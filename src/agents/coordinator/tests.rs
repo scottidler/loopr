@@ -1758,7 +1758,8 @@ fn test_append_work_status_includes_bundle_id_for_inreview_work() {
     let phase_works: Vec<_> = all_works.values().collect();
 
     let mut summary = String::new();
-    append_work_status(&mut summary, &phase_works, &coord_state, &all_works, &bundles);
+    let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
+    append_work_status(&mut summary, &phase_works, &coord_state, &all_works, &bundles, &fsm);
 
     assert!(
         summary.contains(&bundle_id),

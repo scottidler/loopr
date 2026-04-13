@@ -5,6 +5,7 @@ use std::pin::Pin;
 use tracing::{debug, warn};
 
 use crate::domain::tick::TickStatus;
+use crate::fsm::status::FsmStatus;
 use crate::primitive::types::{
     Idempotency, InputField, OutputField, OutputType, Primitive, PrimitiveContext, PrimitiveOutput,
 };
@@ -189,7 +190,7 @@ impl Primitive for AuditBranches {
                 let bundles = ctx.stores.read_bundles()?;
                 bundles
                     .values()
-                    .filter(|b| !b.status().is_terminal())
+                    .filter(|b| !b.status().is_terminal(&ctx.stores.fsm))
                     .map(|b| (b.id.clone(), b.branch_name.clone()))
                     .collect()
             };

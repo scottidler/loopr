@@ -16,13 +16,6 @@ pub enum TickStatus {
     Failed,
 }
 
-impl TickStatus {
-    /// True if this state has no outgoing transitions (terminal).
-    pub fn is_terminal(self) -> bool {
-        matches!(self, TickStatus::Published | TickStatus::Failed)
-    }
-}
-
 impl std::fmt::Display for TickStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
@@ -138,11 +131,13 @@ mod tests {
 
     #[test]
     fn test_tick_status_is_terminal() {
-        assert!(!TickStatus::Open.is_terminal());
-        assert!(!TickStatus::Sealing.is_terminal());
-        assert!(!TickStatus::Validating.is_terminal());
-        assert!(TickStatus::Published.is_terminal());
-        assert!(TickStatus::Failed.is_terminal());
+        use crate::fsm::status::FsmStatus;
+        let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
+        assert!(!TickStatus::Open.is_terminal(&fsm));
+        assert!(!TickStatus::Sealing.is_terminal(&fsm));
+        assert!(!TickStatus::Validating.is_terminal(&fsm));
+        assert!(TickStatus::Published.is_terminal(&fsm));
+        assert!(TickStatus::Failed.is_terminal(&fsm));
     }
 
     #[test]

@@ -20,6 +20,7 @@ use crate::domain::role::Role;
 use crate::domain::sort::topo_sort_by_deps;
 use crate::domain::tick::TickStatus;
 use crate::domain::work::WorkStatus;
+use crate::fsm::status::FsmStatus;
 use crate::ipc::protocol::DaemonEvent;
 
 /// Infer the hierarchy level of a coordinator action for one-level-per-iteration guard (Gap #28).
@@ -798,7 +799,7 @@ fn sweep_stuck_inreview(
                 let work_bundles: Vec<&Bundle> = bundles.values().filter(|b| b.work_id == w.id).collect();
                 // All bundles must be terminal, and at least one must be Merged
                 !work_bundles.is_empty()
-                    && work_bundles.iter().all(|b| b.status().is_terminal())
+                    && work_bundles.iter().all(|b| b.status().is_terminal(&stores.fsm))
                     && work_bundles.iter().any(|b| b.status() == BundleStatus::Merged)
             })
             .map(|w| w.id.clone())
@@ -893,7 +894,7 @@ fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> St
         };
         let plan_works: Vec<_> = works.values().filter(|w| w.parent_id == plan.id).collect();
         summary.push_str(&format!("Plan: {} (Brief mode)\n\n", plan.title));
-        append_work_status(&mut summary, &plan_works, coord_state, &works, &bundles);
+        append_work_status(&mut summary, &plan_works, coord_state, &works, &bundles, &stores.fsm);
         return summary;
     }
 
@@ -932,7 +933,7 @@ fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> St
                 phase.title, phase.id, spec.title
             ));
             let phase_works: Vec<_> = works.values().filter(|w| w.parent_id == phase.id).collect();
-            append_work_status(&mut summary, &phase_works, coord_state, &works, &bundles);
+            append_work_status(&mut summary, &phase_works, coord_state, &works, &bundles, &stores.fsm);
         }
     }
 
@@ -949,6 +950,7 @@ fn append_work_status(
     coord_state: &CoordinatorState,
     all_works: &std::collections::HashMap<String, crate::domain::work::Work>,
     bundles: &std::collections::HashMap<String, Bundle>,
+    fsm: &crate::fsm::runtime::FsmInterpreter,
 ) {
     let mut actionable = Vec::new();
     let mut terminal = Vec::new();
@@ -977,7 +979,7 @@ fn append_work_status(
             let bundle_note = if wi.status() == WorkStatus::InReview {
                 bundles
                     .values()
-                    .filter(|b| b.work_id == wi.id && !b.status().is_terminal())
+                    .filter(|b| b.work_id == wi.id && !b.status().is_terminal(fsm))
                     .max_by_key(|b| b.updated_at)
                     .map(|b| format!(" [bundle: {}, {:?}]", b.id, b.status()))
                     .unwrap_or_default()

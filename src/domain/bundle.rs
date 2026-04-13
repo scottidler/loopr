@@ -19,16 +19,6 @@ pub enum BundleStatus {
     Superseded,
 }
 
-impl BundleStatus {
-    /// True if this state has no outgoing transitions (terminal).
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
-        )
-    }
-}
-
 impl std::fmt::Display for BundleStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
@@ -330,12 +320,14 @@ mod tests {
 
     #[test]
     fn test_is_terminal() {
-        assert!(!BundleStatus::Proposed.is_terminal());
-        assert!(!BundleStatus::Triaged.is_terminal());
-        assert!(!BundleStatus::Integrating.is_terminal());
-        assert!(BundleStatus::Merged.is_terminal());
-        assert!(BundleStatus::Rejected.is_terminal());
-        assert!(BundleStatus::Superseded.is_terminal());
+        use crate::fsm::status::FsmStatus;
+        let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
+        assert!(!BundleStatus::Proposed.is_terminal(&fsm));
+        assert!(!BundleStatus::Triaged.is_terminal(&fsm));
+        assert!(!BundleStatus::Integrating.is_terminal(&fsm));
+        assert!(BundleStatus::Merged.is_terminal(&fsm));
+        assert!(BundleStatus::Rejected.is_terminal(&fsm));
+        assert!(BundleStatus::Superseded.is_terminal(&fsm));
     }
 
     // --- Record trait tests ---

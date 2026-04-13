@@ -4,6 +4,7 @@ use std::pin::Pin;
 
 use tracing::debug;
 
+use crate::fsm::status::FsmStatus;
 use crate::primitive::types::{
     Idempotency, InputField, OutputField, OutputType, Primitive, PrimitiveContext, PrimitiveOutput,
 };
@@ -125,7 +126,7 @@ impl Primitive for SupersedeBundles {
                 let bundles = ctx.stores.read_bundles()?;
                 bundles
                     .values()
-                    .filter(|b| b.work_id == work_id && b.id != except_id && !b.status().is_terminal())
+                    .filter(|b| b.work_id == work_id && b.id != except_id && !b.status().is_terminal(&ctx.stores.fsm))
                     .map(|b| b.id.clone())
                     .collect()
             };

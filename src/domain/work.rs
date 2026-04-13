@@ -23,13 +23,6 @@ pub enum WorkStatus {
     Abandoned,
 }
 
-impl WorkStatus {
-    /// True if this state has no outgoing transitions (terminal).
-    pub fn is_terminal(self) -> bool {
-        matches!(self, WorkStatus::Done | WorkStatus::Abandoned)
-    }
-}
-
 impl std::fmt::Display for WorkStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
@@ -329,10 +322,12 @@ mod tests {
 
     #[test]
     fn test_is_terminal() {
-        assert!(!WorkStatus::Draft.is_terminal());
-        assert!(!WorkStatus::InProgress.is_terminal());
-        assert!(WorkStatus::Done.is_terminal());
-        assert!(WorkStatus::Abandoned.is_terminal());
+        use crate::fsm::status::FsmStatus;
+        let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
+        assert!(!WorkStatus::Draft.is_terminal(&fsm));
+        assert!(!WorkStatus::InProgress.is_terminal(&fsm));
+        assert!(WorkStatus::Done.is_terminal(&fsm));
+        assert!(WorkStatus::Abandoned.is_terminal(&fsm));
     }
 
     // --- FlexibleEnum tests ---

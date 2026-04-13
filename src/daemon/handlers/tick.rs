@@ -27,7 +27,7 @@ pub(super) fn handle_tick_create(
         // Singleton guard: at most one non-terminal Tick at a time
         {
             let ticks = stores.read_ticks()?;
-            let active = ticks.values().any(|t| !t.status().is_terminal());
+            let active = ticks.values().any(|t| !t.status().is_terminal(&stores.fsm));
             if active {
                 return Ok(DaemonResponse::err(
                     req.id,

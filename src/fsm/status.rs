@@ -1,3 +1,5 @@
+use super::runtime::FsmInterpreter;
+
 /// Trait mapping Rust status enums to their YAML FSM definitions.
 ///
 /// Each status enum (WorkStatus, BundleStatus, etc.) implements this trait
@@ -16,6 +18,12 @@ pub trait FsmStatus: Sized + Copy {
 
     /// All variants of this enum, in declaration order.
     fn all_variants() -> &'static [Self];
+
+    /// Check if this state is terminal. Delegates to the runtime interpreter
+    /// so the YAML `terminal:` list is the single source of truth.
+    fn is_terminal(&self, fsm: &FsmInterpreter) -> bool {
+        fsm.is_terminal(Self::fsm_name(), self.to_yaml_name()).unwrap_or(false)
+    }
 }
 
 // --- WorkStatus ---

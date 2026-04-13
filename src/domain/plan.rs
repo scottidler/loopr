@@ -28,13 +28,6 @@ pub enum HierarchyStatus {
     Abandoned,
 }
 
-impl HierarchyStatus {
-    /// True if this state has no outgoing transitions (terminal).
-    pub fn is_terminal(self) -> bool {
-        matches!(self, HierarchyStatus::Complete | HierarchyStatus::Abandoned)
-    }
-}
-
 impl fmt::Display for HierarchyStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -280,11 +273,13 @@ mod tests {
 
     #[test]
     fn test_is_terminal() {
-        assert!(!HierarchyStatus::Draft.is_terminal());
-        assert!(!HierarchyStatus::Pending.is_terminal());
-        assert!(!HierarchyStatus::Active.is_terminal());
-        assert!(HierarchyStatus::Complete.is_terminal());
-        assert!(HierarchyStatus::Abandoned.is_terminal());
+        use crate::fsm::status::FsmStatus;
+        let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
+        assert!(!HierarchyStatus::Draft.is_terminal(&fsm));
+        assert!(!HierarchyStatus::Pending.is_terminal(&fsm));
+        assert!(!HierarchyStatus::Active.is_terminal(&fsm));
+        assert!(HierarchyStatus::Complete.is_terminal(&fsm));
+        assert!(HierarchyStatus::Abandoned.is_terminal(&fsm));
     }
 
     // --- Plan struct tests ---
