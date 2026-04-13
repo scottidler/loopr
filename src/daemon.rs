@@ -238,15 +238,26 @@ fn remove_pid_file(ctx: &DaemonContext) {
 /// Composition engine runner: builds the strategy engine and drives it in a tick loop.
 /// Replaces the coordinator loop, integrator cycle, and supervisor restart logic.
 async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
+    use std::sync::atomic::Ordering;
+
     use crate::engine::tick::{CompositionEngine, EngineContext};
     use crate::primitive::catalog;
     use crate::trigger::evaluate::TriggerEvaluator;
     use crate::trigger::observe::{GuardConditionRegistry, StateQueryRegistry};
     use crate::trigger::schema as trigger_schema;
-    use std::sync::atomic::Ordering;
 
     const ACTIVE_INTERVAL_MS: u64 = 5_000;
     const IDLE_INTERVAL_MS: u64 = 30_000;
+
+    // Helper: signal the daemon to shut down and return.
+    // Used when engine startup fails - a daemon with no engine is a zombie.
+    macro_rules! fatal {
+        ($stores:expr, $($arg:tt)*) => {{
+            error!($($arg)*);
+            $stores.shutting_down.store(true, Ordering::Relaxed);
+            return;
+        }};
+    }
 
     // Load engine components from config
     let (repo_path, stores, event_tx, worktree_mgr, fsm) = {
@@ -263,8 +274,7 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
     // Build primitive registry
     let mut registry = crate::primitive::registry::PrimitiveRegistry::new();
     if let Err(e) = catalog::register_all(&mut registry) {
-        warn!("run_engine: failed to register primitives: {}", e);
-        return;
+        fatal!(stores, "run_engine: failed to register primitives: {}", e);
     }
 
     // Load trigger definitions
@@ -272,12 +282,12 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
     let triggers = match trigger_schema::load_dir(&triggers_dir) {
         Ok(t) => t,
         Err(e) => {
-            warn!(
+            fatal!(
+                stores,
                 "run_engine: failed to load triggers from {}: {}",
                 triggers_dir.display(),
                 e
             );
-            return;
         }
     };
 
@@ -290,23 +300,27 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
     let strategies = match crate::engine::schema::load_dir(&strategies_dir) {
         Ok(s) => s,
         Err(e) => {
-            warn!(
+            fatal!(
+                stores,
                 "run_engine: failed to load strategies from {}: {}",
                 strategies_dir.display(),
                 e
             );
-            return;
         }
     };
     info!("run_engine: loaded {} strategies", strategies.len());
 
-    // Validate strategies against registries
+    // Validate strategies - fail fast rather than run with broken orchestration
     let errors = crate::engine::schema::validate(&strategies);
     if !errors.is_empty() {
-        warn!("run_engine: {} strategy validation errors:", errors.len());
         for err in &errors {
-            warn!("  {}", err);
+            error!("run_engine: strategy validation error: {}", err);
         }
+        fatal!(
+            stores,
+            "run_engine: {} strategy validation error(s), daemon shutting down",
+            errors.len()
+        );
     }
 
     let guard_conditions = GuardConditionRegistry::with_builtins();
@@ -320,6 +334,8 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
 
     let mut engine = CompositionEngine::new(strategies, registry, trigger_evaluator);
     let mut event_rx = event_tx.subscribe();
+    // Carry an event woken from select! into the next iteration's drain so it isn't dropped.
+    let mut next_event: Option<DaemonEvent> = None;
 
     info!("run_engine: engine started");
 
@@ -328,8 +344,11 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
             break;
         }
 
-        // Drain events since last tick
+        // Drain events since last tick, including any carried over from the select! wakeup.
         let mut events: Vec<DaemonEvent> = Vec::new();
+        if let Some(ev) = next_event.take() {
+            events.push(ev);
+        }
         loop {
             match event_rx.try_recv() {
                 Ok(ev) => events.push(ev),
@@ -376,9 +395,11 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
 
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_millis(interval_ms)) => {}
-                    _ = event_rx.recv() => {
-                        // Woken by an event - re-drain on next iteration
-                        // (the event is already consumed; we'll get new ones)
+                    res = event_rx.recv() => {
+                        // Preserve the waking event so it is included in the next tick's drain.
+                        if let Ok(ev) = res {
+                            next_event = Some(ev);
+                        }
                     }
                 }
             }
@@ -402,8 +423,6 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         ensure_one_daemon(&c)?;
         write_pid_file(&c)?;
         write_version_file(&c)?;
-        // Startup reconciliation: detect and recover state fractures from crash
-        c.reconcile();
         c.config.daemon.socket_path.clone()
     };
 
