@@ -832,6 +832,31 @@ impl IntegratorAgent {
                 }
             }
 
+            // Pre-publish state check: verify tick is still Validating before attempting publish.
+            // If recover_stuck_ticks or a racing call already moved it to Failed, skip publish
+            // gracefully instead of triggering a hard FSM error (Failed -> Published).
+            {
+                let tick_state = self
+                    .ctx
+                    .stores
+                    .read_ticks()
+                    .ok()
+                    .and_then(|ticks| ticks.get(&tick_id).map(|t| t.status()));
+                if tick_state != Some(TickStatus::Validating) {
+                    self.ctx.warn(&format!(
+                        "Tick {} not in Validating state before publish (was {:?}), skipping publish",
+                        tick_id, tick_state
+                    ));
+                    return Ok(IntegratorCycleResult::ValidationFailed {
+                        tick_id: tick_id.clone(),
+                        log: format!(
+                            "Tick {} not in Validating state before publish (was {:?})",
+                            tick_id, tick_state
+                        ),
+                    });
+                }
+            }
+
             // NOW transition to Published - the handler persists the tick with SHA populated
             let pub_resp = self.ctx.bridge.request(
                 "tick.transition",
