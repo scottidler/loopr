@@ -236,5 +236,6 @@ verify() {
         ok "All verification checks passed"
     else
         warn "Some verification checks failed"
+        return 1
     fi
 }

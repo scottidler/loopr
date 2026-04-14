@@ -312,6 +312,7 @@ case ${EXIT_CODE} in
     0)  ok "Exit code: 0 (GoalComplete)" ;;
     1)  warn "Exit code: 1 (Timeout)" ;;
     2)  warn "Exit code: 2 (NeedHelp)" ;;
+    3)  warn "Exit code: 3 (VerificationFailed - daemon succeeded but verify() checks failed)" ;;
     *)  err "Exit code: ${EXIT_CODE} (unexpected)" ;;
 esac
 
@@ -340,7 +341,7 @@ collect_results
 
 echo ""
 echo -e "${BOLD}${CYAN}=== Verification ===${NC}"
-verify
+verify || EXIT_CODE=3
 
 if [[ ${EXIT_CODE} -ne 0 && -f "${DAEMON_LOG}" ]]; then
     echo ""
