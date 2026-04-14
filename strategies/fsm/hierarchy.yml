@@ -6,22 +6,27 @@ states:
   - pending
   - active
   - complete
+  - superseded
   - abandoned
 
 terminal:
   - complete
+  - superseded
   - abandoned
 
 transitions:
   draft:
     pending: { by: [coordinator] }
     active: { by: [coordinator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   pending:
     active: { by: [coordinator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   active:
     complete: { by: [coordinator, decomposer] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
 
 overrides: {}

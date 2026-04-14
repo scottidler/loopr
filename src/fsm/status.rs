@@ -45,6 +45,7 @@ impl FsmStatus for WorkStatus {
             WorkStatus::InReview => "in-review",
             WorkStatus::Integrated => "integrated",
             WorkStatus::Done => "done",
+            WorkStatus::Superseded => "superseded",
             WorkStatus::Abandoned => "abandoned",
         }
     }
@@ -59,6 +60,7 @@ impl FsmStatus for WorkStatus {
             "in-review" => Ok(WorkStatus::InReview),
             "integrated" => Ok(WorkStatus::Integrated),
             "done" => Ok(WorkStatus::Done),
+            "superseded" => Ok(WorkStatus::Superseded),
             "abandoned" => Ok(WorkStatus::Abandoned),
             _ => eyre::bail!("unknown work status: '{}'", name),
         }
@@ -74,6 +76,7 @@ impl FsmStatus for WorkStatus {
             WorkStatus::InReview,
             WorkStatus::Integrated,
             WorkStatus::Done,
+            WorkStatus::Superseded,
             WorkStatus::Abandoned,
         ]
     }
@@ -144,6 +147,7 @@ impl FsmStatus for HierarchyStatus {
             HierarchyStatus::Pending => "pending",
             HierarchyStatus::Active => "active",
             HierarchyStatus::Complete => "complete",
+            HierarchyStatus::Superseded => "superseded",
             HierarchyStatus::Abandoned => "abandoned",
         }
     }
@@ -154,6 +158,7 @@ impl FsmStatus for HierarchyStatus {
             "pending" => Ok(HierarchyStatus::Pending),
             "active" => Ok(HierarchyStatus::Active),
             "complete" => Ok(HierarchyStatus::Complete),
+            "superseded" => Ok(HierarchyStatus::Superseded),
             "abandoned" => Ok(HierarchyStatus::Abandoned),
             _ => eyre::bail!("unknown hierarchy status: '{}'", name),
         }
@@ -165,6 +170,7 @@ impl FsmStatus for HierarchyStatus {
             HierarchyStatus::Pending,
             HierarchyStatus::Active,
             HierarchyStatus::Complete,
+            HierarchyStatus::Superseded,
             HierarchyStatus::Abandoned,
         ]
     }

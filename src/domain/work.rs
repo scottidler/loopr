@@ -20,6 +20,7 @@ pub enum WorkStatus {
     InReview,
     Integrated,
     Done,
+    Superseded,
     Abandoned,
 }
 
@@ -218,6 +219,7 @@ mod tests {
             WorkStatus::InReview,
             WorkStatus::Integrated,
             WorkStatus::Done,
+            WorkStatus::Superseded,
             WorkStatus::Abandoned,
         ] {
             let display = status.to_string();
@@ -341,6 +343,7 @@ mod tests {
         assert_eq!("inreview".parse::<WorkStatus>().unwrap(), WorkStatus::InReview);
         assert_eq!("integrated".parse::<WorkStatus>().unwrap(), WorkStatus::Integrated);
         assert_eq!("done".parse::<WorkStatus>().unwrap(), WorkStatus::Done);
+        assert_eq!("superseded".parse::<WorkStatus>().unwrap(), WorkStatus::Superseded);
         assert_eq!("abandoned".parse::<WorkStatus>().unwrap(), WorkStatus::Abandoned);
     }
 
@@ -392,6 +395,7 @@ mod tests {
                 "InReview",
                 "Integrated",
                 "Done",
+                "Superseded",
                 "Abandoned"
             ]
         );

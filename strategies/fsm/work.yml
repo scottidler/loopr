@@ -10,35 +10,43 @@ states:
   - in-review
   - integrated
   - done
+  - superseded
   - abandoned
 
 terminal:
   - done
+  - superseded
   - abandoned
 
 transitions:
   draft:
     pending: { by: [coordinator] }
     ready: { by: [coordinator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   pending:
     ready: { by: [coordinator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   ready:
     in-progress: { by: [coordinator] }
     blocked: { by: [coordinator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
     done: { by: [coordinator] }
   in-progress:
     blocked: {}
     in-review: { by: [implementer] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   blocked:
     ready: { by: [coordinator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   in-review:
     in-progress: { by: [coordinator] }
     integrated: { by: [integrator] }
+    superseded: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   integrated:
     done: { by: [coordinator, integrator] }

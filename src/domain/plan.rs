@@ -24,6 +24,8 @@ pub enum HierarchyStatus {
     Active,
     #[serde(alias = "Complete")]
     Complete,
+    #[serde(alias = "Superseded")]
+    Superseded,
     #[serde(alias = "Abandoned")]
     Abandoned,
 }
@@ -35,6 +37,7 @@ impl fmt::Display for HierarchyStatus {
             HierarchyStatus::Pending => write!(f, "pending"),
             HierarchyStatus::Active => write!(f, "active"),
             HierarchyStatus::Complete => write!(f, "complete"),
+            HierarchyStatus::Superseded => write!(f, "superseded"),
             HierarchyStatus::Abandoned => write!(f, "abandoned"),
         }
     }
@@ -209,6 +212,7 @@ mod tests {
         assert_eq!(HierarchyStatus::Pending.to_string(), "pending");
         assert_eq!(HierarchyStatus::Active.to_string(), "active");
         assert_eq!(HierarchyStatus::Complete.to_string(), "complete");
+        assert_eq!(HierarchyStatus::Superseded.to_string(), "superseded");
         assert_eq!(HierarchyStatus::Abandoned.to_string(), "abandoned");
     }
 
@@ -219,6 +223,7 @@ mod tests {
             HierarchyStatus::Pending,
             HierarchyStatus::Active,
             HierarchyStatus::Complete,
+            HierarchyStatus::Superseded,
             HierarchyStatus::Abandoned,
         ] {
             let json = serde_json::to_string(&status).unwrap();
@@ -237,6 +242,10 @@ mod tests {
             "\"complete\""
         );
         assert_eq!(
+            serde_json::to_string(&HierarchyStatus::Superseded).unwrap(),
+            "\"superseded\""
+        );
+        assert_eq!(
             serde_json::to_string(&HierarchyStatus::Abandoned).unwrap(),
             "\"abandoned\""
         );
@@ -249,6 +258,7 @@ mod tests {
             ("\"Pending\"", HierarchyStatus::Pending),
             ("\"Active\"", HierarchyStatus::Active),
             ("\"Complete\"", HierarchyStatus::Complete),
+            ("\"Superseded\"", HierarchyStatus::Superseded),
             ("\"Abandoned\"", HierarchyStatus::Abandoned),
         ] {
             let deserialized: HierarchyStatus = serde_json::from_str(json)
@@ -264,6 +274,7 @@ mod tests {
             HierarchyStatus::Pending,
             HierarchyStatus::Active,
             HierarchyStatus::Complete,
+            HierarchyStatus::Superseded,
             HierarchyStatus::Abandoned,
         ] {
             let display = status.to_string();
