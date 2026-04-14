@@ -678,7 +678,10 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
 
         if let Some(err) = branch_error {
             info!("partial failure plan={} total_records={}", plan_id, all_records.len());
-            let hierarchy = records_to_hierarchy(&plan_id, &plan_title, plan_markdown, plan_ac, &all_records)?;
+            let mut hierarchy = records_to_hierarchy(&plan_id, &plan_title, plan_markdown, plan_ac, &all_records)?;
+            if brief {
+                hierarchy.plan.tier = crate::domain::plan::Tier::Brief;
+            }
             return Ok((hierarchy, Some(err)));
         }
     }
@@ -690,7 +693,10 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     );
     ratify_hierarchy(&plan_id, plan_markdown, &all_records, config, http_client).await?;
 
-    let hierarchy = records_to_hierarchy(&plan_id, &plan_title, plan_markdown, plan_ac, &all_records)?;
+    let mut hierarchy = records_to_hierarchy(&plan_id, &plan_title, plan_markdown, plan_ac, &all_records)?;
+    if brief {
+        hierarchy.plan.tier = crate::domain::plan::Tier::Brief;
+    }
     Ok((hierarchy, None))
 }
 
