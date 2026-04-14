@@ -251,6 +251,7 @@ pub fn goal_abandon_ratio_terminal(stores: &Stores, plan_id: &str) -> f64 {
 }
 
 /// Returns (done_count, total_all, terminal_count, abandoned_count) for works under a plan.
+/// Superseded works are counted as terminal but not as abandoned.
 pub fn goal_work_counts(stores: &Stores, plan_id: &str) -> (usize, usize, usize, usize) {
     let all_works = collect_goal_works(stores, plan_id);
     let done = all_works
@@ -261,7 +262,11 @@ pub fn goal_work_counts(stores: &Stores, plan_id: &str) -> (usize, usize, usize,
         .iter()
         .filter(|w| matches!(w.status(), WorkStatus::Abandoned))
         .count();
-    let terminal = done + abandoned;
+    let superseded = all_works
+        .iter()
+        .filter(|w| matches!(w.status(), WorkStatus::Superseded))
+        .count();
+    let terminal = done + abandoned + superseded;
     (done, all_works.len(), terminal, abandoned)
 }
 
@@ -271,7 +276,8 @@ pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
     !phase_wis.is_empty()
         && phase_wis
             .iter()
-            .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+            .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Superseded))
+        && phase_wis.iter().any(|w| w.status() == WorkStatus::Done)
 }
 
 #[allow(clippy::unwrap_used)]
@@ -443,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_phase_complete_true_with_abandoned() {
+    fn test_is_phase_complete_false_with_abandoned() {
         let dir = TestDir::new("loopr-gen-ipc-aband");
         let stores = test_stores(&dir);
 
@@ -455,7 +461,42 @@ mod tests {
         wi2.force_status(WorkStatus::Abandoned);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
+        // Abandoned blocks phase completion
+        assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_true_with_superseded() {
+        let dir = TestDir::new("loopr-gen-ipc-superseded");
+        let stores = test_stores(&dir);
+
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into());
+        wi1.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let mut wi2 = Work::new("phase-1".into(), "WI Superseded".into());
+        wi2.force_status(WorkStatus::Superseded);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        // Superseded is transparent - phase completes with at least one Done
         assert!(is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_false_all_superseded() {
+        let dir = TestDir::new("loopr-gen-ipc-all-superseded");
+        let stores = test_stores(&dir);
+
+        let mut wi1 = Work::new("phase-1".into(), "WI Superseded 1".into());
+        wi1.force_status(WorkStatus::Superseded);
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let mut wi2 = Work::new("phase-1".into(), "WI Superseded 2".into());
+        wi2.force_status(WorkStatus::Superseded);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        // All children Superseded with none Done - phase must NOT complete
+        assert!(!is_phase_complete(&stores, "phase-1"));
     }
 
     #[test]

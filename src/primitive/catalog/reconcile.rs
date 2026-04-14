@@ -32,6 +32,7 @@ impl Primitive for DetectGoalComplete {
             let works = ctx.stores.read_works()?;
             let mut done: u32 = 0;
             let mut abandoned: u32 = 0;
+            let mut superseded: u32 = 0;
             let mut total: u32 = 0;
 
             // Walk hierarchy: works whose ancestry traces to this plan
@@ -42,24 +43,27 @@ impl Primitive for DetectGoalComplete {
                 total += 1;
                 match work.status() {
                     WorkStatus::Done => done += 1,
+                    WorkStatus::Superseded => superseded += 1,
                     WorkStatus::Abandoned => abandoned += 1,
                     _ => {}
                 }
             }
 
-            let complete = total > 0 && (done + abandoned) == total;
+            // GoalComplete: all non-Superseded works must be Done. Abandoned blocks completion.
+            let complete = total > 0 && (done + superseded) == total && done > 0;
 
             let mut values = HashMap::new();
             values.insert("complete".to_string(), serde_json::json!(complete));
             values.insert("done-count".to_string(), serde_json::json!(done));
             values.insert("total-count".to_string(), serde_json::json!(total));
+            values.insert("superseded-count".to_string(), serde_json::json!(superseded));
             values.insert("abandoned-count".to_string(), serde_json::json!(abandoned));
 
             Ok(PrimitiveOutput {
                 values,
                 summary: format!(
-                    "plan {}: {}/{} done, {} abandoned, complete={}",
-                    plan_id, done, total, abandoned, complete
+                    "plan {}: {}/{} done, {} superseded, {} abandoned, complete={}",
+                    plan_id, done, total, superseded, abandoned, complete
                 ),
             })
         })
@@ -77,6 +81,10 @@ impl Primitive for DetectGoalComplete {
             },
             OutputField {
                 name: "total-count".to_string(),
+                field_type: OutputType::U32,
+            },
+            OutputField {
+                name: "superseded-count".to_string(),
                 field_type: OutputType::U32,
             },
             OutputField {

@@ -291,24 +291,25 @@ fn complete_specs(stores: &Stores) -> u32 {
 // ---------------------------------------------------------------------------
 
 /// Detect whether the active Plan's goal is complete.
-/// Brief mode: all Works parented to Plan are terminal.
-/// Full mode: all Specs are terminal.
+/// Brief mode: all non-Superseded Works must be Done. Abandoned blocks completion.
+/// Full mode: all non-Superseded Specs must be Complete. Abandoned blocks completion.
 fn detect_goal_complete(stores: &Stores) -> bool {
     let Some(plan) = generation::find_active_plan(stores) else {
         return false;
     };
 
     if plan.tier == Tier::Brief {
-        // Brief: all Works parented to Plan are terminal
+        // Brief: all Works parented to Plan must be Done (Superseded are transparent)
         let works = generation::find_works_for_parent(stores, &plan.id);
         if works.is_empty() {
             return false;
         }
         works
             .iter()
-            .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+            .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Superseded))
+            && works.iter().any(|w| w.status() == WorkStatus::Done)
     } else {
-        // Full: all Specs for this Plan are terminal
+        // Full: all Specs for this Plan must be Complete (Superseded are transparent)
         let Ok(specs) = stores.read_specs() else {
             return false;
         };
@@ -318,7 +319,8 @@ fn detect_goal_complete(stores: &Stores) -> bool {
         }
         plan_specs
             .iter()
-            .all(|s| matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .all(|s| matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Superseded))
+            && plan_specs.iter().any(|s| s.status() == HierarchyStatus::Complete)
     }
 }
 
@@ -361,9 +363,9 @@ fn parent_active(stores: &Stores, parent_id: &str) -> bool {
     }
 }
 
-/// Hierarchy dep check: all deps must be terminal (Complete or Abandoned).
-/// An Abandoned dep does not block advancement - the quality gate at GoalComplete
-/// handles abandon ratios.
+/// Hierarchy dep check: all deps must be terminal (Complete, Superseded, or Abandoned).
+/// A Superseded or Abandoned dep does not block advancement - the quality gate at
+/// GoalComplete handles the distinction between success and failure.
 ///
 /// Defense-in-depth: rejects cross-type dep IDs at the promotion gate.
 /// A cross-type dep (e.g., a Phase ID in a Spec's deps) will never be found in
@@ -392,7 +394,12 @@ fn all_hierarchy_deps_terminal(stores: &Stores, deps: &[String], level: Dependen
                 }
                 specs
                     .get(dep_id)
-                    .map(|s| matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+                    .map(|s| {
+                        matches!(
+                            s.status(),
+                            HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                        )
+                    })
                     .unwrap_or(false)
             })
         }
@@ -410,7 +417,12 @@ fn all_hierarchy_deps_terminal(stores: &Stores, deps: &[String], level: Dependen
                 }
                 phases
                     .get(dep_id)
-                    .map(|p| matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+                    .map(|p| {
+                        matches!(
+                            p.status(),
+                            HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                        )
+                    })
                     .unwrap_or(false)
             })
         }
@@ -435,7 +447,9 @@ fn all_work_deps_done(stores: &Stores, deps: &[String]) -> bool {
     })
 }
 
-/// Check if all child Works of a Phase are terminal (Done or Abandoned).
+/// Check if all child Works of a Phase are successfully complete.
+/// Returns true when all children are Done or Superseded, with at least one Done.
+/// Abandoned children block completion - the Phase stays Active until the coordinator acts.
 /// Returns true for a Phase with zero Works (vacuous truth - empty parent completes immediately).
 fn all_children_terminal_works(stores: &Stores, phase_id: &str) -> bool {
     let Ok(works) = stores.read_works() else {
@@ -447,10 +461,13 @@ fn all_children_terminal_works(stores: &Stores, phase_id: &str) -> bool {
     }
     children
         .iter()
-        .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+        .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Superseded))
+        && children.iter().any(|w| w.status() == WorkStatus::Done)
 }
 
-/// Check if all child Phases of a Spec are terminal (Complete or Abandoned).
+/// Check if all child Phases of a Spec are successfully complete.
+/// Returns true when all children are Complete or Superseded, with at least one Complete.
+/// Abandoned children block completion - the Spec stays Active until the coordinator acts.
 /// Returns true for a Spec with zero Phases (vacuous truth).
 fn all_children_terminal_phases(stores: &Stores, spec_id: &str) -> bool {
     let Ok(phases) = stores.read_phases() else {
@@ -462,7 +479,8 @@ fn all_children_terminal_phases(stores: &Stores, spec_id: &str) -> bool {
     }
     children
         .iter()
-        .all(|p| matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+        .all(|p| matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Superseded))
+        && children.iter().any(|p| p.status() == HierarchyStatus::Complete)
 }
 
 /// Persist a record to TaskStore (JSONL). Follows TaskStore write ordering:
