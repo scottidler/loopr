@@ -174,6 +174,15 @@ pub fn build_state_summary_with_sla(
         if !rejected.is_empty() {
             summary.push_str("### Rejected Bundles (Work needs reset to Ready)\n");
             for b in &rejected {
+                // Only emit the override ACTION if no other bundle for this work is
+                // currently in-flight. If a newer bundle exists in a non-terminal state,
+                // the rejection is already resolved and the instruction is stale.
+                let has_active_bundle = bundles
+                    .values()
+                    .any(|b2| b2.work_id == b.work_id && b2.id != b.id && !b2.status().is_terminal(&stores.fsm));
+                if has_active_bundle {
+                    continue;
+                }
                 let reason = if b.verification.is_empty() {
                     "bundle was rejected by reviewer".to_string()
                 } else {

@@ -477,6 +477,23 @@ pub(super) fn handle_work_transition(
             }
         }
 
+        // #16: override to Ready is rejected if the work already has an active bundle in flight.
+        // Prevents the coordinator from resetting work whose retry is already in review.
+        if is_override && target_status == WorkStatus::Ready {
+            let bundles = stores.read_bundles()?;
+            let has_active_bundle = bundles
+                .values()
+                .any(|b| b.work_id == wi.id && !b.status().is_terminal(fsm));
+            if has_active_bundle {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(
+                        "override_work to Ready rejected: work already has an active bundle in flight",
+                    ),
+                ));
+            }
+        }
+
         // Increment attempt_count when Work is being reset to Ready from a non-Draft state.
         // If the item exceeds MAX_WORK_ATTEMPTS, override target to Abandoned - this is the
         // terminal backstop that prevents an infinite noop death loop.
