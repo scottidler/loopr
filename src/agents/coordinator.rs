@@ -699,12 +699,16 @@ fn apply_fsm_transition(
     }
 
     if new_state == CoordinatorFsmState::GoalComplete {
-        coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-        // Check quality gate before declaring success.
+        // Quality gate runs BEFORE the state transition is committed. This prevents a
+        // race where the CLI polls the persisted GoalComplete status and exits 0 before
+        // the NeedHelp return value is processed. When the gate fires, coord_state is
+        // still Executing - persist_coordinator_state writes Executing, not GoalComplete.
         if let Some(outcome) = check_abandon_gate(stores, coord_state, prefix) {
             persist_coordinator_state(stores, coord_state);
             return Some(outcome);
         }
+
+        coord_state.transition_to(CoordinatorFsmState::GoalComplete);
 
         // Merge integration branch to main on Plan completion.
         if let Some(plan) = crate::agents::generation::find_active_plan(stores) {
