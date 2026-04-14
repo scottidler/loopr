@@ -17,20 +17,26 @@ scaffold() {
 
     log "Found: $(docker compose version)"
 
-    cat > "${TARGET}/requirements.txt" <<'REQ'
-fastapi>=0.115
-uvicorn[standard]>=0.32
-httpx>=0.28
-pytest>=8.3
-REQ
+    cat > "${TARGET}/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "bookmarks-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.28",
+    "pytest>=8.3",
+]
+PYPROJECT
 
     cat > "${TARGET}/Dockerfile" <<'DOCKER'
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN uv sync
 COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
 DOCKER
 
     cat > "${TARGET}/docker-compose.yml" <<'COMPOSE'
@@ -46,7 +52,7 @@ services:
 
   test:
     build: .
-    command: python -m pytest test_api.py -v
+    command: uv run pytest test_api.py -v
     environment:
       - DATABASE_PATH=/tmp/test_bookmarks.db
 COMPOSE
@@ -132,7 +138,7 @@ TOOLS
 }
 
 target_goal() {
-    echo "Build a bookmarks REST API with FastAPI and SQLite. Endpoints: GET /health, GET /bookmarks, POST /bookmarks, GET /bookmarks/{id}, PUT /bookmarks/{id}, DELETE /bookmarks/{id}. Bookmark: id (int, auto), title (str), url (str), tags (str, comma-separated, default ''). Read database path from DATABASE_PATH env var, default 'data/bookmarks.db'. Include a pytest test suite in test_api.py. Validate with: docker compose run --rm test."
+    echo "Build a bookmarks REST API with FastAPI and SQLite. Endpoints: GET /health, GET /bookmarks, POST /bookmarks, GET /bookmarks/{id}, PUT /bookmarks/{id}, DELETE /bookmarks/{id}. Bookmark: id (int, auto), title (str), url (str), tags (str, comma-separated, default ''). Read database path from DATABASE_PATH env var, default 'data/bookmarks.db'. Include a pytest test suite in test_api.py. Use uv + pyproject.toml (NOT pip or requirements.txt). Validate with: docker compose run --rm test."
 }
 
 target_plan() {
@@ -207,5 +213,6 @@ verify() {
         ok "All verification checks passed"
     else
         warn "Some verification checks failed"
+        return 1
     fi
 }

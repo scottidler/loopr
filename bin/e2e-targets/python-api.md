@@ -36,7 +36,7 @@ project. Validation: `docker compose run --rm test`.
 
 ## Constraints
 
-- Python 3.12. FastAPI, uvicorn, httpx, and pytest from `requirements.txt`.
+- Python 3.12. FastAPI, uvicorn, httpx, and pytest declared in `pyproject.toml`, installed with `uv`. Do NOT use pip or requirements.txt.
 - No ORM - use `sqlite3` stdlib directly.
 - Database path from `DATABASE_PATH` env var, default `data/bookmarks.db`.
 - Containerized: `Dockerfile` + `docker-compose.yml` are pre-provided.
@@ -112,8 +112,9 @@ docker compose run --rm test
 
 ## Dependencies
 
-- `fastapi>=0.115` (in `requirements.txt`)
-- `uvicorn[standard]>=0.32` (in `requirements.txt`)
-- `httpx>=0.28` (required by FastAPI TestClient, in `requirements.txt`)
-- `pytest>=8.3` (in `requirements.txt`)
+- `fastapi>=0.115` (in `pyproject.toml`)
+- `uvicorn[standard]>=0.32` (in `pyproject.toml`)
+- `httpx>=0.28` (required by FastAPI TestClient, in `pyproject.toml`)
+- `pytest>=8.3` (in `pyproject.toml`)
+- `uv` (package manager, provided by the Docker base image `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`)
 - Docker + docker compose (pre-installed in the scaffold environment)
