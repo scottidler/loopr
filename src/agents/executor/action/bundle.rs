@@ -121,6 +121,57 @@ pub(super) async fn handle_propose_bundle(
         }
     }
 
+    // Rebase onto current integration tip before computing diff.
+    // Prevents false out-of-scope deletions when the integration branch
+    // advanced after this session's worktree was created.
+    let effective_base_ref = if !is_noop {
+        let current_tip = crate::agents::executor::util::resolve_worktree_base_for(ctx.bridge.stores(), Some(wi_id));
+        let old_base = ctx.session.base_ref.as_deref().unwrap_or("");
+
+        // Only rebase if the integration tip has moved since session start
+        if !old_base.is_empty() && current_tip != old_base {
+            ctx.info(&format!(
+                "Integration tip moved ({} -> {}), rebasing before bundle proposal",
+                &old_base[..old_base.len().min(8)],
+                &current_tip[..current_tip.len().min(8)]
+            ));
+            let rebase_out = tokio::process::Command::new("git")
+                .args(["rebase", &current_tip])
+                .current_dir(worktree_path)
+                .output()
+                .await;
+            match rebase_out {
+                Ok(out) if out.status.success() => {
+                    ctx.info("Rebase onto integration tip succeeded");
+                    Some(current_tip)
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    // Abort the failed rebase to restore clean state
+                    let _ = tokio::process::Command::new("git")
+                        .args(["rebase", "--abort"])
+                        .current_dir(worktree_path)
+                        .output()
+                        .await;
+                    return Ok(ActionResult::ActionError(format!(
+                        "Rebase onto integration tip failed (conflicts). \
+                         The integration branch has diverged since your session started. \
+                         A new session will start from the current integration tip.\n\
+                         Error: {}",
+                        stderr.trim()
+                    )));
+                }
+                Err(e) => {
+                    return Ok(ActionResult::ActionError(format!("Failed to run git rebase: {}", e)));
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // F2: Derive branch name deterministically from work_id - matches
     // WorktreeManager::create() which uses format!("agent/{}", work_id).
     // For noop bundles, use empty branch_name (Integrator skips merge).
@@ -149,7 +200,10 @@ pub(super) async fn handle_propose_bundle(
     // For normal bundles: git diff --name-only <base_ref>...HEAD
     // For noop bundles: use explicit noop_paths or fall back to Work context extraction.
     let paths: Vec<String> = if !is_noop {
-        let base = ctx.session.base_ref.as_deref().unwrap_or("main");
+        let base = effective_base_ref
+            .as_deref()
+            .or(ctx.session.base_ref.as_deref())
+            .unwrap_or("main");
         let range = format!("{}...HEAD", base);
         tokio::process::Command::new("git")
             .args(["diff", "--name-only", &range])
