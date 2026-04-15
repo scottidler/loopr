@@ -396,6 +396,99 @@ fn persist_children(
 
 // ─── Prompt construction ────────────────────────────────────────────────────
 
+/// Collect the `git ls-files` listing for the target repo, if available.
+fn workspace_file_tree(repo_path: Option<&std::path::Path>) -> String {
+    let Some(path) = repo_path else {
+        return String::new();
+    };
+    let Ok(output) = std::process::Command::new("git")
+        .args(["ls-files"])
+        .current_dir(path)
+        .output()
+    else {
+        return String::new();
+    };
+    if !output.status.success() {
+        return String::new();
+    }
+    let file_list = String::from_utf8_lossy(&output.stdout);
+    let trimmed = file_list.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n## Existing Workspace Files\n\n\
+         The target repository already contains these files. \
+         Do NOT instruct 'create from scratch' for any existing file. \
+         Default to additive changes unless the parent document explicitly requires replacement.\n\n\
+         ```\n{}\n```\n",
+        trimmed
+    )
+}
+
+/// Sanitize a file reference from LLM-generated content.
+/// Rejects absolute paths and `..` components, ensures result stays under repo_path.
+fn sanitize_file_ref(repo: &std::path::Path, raw: &str) -> Option<std::path::PathBuf> {
+    // Reject absolute paths outright - LLM-generated refs should always be relative
+    if raw.starts_with('/') {
+        return None;
+    }
+    let path = std::path::Path::new(raw);
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return None;
+    }
+    let full = repo.join(path);
+    if full.starts_with(repo) { Some(full) } else { None }
+}
+
+/// Extract file path references from LLM-generated markdown content.
+/// Matches paths ending in common source extensions.
+fn extract_file_references(content: &str) -> Vec<std::path::PathBuf> {
+    let re = regex::Regex::new(
+        r"(?:^|[\s`\(])([a-zA-Z0-9_./-]+\.(?:py|rs|ts|tsx|js|jsx|yml|yaml|toml|json|sql|sh|css|html))\b",
+    )
+    .expect("valid regex");
+    let mut seen = std::collections::HashSet::new();
+    let mut refs = Vec::new();
+    for cap in re.captures_iter(content) {
+        let path_str = cap[1].to_string();
+        if seen.insert(path_str.clone()) {
+            refs.push(std::path::PathBuf::from(path_str));
+        }
+    }
+    refs
+}
+
+/// Build file-content section for Spec-level decomposition.
+/// Reads up to 5 referenced files, 200 lines each.
+fn file_content_section(repo_path: Option<&std::path::Path>, target_kind: DocKind, parent_content: &str) -> String {
+    let Some(repo) = repo_path else {
+        return String::new();
+    };
+    if target_kind != DocKind::Spec {
+        return String::new();
+    }
+    let referenced_files = extract_file_references(parent_content);
+    let mut buf = String::new();
+    for file_ref in referenced_files.iter().take(5) {
+        let Some(full) = sanitize_file_ref(repo, &file_ref.to_string_lossy()) else {
+            continue;
+        };
+        if !full.exists() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&full) else {
+            continue;
+        };
+        let truncated: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+        buf.push_str(&format!("\n### {}\n```\n{}\n```\n", file_ref.display(), truncated));
+    }
+    if buf.is_empty() {
+        return String::new();
+    }
+    format!("\n## Existing File Contents\n{}", buf)
+}
+
 /// Build decomposition prompt with count_guidance and dependency_pattern injected.
 fn build_decompose_prompt(
     target_kind: DocKind,
@@ -414,9 +507,12 @@ fn build_decompose_prompt(
     let template_text = crate::resources::Resources::load(template_path, repo_path)
         .with_context(|| format!("failed to load template: {}", template_path))?;
 
+    let workspace_ctx = workspace_file_tree(repo_path);
+    let file_ctx = file_content_section(repo_path, target_kind, parent_content);
+
     Ok(format!(
-        "{}\n\n## Guidance\n\n- Produce {} child documents\n- Dependency pattern: {}\n\n## Template\n\n{}\n\n## Parent Document\n\n{}",
-        instructions, count_guidance, dependency_pattern, template_text, parent_content
+        "{}\n\n## Guidance\n\n- Produce {} child documents\n- Dependency pattern: {}\n\n## Template\n\n{}{}{}\n\n## Parent Document\n\n{}",
+        instructions, count_guidance, dependency_pattern, template_text, workspace_ctx, file_ctx, parent_content
     ))
 }
 
@@ -1308,5 +1404,103 @@ mod tests {
         use crate::domain::plan::Plan;
         let plan = Plan::new("test plan".to_string(), AcceptanceCriteria::default());
         assert_eq!(plan.decomposition_attempts, 0);
+    }
+
+    // --- workspace awareness (Phase 4: Bug 1) ---
+
+    #[test]
+    fn prompt_includes_workspace_files_when_repo_path_given() {
+        crate::prompts::init_defaults();
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Initialize a git repo with one tracked file
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("main.py"), "print('hello')").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "main.py"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+
+        let prompt =
+            build_decompose_prompt(DocKind::Work, "parent content", "1-3", "fan-out", Some(tmp.path())).unwrap();
+        assert!(prompt.contains("## Existing Workspace Files"));
+        assert!(prompt.contains("main.py"));
+    }
+
+    #[test]
+    fn prompt_no_workspace_section_without_repo_path() {
+        crate::prompts::init_defaults();
+        let prompt = build_decompose_prompt(DocKind::Work, "parent content", "1-3", "fan-out", None).unwrap();
+        assert!(!prompt.contains("## Existing Workspace Files"));
+    }
+
+    #[test]
+    fn sanitize_file_ref_rejects_absolute_path() {
+        let repo = std::path::Path::new("/tmp/repo");
+        assert!(sanitize_file_ref(repo, "/etc/passwd").is_none());
+    }
+
+    #[test]
+    fn sanitize_file_ref_rejects_parent_traversal() {
+        let repo = std::path::Path::new("/tmp/repo");
+        assert!(sanitize_file_ref(repo, "../../.env").is_none());
+        assert!(sanitize_file_ref(repo, "src/../../.aws/credentials").is_none());
+    }
+
+    #[test]
+    fn sanitize_file_ref_accepts_valid_path() {
+        let repo = std::path::Path::new("/tmp/repo");
+        let result = sanitize_file_ref(repo, "src/main.py");
+        assert_eq!(result, Some(std::path::PathBuf::from("/tmp/repo/src/main.py")));
+    }
+
+    #[test]
+    fn extract_file_references_finds_common_extensions() {
+        let content = "Create `src/main.py` and modify `config.yml` for the API.\n\
+                        Also update `tests/test_api.rs` and `package.json`.";
+        let refs = extract_file_references(content);
+        let names: Vec<&str> = refs.iter().map(|p| p.to_str().unwrap()).collect();
+        assert!(names.contains(&"src/main.py"));
+        assert!(names.contains(&"config.yml"));
+        assert!(names.contains(&"tests/test_api.rs"));
+        assert!(names.contains(&"package.json"));
+    }
+
+    #[test]
+    fn extract_file_references_deduplicates() {
+        let content = "Edit `main.py` first, then update `main.py` again.";
+        let refs = extract_file_references(content);
+        assert_eq!(refs.len(), 1);
+    }
+
+    #[test]
+    fn file_content_section_only_for_spec_decomposition() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("main.py"), "print('hello')").unwrap();
+        let content = "Create main.py for the API";
+
+        // Phase decomposition should produce empty string
+        let result = file_content_section(Some(tmp.path()), DocKind::Phase, content);
+        assert!(result.is_empty());
+
+        // Work decomposition should produce empty string
+        let result = file_content_section(Some(tmp.path()), DocKind::Work, content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn file_content_section_includes_existing_files_for_spec() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("main.py"), "print('hello world')").unwrap();
+        let content = "The Plan says create main.py for the FastAPI app";
+
+        let result = file_content_section(Some(tmp.path()), DocKind::Spec, content);
+        assert!(result.contains("## Existing File Contents"));
+        assert!(result.contains("main.py"));
+        assert!(result.contains("print('hello world')"));
     }
 }

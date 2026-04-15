@@ -21,6 +21,13 @@ Respond with a JSON array of phases. Each phase is an object:
 ]
 ```
 
+## Workspace Awareness
+
+CRITICAL: The target repository may already contain files from prior work or initialization.
+Never instruct "create from scratch" or "write from scratch" for any file that appears in the
+Existing Workspace Files listing. Default to modifying, extending, or appending to existing files.
+Only create new files when they genuinely don't exist yet.
+
 ## Rules
 
 1. Each Phase must follow the template provided in the "## Template" section below EXACTLY - use the same section headings and subsection structure (including ### sub-headings within sections)
