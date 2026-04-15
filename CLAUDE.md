@@ -98,7 +98,7 @@ cargo check      # Quick compile check
 22. **tui** - ratatui terminal UI: app state, keyboard input, event/render/IPC poll loop
 23. **run** - event loop split into events, IPC polling, and render sub-modules
 24. **views** - one file per TUI screen (dashboard, chat, agents, bundles, works, ticks, etc.)
-25. **validator** - doc validator (sync/ureq): validates documents against templates in docs/templates/
+25. **validator** - doc validator (sync/ureq): validates documents against templates in resources/decompose/
 26. **worktree** - git worktree lifecycle: create, clean, merge back to main
 
 ## Key External Dependencies
