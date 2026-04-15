@@ -1597,6 +1597,141 @@ fn test_validate_action_coherence_no_warning_non_abandoned_override() {
     assert!(warnings.is_empty(), "non-Abandoned overrides should not warn");
 }
 
+#[test]
+fn test_validate_action_coherence_negation_no_replacement_needed() {
+    // abandon with "no replacement is needed" in reason, no create_work -> no warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-4".into(),
+        target_status: "Abandoned".into(),
+        reason: "No replacement is needed for this work item".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(
+        warnings.is_empty(),
+        "negation 'no replacement' should suppress warning"
+    );
+}
+
+#[test]
+fn test_validate_action_coherence_negation_not_replacing() {
+    // abandon with "not replacing" in reason, no create_work -> no warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-5".into(),
+        target_status: "Abandoned".into(),
+        reason: "Not replacing this item, the feature is out of scope".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(
+        warnings.is_empty(),
+        "negation 'not replacing' should suppress warning"
+    );
+}
+
+#[test]
+fn test_validate_action_coherence_negation_without_replacement() {
+    // abandon with "without replacement" in reason, no create_work -> no warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-6".into(),
+        target_status: "Abandoned".into(),
+        reason: "Abandoning without replacement, work is no longer relevant".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(
+        warnings.is_empty(),
+        "negation 'without replacement' should suppress warning"
+    );
+}
+
+#[test]
+fn test_validate_action_coherence_negation_replacement_is_not() {
+    // abandon with "replacement is not" in reason, no create_work -> no warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-7".into(),
+        target_status: "Abandoned".into(),
+        reason: "Replacement is not warranted for this work item".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(
+        warnings.is_empty(),
+        "negation 'replacement is not' should suppress warning"
+    );
+}
+
+// --- coherence enforcement run_iteration tests ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_iteration_incoherent_actions_returns_continue_with_feedback() {
+    // override_work with "Creating replacement" but no create_work -> coherence gate
+    // should return Continue with feedback, not execute the actions.
+    crate::prompts::init_defaults();
+    let dir = TestDir::new("loopr-coord-coherence1");
+    let stores = test_stores(&dir);
+
+    let agent = test_coordinator(
+        &dir,
+        &stores,
+        vec![
+            r#"[{"action": "override_work", "work_id": "wi-1", "target_status": "Abandoned", "reason": "Creating replacement work for this item"}]"#
+                .to_string(),
+        ],
+        CoordinatorConfig::default(),
+    );
+
+    let mut coord_state = CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive);
+    let mut guard = Lifeguard::new();
+    let result = agent.run_iteration(&mut coord_state, &mut guard).await;
+
+    assert!(result.is_ok());
+    match result.unwrap() {
+        IterationOutcome::Continue(feedback) => {
+            assert!(
+                feedback.contains("incoherent"),
+                "feedback should mention incoherence, got: {}",
+                feedback
+            );
+        }
+        other => panic!("expected Continue with feedback, got: {:?}", other),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_iteration_coherent_negation_executes_normally() {
+    // override_work with "no replacement is needed" and no create_work -> negation guard
+    // should let the actions through (no coherence failure).
+    crate::prompts::init_defaults();
+    let dir = TestDir::new("loopr-coord-coherence2");
+    let stores = test_stores(&dir);
+
+    let agent = test_coordinator(
+        &dir,
+        &stores,
+        vec![
+            r#"[{"action": "override_work", "work_id": "wi-1", "target_status": "Abandoned", "reason": "No replacement is needed, feature was descoped"}]"#
+                .to_string(),
+        ],
+        CoordinatorConfig::default(),
+    );
+
+    let mut coord_state = CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive);
+    let mut guard = Lifeguard::new();
+    let result = agent.run_iteration(&mut coord_state, &mut guard).await;
+
+    assert!(result.is_ok());
+    // Should NOT be Continue with coherence feedback - the negation guard allows it through.
+    // The override_work action will fail (no matching work in stores), but that's an action
+    // execution failure, not a coherence failure.
+    match result.unwrap() {
+        IterationOutcome::Continue(feedback) => {
+            assert!(
+                !feedback.contains("incoherent"),
+                "negation guard should have suppressed coherence check, but got: {}",
+                feedback
+            );
+        }
+        _ => {} // Done or NeedHelp are also acceptable - the key is it wasn't a coherence rejection
+    }
+}
+
 // --- decomposition_error FSM tests ---
 
 #[tokio::test(flavor = "multi_thread")]

@@ -293,8 +293,6 @@ impl<L: LlmClient> CoordinatorAgent<L> {
                 }
             }
         };
-        guard.reset_parse_failures();
-
         tracing::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
@@ -302,15 +300,32 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         ));
 
         if actions.is_empty() {
+            guard.reset_parse_failures();
             return Ok(IterationOutcome::Done("No actions needed".to_string()));
         }
 
-        // Phase 2: Action coherence validation - warn when coordinator promises
+        // Action coherence validation - reject when coordinator promises
         // to create replacement works but doesn't emit the create_work action.
         let coherence_warnings = super::validate_action_coherence(&actions, &prefix);
-        for warning in &coherence_warnings {
-            self.ctx.warn(warning);
+        if !coherence_warnings.is_empty() {
+            for warning in &coherence_warnings {
+                self.ctx.warn(warning);
+            }
+            if let Verdict::Escalate(reason) = guard.record_parse_failure() {
+                return Ok(IterationOutcome::NeedHelp(format!(
+                    "lifeguard: repeated coherence failures: {}",
+                    reason
+                )));
+            }
+            let feedback = format!(
+                "Your actions are incoherent. Fix the following issues and resubmit all actions:\n{}",
+                coherence_warnings.join("\n")
+            );
+            return Ok(IterationOutcome::Continue(feedback));
         }
+
+        // Both parse and coherence passed - reset failure counter
+        guard.reset_parse_failures();
 
         // Gap #28: One-level-per-iteration guard — filter mixed-level actions
         let levels: std::collections::HashSet<_> = actions.iter().filter_map(infer_action_level).collect();

@@ -625,7 +625,11 @@ pub(crate) fn validate_action_coherence(actions: &[AgentAction], prefix: &str) -
                 || lower.contains("replacement")
                 || lower.contains("replacing")
                 || lower.contains("fix work");
-            if mentions_create && !has_create {
+            let negation = lower.contains("no replacement")
+                || lower.contains("not replacing")
+                || lower.contains("without replacement")
+                || lower.contains("replacement is not");
+            if mentions_create && !has_create && !negation {
                 let msg = format!(
                     "{} override_work on {} mentions creating replacements \
                      but no create_work action in payload",
