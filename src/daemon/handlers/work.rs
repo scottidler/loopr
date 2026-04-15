@@ -561,11 +561,21 @@ pub(super) fn handle_work_transition(
         if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &wi_clone) {
             tracing::warn!("docs/loopr write failed for {}: {}", id, e);
         }
+        if effective_status != target_status {
+            tracing::warn!(
+                "Work {} attempt_count={} reached max; effective status forced {:?} -> {:?}",
+                id,
+                wi_clone.attempt_count,
+                target_status,
+                effective_status
+            );
+        }
+
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "work",
             &id,
             &from.to_string(),
-            &target_status.to_string(),
+            &effective_status.to_string(),
             &role.to_string(),
         ));
 
@@ -574,7 +584,7 @@ pub(super) fn handle_work_transition(
                 "OVERRIDE: Work {} transitioned {:?} → {:?} by Coordinator (reason: {})",
                 id,
                 from,
-                target_status,
+                effective_status,
                 override_reason
             );
             let _ = event_tx.send(DaemonEvent::new(
@@ -582,7 +592,7 @@ pub(super) fn handle_work_transition(
                 serde_json::json!({
                     "work_id": id,
                     "from": format!("{:?}", from),
-                    "to": format!("{:?}", target_status),
+                    "to": format!("{:?}", effective_status),
                     "reason": override_reason,
                 }),
             ));
@@ -1802,6 +1812,126 @@ mod tests {
             wi.status(),
             crate::domain::work::WorkStatus::Blocked,
             "work should be Blocked (not Abandoned) when attempt_count reaches MAX_WORK_ATTEMPTS"
+        );
+    }
+
+    // --- Phase 3: OVERRIDE logging accuracy tests ---
+
+    #[tokio::test]
+    async fn test_transition_event_reports_effective_status_when_blocked() {
+        // When attempt_count reaches MAX_WORK_ATTEMPTS and effective_status becomes Blocked,
+        // the DaemonEvent::transition_completed must report "Blocked", not "Ready".
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let mut rx = tx.subscribe();
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
+
+        // Drain events from work creation hierarchy
+        while rx.try_recv().is_ok() {}
+
+        // Pre-set attempt_count to MAX_WORK_ATTEMPTS - 1 so the next reset tips it over
+        {
+            let mut works = stores.works.write().unwrap();
+            let wi = works.get_mut(&wi_id).unwrap();
+            wi.attempt_count = super::MAX_WORK_ATTEMPTS - 1;
+            wi.force_status(crate::domain::work::WorkStatus::InProgress);
+        }
+
+        // Trigger Ready transition; effective_status will be forced to Blocked
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                99,
+                "work.transition",
+                serde_json::json!({
+                    "id": wi_id,
+                    "target_status": "ready",
+                    "role": "coordinator",
+                    "override": true
+                }),
+            ),
+        )
+        .await;
+
+        // Collect the transition_completed event
+        let mut transition_event = None;
+        while let Ok(ev) = rx.try_recv() {
+            if ev.event == "transition.completed" && ev.data.get("collection").and_then(|v| v.as_str()) == Some("work")
+            {
+                transition_event = Some(ev);
+                break;
+            }
+        }
+
+        let ev = transition_event.expect("expected a transition.completed event");
+        let to = ev.data["to"].as_str().expect("expected 'to' field");
+        assert_eq!(
+            to, "Blocked",
+            "transition_completed event should report effective status 'Blocked', not 'Ready'; got: {}",
+            to
+        );
+    }
+
+    #[tokio::test]
+    async fn test_override_transition_event_reports_effective_status_when_blocked() {
+        // When effective_status diverges from target_status, the work.override_transition
+        // event must report the effective status (Blocked), not the requested status (Ready).
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let mut rx = tx.subscribe();
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
+
+        // Drain events from work creation hierarchy
+        while rx.try_recv().is_ok() {}
+
+        // Pre-set attempt_count to MAX_WORK_ATTEMPTS - 1
+        {
+            let mut works = stores.works.write().unwrap();
+            let wi = works.get_mut(&wi_id).unwrap();
+            wi.attempt_count = super::MAX_WORK_ATTEMPTS - 1;
+            wi.force_status(crate::domain::work::WorkStatus::InProgress);
+        }
+
+        // Trigger override transition; effective_status will be Blocked, target was Ready
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                99,
+                "work.transition",
+                serde_json::json!({
+                    "id": wi_id,
+                    "target_status": "ready",
+                    "role": "coordinator",
+                    "override": true,
+                    "override_reason": "retry attempt"
+                }),
+            ),
+        )
+        .await;
+
+        // Collect the work.override_transition event
+        let mut override_event = None;
+        while let Ok(ev) = rx.try_recv() {
+            if ev.event == "work.override_transition" {
+                override_event = Some(ev);
+                break;
+            }
+        }
+
+        let ev = override_event.expect("expected a work.override_transition event");
+        let to = ev.data["to"].as_str().expect("expected 'to' field");
+        assert_eq!(
+            to, "Blocked",
+            "work.override_transition event should report effective status 'Blocked', not 'Ready'; got: {}",
+            to
         );
     }
 
