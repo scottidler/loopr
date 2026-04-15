@@ -19,6 +19,7 @@ pub mod id;
 pub mod ipc;
 pub mod primitive;
 pub mod prompts;
+pub mod resources;
 pub mod scorer;
 pub mod session_summary;
 pub mod tools;

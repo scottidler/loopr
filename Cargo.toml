@@ -37,6 +37,7 @@ tracing-appender = "0.2.4"
 tracing-log = "0.2.0"
 regex = "1.12.3"
 keyby = { git = "https://github.com/scottidler/keyby.git", version = "0.1.0" }
+rust-embed = "8.11.0"
 # Dependencies will be added via cargo add
 
 [dev-dependencies]
