@@ -139,6 +139,16 @@ pub async fn execute_action(
             target_status,
             reason,
         } => work::handle_override_work(ctx, work_id, target_status, reason),
+        AgentAction::OverridePhase {
+            phase_id,
+            target_status,
+            reason,
+        } => record::handle_override_phase(ctx, phase_id, target_status, reason),
+        AgentAction::OverrideSpec {
+            spec_id,
+            target_status,
+            reason,
+        } => record::handle_override_spec(ctx, spec_id, target_status, reason),
 
         // --- Researcher actions ---
         AgentAction::SearchCode { pattern, glob, path } => {

@@ -107,6 +107,102 @@ pub(super) fn handle_revise_parent(
     )))
 }
 
+/// Handle OverridePhase action.
+/// Transitions a Phase to Superseded or Abandoned with an audit trail.
+pub(super) fn handle_override_phase(
+    ctx: &AgentContext,
+    phase_id: &str,
+    target_status: &str,
+    reason: &str,
+) -> Result<ActionResult> {
+    let bridge = &ctx.bridge;
+
+    let resp = bridge.request(
+        "phase.transition",
+        serde_json::json!({
+            "id": phase_id,
+            "target_status": target_status,
+            "role": "coordinator",
+        }),
+    );
+
+    if resp.is_error() {
+        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+        return Ok(ActionResult::ActionError(format!(
+            "override_phase transition failed: {}",
+            msg
+        )));
+    }
+
+    let _ = bridge.request(
+        "learning.create",
+        serde_json::json!({
+            "content": format!("Override: Phase {} -> {} (reason: {})", phase_id, target_status, reason),
+            "scope": "phase",
+            "source_id": phase_id,
+            "applicable_roles": ["coordinator"],
+            "files": ["override", "audit"],
+        }),
+    );
+
+    ctx.info(&format!(
+        "OverridePhase: {} -> {} (reason: {})",
+        phase_id, target_status, reason
+    ));
+    Ok(ActionResult::Transitioned(format!(
+        "override: phase/{} -> {}",
+        phase_id, target_status
+    )))
+}
+
+/// Handle OverrideSpec action.
+/// Transitions a Spec to Superseded or Abandoned with an audit trail.
+pub(super) fn handle_override_spec(
+    ctx: &AgentContext,
+    spec_id: &str,
+    target_status: &str,
+    reason: &str,
+) -> Result<ActionResult> {
+    let bridge = &ctx.bridge;
+
+    let resp = bridge.request(
+        "spec.transition",
+        serde_json::json!({
+            "id": spec_id,
+            "target_status": target_status,
+            "role": "coordinator",
+        }),
+    );
+
+    if resp.is_error() {
+        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+        return Ok(ActionResult::ActionError(format!(
+            "override_spec transition failed: {}",
+            msg
+        )));
+    }
+
+    let _ = bridge.request(
+        "learning.create",
+        serde_json::json!({
+            "content": format!("Override: Spec {} -> {} (reason: {})", spec_id, target_status, reason),
+            "scope": "spec",
+            "source_id": spec_id,
+            "applicable_roles": ["coordinator"],
+            "files": ["override", "audit"],
+        }),
+    );
+
+    ctx.info(&format!(
+        "OverrideSpec: {} -> {} (reason: {})",
+        spec_id, target_status, reason
+    ));
+    Ok(ActionResult::Transitioned(format!(
+        "override: spec/{} -> {}",
+        spec_id, target_status
+    )))
+}
+
 /// Handle InterviewQuestion action.
 pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]) -> Result<ActionResult> {
     let bridge = &ctx.bridge;

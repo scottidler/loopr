@@ -166,6 +166,16 @@ pub enum AgentAction {
         target_status: String,
         reason: String,
     },
+    OverridePhase {
+        phase_id: String,
+        target_status: String,
+        reason: String,
+    },
+    OverrideSpec {
+        spec_id: String,
+        target_status: String,
+        reason: String,
+    },
     EvaluateCoverage {
         parent_collection: String,
         parent_id: String,
