@@ -68,7 +68,10 @@ pub(super) fn handle_work_create(
         {
             let phases = stores.read_phases()?;
             if let Some(phase) = phases.get(&parent_id) {
-                if matches!(phase.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) {
+                if matches!(
+                    phase.status(),
+                    HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                ) {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
@@ -83,7 +86,12 @@ pub(super) fn handle_work_create(
                 let plans = stores.read_plans()?;
                 match plans.get(&parent_id) {
                     None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("parent", &parent_id))),
-                    Some(plan) if matches!(plan.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                    Some(plan)
+                        if matches!(
+                            plan.status(),
+                            HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                        ) =>
+                    {
                         return Ok(DaemonResponse::err(
                             req.id,
                             RpcError::precondition_failed(&format!(

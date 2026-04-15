@@ -42,7 +42,12 @@ pub(super) fn handle_phase_create(
             let specs = stores.read_specs()?;
             match specs.get(&parent_id) {
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id))),
-                Some(spec) if matches!(spec.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                Some(spec)
+                    if matches!(
+                        spec.status(),
+                        HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                    ) =>
+                {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(

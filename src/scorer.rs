@@ -165,7 +165,12 @@ fn compute_quality(works: &[Work], bundles: &[Bundle]) -> QualityMetrics {
             after_revision += 1;
         }
 
-        if !has_accepted && matches!(final_status, WorkStatus::Done | WorkStatus::Abandoned) {
+        if !has_accepted
+            && matches!(
+                final_status,
+                WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+            )
+        {
             rejected_terminal += 1;
         }
     }
