@@ -81,7 +81,7 @@ fn interpolate_status_values(content: String, max_abandon_ratio: f64) -> String 
         .replace("{work_status_values}", &WorkStatus::VARIANT_NAMES.join(", "))
         .replace("{bundle_status_values}", &BundleStatus::VARIANT_NAMES.join(", "))
         .replace("{hierarchy_status_values}", &HierarchyStatus::VARIANT_NAMES.join(", "))
-        .replace("{work_override_statuses}", "Ready, Abandoned, InReview")
+        .replace("{work_override_statuses}", "Ready, Superseded, Abandoned, InReview")
         .replace("{max_abandon_ratio_pct}", &pct.to_string())
 }
 

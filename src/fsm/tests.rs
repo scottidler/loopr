@@ -67,9 +67,10 @@ fn all_yaml_files_pass_validation() {
 fn work_fsm_has_correct_states() {
     let defs = schema::load_dir(&test_strategies_dir()).unwrap();
     let work = defs.iter().find(|d| d.name == "work").unwrap();
-    assert_eq!(work.states.len(), 9);
-    assert_eq!(work.terminal.len(), 2);
+    assert_eq!(work.states.len(), 10);
+    assert_eq!(work.terminal.len(), 3);
     assert!(work.terminal.contains(&"done".to_string()));
+    assert!(work.terminal.contains(&"superseded".to_string()));
     assert!(work.terminal.contains(&"abandoned".to_string()));
 }
 
