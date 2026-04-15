@@ -13,11 +13,22 @@ observe, report, and flag anomalies. You do NOT fix agents, edit source code, or
 **Immediately run the health check without waiting for further instruction:**
 
 ```bash
-TARGET=$(ps aux | grep 'loopr.*daemon' | grep -v grep | awk -F'--config ' '{print $2}' | awk -F'/loopr.yml' '{print $1}')
+# 1. Try to find the target from the active daemon
+TARGET=$(ps aux | grep 'loopr.*daemon' | grep -v grep | awk -F'--config ' '{print $2}' | awk -F'/loopr.yml' '{print $1}' | head -n 1)
+
+# 2. If no daemon, we might be in the build phase. Find the newest directory for the active e2e process.
+if [ -z "$TARGET" ]; then
+  ACTIVE_TARGET=$(ps aux | grep '[b]in/e2e ' | grep -v bash | awk '{print $12}' | head -n 1)
+  if [ -n "$ACTIVE_TARGET" ]; then
+    # Get the absolute newest directory, specifically ignoring the 'latest' symlink which is stale during build
+    TARGET=$(ls -td /tmp/loopr/e2e/$ACTIVE_TARGET/*/ 2>/dev/null | grep -v '/latest/' | head -1 | sed 's#/$##')
+  fi
+fi
+
 if [ -n "$TARGET" ]; then
-  scripts/check.sh $TARGET
+  scripts/check.sh "$TARGET"
 else
-  echo "No active loopr daemon found."
+  echo "No active loopr daemon or building E2E run found."
 fi
 ```
 
@@ -102,7 +113,7 @@ To accurately observe the run, follow these 6 keys:
 **CRITICAL: The E2E base directory is `/tmp/loopr/e2e/` - a slash before `e2e`, NOT a hyphen.**
 
 ```
-CORRECT:   /tmp/loopr/e2e/<target>/latest
+CORRECT:   /tmp/loopr/e2e/<target>/latest (but beware: this symlink is only updated AFTER the 60-second cargo build completes. Use `ls -td /tmp/loopr/e2e/<target>/*/ | grep -v '/latest/' | head -1` to find the actual newest run if a build is active).
 WRONG:     /tmp/loopr-e2e/<target>/latest   <- does not exist, NEVER use this
 ```
 
