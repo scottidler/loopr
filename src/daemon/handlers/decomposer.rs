@@ -396,15 +396,14 @@ fn build_decompose_prompt(
     dependency_pattern: &str,
 ) -> eyre::Result<String> {
     let prompts = crate::prompts::store();
-    let (instructions, template_text) = match target_kind {
-        DocKind::Spec => (&prompts.decompose_spec, include_str!("../../../docs/templates/spec.md")),
-        DocKind::Phase => (
-            &prompts.decompose_phase,
-            include_str!("../../../docs/templates/phase.md"),
-        ),
-        DocKind::Work => (&prompts.decompose_work, include_str!("../../../docs/templates/work.md")),
+    let (instructions, template_path) = match target_kind {
+        DocKind::Spec => (&prompts.decompose_spec, "decompose/spec/template.md"),
+        DocKind::Phase => (&prompts.decompose_phase, "decompose/phase/template.md"),
+        DocKind::Work => (&prompts.decompose_work, "decompose/work/template.md"),
         DocKind::Plan => bail!("cannot decompose into Plan"),
     };
+    let template_text = crate::resources::Resources::load(template_path, None)
+        .with_context(|| format!("failed to load template: {}", template_path))?;
 
     Ok(format!(
         "{}\n\n## Guidance\n\n- Produce {} child documents\n- Dependency pattern: {}\n\n## Template\n\n{}\n\n## Parent Document\n\n{}",
