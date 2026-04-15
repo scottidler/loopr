@@ -310,6 +310,7 @@ fn validate_trigger(
             }
             // NOT composite: sub-trigger must not be disabled.
             // NOT(disabled) returns Idle which inverts to fire unconditionally - dangerous.
+            // AND/OR(disabled) silently degrades but is warn-only; caught by validate_cross_references.
             if *operator == CompositeOperator::Not {
                 for sub in triggers {
                     if enabled_map.get(sub.as_str()) == Some(&false) {

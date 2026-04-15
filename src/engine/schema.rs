@@ -191,26 +191,70 @@ pub struct ValidationResult {
 
 /// Cross-validate strategies against triggers.
 ///
-/// Checks that every enabled strategy's `trigger` field names a known trigger.
-/// A strategy referencing an undefined trigger is a fatal error: the strategy
-/// can never fire and almost certainly indicates a typo or stale reference.
+/// Checks trigger existence, enabled state, and composite sub-trigger disabled states.
+/// - Strategy referencing an undefined trigger: Error (will never fire, likely a typo)
+/// - Strategy referencing a disabled trigger: Warn (strategy permanently inert)
+/// - NOT composite referencing a disabled sub-trigger: Error (NOT(disabled) fires unconditionally)
+/// - AND/OR composite referencing a disabled sub-trigger: Warn (silently degrades)
 pub fn validate_cross_references(
     strategies: &[StrategyDefinition],
     triggers: &[crate::trigger::schema::TriggerDefinition],
 ) -> Vec<ValidationResult> {
-    let trigger_names: HashSet<&str> = triggers.iter().map(|t| t.name.as_str()).collect();
+    use crate::trigger::schema::{CompositeOperator, TriggerKind};
+
+    let trigger_map: HashMap<&str, &crate::trigger::schema::TriggerDefinition> =
+        triggers.iter().map(|t| (t.name.as_str(), t)).collect();
     let mut results = Vec::new();
+
+    // Strategy -> trigger reference checks
     for strategy in strategies {
-        if !trigger_names.contains(strategy.trigger.as_str()) {
-            results.push(ValidationResult {
+        match trigger_map.get(strategy.trigger.as_str()) {
+            None => results.push(ValidationResult {
                 severity: Severity::Error,
                 message: format!(
                     "strategy '{}': trigger '{}' not found in trigger registry",
                     strategy.name, strategy.trigger
                 ),
-            });
+            }),
+            Some(t) if !t.enabled => results.push(ValidationResult {
+                severity: Severity::Warn,
+                message: format!(
+                    "strategy '{}': trigger '{}' is disabled (strategy will never fire)",
+                    strategy.name, strategy.trigger
+                ),
+            }),
+            _ => {}
         }
     }
+
+    // Composite trigger -> disabled sub-trigger checks
+    for trigger in triggers {
+        if let TriggerKind::Composite {
+            operator,
+            triggers: sub_names,
+        } = &trigger.kind
+        {
+            for sub_name in sub_names {
+                if let Some(sub) = trigger_map.get(sub_name.as_str())
+                    && !sub.enabled
+                {
+                    let (severity, note) = if matches!(operator, CompositeOperator::Not) {
+                        (Severity::Error, "NOT(disabled) fires unconditionally")
+                    } else {
+                        (Severity::Warn, "sub-trigger is permanently Idle")
+                    };
+                    results.push(ValidationResult {
+                        severity,
+                        message: format!(
+                            "composite '{}' ({:?}): sub-trigger '{}' is disabled - {}",
+                            trigger.name, operator, sub_name, note
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     results
 }
 

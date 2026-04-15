@@ -1279,6 +1279,124 @@ fn validate_cross_references_catches_unknown_trigger() {
 }
 
 #[test]
+fn validate_cross_references_warns_for_strategy_referencing_disabled_trigger() {
+    use crate::trigger::schema::{Operator, TriggerDefinition, TriggerKind};
+    let disabled_trigger = TriggerDefinition {
+        name: "disabled-trigger".to_owned(),
+        enabled: false,
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".to_owned(),
+            field: "attempt-count".to_owned(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let strategy = StrategyDefinition {
+        name: "strat-using-disabled".to_owned(),
+        description: String::new(),
+        trigger: "disabled-trigger".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "retry-work".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let results = schema::validate_cross_references(&[strategy], &[disabled_trigger]);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r.severity, schema::Severity::Warn) && r.message.contains("disabled-trigger")),
+        "expected Warn for strategy referencing disabled trigger, got: {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_cross_references_errors_for_not_composite_with_disabled_sub_trigger() {
+    use crate::trigger::schema::{CompositeOperator, Operator, TriggerDefinition, TriggerKind};
+    let disabled_sub = TriggerDefinition {
+        name: "disabled-sub".to_owned(),
+        enabled: false,
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".to_owned(),
+            field: "attempt-count".to_owned(),
+            operator: Operator::Gte,
+            value: 1.0,
+        },
+    };
+    let not_composite = TriggerDefinition {
+        name: "not-of-disabled".to_owned(),
+        enabled: true,
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Not,
+            triggers: vec!["disabled-sub".to_owned()],
+        },
+    };
+    let results = schema::validate_cross_references(&[], &[disabled_sub, not_composite]);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r.severity, schema::Severity::Error) && r.message.contains("not-of-disabled")),
+        "expected Error for NOT composite with disabled sub-trigger, got: {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_cross_references_warns_for_and_composite_with_disabled_sub_trigger() {
+    use crate::trigger::schema::{CompositeOperator, Operator, TriggerDefinition, TriggerKind};
+    let disabled_sub = TriggerDefinition {
+        name: "disabled-arm".to_owned(),
+        enabled: false,
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".to_owned(),
+            field: "attempt-count".to_owned(),
+            operator: Operator::Gte,
+            value: 1.0,
+        },
+    };
+    let enabled_sub = TriggerDefinition {
+        name: "enabled-arm".to_owned(),
+        enabled: true,
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".to_owned(),
+            field: "attempt-count".to_owned(),
+            operator: Operator::Gte,
+            value: 1.0,
+        },
+    };
+    let and_composite = TriggerDefinition {
+        name: "and-with-disabled".to_owned(),
+        enabled: true,
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::And,
+            triggers: vec!["disabled-arm".to_owned(), "enabled-arm".to_owned()],
+        },
+    };
+    let results = schema::validate_cross_references(&[], &[disabled_sub, enabled_sub, and_composite]);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r.severity, schema::Severity::Warn) && r.message.contains("and-with-disabled")),
+        "expected Warn for AND composite with disabled sub-trigger, got: {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn all_strategy_params_pass_primitive_validation() {
     let strategies = schema::load_dir(&strategies_dir()).unwrap();
     let registry = full_primitive_registry();
