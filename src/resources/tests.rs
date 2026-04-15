@@ -1,4 +1,66 @@
+use std::fs;
+
 use super::Resources;
+
+// ─── Phase 1: warn on override read failures ─────────────────────────────────
+
+/// Passing a directory path as the "file" argument triggers a non-NotFound IO
+/// error from read_to_string (IsADirectory on Linux, PermissionDenied on some
+/// platforms). This verifies the ErrorKind guard emits warn and falls through.
+#[test]
+fn test_load_repo_override_dir_as_file_falls_through_to_embedded() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Create a directory at the path where a file override would be expected.
+    // resources/agents/ already exists as an embedded path; creating a directory
+    // named after a known file causes read_to_string to fail with IsADirectory.
+    let override_dir = tmp.path().join("resources").join("agents");
+    fs::create_dir_all(&override_dir).unwrap();
+    // The override_dir itself will be the "file" path for the coordinator prompt
+    // because repo.join("resources").join("agents/coordinator.pmt") resolves to
+    // a path whose parent (agents/) exists, but the "file" itself doesn't exist.
+    // Instead, make a directory *at* the exact file path to force IsADirectory.
+    let file_as_dir = tmp.path().join("resources").join("agents").join("coordinator.pmt");
+    fs::create_dir_all(&file_as_dir).unwrap();
+
+    // Should fall through to the embedded default rather than returning an error.
+    let result = Resources::load("agents/coordinator.pmt", Some(tmp.path()));
+    assert!(
+        result.is_ok(),
+        "should fall through to embedded when override dir exists as directory"
+    );
+    let content = result.unwrap();
+    assert!(!content.is_empty(), "embedded fallback should return content");
+}
+
+#[test]
+fn test_load_dir_repo_override_dir_unreadable_falls_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Make the override directory exist but be unreadable (mode 000).
+    let override_dir = tmp.path().join("resources").join("engine").join("triggers");
+    fs::create_dir_all(&override_dir).unwrap();
+
+    // Only attempt permission manipulation on unix where it works predictably.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&override_dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // load_dir should warn and fall through - still returning embedded results.
+        let result = Resources::load_dir("engine/triggers/", Some(tmp.path()));
+
+        // Restore permissions so tempdir cleanup doesn't fail.
+        fs::set_permissions(&override_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "should fall through to embedded when override dir is unreadable"
+        );
+        let files = result.unwrap();
+        assert!(!files.is_empty(), "embedded trigger files should still be returned");
+    }
+}
+
+// ─── Existing tests ───────────────────────────────────────────────────────────
 
 #[test]
 fn test_load_embedded_prompt() {

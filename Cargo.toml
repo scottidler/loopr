@@ -41,6 +41,7 @@ rust-embed = "8.11.0"
 # Dependencies will be added via cargo add
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tokio = { version = "1.49.0", features = ["test-util"] }
 
 [build-dependencies]

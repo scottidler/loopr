@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use rust_embed::Embed;
-use tracing::info;
+use tracing::{info, warn};
 
 /// All runtime resource files compiled into the binary at build time.
 /// In debug builds, files are read from disk (enables hot-reload during development).
@@ -50,22 +50,40 @@ impl Resources {
         // 1. Repo-local override
         if let Some(repo) = repo_path {
             let local = repo.join("resources").join(path);
-            if let Ok(content) = std::fs::read_to_string(&local)
-                && !content.trim().is_empty()
-            {
-                info!("resource override loaded: {}", local.display());
-                return Ok(content);
+            match std::fs::read_to_string(&local) {
+                Ok(content) if !content.trim().is_empty() => {
+                    info!("resource override loaded: {}", local.display());
+                    return Ok(content);
+                }
+                Ok(_) => {
+                    // Empty file - fall through (intentional, documented behavior)
+                }
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    warn!("resource override failed to read: {}: {}", local.display(), e);
+                }
+                Err(_) => {
+                    // File doesn't exist - normal fallthrough
+                }
             }
         }
 
         // 2. XDG override
         if let Some(config_dir) = dirs::config_dir() {
             let xdg = config_dir.join("loopr/resources").join(path);
-            if let Ok(content) = std::fs::read_to_string(&xdg)
-                && !content.trim().is_empty()
-            {
-                info!("resource XDG override loaded: {}", xdg.display());
-                return Ok(content);
+            match std::fs::read_to_string(&xdg) {
+                Ok(content) if !content.trim().is_empty() => {
+                    info!("resource XDG override loaded: {}", xdg.display());
+                    return Ok(content);
+                }
+                Ok(_) => {
+                    // Empty file - fall through (intentional, documented behavior)
+                }
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    warn!("resource XDG override failed to read: {}: {}", xdg.display(), e);
+                }
+                Err(_) => {
+                    // File doesn't exist - normal fallthrough
+                }
             }
         }
 
@@ -101,14 +119,22 @@ impl Resources {
         // Union with any novel files in repo-local override.
         if let Some(repo) = repo_path {
             let dir = repo.join("resources").join(prefix);
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if entry.path().is_file()
-                        && Self::is_resource_file(&entry.path())
-                        && let Ok(name) = entry.file_name().into_string()
-                    {
-                        rel_paths.insert(format!("{}{}", prefix, name));
+            match std::fs::read_dir(&dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        if entry.path().is_file()
+                            && Self::is_resource_file(&entry.path())
+                            && let Ok(name) = entry.file_name().into_string()
+                        {
+                            rel_paths.insert(format!("{}{}", prefix, name));
+                        }
                     }
+                }
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    warn!("resource override dir failed to read: {}: {}", dir.display(), e);
+                }
+                Err(_) => {
+                    // Directory doesn't exist - normal fallthrough
                 }
             }
         }
@@ -116,14 +142,22 @@ impl Resources {
         // Union with any novel files in XDG override.
         if let Some(config_dir) = dirs::config_dir() {
             let dir = config_dir.join("loopr/resources").join(prefix);
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if entry.path().is_file()
-                        && Self::is_resource_file(&entry.path())
-                        && let Ok(name) = entry.file_name().into_string()
-                    {
-                        rel_paths.insert(format!("{}{}", prefix, name));
+            match std::fs::read_dir(&dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        if entry.path().is_file()
+                            && Self::is_resource_file(&entry.path())
+                            && let Ok(name) = entry.file_name().into_string()
+                        {
+                            rel_paths.insert(format!("{}{}", prefix, name));
+                        }
                     }
+                }
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    warn!("resource XDG override dir failed to read: {}: {}", dir.display(), e);
+                }
+                Err(_) => {
+                    // Directory doesn't exist - normal fallthrough
                 }
             }
         }
