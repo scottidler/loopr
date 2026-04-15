@@ -830,6 +830,7 @@ async fn tick_event_trigger_fires_strategy() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -881,6 +882,7 @@ async fn tick_priority_ordering() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -949,6 +951,7 @@ async fn tick_on_failure_wiring_fires_when_action_fails() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -1008,6 +1011,7 @@ async fn tick_disabled_strategy_is_skipped() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -1058,6 +1062,7 @@ async fn tick_scope_id_explosion() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -1116,6 +1121,7 @@ async fn tick_context_passes_between_steps() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -1223,6 +1229,52 @@ fn all_strategy_triggers_exist_in_trigger_definitions() {
         missing.is_empty(),
         "triggers missing from definitions:\n{}",
         missing.join("\n")
+    );
+}
+
+#[test]
+fn validate_cross_references_passes_for_valid_strategies() {
+    let triggers = crate::trigger::schema::load_dir(&triggers_dir()).unwrap();
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let results = schema::validate_cross_references(&strategies, &triggers);
+    let errors: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r.severity, schema::Severity::Error))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "all embedded strategies should reference valid triggers: {:?}",
+        errors.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_cross_references_catches_unknown_trigger() {
+    let triggers = crate::trigger::schema::load_dir(&triggers_dir()).unwrap();
+    let bad_strategy = StrategyDefinition {
+        name: "bad-strategy".to_owned(),
+        description: String::new(),
+        trigger: "nonexistent-trigger".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "retry-work".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let results = schema::validate_cross_references(&[bad_strategy], &triggers);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r.severity, schema::Severity::Error) && r.message.contains("nonexistent-trigger")),
+        "expected error for unknown trigger, got: {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
     );
 }
 
@@ -1348,6 +1400,7 @@ async fn tick_context_passes_from_action_to_on_success() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 
@@ -1406,6 +1459,7 @@ async fn tick_guard_skips_step_but_strategy_succeeds() {
             match_filter: HashMap::new(),
             throttle_secs: None,
         },
+        enabled: true,
         cooldown_secs: None,
     };
 

@@ -66,12 +66,21 @@ pub struct TriggerDefinition {
     /// Trigger name - injected from the YAML map key, not a YAML field.
     #[serde(skip_deserializing)]
     pub name: String,
-    /// The kind of trigger and its type-specific parameters.
-    #[serde(flatten)]
-    pub kind: TriggerKind,
+    /// Whether this trigger is active. Disabled triggers are parsed but never evaluated.
+    /// Defaults to true. Field ordering is load-bearing: must precede the #[serde(flatten)]
+    /// field to ensure the default applies correctly (serde-rs/serde#1626).
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     /// Suppress re-fires for a scope_id within this window after firing.
     #[serde(default)]
     pub cooldown_secs: Option<u32>,
+    /// The kind of trigger and its type-specific parameters.
+    #[serde(flatten)]
+    pub kind: TriggerKind,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// The kind of trigger and its type-specific parameters.
@@ -202,9 +211,10 @@ pub fn parse_content(content: &str, source: &str) -> eyre::Result<Vec<TriggerDef
 pub fn validate(defs: &[TriggerDefinition]) -> Vec<String> {
     let mut errors = Vec::new();
     let names: HashSet<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    let enabled_map: HashMap<&str, bool> = defs.iter().map(|d| (d.name.as_str(), d.enabled)).collect();
 
     for def in defs {
-        validate_trigger(def, &names, &mut errors);
+        validate_trigger(def, &names, &enabled_map, &mut errors);
     }
 
     // Check for cycles in composite triggers.
@@ -213,7 +223,12 @@ pub fn validate(defs: &[TriggerDefinition]) -> Vec<String> {
     errors
 }
 
-fn validate_trigger(def: &TriggerDefinition, all_names: &HashSet<&str>, errors: &mut Vec<String>) {
+fn validate_trigger(
+    def: &TriggerDefinition,
+    all_names: &HashSet<&str>,
+    enabled_map: &HashMap<&str, bool>,
+    errors: &mut Vec<String>,
+) {
     match &def.kind {
         TriggerKind::Threshold { scope, field, .. } => {
             if !VALID_SCOPES.contains(&scope.as_str()) {
@@ -291,6 +306,18 @@ fn validate_trigger(def: &TriggerDefinition, all_names: &HashSet<&str>, errors: 
                         "trigger '{}': references unknown trigger '{}'",
                         def.name, referenced
                     ));
+                }
+            }
+            // NOT composite: sub-trigger must not be disabled.
+            // NOT(disabled) returns Idle which inverts to fire unconditionally - dangerous.
+            if *operator == CompositeOperator::Not {
+                for sub in triggers {
+                    if enabled_map.get(sub.as_str()) == Some(&false) {
+                        errors.push(format!(
+                            "trigger '{}': NOT sub-trigger '{}' is disabled; NOT(disabled) fires unconditionally",
+                            def.name, sub
+                        ));
+                    }
                 }
             }
         }

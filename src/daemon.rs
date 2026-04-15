@@ -285,10 +285,6 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
         }
     };
 
-    // Build trigger evaluator
-    let state_queries = StateQueryRegistry::with_builtins();
-    let trigger_evaluator = TriggerEvaluator::new(triggers, state_queries);
-
     // Load strategy definitions from embedded resources (with repo-local override)
     let strategies = match crate::engine::schema::load_from_resources(Some(&repo_path)) {
         Ok(s) => s,
@@ -310,6 +306,33 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
             errors.len()
         );
     }
+
+    // Cross-validate: every strategy's trigger field must name a known trigger.
+    // Must run before TriggerEvaluator::new() takes ownership of triggers.
+    let cross_results = crate::engine::schema::validate_cross_references(&strategies, &triggers);
+    let mut fatal_cross = 0usize;
+    for result in &cross_results {
+        match result.severity {
+            crate::engine::schema::Severity::Error => {
+                error!("run_engine: cross-validation error: {}", result.message);
+                fatal_cross += 1;
+            }
+            crate::engine::schema::Severity::Warn => {
+                warn!("run_engine: cross-validation warning: {}", result.message);
+            }
+        }
+    }
+    if fatal_cross > 0 {
+        fatal!(
+            stores,
+            "run_engine: {} cross-validation error(s), daemon shutting down",
+            fatal_cross
+        );
+    }
+
+    // Build trigger evaluator (takes ownership of triggers - after cross-validation)
+    let state_queries = StateQueryRegistry::with_builtins();
+    let trigger_evaluator = TriggerEvaluator::new(triggers, state_queries);
 
     let guard_conditions = GuardConditionRegistry::with_builtins();
     let bridge = crate::agents::bridge::AgentIpcBridge::new(

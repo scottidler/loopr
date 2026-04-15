@@ -57,6 +57,7 @@ impl TriggerEvaluator {
         let names: Vec<String> = self
             .triggers
             .iter()
+            .filter(|t| t.enabled)
             .filter(|t| !matches!(t.kind, TriggerKind::Event { .. }))
             .map(|t| t.name.clone())
             .collect();
@@ -77,6 +78,7 @@ impl TriggerEvaluator {
         let names: Vec<String> = self
             .triggers
             .iter()
+            .filter(|t| t.enabled)
             .filter(|t| matches!(t.kind, TriggerKind::Event { .. }))
             .map(|t| t.name.clone())
             .collect();
@@ -124,6 +126,9 @@ impl TriggerEvaluator {
             None => return TriggerResult::Idle,
         };
         let def = &self.triggers[idx];
+        if !def.enabled {
+            return TriggerResult::Idle;
+        }
         match &def.kind {
             TriggerKind::Threshold {
                 scope,

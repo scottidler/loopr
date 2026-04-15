@@ -173,6 +173,47 @@ pub fn parse_content(content: &str, source: &str) -> eyre::Result<Vec<StrategyDe
     Ok(defs)
 }
 
+// ─── Cross-validation ────────────────────────────────────────────────────────
+
+/// Severity of a cross-validation finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warn,
+}
+
+/// A single cross-validation finding with a severity and message.
+#[derive(Debug, Clone)]
+pub struct ValidationResult {
+    pub severity: Severity,
+    pub message: String,
+}
+
+/// Cross-validate strategies against triggers.
+///
+/// Checks that every enabled strategy's `trigger` field names a known trigger.
+/// A strategy referencing an undefined trigger is a fatal error: the strategy
+/// can never fire and almost certainly indicates a typo or stale reference.
+pub fn validate_cross_references(
+    strategies: &[StrategyDefinition],
+    triggers: &[crate::trigger::schema::TriggerDefinition],
+) -> Vec<ValidationResult> {
+    let trigger_names: HashSet<&str> = triggers.iter().map(|t| t.name.as_str()).collect();
+    let mut results = Vec::new();
+    for strategy in strategies {
+        if !trigger_names.contains(strategy.trigger.as_str()) {
+            results.push(ValidationResult {
+                severity: Severity::Error,
+                message: format!(
+                    "strategy '{}': trigger '{}' not found in trigger registry",
+                    strategy.name, strategy.trigger
+                ),
+            });
+        }
+    }
+    results
+}
+
 // ─── Validation ──────────────────────────────────────────────────────────────
 
 /// Structural validation of a set of strategy definitions.

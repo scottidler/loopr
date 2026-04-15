@@ -21,6 +21,7 @@ fn strategies_triggers_dir() -> PathBuf {
 fn minimal_threshold() -> TriggerDefinition {
     TriggerDefinition {
         name: "test-threshold".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -34,6 +35,7 @@ fn minimal_threshold() -> TriggerDefinition {
 fn minimal_composite(operator: CompositeOperator, triggers: Vec<String>) -> TriggerDefinition {
     TriggerDefinition {
         name: "test-composite".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite { operator, triggers },
     }
@@ -269,6 +271,7 @@ fn valid_threshold_trigger_passes() {
 fn valid_event_trigger_passes() {
     let def = TriggerDefinition {
         name: "test-event".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "transition.completed".into(),
@@ -286,6 +289,7 @@ fn valid_composite_and_passes() {
     let a = minimal_threshold();
     let b = TriggerDefinition {
         name: "other-threshold".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -309,6 +313,7 @@ fn valid_composite_and_passes() {
 fn reject_unknown_scope() {
     let def = TriggerDefinition {
         name: "bad-scope".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "foobar".into(),
@@ -329,6 +334,7 @@ fn reject_unknown_scope() {
 fn reject_unknown_event_type() {
     let def = TriggerDefinition {
         name: "bad-event".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "nonexistent.event".into(),
@@ -350,6 +356,7 @@ fn reject_composite_not_with_two_triggers() {
     let a = minimal_threshold();
     let b = TriggerDefinition {
         name: "other".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -401,6 +408,7 @@ fn reject_cycle_in_composite() {
     // a -> b -> a
     let a = TriggerDefinition {
         name: "a".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::And,
@@ -414,6 +422,7 @@ fn reject_cycle_in_composite() {
     // c -> a (cycle)
     let c = TriggerDefinition {
         name: "c".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::And,
@@ -433,6 +442,7 @@ fn reject_cycle_in_composite() {
 fn reject_invalid_ratio_collection() {
     let def = TriggerDefinition {
         name: "bad-ratio".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Ratio {
             scope: "plan".into(),
@@ -995,6 +1005,7 @@ fn ratio_fires_when_ratio_exceeds_threshold() {
     let ctx = make_ctx(&stores);
     let def = TriggerDefinition {
         name: "abandon-ratio-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Ratio {
             scope: "plan".into(),
@@ -1053,6 +1064,7 @@ fn ratio_idle_when_ratio_below_threshold() {
     let ctx = make_ctx(&stores);
     let def = TriggerDefinition {
         name: "abandon-ratio-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Ratio {
             scope: "plan".into(),
@@ -1086,6 +1098,7 @@ fn ratio_idle_when_denominator_zero() {
     let ctx = make_ctx(&stores);
     let def = TriggerDefinition {
         name: "ratio-zero-denom".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Ratio {
             scope: "plan".into(),
@@ -1118,6 +1131,7 @@ fn event_fires_on_matching_event() {
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
         name: "session-failure-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "agent.status-changed".into(),
@@ -1147,6 +1161,7 @@ fn event_idle_when_no_matching_event() {
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
         name: "session-failure-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "agent.status-changed".into(),
@@ -1173,6 +1188,7 @@ fn event_extracts_id_from_standard_events() {
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
         name: "transition-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "transition.completed".into(),
@@ -1203,6 +1219,7 @@ fn timer_fires_when_elapsed_exceeds_max() {
     let ctx = ObservationCtx::new(&stores, &[], now);
     let def = TriggerDefinition {
         name: "sla-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Timer {
             scope: "work".into(),
@@ -1230,6 +1247,7 @@ fn timer_idle_when_under_max() {
     let ctx = ObservationCtx::new(&stores, &[], now);
     let def = TriggerDefinition {
         name: "sla-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Timer {
             scope: "work".into(),
@@ -1252,6 +1270,7 @@ fn state_query_trigger_fires_when_query_true() {
     let ctx = make_ctx(&stores);
     let def = TriggerDefinition {
         name: "has-children-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::StateQuery {
             scope: "phase".into(),
@@ -1277,6 +1296,7 @@ fn state_query_trigger_idle_when_query_false() {
     let ctx = make_ctx(&stores);
     let def = TriggerDefinition {
         name: "has-children-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::StateQuery {
             scope: "phase".into(),
@@ -1306,6 +1326,7 @@ fn composite_and_fires_when_all_sub_triggers_fire() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1316,6 +1337,7 @@ fn composite_and_fires_when_all_sub_triggers_fire() {
     };
     let t2 = TriggerDefinition {
         name: "session-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1326,6 +1348,7 @@ fn composite_and_fires_when_all_sub_triggers_fire() {
     };
     let comp = TriggerDefinition {
         name: "both-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::And,
@@ -1350,6 +1373,7 @@ fn composite_and_idle_when_one_sub_trigger_idle() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1360,6 +1384,7 @@ fn composite_and_idle_when_one_sub_trigger_idle() {
     };
     let t2 = TriggerDefinition {
         name: "session-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1370,6 +1395,7 @@ fn composite_and_idle_when_one_sub_trigger_idle() {
     };
     let comp = TriggerDefinition {
         name: "both-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::And,
@@ -1394,6 +1420,7 @@ fn composite_or_fires_when_any_sub_trigger_fires() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1404,6 +1431,7 @@ fn composite_or_fires_when_any_sub_trigger_fires() {
     };
     let t2 = TriggerDefinition {
         name: "session-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1414,6 +1442,7 @@ fn composite_or_fires_when_any_sub_trigger_fires() {
     };
     let comp = TriggerDefinition {
         name: "either-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::Or,
@@ -1436,6 +1465,7 @@ fn composite_or_idle_when_no_sub_trigger_fires() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1446,6 +1476,7 @@ fn composite_or_idle_when_no_sub_trigger_fires() {
     };
     let t2 = TriggerDefinition {
         name: "session-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1456,6 +1487,7 @@ fn composite_or_idle_when_no_sub_trigger_fires() {
     };
     let comp = TriggerDefinition {
         name: "either-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::Or,
@@ -1478,6 +1510,7 @@ fn composite_not_fires_when_sub_trigger_idle() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1488,6 +1521,7 @@ fn composite_not_fires_when_sub_trigger_idle() {
     };
     let comp = TriggerDefinition {
         name: "not-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::Not,
@@ -1511,6 +1545,7 @@ fn composite_not_idle_when_sub_trigger_fires() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1521,6 +1556,7 @@ fn composite_not_idle_when_sub_trigger_fires() {
     };
     let comp = TriggerDefinition {
         name: "not-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::Not,
@@ -1545,6 +1581,7 @@ fn cooldown_suppresses_refire_within_window() {
     stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
     let def = TriggerDefinition {
         name: "cooldown-test".into(),
+        enabled: true,
         cooldown_secs: Some(60),
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1576,6 +1613,7 @@ fn throttle_suppresses_event_refire() {
     let stores = make_stores();
     let def = TriggerDefinition {
         name: "throttle-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "agent.status-changed".into(),
@@ -1615,6 +1653,7 @@ fn cooldown_is_per_scope_id() {
     stores.write_works().unwrap().get_mut(&w2.id).unwrap().attempt_count = 5;
     let def = TriggerDefinition {
         name: "cooldown-per-id".into(),
+        enabled: true,
         cooldown_secs: Some(60),
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1646,6 +1685,7 @@ fn sweep_removes_expired_cooldowns() {
     stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
     let def = TriggerDefinition {
         name: "sweep-test".into(),
+        enabled: true,
         cooldown_secs: Some(10),
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1669,6 +1709,116 @@ fn sweep_removes_expired_cooldowns() {
     assert_eq!(results.len(), 1, "should fire after cooldown swept");
 }
 
+// --- Enabled field: serde and evaluation ---
+
+#[test]
+fn trigger_enabled_defaults_to_true() {
+    let yaml = r#"
+my-trigger:
+  type: threshold
+  scope: work
+  field: attempt-count
+  operator: ">="
+  value: 3.0
+"#;
+    let defs = schema::parse_content(yaml, "test").unwrap();
+    assert_eq!(defs.len(), 1);
+    assert!(defs[0].enabled, "enabled should default to true");
+}
+
+#[test]
+fn trigger_enabled_false_deserializes() {
+    let yaml = r#"
+my-trigger:
+  type: threshold
+  scope: work
+  field: attempt-count
+  operator: ">="
+  value: 3.0
+  enabled: false
+"#;
+    let defs = schema::parse_content(yaml, "test").unwrap();
+    assert_eq!(defs.len(), 1);
+    assert!(!defs[0].enabled, "enabled: false should deserialize correctly");
+}
+
+#[test]
+fn evaluate_pull_skips_disabled_trigger() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    let ctx = make_ctx(&stores);
+    let def = TriggerDefinition {
+        name: "disabled-threshold".into(),
+        enabled: false,
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty(), "disabled trigger must not fire in pull mode");
+}
+
+#[test]
+fn evaluate_push_skips_disabled_trigger() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed", "work_id": "wk-1"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let def = TriggerDefinition {
+        name: "disabled-event".into(),
+        enabled: false,
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "agent.status-changed".into(),
+            scope: Some("work".into()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_push(&ctx);
+    assert!(results.is_empty(), "disabled trigger must not fire in push mode");
+}
+
+#[test]
+fn validate_rejects_not_with_disabled_sub_trigger() {
+    // NOT(disabled) fires unconditionally - must be a validation error.
+    let sub = TriggerDefinition {
+        name: "disabled-sub".into(),
+        enabled: false,
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let not_trigger = TriggerDefinition {
+        name: "not-of-disabled".into(),
+        enabled: true,
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Not,
+            triggers: vec!["disabled-sub".into()],
+        },
+    };
+    let errors = schema::validate(&[sub, not_trigger]);
+    assert!(
+        errors.iter().any(|e| e.contains("fires unconditionally")),
+        "expected NOT(disabled) validation error, got: {:?}",
+        errors
+    );
+}
+
 // --- Pull vs push separation ---
 
 #[test]
@@ -1681,6 +1831,7 @@ fn evaluate_pull_skips_event_triggers() {
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
         name: "event-only".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "agent.status-changed".into(),
@@ -1757,6 +1908,7 @@ fn v3_work_sla_breach_fires_after_timeout() {
     // ts > 0, so we use created-at which is always set. We test with our own def.
     let def = TriggerDefinition {
         name: "sla-regression".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Timer {
             scope: "work".into(),
@@ -1785,6 +1937,7 @@ fn composite_not_fires_for_unmatched_records_only() {
     let ctx = make_ctx(&stores);
     let t1 = TriggerDefinition {
         name: "attempt-check".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Threshold {
             scope: "work".into(),
@@ -1795,6 +1948,7 @@ fn composite_not_fires_for_unmatched_records_only() {
     };
     let comp = TriggerDefinition {
         name: "not-failing".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Composite {
             operator: CompositeOperator::Not,
@@ -1827,6 +1981,7 @@ fn event_prefers_scope_keyed_id_over_generic_id() {
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
         name: "session-failure-test".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "agent.status-changed".into(),
@@ -1861,6 +2016,7 @@ fn global_event_trigger_throttle_suppresses_refire() {
     let stores = make_stores();
     let def = TriggerDefinition {
         name: "global-event".into(),
+        enabled: true,
         cooldown_secs: None,
         kind: TriggerKind::Event {
             event: "tick.published".into(),
