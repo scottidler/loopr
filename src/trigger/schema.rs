@@ -139,6 +139,22 @@ impl TriggerKind {
     }
 }
 
+/// Load all trigger definitions from embedded resources, with optional repo-local override.
+///
+/// Uses `Resources::load_dir("triggers/", ...)` to discover trigger YAML files from
+/// the embedded strategies directory, falling back through the standard override chain
+/// (repo-local > XDG > embedded).
+pub fn load_from_resources(repo_path: Option<&Path>) -> eyre::Result<Vec<TriggerDefinition>> {
+    let entries = crate::resources::Resources::load_dir("triggers/", repo_path)?;
+    let mut defs = Vec::new();
+    for (path, content) in entries {
+        let mut file_defs = parse_content(&content, &path)?;
+        defs.append(&mut file_defs);
+    }
+    info!("loaded {} trigger definitions from resources", defs.len());
+    Ok(defs)
+}
+
 /// Load all trigger definitions from a directory of YAML files.
 pub fn load_dir(dir: &Path) -> eyre::Result<Vec<TriggerDefinition>> {
     let mut defs = Vec::new();
@@ -160,8 +176,14 @@ pub fn load_dir(dir: &Path) -> eyre::Result<Vec<TriggerDefinition>> {
 /// The file must be a keyed map: trigger-name -> TriggerDefinition.
 pub fn load_file(path: &Path) -> eyre::Result<Vec<TriggerDefinition>> {
     let content = std::fs::read_to_string(path).map_err(|e| eyre::eyre!("failed to read {}: {}", path.display(), e))?;
+    parse_content(&content, &path.display().to_string())
+}
+
+/// Parse trigger definitions from YAML content string.
+/// The content must be a keyed map: trigger-name -> TriggerDefinition.
+pub fn parse_content(content: &str, source: &str) -> eyre::Result<Vec<TriggerDefinition>> {
     let raw: HashMap<String, TriggerDefinition> =
-        serde_yaml::from_str(&content).map_err(|e| eyre::eyre!("failed to parse {}: {}", path.display(), e))?;
+        serde_yaml::from_str(content).map_err(|e| eyre::eyre!("failed to parse {}: {}", source, e))?;
     let mut defs: Vec<TriggerDefinition> = raw
         .into_iter()
         .map(|(name, mut def)| {
@@ -171,7 +193,7 @@ pub fn load_file(path: &Path) -> eyre::Result<Vec<TriggerDefinition>> {
         .collect();
     // Sort by name for deterministic ordering in tests.
     defs.sort_by(|a, b| a.name.cmp(&b.name));
-    info!("loaded {} triggers from {}", defs.len(), path.display());
+    info!("loaded {} triggers from {}", defs.len(), source);
     Ok(defs)
 }
 

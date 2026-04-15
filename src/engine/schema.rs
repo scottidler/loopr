@@ -94,6 +94,22 @@ fn default_enabled() -> bool {
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
 
+/// Load all strategy definitions from embedded resources, with optional repo-local override.
+///
+/// Uses `Resources::load_dir_excluding()` to discover strategy YAML files from the
+/// embedded strategies directory, skipping fsm/, triggers/, and roles/ subdirectories
+/// that share the same embed root but contain non-strategy YAML schemas.
+pub fn load_from_resources(repo_path: Option<&Path>) -> eyre::Result<Vec<StrategyDefinition>> {
+    let entries = crate::resources::Resources::load_dir_excluding(&["fsm/", "triggers/", "roles/"], repo_path)?;
+    let mut defs = Vec::new();
+    for (path, content) in entries {
+        let mut file_defs = parse_content(&content, &path)?;
+        defs.append(&mut file_defs);
+    }
+    info!("loaded {} strategy definitions from resources", defs.len());
+    Ok(defs)
+}
+
 /// Load all strategy definitions from a directory tree (recursive).
 /// Strategies are organized in subdirectories (e.g. `recovery/`, `reconciliation/`).
 /// The `fsm/`, `triggers/`, and `roles/` subdirs at the ROOT level are skipped - they
@@ -136,8 +152,14 @@ fn load_dir_recursive(root: &Path, dir: &Path, defs: &mut Vec<StrategyDefinition
 /// The file must be a keyed map: strategy-name -> StrategyDefinition.
 pub fn load_file(path: &Path) -> eyre::Result<Vec<StrategyDefinition>> {
     let content = std::fs::read_to_string(path).map_err(|e| eyre::eyre!("failed to read {}: {}", path.display(), e))?;
+    parse_content(&content, &path.display().to_string())
+}
+
+/// Parse strategy definitions from YAML content string.
+/// The content must be a keyed map: strategy-name -> StrategyDefinition.
+pub fn parse_content(content: &str, source: &str) -> eyre::Result<Vec<StrategyDefinition>> {
     let raw: HashMap<String, StrategyDefinition> =
-        serde_yaml::from_str(&content).map_err(|e| eyre::eyre!("failed to parse {}: {}", path.display(), e))?;
+        serde_yaml::from_str(content).map_err(|e| eyre::eyre!("failed to parse {}: {}", source, e))?;
     let mut defs: Vec<StrategyDefinition> = raw
         .into_iter()
         .map(|(name, mut def)| {
@@ -146,7 +168,7 @@ pub fn load_file(path: &Path) -> eyre::Result<Vec<StrategyDefinition>> {
         })
         .collect();
     defs.sort_by(|a, b| a.name.cmp(&b.name));
-    info!("loaded {} strategies from {}", defs.len(), path.display());
+    info!("loaded {} strategies from {}", defs.len(), source);
     Ok(defs)
 }
 

@@ -91,6 +91,35 @@ impl Resources {
         Ok(results)
     }
 
+    /// Load all strategy files from the strategies embed, excluding entries whose
+    /// path starts with any of the given prefixes.
+    ///
+    /// Used by engine::schema to load strategy definitions while skipping the
+    /// fsm/, triggers/, and roles/ subdirectories that share the strategies/ embed
+    /// root but contain non-strategy YAML files with incompatible schemas.
+    pub fn load_dir_excluding(
+        exclude_prefixes: &[&str],
+        repo_path: Option<&Path>,
+    ) -> eyre::Result<Vec<(String, String)>> {
+        let mut paths: Vec<String> = EmbeddedStrategies::iter()
+            .filter(|p| !exclude_prefixes.iter().any(|exc| p.starts_with(exc)))
+            .map(|p| p.to_string())
+            .collect();
+        paths.sort();
+        if paths.is_empty() {
+            return Err(eyre::eyre!(
+                "no embedded strategy files found after excluding {:?}",
+                exclude_prefixes
+            ));
+        }
+        let mut results = Vec::new();
+        for rel_path in paths {
+            let content = Self::load(&rel_path, repo_path)?;
+            results.push((rel_path, content));
+        }
+        Ok(results)
+    }
+
     /// Check whether a resource exists in any layer.
     pub fn exists(path: &str, repo_path: Option<&Path>) -> bool {
         if path.starts_with('/') {

@@ -149,17 +149,19 @@ impl<'a> DecomposerAgent<'a> {
     }
 
     /// Load the role config YAML and find the rule for this parent kind.
+    ///
+    /// Uses `Resources::load()` to resolve the role config through the standard override
+    /// chain (repo-local > XDG > embedded default), so role configs work out of the box
+    /// without a strategies/ directory on disk.
     fn load_rule(&self, parent_collection: &str, config_name: &str) -> Result<DecomposerRule> {
-        let config_path = format!(
-            "strategies/roles/decomposer{}.yml",
+        let resource_path = format!(
+            "roles/decomposer{}.yml",
             if config_name == "full" { String::new() } else { format!("-{}", config_name) }
         );
 
         let repo_path = &self.ctx.stores.config.project.repo_path;
-        let full_path = std::path::Path::new(repo_path).join(&config_path);
-
-        let content = std::fs::read_to_string(&full_path)
-            .map_err(|e| eyre!("failed to read role config '{}': {}", full_path.display(), e))?;
+        let content = crate::resources::Resources::load(&resource_path, Some(std::path::Path::new(repo_path)))
+            .map_err(|e| eyre!("failed to load role config '{}': {}", resource_path, e))?;
 
         let parsed: serde_json::Value =
             serde_yaml::from_str(&content).map_err(|e| eyre!("failed to parse role config: {}", e))?;

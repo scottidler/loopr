@@ -79,3 +79,59 @@ fn test_load_absolute_path_not_found() {
         msg
     );
 }
+
+#[test]
+fn test_load_dir_triggers_returns_all_definitions() {
+    let files = Resources::load_dir("triggers/", None).unwrap();
+    assert!(!files.is_empty(), "should find embedded trigger files");
+    for (path, content) in &files {
+        assert!(
+            path.starts_with("triggers/"),
+            "path should start with triggers/: {}",
+            path
+        );
+        assert!(path.ends_with(".yml"), "trigger files should be .yml: {}", path);
+        assert!(!content.is_empty(), "trigger file should not be empty: {}", path);
+    }
+}
+
+#[test]
+fn test_load_dir_excluding_skips_fsm_triggers_roles() {
+    let files = Resources::load_dir_excluding(&["fsm/", "triggers/", "roles/"], None).unwrap();
+    assert!(!files.is_empty(), "should find strategy files after exclusions");
+    for (path, _) in &files {
+        assert!(!path.starts_with("fsm/"), "should not contain fsm/ entries: {}", path);
+        assert!(
+            !path.starts_with("triggers/"),
+            "should not contain triggers/ entries: {}",
+            path
+        );
+        assert!(
+            !path.starts_with("roles/"),
+            "should not contain roles/ entries: {}",
+            path
+        );
+    }
+}
+
+#[test]
+fn test_load_dir_excluding_returns_strategy_subdirs() {
+    let files = Resources::load_dir_excluding(&["fsm/", "triggers/", "roles/"], None).unwrap();
+    let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+    assert!(
+        paths.iter().any(|p| p.starts_with("decomposition/")),
+        "should include decomposition/ strategies"
+    );
+    assert!(
+        paths.iter().any(|p| p.starts_with("recovery/")),
+        "should include recovery/ strategies"
+    );
+}
+
+#[test]
+fn test_load_embedded_role_config() {
+    let content = Resources::load("roles/decomposer.yml", None).unwrap();
+    assert!(!content.is_empty(), "decomposer.yml should not be empty");
+    let content_brief = Resources::load("roles/decomposer-brief.yml", None).unwrap();
+    assert!(!content_brief.is_empty(), "decomposer-brief.yml should not be empty");
+}

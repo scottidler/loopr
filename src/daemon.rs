@@ -277,17 +277,11 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
         fatal!(stores, "run_engine: failed to register primitives: {}", e);
     }
 
-    // Load trigger definitions
-    let triggers_dir = repo_path.join("strategies/triggers");
-    let triggers = match trigger_schema::load_dir(&triggers_dir) {
+    // Load trigger definitions from embedded resources (with repo-local override)
+    let triggers = match trigger_schema::load_from_resources(Some(&repo_path)) {
         Ok(t) => t,
         Err(e) => {
-            fatal!(
-                stores,
-                "run_engine: failed to load triggers from {}: {}",
-                triggers_dir.display(),
-                e
-            );
+            fatal!(stores, "run_engine: failed to load triggers: {}", e);
         }
     };
 
@@ -295,17 +289,11 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
     let state_queries = StateQueryRegistry::with_builtins();
     let trigger_evaluator = TriggerEvaluator::new(triggers, state_queries);
 
-    // Load strategy definitions
-    let strategies_dir = repo_path.join("strategies");
-    let strategies = match crate::engine::schema::load_dir(&strategies_dir) {
+    // Load strategy definitions from embedded resources (with repo-local override)
+    let strategies = match crate::engine::schema::load_from_resources(Some(&repo_path)) {
         Ok(s) => s,
         Err(e) => {
-            fatal!(
-                stores,
-                "run_engine: failed to load strategies from {}: {}",
-                strategies_dir.display(),
-                e
-            );
+            fatal!(stores, "run_engine: failed to load strategies: {}", e);
         }
     };
     info!("run_engine: loaded {} strategies", strategies.len());

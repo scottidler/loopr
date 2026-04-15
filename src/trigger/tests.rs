@@ -55,6 +55,37 @@ fn all_yaml_files_pass_validation() {
 }
 
 #[test]
+fn load_from_resources_returns_all_triggers() {
+    let defs = schema::load_from_resources(None).unwrap();
+    assert!(!defs.is_empty(), "expected trigger definitions from embedded resources");
+}
+
+#[test]
+fn load_from_resources_matches_filesystem() {
+    let fs_defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let res_defs = schema::load_from_resources(None).unwrap();
+    let mut fs_names: Vec<&str> = fs_defs.iter().map(|d| d.name.as_str()).collect();
+    let mut res_names: Vec<&str> = res_defs.iter().map(|d| d.name.as_str()).collect();
+    fs_names.sort();
+    res_names.sort();
+    assert_eq!(
+        fs_names, res_names,
+        "resource-loaded triggers should match filesystem-loaded triggers"
+    );
+}
+
+#[test]
+fn load_from_resources_passes_validation() {
+    let defs = schema::load_from_resources(None).unwrap();
+    let errors = schema::validate(&defs);
+    assert!(
+        errors.is_empty(),
+        "resource-loaded triggers should pass validation: {:?}",
+        errors
+    );
+}
+
+#[test]
 fn loaded_triggers_cover_all_27_v3_conditions() {
     let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
