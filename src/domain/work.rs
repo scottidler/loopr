@@ -329,6 +329,7 @@ mod tests {
         assert!(!WorkStatus::Draft.is_terminal(&fsm));
         assert!(!WorkStatus::InProgress.is_terminal(&fsm));
         assert!(WorkStatus::Done.is_terminal(&fsm));
+        assert!(WorkStatus::Superseded.is_terminal(&fsm));
         assert!(WorkStatus::Abandoned.is_terminal(&fsm));
     }
 

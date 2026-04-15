@@ -4,7 +4,7 @@ use crate::domain::transition::Transition;
 use crate::domain::work::{Work, WorkStatus};
 use crate::fsm::status::FsmStatus;
 
-const ALL_STATES: [WorkStatus; 9] = [
+const ALL_STATES: [WorkStatus; 10] = [
     WorkStatus::Draft,
     WorkStatus::Pending,
     WorkStatus::Ready,
@@ -13,10 +13,11 @@ const ALL_STATES: [WorkStatus; 9] = [
     WorkStatus::InReview,
     WorkStatus::Integrated,
     WorkStatus::Done,
+    WorkStatus::Superseded,
     WorkStatus::Abandoned,
 ];
 
-const TERMINAL: [WorkStatus; 2] = [WorkStatus::Done, WorkStatus::Abandoned];
+const TERMINAL: [WorkStatus; 3] = [WorkStatus::Done, WorkStatus::Superseded, WorkStatus::Abandoned];
 
 // --- Valid transitions ---
 
@@ -396,5 +397,63 @@ fn yaml_name_roundtrip() {
         let name = status.to_yaml_name();
         let restored = WorkStatus::from_yaml_name(name).expect("roundtrip failed");
         assert_eq!(*status, restored, "roundtrip failed for {}", name);
+    }
+}
+
+// --- Superseded transition tests ---
+
+#[test]
+fn valid_superseded_from_all_pre_terminal() {
+    let interp = new_interp();
+    let pre_terminal = [
+        WorkStatus::Draft,
+        WorkStatus::Pending,
+        WorkStatus::Ready,
+        WorkStatus::InProgress,
+        WorkStatus::Blocked,
+        WorkStatus::InReview,
+    ];
+    for from in &pre_terminal {
+        let r = vt(&interp, *from, WorkStatus::Superseded, Role::Coordinator);
+        assert_valid(format!("{:?}", from), "Superseded", &r);
+    }
+}
+
+#[test]
+fn wrong_role_superseded() {
+    let interp = new_interp();
+    let pre_terminal = [
+        WorkStatus::Draft,
+        WorkStatus::Pending,
+        WorkStatus::Ready,
+        WorkStatus::InProgress,
+        WorkStatus::Blocked,
+        WorkStatus::InReview,
+    ];
+    for from in &pre_terminal {
+        for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
+            let r = vt(&interp, *from, WorkStatus::Superseded, role);
+            assert_invalid(format!("{:?}", from), format!("Superseded ({:?})", role), &r);
+        }
+    }
+}
+
+#[test]
+fn superseded_is_terminal() {
+    let interp = new_interp();
+    assert!(WorkStatus::Superseded.is_terminal(&interp));
+}
+
+#[test]
+fn no_transitions_from_superseded() {
+    let interp = new_interp();
+    for target in &ALL_STATES {
+        if *target == WorkStatus::Superseded {
+            continue;
+        }
+        for role in &ALL_ROLES {
+            let r = vt(&interp, WorkStatus::Superseded, *target, *role);
+            assert_invalid("Superseded", format!("{:?}", target), &r);
+        }
     }
 }

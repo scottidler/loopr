@@ -5,15 +5,20 @@ use crate::domain::role::Role;
 use crate::domain::transition::Transition;
 use crate::fsm::status::FsmStatus;
 
-const ALL_STATES: [HierarchyStatus; 5] = [
+const ALL_STATES: [HierarchyStatus; 6] = [
     HierarchyStatus::Draft,
     HierarchyStatus::Pending,
     HierarchyStatus::Active,
     HierarchyStatus::Complete,
+    HierarchyStatus::Superseded,
     HierarchyStatus::Abandoned,
 ];
 
-const TERMINAL: [HierarchyStatus; 2] = [HierarchyStatus::Complete, HierarchyStatus::Abandoned];
+const TERMINAL: [HierarchyStatus; 3] = [
+    HierarchyStatus::Complete,
+    HierarchyStatus::Superseded,
+    HierarchyStatus::Abandoned,
+];
 
 // --- Valid transitions: all with Coordinator ---
 
@@ -111,6 +116,9 @@ fn wrong_role_on_every_valid_transition() {
         (HierarchyStatus::Draft, HierarchyStatus::Active),
         (HierarchyStatus::Pending, HierarchyStatus::Active),
         (HierarchyStatus::Active, HierarchyStatus::Complete),
+        (HierarchyStatus::Draft, HierarchyStatus::Superseded),
+        (HierarchyStatus::Pending, HierarchyStatus::Superseded),
+        (HierarchyStatus::Active, HierarchyStatus::Superseded),
         (HierarchyStatus::Draft, HierarchyStatus::Abandoned),
         (HierarchyStatus::Pending, HierarchyStatus::Abandoned),
         (HierarchyStatus::Active, HierarchyStatus::Abandoned),
@@ -232,5 +240,58 @@ fn yaml_name_roundtrip() {
         let name = status.to_yaml_name();
         let restored = HierarchyStatus::from_yaml_name(name).expect("roundtrip failed");
         assert_eq!(*status, restored, "roundtrip failed for {}", name);
+    }
+}
+
+// --- Superseded transition tests ---
+
+#[test]
+fn valid_superseded_from_all_pre_terminal() {
+    let interp = new_interp();
+    let pre_terminal = [
+        HierarchyStatus::Draft,
+        HierarchyStatus::Pending,
+        HierarchyStatus::Active,
+    ];
+    for from in &pre_terminal {
+        let r = vt(&interp, *from, HierarchyStatus::Superseded, Role::Coordinator);
+        assert_valid(format!("{:?}", from), "Superseded", &r);
+    }
+}
+
+#[test]
+fn wrong_role_superseded() {
+    let interp = new_interp();
+    let pre_terminal = [
+        HierarchyStatus::Draft,
+        HierarchyStatus::Pending,
+        HierarchyStatus::Active,
+    ];
+    let wrong_roles = [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator];
+    for from in &pre_terminal {
+        for role in &wrong_roles {
+            let r = vt(&interp, *from, HierarchyStatus::Superseded, *role);
+            assert_invalid(format!("{:?}", from), format!("Superseded ({:?})", role), &r);
+        }
+    }
+}
+
+#[test]
+fn superseded_is_terminal() {
+    let interp = new_interp();
+    assert!(HierarchyStatus::Superseded.is_terminal(&interp));
+}
+
+#[test]
+fn no_transitions_from_superseded() {
+    let interp = new_interp();
+    for target in &ALL_STATES {
+        if *target == HierarchyStatus::Superseded {
+            continue;
+        }
+        for role in &ALL_ROLES {
+            let r = vt(&interp, HierarchyStatus::Superseded, *target, *role);
+            assert_invalid("Superseded", format!("{:?}", target), &r);
+        }
     }
 }

@@ -295,6 +295,7 @@ mod tests {
         assert!(!HierarchyStatus::Pending.is_terminal(&fsm));
         assert!(!HierarchyStatus::Active.is_terminal(&fsm));
         assert!(HierarchyStatus::Complete.is_terminal(&fsm));
+        assert!(HierarchyStatus::Superseded.is_terminal(&fsm));
         assert!(HierarchyStatus::Abandoned.is_terminal(&fsm));
     }
 
