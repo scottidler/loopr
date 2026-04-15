@@ -132,6 +132,7 @@ pub(super) async fn handle_decomposer_decompose(
             &http_client,
             &count_guidance,
             &dependency_pattern,
+            Some(std::path::Path::new(repo_path)),
         )
         .await?;
 
@@ -169,8 +170,15 @@ async fn decompose_single_level<H: HttpClient + Sync>(
     http_client: &H,
     count_guidance: &str,
     dependency_pattern: &str,
+    repo_path: Option<&std::path::Path>,
 ) -> eyre::Result<Vec<ChildRecord>> {
-    let prompt = build_decompose_prompt(target_kind, parent_content, count_guidance, dependency_pattern)?;
+    let prompt = build_decompose_prompt(
+        target_kind,
+        parent_content,
+        count_guidance,
+        dependency_pattern,
+        repo_path,
+    )?;
     let children = match call_llm_for_children(http_client, config, &prompt).await {
         Ok(c) => c,
         Err(e) => {
@@ -394,6 +402,7 @@ fn build_decompose_prompt(
     parent_content: &str,
     count_guidance: &str,
     dependency_pattern: &str,
+    repo_path: Option<&std::path::Path>,
 ) -> eyre::Result<String> {
     let prompts = crate::prompts::store();
     let (instructions, template_path) = match target_kind {
@@ -402,7 +411,7 @@ fn build_decompose_prompt(
         DocKind::Work => (&prompts.decompose_work, "decompose/work/template.md"),
         DocKind::Plan => bail!("cannot decompose into Plan"),
     };
-    let template_text = crate::resources::Resources::load(template_path, None)
+    let template_text = crate::resources::Resources::load(template_path, repo_path)
         .with_context(|| format!("failed to load template: {}", template_path))?;
 
     Ok(format!(
@@ -1253,7 +1262,7 @@ mod tests {
     #[test]
     fn prompt_includes_guidance_section() {
         crate::prompts::init_defaults();
-        let prompt = build_decompose_prompt(DocKind::Work, "parent content", "1-3", "fan-out").unwrap();
+        let prompt = build_decompose_prompt(DocKind::Work, "parent content", "1-3", "fan-out", None).unwrap();
         assert!(prompt.contains("## Guidance"));
         assert!(prompt.contains("1-3"));
         assert!(prompt.contains("fan-out"));
@@ -1263,14 +1272,14 @@ mod tests {
     #[test]
     fn prompt_rejects_plan_target() {
         crate::prompts::init_defaults();
-        let result = build_decompose_prompt(DocKind::Plan, "content", "1-3", "fan-out");
+        let result = build_decompose_prompt(DocKind::Plan, "content", "1-3", "fan-out", None);
         assert!(result.is_err());
     }
 
     #[test]
     fn prompt_includes_template_for_spec() {
         crate::prompts::init_defaults();
-        let prompt = build_decompose_prompt(DocKind::Spec, "parent", "1-3", "sequential-chain").unwrap();
+        let prompt = build_decompose_prompt(DocKind::Spec, "parent", "1-3", "sequential-chain", None).unwrap();
         assert!(prompt.contains("## Template"));
         assert!(prompt.contains("sequential-chain"));
     }

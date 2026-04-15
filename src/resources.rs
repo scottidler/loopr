@@ -75,14 +75,26 @@ impl Resources {
 
     /// Load all files matching a directory prefix.
     ///
+    /// `prefix` must end with `/` (e.g., `"engine/triggers/"`). Absolute prefixes
+    /// are not supported; use `Resources::load()` directly for absolute paths.
+    ///
     /// Additive override semantics: the result set is the union of:
     /// - All embedded files with the given prefix
     /// - Any files found in repo-local or XDG override directories under the same prefix
     ///   (novel files not present in the embedded set are included; files that are present
     ///   in both are resolved via the standard load() override chain)
     ///
+    /// Only plain files with recognized extensions (.pmt, .yml, .yaml, .md) are included.
+    /// Subdirectories, editor backups, and OS metadata files (.DS_Store, etc.) are skipped.
+    ///
     /// Returns `Vec<(relative_path, content)>` sorted by path for determinism.
     pub fn load_dir(prefix: &str, repo_path: Option<&Path>) -> eyre::Result<Vec<(String, String)>> {
+        debug_assert!(
+            prefix.ends_with('/'),
+            "load_dir prefix must end with '/': got {:?}",
+            prefix
+        );
+
         // Collect embedded paths as the baseline set.
         let mut rel_paths: HashSet<String> = Self::list_embedded(prefix).into_iter().collect();
 
@@ -91,9 +103,11 @@ impl Resources {
             let dir = repo.join("resources").join(prefix);
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
-                    if let Ok(name) = entry.file_name().into_string() {
-                        let rel = format!("{}{}", prefix, name);
-                        rel_paths.insert(rel);
+                    if entry.path().is_file()
+                        && Self::is_resource_file(&entry.path())
+                        && let Ok(name) = entry.file_name().into_string()
+                    {
+                        rel_paths.insert(format!("{}{}", prefix, name));
                     }
                 }
             }
@@ -104,9 +118,11 @@ impl Resources {
             let dir = config_dir.join("loopr/resources").join(prefix);
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
-                    if let Ok(name) = entry.file_name().into_string() {
-                        let rel = format!("{}{}", prefix, name);
-                        rel_paths.insert(rel);
+                    if entry.path().is_file()
+                        && Self::is_resource_file(&entry.path())
+                        && let Ok(name) = entry.file_name().into_string()
+                    {
+                        rel_paths.insert(format!("{}{}", prefix, name));
                     }
                 }
             }
@@ -125,6 +141,14 @@ impl Resources {
             results.push((rel_path, content));
         }
         Ok(results)
+    }
+
+    /// Returns true if the path has a recognized resource file extension.
+    fn is_resource_file(path: &Path) -> bool {
+        matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("pmt" | "yml" | "yaml" | "md")
+        )
     }
 
     /// Check whether a resource exists in any layer.
