@@ -107,7 +107,7 @@ impl Resources {
     ///
     /// Returns `Vec<(relative_path, content)>` sorted by path for determinism.
     pub fn load_dir(prefix: &str, repo_path: Option<&Path>) -> eyre::Result<Vec<(String, String)>> {
-        debug_assert!(
+        eyre::ensure!(
             prefix.ends_with('/'),
             "load_dir prefix must end with '/': got {:?}",
             prefix

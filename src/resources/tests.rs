@@ -60,6 +60,32 @@ fn test_load_dir_repo_override_dir_unreadable_falls_through() {
     }
 }
 
+// ─── Phase 3: load_dir prefix guard in all builds ────────────────────────────
+
+#[test]
+fn test_load_dir_prefix_missing_trailing_slash_returns_err() {
+    let result = Resources::load_dir("engine/triggers", None);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("load_dir prefix must end with '/'"),
+        "unexpected error: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_load_dir_empty_string_prefix_returns_err() {
+    let result = Resources::load_dir("", None);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("load_dir prefix must end with '/'"),
+        "unexpected error: {}",
+        msg
+    );
+}
+
 // ─── Existing tests ───────────────────────────────────────────────────────────
 
 #[test]
