@@ -11,11 +11,35 @@ You are reviewing a Spec document. Your job is to assess whether this document i
 
 ## Evaluation Criteria
 
-1. References a valid Plan - the spec's approach should directly address the plan's objective and acceptance criteria.
-2. Technical approach described - the spec should name specific modules, patterns, and dependencies.
-3. Testability addressed - the spec identifies what will be unit-tested vs integration-tested.
-4. Key decisions (optional) - if alternatives were considered, they should include rationale. Missing alternatives is acceptable when the approach is straightforward - do NOT flag their absence as an issue.
-5. Optional sections (Performance, Security, Open Questions, Alternatives, Key Decisions, Glossary) are conditional - their absence must NOT lower the verdict. Only flag them if their content is present but incorrect.
+1. **Plan alignment** - The Spec's Overview names which Plan requirements it covers.
+   The approach directly addresses those requirements and the Plan's acceptance criteria.
+
+2. **Data Flow completeness** - The Data Flow section traces data end to end with
+   concrete shapes at each boundary. Both happy path and at least one error path are
+   present. Missing or single-sentence Data Flow sections are a blocking issue.
+
+3. **Module Structure substantiveness** - The Module Structure section lists files with
+   responsibility, dependencies, and exports. An empty table or a table with only
+   filenames (no responsibility column) is a blocking issue.
+
+4. **Interface elaboration** - The Interfaces section elaborates the Plan's contracts
+   with module-level detail (function signatures, parameter types, return types).
+   Interfaces that merely repeat the Plan's contract definitions without adding
+   module-level specificity are insufficient.
+
+5. **Failure Modes coverage** - The Failure Modes section has at least one entry per
+   interface boundary defined in the Interfaces section. Entries must include handling
+   strategy and rationale. If interfaces are defined, an empty Failure Modes table is
+   a blocking issue. If no interfaces are defined (e.g., a Spec that only defines
+   internal data models or static types), an empty Failure Modes table is acceptable.
+
+6. **Test Inventory traceability** - The Testing section includes a numbered test
+   inventory. Every Plan AC traceable to this Spec should map to at least one test.
+   The "Not Tested" subsection is present and states exclusions explicitly.
+
+7. **Optional sections** - Performance, Security, Open Questions, Alternatives, Key
+   Decisions, Glossary are conditional. Their absence must NOT lower the verdict. Only
+   flag them if their content is present but incorrect or incomplete.
 
 ## Output Format
 

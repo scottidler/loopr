@@ -9,12 +9,21 @@ You are evaluating whether a set of Specs fully covers a Plan.
 {children_markdown_content}
 
 ## Task
-Evaluate whether these Specs, taken together, fully address the Plan's acceptance criteria and description.
+Evaluate whether these Specs, taken together, fully address the Plan's acceptance
+criteria, requirements, and contract boundaries.
 
 Check for:
-1. **Gaps**: Are there acceptance criteria or requirements in the Plan that no Spec addresses?
-2. **Out-of-scope**: Do any Specs include work that goes beyond the Plan's stated goals?
-3. **Coherence**: Do the Specs work together without contradictions or overlaps?
+1. **Requirement gaps**: Are there acceptance criteria or requirements in the Plan
+   that no Spec addresses?
+2. **Contract coverage**: Does every data model entity and API endpoint defined in
+   the Plan's Contracts section appear in at least one Spec's Module Structure or
+   Interfaces section?
+3. **Interface consistency**: Where two Specs share an interface boundary, do their
+   descriptions of that boundary agree on types, parameters, and behavior?
+4. **Out-of-scope**: Do any Specs include modules, interfaces, or data flows that
+   go beyond the Plan's stated goals?
+5. **Coherence**: Do the Specs work together without contradictions or overlapping
+   file ownership?
 
 Respond with ONLY valid JSON matching this schema:
 {schema}

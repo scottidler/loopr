@@ -33,3 +33,103 @@ Respond with a JSON array of specs. Each spec is an object:
 4. Do NOT include any text outside the JSON array
 5. Produce 1-3 Specs for typical projects
 6. Each Spec must reference which Plan requirements it covers
+
+## Architectural Guidance
+
+When writing each Spec's content, ensure:
+
+### Data Flow
+- Trace the Plan's contracts through the system end to end
+- Show concrete data shapes at each boundary (what enters, what exits)
+- Include both the happy path AND at least one error path
+- If the Plan defines a data model with fields X, Y, Z, show where those fields
+  are created, transformed, and consumed
+
+### Module Structure
+- Every file must trace to at least one Plan requirement
+- State what each file exports and what it depends on
+- If two Specs share a dependency, name it explicitly in both
+- Do NOT list files that have no clear purpose in the Plan's requirements
+
+### Interfaces
+- Elaborate the Plan's contracts with module-level detail
+- Function signatures must include parameter types and return types
+- If the Plan defines an API endpoint, the Spec must show the handler signature,
+  the request/response types, and which module owns it
+
+### Failure Modes
+- At least one failure mode per interface boundary
+- Include the handling strategy and rationale, not just "returns error"
+- Cover: malformed input, missing dependencies, concurrent access where applicable
+
+### Testing (including ### Test Inventory and ### Not Tested subsections)
+- Number every test in the Test Inventory subsection
+- Each Plan AC that maps to this Spec must map to at least one test
+- The Not Tested subsection must be present and state exclusions explicitly
+
+### Traceability
+- The Overview must name which Plan requirements this Spec covers
+- If a requirement spans multiple Specs, each Spec states its portion
+
+### When the Plan has minimal contracts
+- If the Plan's Contracts section says "No contract changes" or references a shared
+  spec, Data Flow and Interfaces should focus on how existing contracts are consumed,
+  not on defining new ones. Module Structure and Testing sections still apply fully.
+
+## Template
+
+Use this structure for every Spec's `content` field EXACTLY:
+
+```markdown
+## Overview
+
+What this spec delivers and which Plan it implements (by ID or name).
+Architectural approach in one paragraph. Name which Plan requirements this Spec covers.
+
+## Data Flow
+
+How data moves through the system end to end. Happy path AND error path.
+Actual data shapes at each boundary - what enters, what exits.
+
+## Module Structure
+
+Every file, its responsibility, what it depends on, what it exports.
+
+| File | Responsibility | Depends On | Exports |
+|------|---------------|------------|---------|
+
+## Dependencies
+
+External packages with versions, runtime/test classification, and purpose.
+
+| Package | Version | Runtime/Test | Purpose |
+|---------|---------|-------------|---------|
+
+## Interfaces
+
+Public interfaces between modules. Function signatures, API endpoints,
+message formats. What crosses each boundary. Elaborate the Plan's contracts
+with module-level detail - parameter types, return types, handler signatures.
+
+## Failure Modes
+
+What can go wrong at each interface boundary and how it is handled.
+At least one entry per interface defined above.
+
+| Layer | Failure | Handling | Rationale |
+|-------|---------|----------|-----------|
+
+## Testing
+
+Isolation method, test client/runner, named test inventory, what is NOT tested and why.
+
+### Test Inventory
+
+Number each test. Every Plan AC traceable to this Spec maps to at least one test.
+
+1. Test name - what it verifies
+
+### Not Tested
+
+What is out of scope for the test suite and why. This subsection must always be present.
+```

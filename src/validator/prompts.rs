@@ -93,9 +93,13 @@ mod tests {
         let md = "---\ntitle: T\n---\n\nBody";
         let parent_md = "---\ntitle: P\n---\n\nParent";
         let prompt = spec_prompt(md, parent_md);
-        assert!(prompt.contains("Technical approach described"));
-        assert!(prompt.contains("Testability addressed"));
-        assert!(prompt.contains("Key decisions (optional)"));
+        assert!(prompt.contains("Plan alignment"));
+        assert!(prompt.contains("Data Flow completeness"));
+        assert!(prompt.contains("Module Structure substantiveness"));
+        assert!(prompt.contains("Interface elaboration"));
+        assert!(prompt.contains("Failure Modes coverage"));
+        assert!(prompt.contains("Test Inventory traceability"));
+        assert!(prompt.contains("Optional sections"));
     }
 
     #[test]
