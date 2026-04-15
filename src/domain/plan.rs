@@ -11,7 +11,7 @@ use crate::id;
 use crate::prompts::SECTION_AC;
 
 /// Shared status enum for Plan, Spec, and Phase records.
-/// Five-state machine: Draft -> Pending -> Active -> Complete | Abandoned.
+/// Six-state machine: Draft -> Pending -> Active -> Complete | Superseded | Abandoned.
 /// Pending is the "waiting for deps + parent" state introduced by the reactive execution model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 #[serde(rename_all = "lowercase")]
