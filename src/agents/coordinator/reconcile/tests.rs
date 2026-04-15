@@ -310,7 +310,7 @@ fn test_phase_completes_when_all_works_done() {
 }
 
 #[test]
-fn test_phase_completes_when_all_works_terminal_mixed() {
+fn test_phase_blocked_by_abandoned_work() {
     let dir = TestDir::new("reconcile_phase_mixed_terminal");
     let stores = test_stores(&dir);
     let plan_id = insert_active_plan(&stores, "Test Plan");
@@ -321,9 +321,46 @@ fn test_phase_completes_when_all_works_terminal_mixed() {
 
     let outcome = reconcile(&stores);
 
+    // Abandoned blocks phase completion - phase stays Active
+    let phases = stores.read_phases().unwrap();
+    assert_eq!(phases.get(&phase_id).unwrap().status(), HierarchyStatus::Active);
+    assert_eq!(outcome.completed, 0);
+}
+
+#[test]
+fn test_phase_completes_with_superseded_work() {
+    let dir = TestDir::new("reconcile_phase_superseded");
+    let stores = test_stores(&dir);
+    let plan_id = insert_active_plan(&stores, "Test Plan");
+    let spec_id = insert_spec(&stores, &plan_id, "Spec A", HierarchyStatus::Active, vec![]);
+    let phase_id = insert_phase(&stores, &spec_id, "Phase 1", HierarchyStatus::Active, vec![]);
+    insert_work(&stores, &phase_id, "main.py", WorkStatus::Done, vec![]);
+    insert_work(&stores, &phase_id, "test.py", WorkStatus::Superseded, vec![]);
+
+    let outcome = reconcile(&stores);
+
+    // Superseded is transparent - phase completes with at least one Done
     let phases = stores.read_phases().unwrap();
     assert_eq!(phases.get(&phase_id).unwrap().status(), HierarchyStatus::Complete);
     assert!(outcome.completed >= 1);
+}
+
+#[test]
+fn test_phase_does_not_complete_when_all_superseded() {
+    let dir = TestDir::new("reconcile_phase_all_superseded");
+    let stores = test_stores(&dir);
+    let plan_id = insert_active_plan(&stores, "Test Plan");
+    let spec_id = insert_spec(&stores, &plan_id, "Spec A", HierarchyStatus::Active, vec![]);
+    let phase_id = insert_phase(&stores, &spec_id, "Phase 1", HierarchyStatus::Active, vec![]);
+    insert_work(&stores, &phase_id, "main.py", WorkStatus::Superseded, vec![]);
+    insert_work(&stores, &phase_id, "test.py", WorkStatus::Superseded, vec![]);
+
+    let outcome = reconcile(&stores);
+
+    // All Superseded with no Done - phase must NOT complete
+    let phases = stores.read_phases().unwrap();
+    assert_eq!(phases.get(&phase_id).unwrap().status(), HierarchyStatus::Active);
+    assert_eq!(outcome.completed, 0);
 }
 
 #[test]
@@ -498,6 +535,63 @@ fn test_goal_not_complete_brief_mode_when_work_pending() {
 
     let outcome = reconcile(&stores);
 
+    assert!(!outcome.goal_complete);
+}
+
+#[test]
+fn test_goal_complete_brief_mode_with_superseded() {
+    let dir = TestDir::new("reconcile_goal_brief_superseded");
+    let stores = test_stores(&dir);
+    let mut plan = Plan::new("Brief Plan".to_string(), Default::default());
+    plan.force_status(HierarchyStatus::Active);
+    plan.tier = Tier::Brief;
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    insert_work(&stores, &plan_id, "task.py", WorkStatus::Done, vec![]);
+    insert_work(&stores, &plan_id, "old.py", WorkStatus::Superseded, vec![]);
+
+    let outcome = reconcile(&stores);
+
+    // Superseded is transparent - goal completes with at least one Done
+    assert!(outcome.goal_complete);
+}
+
+#[test]
+fn test_goal_not_complete_brief_mode_with_abandoned() {
+    let dir = TestDir::new("reconcile_goal_brief_abandoned");
+    let stores = test_stores(&dir);
+    let mut plan = Plan::new("Brief Plan".to_string(), Default::default());
+    plan.force_status(HierarchyStatus::Active);
+    plan.tier = Tier::Brief;
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    insert_work(&stores, &plan_id, "task.py", WorkStatus::Done, vec![]);
+    insert_work(&stores, &plan_id, "fail.py", WorkStatus::Abandoned, vec![]);
+
+    let outcome = reconcile(&stores);
+
+    // Abandoned blocks goal completion
+    assert!(!outcome.goal_complete);
+}
+
+#[test]
+fn test_goal_not_complete_brief_mode_all_superseded() {
+    let dir = TestDir::new("reconcile_goal_brief_all_superseded");
+    let stores = test_stores(&dir);
+    let mut plan = Plan::new("Brief Plan".to_string(), Default::default());
+    plan.force_status(HierarchyStatus::Active);
+    plan.tier = Tier::Brief;
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    insert_work(&stores, &plan_id, "a.py", WorkStatus::Superseded, vec![]);
+    insert_work(&stores, &plan_id, "b.py", WorkStatus::Superseded, vec![]);
+
+    let outcome = reconcile(&stores);
+
+    // All Superseded with no Done - goal must NOT complete
     assert!(!outcome.goal_complete);
 }
 
