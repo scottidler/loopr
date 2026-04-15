@@ -6,16 +6,16 @@ use crate::domain::transition::Transition;
 use super::runtime::FsmInterpreter;
 use super::schema::{self, FsmDefinition, TransitionRule};
 
-// --- Helper ---
+// --- Helpers ---
+
+fn load_test_interpreter() -> FsmInterpreter {
+    FsmInterpreter::embedded().unwrap()
+}
 
 fn test_strategies_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("strategies/fsm");
     dir
-}
-
-fn load_test_interpreter() -> FsmInterpreter {
-    FsmInterpreter::load(&test_strategies_dir()).unwrap()
 }
 
 fn minimal_def(name: &str) -> FsmDefinition {

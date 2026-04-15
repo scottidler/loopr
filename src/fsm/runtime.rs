@@ -5,15 +5,7 @@ use tracing::info;
 
 use super::schema::{self, FsmDefinition, TransitionRule};
 use crate::domain::transition::Transition;
-
-/// Embedded YAML sources, compiled into the binary.
-const EMBEDDED_YAMLS: &[(&str, &str)] = &[
-    ("work.yml", include_str!("../../strategies/fsm/work.yml")),
-    ("bundle.yml", include_str!("../../strategies/fsm/bundle.yml")),
-    ("hierarchy.yml", include_str!("../../strategies/fsm/hierarchy.yml")),
-    ("tick.yml", include_str!("../../strategies/fsm/tick.yml")),
-    ("agent.yml", include_str!("../../strategies/fsm/agent.yml")),
-];
+use crate::resources::Resources;
 
 /// Holds all loaded FSM definitions. Immutable after startup.
 pub struct FsmInterpreter {
@@ -21,42 +13,37 @@ pub struct FsmInterpreter {
 }
 
 impl FsmInterpreter {
-    /// Build the interpreter from embedded YAML definitions (compile-time included).
-    /// This is the primary constructor for production use.
-    pub fn embedded() -> eyre::Result<Self> {
-        let mut definitions = HashMap::new();
-        let mut all_errors = Vec::new();
-
-        for (filename, content) in EMBEDDED_YAMLS {
-            let mut def: FsmDefinition = serde_yaml::from_str(content)
-                .map_err(|e| eyre::eyre!("failed to parse embedded {}: {}", filename, e))?;
-            schema::inject_transition_names(&mut def);
-            let errors = schema::validate(&def, Some(filename));
-            if !errors.is_empty() {
-                for e in &errors {
-                    all_errors.push(format!("{}: {}", def.name, e));
-                }
-            }
-            definitions.insert(def.name.clone(), def);
-        }
-
-        if !all_errors.is_empty() {
-            eyre::bail!("FSM validation failed:\n  {}", all_errors.join("\n  "));
-        }
-
-        info!("loaded {} embedded FSM definitions", definitions.len());
-        Ok(Self { definitions })
+    /// Build the interpreter from embedded FSM definitions, with optional repo-local override.
+    ///
+    /// Resource resolution order:
+    /// 1. `{repo_path}/resources/fsm/` - per-file repo-local overrides
+    /// 2. Embedded default (compiled into the binary via rust-embed; disk in debug builds)
+    ///
+    /// Pass `None` for pure embedded defaults (tests, TUI startup, anywhere without a repo path).
+    pub fn new(repo_path: Option<&Path>) -> eyre::Result<Self> {
+        let entries = Resources::load_dir("fsm/", repo_path)?;
+        let result = Self::build_from_entries(entries)?;
+        info!("loaded {} FSM definitions", result.definitions.len());
+        Ok(result)
     }
 
-    /// Load all FSM definitions from a directory and validate them.
-    pub fn load(dir: &Path) -> eyre::Result<Self> {
-        let defs = schema::load_dir(dir)?;
+    /// Convenience wrapper for embedded-only construction (no repo-local override).
+    /// Equivalent to `FsmInterpreter::new(None)`.
+    pub fn embedded() -> eyre::Result<Self> {
+        Self::new(None)
+    }
+
+    fn build_from_entries(entries: Vec<(String, String)>) -> eyre::Result<Self> {
         let mut definitions = HashMap::new();
         let mut all_errors = Vec::new();
 
-        for def in defs {
-            let filename = format!("{}.yml", def.name);
-            let errors = schema::validate(&def, Some(&filename));
+        for (filename, content) in entries {
+            let mut def: FsmDefinition =
+                serde_yaml::from_str(&content).map_err(|e| eyre::eyre!("failed to parse {}: {}", filename, e))?;
+            schema::inject_transition_names(&mut def);
+            // validate expects just the basename (e.g. "work.yml") to match against def.name
+            let basename = filename.rsplit('/').next().unwrap_or(&filename);
+            let errors = schema::validate(&def, Some(basename));
             if !errors.is_empty() {
                 for e in &errors {
                     all_errors.push(format!("{}: {}", def.name, e));
@@ -69,7 +56,6 @@ impl FsmInterpreter {
             eyre::bail!("FSM validation failed:\n  {}", all_errors.join("\n  "));
         }
 
-        info!("loaded {} FSM definitions", definitions.len());
         Ok(Self { definitions })
     }
 

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::config::Config;
@@ -57,11 +58,17 @@ fn interpolate_status_values(content: String, max_abandon_ratio: f64) -> String 
 
 /// Initialize the global prompt store from config. Call once at startup after config load.
 ///
+/// `repo_path` enables repo-local prompt overrides at `{repo}/resources/{name}.pmt`.
+/// Pass `Some(&config.project.repo_path)` from the daemon; pass `None` when no target
+/// repo is available (standalone CLI, tests).
+///
 /// Prompt paths are read from config. Each path can be:
-/// - A relative path resolved via Resources::load (XDG override, then embedded default)
-/// - An absolute path (loaded directly; FATAL if missing or empty - prevents silent fallback
-///   that would corrupt AR experimental data by scoring the baseline as the trial prompt)
-pub fn init(config: &Config) -> eyre::Result<()> {
+/// - A relative path resolved via Resources::load (repo-local override, XDG override,
+///   then embedded default)
+/// - An absolute path (loaded directly; FATAL if missing or empty - prevents silent
+///   fallback that would corrupt AR experimental data by scoring the baseline as the
+///   trial prompt)
+pub fn init(config: &Config, repo_path: Option<&Path>) -> eyre::Result<()> {
     let max_abandon_ratio = config.agents.coordinator.max_abandon_ratio;
 
     // Convert config path to resource path: "coordinator" -> "coordinator.pmt",
@@ -72,7 +79,7 @@ pub fn init(config: &Config) -> eyre::Result<()> {
         } else {
             format!("{}.pmt", configured_path)
         };
-        Resources::load(&path, None)
+        Resources::load(&path, repo_path)
     };
 
     // OnceLock::set returns Err if already initialized - harmless no-op

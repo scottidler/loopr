@@ -439,18 +439,7 @@ impl DaemonContext {
 
         stores.session_id = session_id.clone();
 
-        let fsm_dir = repo_path.join("strategies/fsm");
-        let fsm = Arc::new(if fsm_dir.exists() {
-            crate::fsm::runtime::FsmInterpreter::load(&fsm_dir)?
-        } else {
-            // Fall back to embedded definitions when running outside the repo
-            // (e.g., cargo install without the source tree).
-            tracing::warn!(
-                "strategies/fsm/ not found at {}; using embedded FSM definitions",
-                fsm_dir.display()
-            );
-            crate::fsm::runtime::FsmInterpreter::embedded()?
-        });
+        let fsm = Arc::new(crate::fsm::runtime::FsmInterpreter::new(Some(&repo_path))?);
         stores.fsm = fsm.clone();
 
         Ok(Self {
