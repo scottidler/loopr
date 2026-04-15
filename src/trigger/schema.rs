@@ -141,11 +141,11 @@ impl TriggerKind {
 
 /// Load all trigger definitions from embedded resources, with optional repo-local override.
 ///
-/// Uses `Resources::load_dir("triggers/", ...)` to discover trigger YAML files from
-/// the embedded strategies directory, falling back through the standard override chain
+/// Uses `Resources::load_dir("engine/triggers/", ...)` to discover trigger YAML files from
+/// the embedded resources directory, falling back through the standard override chain
 /// (repo-local > XDG > embedded).
 pub fn load_from_resources(repo_path: Option<&Path>) -> eyre::Result<Vec<TriggerDefinition>> {
-    let entries = crate::resources::Resources::load_dir("triggers/", repo_path)?;
+    let entries = crate::resources::Resources::load_dir("engine/triggers/", repo_path)?;
     let mut defs = Vec::new();
     for (path, content) in entries {
         let mut file_defs = parse_content(&content, &path)?;

@@ -4,7 +4,7 @@ use super::runtime::FsmInterpreter;
 ///
 /// Each status enum (WorkStatus, BundleStatus, etc.) implements this trait
 /// to provide the PascalCase <-> kebab-case mapping needed by FsmInterpreter.
-/// The YAML definitions in `strategies/fsm/` are the single source of truth;
+/// The YAML definitions in `resources/engine/fsm/` are the single source of truth;
 /// this trait is the bridge between Rust types and the runtime interpreter.
 pub trait FsmStatus: Sized + Copy {
     /// The FSM definition name (matches the YAML filename without extension).

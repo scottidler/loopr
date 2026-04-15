@@ -14,7 +14,7 @@ fn load_test_interpreter() -> FsmInterpreter {
 
 fn test_strategies_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.push("strategies/fsm");
+    dir.push("resources/engine/fsm");
     dir
 }
 

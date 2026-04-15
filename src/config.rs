@@ -272,7 +272,7 @@ impl Default for CoordinatorConfig {
                 max_pool: 1,
                 session_timeout_secs: None, // Coordinator is long-lived
                 max_requeries: 3,
-                prompt: "coordinator".to_string(),
+                prompt: "agents/coordinator".to_string(),
             },
             active_interval_secs: 5,
             idle_interval_secs: 30,
@@ -469,12 +469,12 @@ pub struct DecomposerPrompts {
 impl Default for DecomposerPrompts {
     fn default() -> Self {
         Self {
-            spec: "decompose/spec".to_string(),
-            phase: "decompose/phase".to_string(),
-            work: "decompose/work".to_string(),
+            spec: "decompose/spec/prompt".to_string(),
+            phase: "decompose/phase/prompt".to_string(),
+            work: "decompose/work/prompt".to_string(),
             validate: "decompose/validate".to_string(),
             ratify: "decompose/ratify".to_string(),
-            generation_work: "generation-work".to_string(),
+            generation_work: "decompose/work/generation".to_string(),
         }
     }
 }
@@ -492,10 +492,10 @@ pub struct ValidatorPrompts {
 impl Default for ValidatorPrompts {
     fn default() -> Self {
         Self {
-            schema: "validator-schema".to_string(),
-            plan: "validator-plan".to_string(),
-            spec: "validator-spec".to_string(),
-            phase: "validator-phase".to_string(),
+            schema: "decompose/schema".to_string(),
+            plan: "decompose/plan/validator".to_string(),
+            spec: "decompose/spec/validator".to_string(),
+            phase: "decompose/phase/validator".to_string(),
         }
     }
 }
@@ -513,10 +513,10 @@ pub struct EvaluatorPrompts {
 impl Default for EvaluatorPrompts {
     fn default() -> Self {
         Self {
-            schema: "coverage-schema".to_string(),
-            plan_specs: "coverage-plan-specs".to_string(),
-            spec_phases: "coverage-spec-phases".to_string(),
-            phase_works: "coverage-phase-works".to_string(),
+            schema: "decompose/coverage-schema".to_string(),
+            plan_specs: "decompose/spec/coverage".to_string(),
+            spec_phases: "decompose/phase/coverage".to_string(),
+            phase_works: "decompose/work/coverage".to_string(),
         }
     }
 }
@@ -535,11 +535,11 @@ pub struct ChatPrompts {
 impl Default for ChatPrompts {
     fn default() -> Self {
         Self {
-            default: "chat".to_string(),
-            interview: "chat-interview".to_string(),
-            draft: "chat-draft".to_string(),
-            refine: "chat-refine".to_string(),
-            executing: "chat-executing".to_string(),
+            default: "chat/default".to_string(),
+            interview: "chat/interview".to_string(),
+            draft: "chat/draft".to_string(),
+            refine: "chat/refine".to_string(),
+            executing: "chat/executing".to_string(),
         }
     }
 }
@@ -578,7 +578,7 @@ impl AgentRoleConfig {
             max_pool: MAX_POOL_UNLIMITED,
             session_timeout_secs: Some(1800), // 30 min
             max_requeries: 3,
-            prompt: "implementer".to_string(),
+            prompt: "agents/implementer".to_string(),
         }
     }
 
@@ -594,7 +594,7 @@ impl AgentRoleConfig {
             max_pool: MAX_POOL_UNLIMITED,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
-            prompt: "reviewer".to_string(),
+            prompt: "agents/reviewer".to_string(),
         }
     }
 
@@ -610,7 +610,7 @@ impl AgentRoleConfig {
             max_pool: 4,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
-            prompt: "researcher".to_string(),
+            prompt: "agents/researcher".to_string(),
         }
     }
 }
@@ -736,7 +736,7 @@ impl Default for TierGateConfig {
             },
             enabled: true,
             provider: "anthropic".to_string(),
-            prompt: "tier-gate".to_string(),
+            prompt: "agents/tier-gate".to_string(),
         }
     }
 }
@@ -1726,81 +1726,81 @@ strategy:
 
     #[test]
     fn test_agent_role_config_has_prompt_field() {
-        assert_eq!(AgentRoleConfig::default_implementer().prompt, "implementer");
-        assert_eq!(AgentRoleConfig::default_reviewer().prompt, "reviewer");
-        assert_eq!(AgentRoleConfig::default_researcher().prompt, "researcher");
-        assert_eq!(CoordinatorConfig::default().role.prompt, "coordinator");
+        assert_eq!(AgentRoleConfig::default_implementer().prompt, "agents/implementer");
+        assert_eq!(AgentRoleConfig::default_reviewer().prompt, "agents/reviewer");
+        assert_eq!(AgentRoleConfig::default_researcher().prompt, "agents/researcher");
+        assert_eq!(CoordinatorConfig::default().role.prompt, "agents/coordinator");
     }
 
     #[test]
     fn test_tier_gate_config_has_prompt_field() {
         let tg = TierGateConfig::default();
-        assert_eq!(tg.prompt, "tier-gate");
+        assert_eq!(tg.prompt, "agents/tier-gate");
     }
 
     #[test]
     fn test_decomposer_prompts_defaults() {
         let dp = DecomposerPrompts::default();
-        assert_eq!(dp.spec, "decompose/spec");
-        assert_eq!(dp.phase, "decompose/phase");
-        assert_eq!(dp.work, "decompose/work");
+        assert_eq!(dp.spec, "decompose/spec/prompt");
+        assert_eq!(dp.phase, "decompose/phase/prompt");
+        assert_eq!(dp.work, "decompose/work/prompt");
         assert_eq!(dp.validate, "decompose/validate");
         assert_eq!(dp.ratify, "decompose/ratify");
-        assert_eq!(dp.generation_work, "generation-work");
+        assert_eq!(dp.generation_work, "decompose/work/generation");
     }
 
     #[test]
     fn test_validator_prompts_defaults() {
         let vp = ValidatorPrompts::default();
-        assert_eq!(vp.schema, "validator-schema");
-        assert_eq!(vp.plan, "validator-plan");
-        assert_eq!(vp.spec, "validator-spec");
-        assert_eq!(vp.phase, "validator-phase");
+        assert_eq!(vp.schema, "decompose/schema");
+        assert_eq!(vp.plan, "decompose/plan/validator");
+        assert_eq!(vp.spec, "decompose/spec/validator");
+        assert_eq!(vp.phase, "decompose/phase/validator");
     }
 
     #[test]
     fn test_evaluator_prompts_defaults() {
         let ep = EvaluatorPrompts::default();
-        assert_eq!(ep.schema, "coverage-schema");
-        assert_eq!(ep.plan_specs, "coverage-plan-specs");
-        assert_eq!(ep.spec_phases, "coverage-spec-phases");
-        assert_eq!(ep.phase_works, "coverage-phase-works");
+        assert_eq!(ep.schema, "decompose/coverage-schema");
+        assert_eq!(ep.plan_specs, "decompose/spec/coverage");
+        assert_eq!(ep.spec_phases, "decompose/phase/coverage");
+        assert_eq!(ep.phase_works, "decompose/work/coverage");
     }
 
     #[test]
     fn test_chat_prompts_defaults() {
         let cp = ChatPrompts::default();
-        assert_eq!(cp.default, "chat");
-        assert_eq!(cp.interview, "chat-interview");
-        assert_eq!(cp.draft, "chat-draft");
-        assert_eq!(cp.refine, "chat-refine");
-        assert_eq!(cp.executing, "chat-executing");
+        assert_eq!(cp.default, "chat/default");
+        assert_eq!(cp.interview, "chat/interview");
+        assert_eq!(cp.draft, "chat/draft");
+        assert_eq!(cp.refine, "chat/refine");
+        assert_eq!(cp.executing, "chat/executing");
     }
 
     #[test]
     fn test_decomposer_config_has_prompts() {
         let dc = DecomposerConfig::default();
-        assert_eq!(dc.prompts.work, "decompose/work");
-        assert_eq!(dc.prompts.generation_work, "generation-work");
+        assert_eq!(dc.prompts.work, "decompose/work/prompt");
+        assert_eq!(dc.prompts.generation_work, "decompose/work/generation");
     }
 
     #[test]
     fn test_validator_config_has_prompts() {
         let vc = ValidatorConfig::default();
-        assert_eq!(vc.prompts.schema, "validator-schema");
+        assert_eq!(vc.prompts.schema, "decompose/schema");
     }
 
     #[test]
     fn test_evaluator_config_has_prompts() {
         let ec = EvaluatorConfig::default();
-        assert_eq!(ec.prompts.schema, "coverage-schema");
+        assert_eq!(ec.prompts.schema, "decompose/coverage-schema");
     }
 
     #[test]
     fn test_chat_config_has_prompts() {
         let cc = ChatConfig::default();
-        assert_eq!(cc.prompts.default, "chat");
-        assert_eq!(cc.prompts.interview, "chat-interview");
+        assert_eq!(cc.prompts.default, "chat/default");
+        assert_eq!(cc.prompts.interview, "chat/interview");
     }
 
     #[test]

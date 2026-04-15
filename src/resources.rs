@@ -1,28 +1,31 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use rust_embed::Embed;
 use tracing::info;
 
-/// Embedded prompt files (.pmt) compiled into the binary at build time.
+/// All runtime resource files compiled into the binary at build time.
 /// In debug builds, files are read from disk (enables hot-reload during development).
+///
+/// Directory structure:
+///   resources/
+///     agents/        - agent prompts (coordinator, implementer, researcher, ...)
+///     chat/          - chat mode prompts
+///     decompose/     - decomposition prompts, validators, coverage, strategies, roles
+///     engine/
+///       fsm/         - FSM definitions
+///       triggers/    - trigger definitions
+///       strategies/  - engine strategy definitions (integration, recovery, ...)
 #[derive(Embed)]
-#[folder = "prompts/"]
-struct EmbeddedPrompts;
-
-/// Embedded strategy files (.yml) compiled into the binary at build time.
-/// In debug builds, files are read from disk (enables hot-reload during development).
-#[derive(Embed)]
-#[folder = "strategies/"]
-struct EmbeddedStrategies;
+#[folder = "resources/"]
+struct EmbeddedResources;
 
 /// Unified resource loader - compiled-in defaults with filesystem override semantics.
 ///
-/// During Phase A (phases 1-4), two embedded structs back this loader:
-/// - `.pmt` files are served from `EmbeddedPrompts` (embedded `prompts/` directory)
-/// - `.yml`/`.yaml` files are served from `EmbeddedStrategies` (embedded `strategies/` directory)
-///
-/// After Phase B (directory reorganization in phase 5), both collapse into a single
-/// `EmbeddedResources` struct backed by the `resources/` directory.
+/// Resolution order for every file:
+///   1. Repo-local override  - `{repo_path}/resources/{path}`
+///   2. XDG override         - `~/.config/loopr/resources/{path}`
+///   3. Embedded default     - compiled into the binary via rust-embed
 pub struct Resources;
 
 impl Resources {
@@ -72,48 +75,52 @@ impl Resources {
 
     /// Load all files matching a directory prefix.
     ///
-    /// Merges filesystem overrides with embedded defaults on a per-file basis:
-    /// if a file exists in the repo-local or XDG override location, it replaces
-    /// the embedded version for that specific file. Files only present in the
-    /// embedded set are still included.
+    /// Additive override semantics: the result set is the union of:
+    /// - All embedded files with the given prefix
+    /// - Any files found in repo-local or XDG override directories under the same prefix
+    ///   (novel files not present in the embedded set are included; files that are present
+    ///   in both are resolved via the standard load() override chain)
     ///
     /// Returns `Vec<(relative_path, content)>` sorted by path for determinism.
     pub fn load_dir(prefix: &str, repo_path: Option<&Path>) -> eyre::Result<Vec<(String, String)>> {
-        let paths = Self::list_embedded(prefix);
-        if paths.is_empty() {
-            return Err(eyre::eyre!("no embedded resources found with prefix: {}", prefix));
-        }
-        let mut results = Vec::new();
-        for rel_path in paths {
-            let content = Self::load(&rel_path, repo_path)?;
-            results.push((rel_path, content));
-        }
-        Ok(results)
-    }
+        // Collect embedded paths as the baseline set.
+        let mut rel_paths: HashSet<String> = Self::list_embedded(prefix).into_iter().collect();
 
-    /// Load all strategy files from the strategies embed, excluding entries whose
-    /// path starts with any of the given prefixes.
-    ///
-    /// Used by engine::schema to load strategy definitions while skipping the
-    /// fsm/, triggers/, and roles/ subdirectories that share the strategies/ embed
-    /// root but contain non-strategy YAML files with incompatible schemas.
-    pub fn load_dir_excluding(
-        exclude_prefixes: &[&str],
-        repo_path: Option<&Path>,
-    ) -> eyre::Result<Vec<(String, String)>> {
-        let mut paths: Vec<String> = EmbeddedStrategies::iter()
-            .filter(|p| !exclude_prefixes.iter().any(|exc| p.starts_with(exc)))
-            .map(|p| p.to_string())
-            .collect();
-        paths.sort();
-        if paths.is_empty() {
-            return Err(eyre::eyre!(
-                "no embedded strategy files found after excluding {:?}",
-                exclude_prefixes
-            ));
+        // Union with any novel files in repo-local override.
+        if let Some(repo) = repo_path {
+            let dir = repo.join("resources").join(prefix);
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if let Ok(name) = entry.file_name().into_string() {
+                        let rel = format!("{}{}", prefix, name);
+                        rel_paths.insert(rel);
+                    }
+                }
+            }
         }
+
+        // Union with any novel files in XDG override.
+        if let Some(config_dir) = dirs::config_dir() {
+            let dir = config_dir.join("loopr/resources").join(prefix);
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if let Ok(name) = entry.file_name().into_string() {
+                        let rel = format!("{}{}", prefix, name);
+                        rel_paths.insert(rel);
+                    }
+                }
+            }
+        }
+
+        if rel_paths.is_empty() {
+            return Err(eyre::eyre!("no resources found with prefix: {}", prefix));
+        }
+
+        let mut sorted: Vec<String> = rel_paths.into_iter().collect();
+        sorted.sort();
+
         let mut results = Vec::new();
-        for rel_path in paths {
+        for rel_path in sorted {
             let content = Self::load(&rel_path, repo_path)?;
             results.push((rel_path, content));
         }
@@ -139,19 +146,9 @@ impl Resources {
     }
 
     fn get_embedded(path: &str) -> eyre::Result<String> {
-        let data_opt = if path.ends_with(".pmt") {
-            EmbeddedPrompts::get(path).map(|f| f.data)
-        } else if path.ends_with(".yml") || path.ends_with(".yaml") {
-            EmbeddedStrategies::get(path).map(|f| f.data)
-        } else {
-            EmbeddedPrompts::get(path)
-                .map(|f| f.data)
-                .or_else(|| EmbeddedStrategies::get(path).map(|f| f.data))
-        };
-
-        match data_opt {
-            Some(data) => {
-                let content = std::str::from_utf8(data.as_ref())
+        match EmbeddedResources::get(path) {
+            Some(file) => {
+                let content = std::str::from_utf8(file.data.as_ref())
                     .map_err(|e| eyre::eyre!("resource is not valid UTF-8: {}: {}", path, e))?;
                 Ok(content.to_string())
             }
@@ -160,15 +157,10 @@ impl Resources {
     }
 
     fn list_embedded(prefix: &str) -> Vec<String> {
-        let mut paths: Vec<String> = EmbeddedStrategies::iter()
+        let mut paths: Vec<String> = EmbeddedResources::iter()
             .filter(|p| p.starts_with(prefix))
             .map(|p| p.to_string())
             .collect();
-        let prompt_paths: Vec<String> = EmbeddedPrompts::iter()
-            .filter(|p| p.starts_with(prefix))
-            .map(|p| p.to_string())
-            .collect();
-        paths.extend(prompt_paths);
         paths.sort();
         paths
     }

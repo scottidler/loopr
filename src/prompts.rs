@@ -97,8 +97,8 @@ pub fn init(config: &Config, repo_path: Option<&Path>) -> eyre::Result<()> {
         coverage_plan_specs: load(&config.evaluator.prompts.plan_specs)?,
         coverage_spec_phases: load(&config.evaluator.prompts.spec_phases)?,
         coverage_phase_works: load(&config.evaluator.prompts.phase_works)?,
-        // interview.pmt: open question on final config location; XDG-only for now
-        interview: Resources::load("interview.pmt", None)?,
+        // agents/interview.pmt: open question on final config location; XDG-only for now
+        interview: Resources::load("agents/interview.pmt", None)?,
         chat: load(&config.chat.prompts.default)?,
         chat_interview: load(&config.chat.prompts.interview)?,
         chat_draft: load(&config.chat.prompts.draft)?,
@@ -120,29 +120,29 @@ pub fn init_defaults() {
         Resources::load(path, None).unwrap_or_else(|e| panic!("missing embedded resource {}: {}", path, e))
     };
     let _ = STORE.set(PromptStore {
-        coordinator: interpolate_status_values(load("coordinator.pmt"), 0.4),
-        implementer: load("implementer.pmt"),
-        reviewer: load("reviewer.pmt"),
-        researcher: load("researcher.pmt"),
-        validator_schema: load("validator-schema.pmt"),
-        validator_plan: load("validator-plan.pmt"),
-        validator_spec: load("validator-spec.pmt"),
-        validator_phase: load("validator-phase.pmt"),
-        generation_work: load("generation-work.pmt"),
-        coverage_schema: load("coverage-schema.pmt"),
-        coverage_plan_specs: load("coverage-plan-specs.pmt"),
-        coverage_spec_phases: load("coverage-spec-phases.pmt"),
-        coverage_phase_works: load("coverage-phase-works.pmt"),
-        interview: load("interview.pmt"),
-        chat: load("chat.pmt"),
-        chat_interview: load("chat-interview.pmt"),
-        chat_draft: load("chat-draft.pmt"),
-        chat_refine: load("chat-refine.pmt"),
-        chat_executing: load("chat-executing.pmt"),
-        tier_gate: load("tier-gate.pmt"),
-        decompose_spec: load("decompose/spec.pmt"),
-        decompose_phase: load("decompose/phase.pmt"),
-        decompose_work: load("decompose/work.pmt"),
+        coordinator: interpolate_status_values(load("agents/coordinator.pmt"), 0.4),
+        implementer: load("agents/implementer.pmt"),
+        reviewer: load("agents/reviewer.pmt"),
+        researcher: load("agents/researcher.pmt"),
+        validator_schema: load("decompose/schema.pmt"),
+        validator_plan: load("decompose/plan/validator.pmt"),
+        validator_spec: load("decompose/spec/validator.pmt"),
+        validator_phase: load("decompose/phase/validator.pmt"),
+        generation_work: load("decompose/work/generation.pmt"),
+        coverage_schema: load("decompose/coverage-schema.pmt"),
+        coverage_plan_specs: load("decompose/spec/coverage.pmt"),
+        coverage_spec_phases: load("decompose/phase/coverage.pmt"),
+        coverage_phase_works: load("decompose/work/coverage.pmt"),
+        interview: load("agents/interview.pmt"),
+        chat: load("chat/default.pmt"),
+        chat_interview: load("chat/interview.pmt"),
+        chat_draft: load("chat/draft.pmt"),
+        chat_refine: load("chat/refine.pmt"),
+        chat_executing: load("chat/executing.pmt"),
+        tier_gate: load("agents/tier-gate.pmt"),
+        decompose_spec: load("decompose/spec/prompt.pmt"),
+        decompose_phase: load("decompose/phase/prompt.pmt"),
+        decompose_work: load("decompose/work/prompt.pmt"),
         decompose_validate: load("decompose/validate.pmt"),
         decompose_ratify: load("decompose/ratify.pmt"),
     });
@@ -182,12 +182,12 @@ mod tests {
         init_defaults();
         let s = store();
         // Coordinator is interpolated (status placeholders replaced)
-        let raw_coordinator = Resources::load("coordinator.pmt", None).unwrap();
+        let raw_coordinator = Resources::load("agents/coordinator.pmt", None).unwrap();
         assert_eq!(s.coordinator, interpolate_status_values(raw_coordinator, 0.4));
         // Other prompts are loaded verbatim from embedded resources
-        assert_eq!(s.implementer, Resources::load("implementer.pmt", None).unwrap());
-        assert_eq!(s.reviewer, Resources::load("reviewer.pmt", None).unwrap());
-        assert_eq!(s.researcher, Resources::load("researcher.pmt", None).unwrap());
+        assert_eq!(s.implementer, Resources::load("agents/implementer.pmt", None).unwrap());
+        assert_eq!(s.reviewer, Resources::load("agents/reviewer.pmt", None).unwrap());
+        assert_eq!(s.researcher, Resources::load("agents/researcher.pmt", None).unwrap());
     }
 
     #[test]
@@ -212,13 +212,18 @@ mod tests {
         let dir = TestDir::new("loopr-pmt-override");
         let resources_dir = dir.join("resources");
         fs::create_dir_all(&resources_dir).unwrap();
-        fs::write(resources_dir.join("coordinator.pmt"), "CUSTOM COORDINATOR PROMPT").unwrap();
+        fs::create_dir_all(resources_dir.join("agents")).unwrap();
+        fs::write(
+            resources_dir.join("agents/coordinator.pmt"),
+            "CUSTOM COORDINATOR PROMPT",
+        )
+        .unwrap();
 
-        let content = Resources::load("coordinator.pmt", Some(&dir)).unwrap();
+        let content = Resources::load("agents/coordinator.pmt", Some(&dir)).unwrap();
         assert_eq!(content, "CUSTOM COORDINATOR PROMPT");
 
         // Non-overridden file falls back to embedded default
-        let implementer = Resources::load("implementer.pmt", Some(&dir)).unwrap();
+        let implementer = Resources::load("agents/implementer.pmt", Some(&dir)).unwrap();
         assert!(!implementer.is_empty());
     }
 
@@ -227,10 +232,11 @@ mod tests {
         let dir = TestDir::new("loopr-pmt-empty");
         let resources_dir = dir.join("resources");
         fs::create_dir_all(&resources_dir).unwrap();
-        fs::write(resources_dir.join("coordinator.pmt"), "   \n  ").unwrap();
+        fs::create_dir_all(resources_dir.join("agents")).unwrap();
+        fs::write(resources_dir.join("agents/coordinator.pmt"), "   \n  ").unwrap();
 
         // Empty override treated as absent; falls back to embedded default
-        let content = Resources::load("coordinator.pmt", Some(&dir)).unwrap();
+        let content = Resources::load("agents/coordinator.pmt", Some(&dir)).unwrap();
         assert!(
             !content.trim().is_empty(),
             "should fall back to non-empty embedded default"

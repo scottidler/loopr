@@ -16,12 +16,12 @@ impl FsmInterpreter {
     /// Build the interpreter from embedded FSM definitions, with optional repo-local override.
     ///
     /// Resource resolution order:
-    /// 1. `{repo_path}/resources/fsm/` - per-file repo-local overrides
+    /// 1. `{repo_path}/resources/engine/fsm/` - per-file repo-local overrides
     /// 2. Embedded default (compiled into the binary via rust-embed; disk in debug builds)
     ///
     /// Pass `None` for pure embedded defaults (tests, TUI startup, anywhere without a repo path).
     pub fn new(repo_path: Option<&Path>) -> eyre::Result<Self> {
-        let entries = Resources::load_dir("fsm/", repo_path)?;
+        let entries = Resources::load_dir("engine/fsm/", repo_path)?;
         let result = Self::build_from_entries(entries)?;
         info!("loaded {} FSM definitions", result.definitions.len());
         Ok(result)

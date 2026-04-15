@@ -11,7 +11,7 @@ use crate::primitive::types::{
 
 fn strategies_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.push("strategies");
+    dir.push("resources/engine/strategies");
     dir
 }
 
@@ -40,7 +40,10 @@ fn minimal_strategy(name: &str) -> StrategyDefinition {
 #[test]
 fn load_all_strategy_yaml_files() {
     let defs = schema::load_dir(&strategies_dir()).unwrap();
-    assert!(!defs.is_empty(), "expected strategy YAML files under strategies/");
+    assert!(
+        !defs.is_empty(),
+        "expected strategy YAML files under resources/engine/strategies/"
+    );
 }
 
 #[test]
@@ -60,16 +63,20 @@ fn load_from_resources_returns_all_strategies() {
 }
 
 #[test]
-fn load_from_resources_matches_filesystem() {
-    let fs_defs = schema::load_dir(&strategies_dir()).unwrap();
-    let res_defs = schema::load_from_resources(None).unwrap();
-    let mut fs_names: Vec<&str> = fs_defs.iter().map(|d| d.name.as_str()).collect();
-    let mut res_names: Vec<&str> = res_defs.iter().map(|d| d.name.as_str()).collect();
-    fs_names.sort();
-    res_names.sort();
-    assert_eq!(
-        fs_names, res_names,
-        "resource-loaded strategies should match filesystem-loaded strategies"
+fn load_from_resources_includes_both_engine_and_decompose_strategies() {
+    // load_from_resources covers engine/strategies/ + decompose/strategies/ -
+    // it should return strictly more definitions than either directory alone.
+    let engine_defs = schema::load_dir(&strategies_dir()).unwrap();
+    let mut decompose_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    decompose_dir.push("resources/decompose/strategies");
+    let decompose_defs = schema::load_dir(&decompose_dir).unwrap();
+    let all_defs = schema::load_from_resources(None).unwrap();
+    assert!(
+        all_defs.len() >= engine_defs.len() + decompose_defs.len(),
+        "load_from_resources ({}) should include engine ({}) + decompose ({}) strategies",
+        all_defs.len(),
+        engine_defs.len(),
+        decompose_defs.len()
     );
 }
 
@@ -1163,13 +1170,13 @@ fn full_primitive_registry() -> crate::primitive::registry::PrimitiveRegistry {
 
 fn triggers_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.push("strategies/triggers");
+    dir.push("resources/engine/triggers");
     dir
 }
 
 #[test]
 fn all_strategy_primitives_exist_in_registry() {
-    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let strategies = schema::load_from_resources(None).unwrap();
     let registry = full_primitive_registry();
 
     let mut missing = Vec::new();
@@ -1462,7 +1469,7 @@ async fn tick_guard_skips_step_but_strategy_succeeds() {
 
 #[test]
 fn decomposition_strategies_are_loaded() {
-    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let defs = schema::load_from_resources(None).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
     for required in &[
         "decompose-plan",
@@ -1479,7 +1486,7 @@ fn decomposition_strategies_are_loaded() {
 
 #[test]
 fn decomposition_strategies_have_correct_scopes() {
-    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let defs = schema::load_from_resources(None).unwrap();
     let by_name: HashMap<&str, &StrategyDefinition> = defs.iter().map(|d| (d.name.as_str(), d)).collect();
     assert_eq!(by_name["decompose-plan"].scope, "plan");
     assert_eq!(by_name["decompose-spec"].scope, "spec");
@@ -1490,7 +1497,7 @@ fn decomposition_strategies_have_correct_scopes() {
 
 #[test]
 fn decomposition_strategies_have_correct_priorities() {
-    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let defs = schema::load_from_resources(None).unwrap();
     let by_name: HashMap<&str, &StrategyDefinition> = defs.iter().map(|d| (d.name.as_str(), d)).collect();
     assert_eq!(by_name["classify-and-configure"].priority, 1000);
     assert_eq!(by_name["decompose-plan"].priority, 850);
@@ -1503,7 +1510,7 @@ fn decomposition_strategies_have_correct_priorities() {
 
 #[test]
 fn classify_and_configure_has_named_classify_step() {
-    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let defs = schema::load_from_resources(None).unwrap();
     let def = defs.iter().find(|d| d.name == "classify-and-configure").unwrap();
     let named: Vec<&str> = def.action.iter().filter_map(|s| s.name.as_deref()).collect();
     assert!(
@@ -1513,16 +1520,14 @@ fn classify_and_configure_has_named_classify_step() {
 }
 
 #[test]
-fn roles_dir_is_not_loaded_as_strategies() {
-    // Verifies that strategies/roles/ is skipped by load_dir, so role config YAML
-    // (which has a different schema) does not cause parse errors.
-    let defs = schema::load_dir(&strategies_dir()).unwrap();
+fn roles_are_not_loaded_as_strategies() {
+    // Verifies that decompose/roles/ is not included in strategy loading.
+    // Role config YAML has a different schema; mixing it in would cause parse errors.
+    let defs = schema::load_from_resources(None).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
     // Role config files are keyed under "decomposer", not valid strategy names.
-    // If roles/ were scanned this would either fail to parse or inject "decomposer"
-    // as a strategy with missing required fields.
     assert!(
         !names.contains(&"decomposer"),
-        "roles/ was scanned as strategy dir; 'decomposer' should not appear as a strategy"
+        "decompose/roles/ was loaded as strategy; 'decomposer' should not appear as a strategy"
     );
 }

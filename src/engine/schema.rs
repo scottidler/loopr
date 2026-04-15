@@ -60,8 +60,8 @@ pub struct StrategyDefinition {
     /// Human-readable description of what this strategy does.
     #[serde(default)]
     pub description: String,
-    /// Name of a trigger defined in `strategies/triggers/`. Validated against
-    /// the trigger registry in Phase 2.
+    /// Name of a trigger defined in `resources/engine/triggers/`. Validated against
+    /// the trigger registry at startup.
     pub trigger: String,
     /// Domain collection this strategy operates on (e.g. "work", "plan").
     pub scope: String,
@@ -96,25 +96,26 @@ fn default_enabled() -> bool {
 
 /// Load all strategy definitions from embedded resources, with optional repo-local override.
 ///
-/// Uses `Resources::load_dir_excluding()` to discover strategy YAML files from the
-/// embedded strategies directory, skipping fsm/, triggers/, and roles/ subdirectories
-/// that share the same embed root but contain non-strategy YAML schemas.
+/// Loads from both `engine/strategies/` (integration, reconciliation, recovery, supervision,
+/// sweeps) and `decompose/strategies/` (decomposition, classify, coverage, validate, failure).
+/// All of these feed the same engine strategy registry.
 pub fn load_from_resources(repo_path: Option<&Path>) -> eyre::Result<Vec<StrategyDefinition>> {
-    let entries = crate::resources::Resources::load_dir_excluding(&["fsm/", "triggers/", "roles/"], repo_path)?;
     let mut defs = Vec::new();
-    for (path, content) in entries {
-        let mut file_defs = parse_content(&content, &path)?;
-        defs.append(&mut file_defs);
+    for prefix in &["engine/strategies/", "decompose/strategies/"] {
+        let entries = crate::resources::Resources::load_dir(prefix, repo_path)?;
+        for (path, content) in entries {
+            let mut file_defs = parse_content(&content, &path)?;
+            defs.append(&mut file_defs);
+        }
     }
     info!("loaded {} strategy definitions from resources", defs.len());
     Ok(defs)
 }
 
 /// Load all strategy definitions from a directory tree (recursive).
-/// Strategies are organized in subdirectories (e.g. `recovery/`, `reconciliation/`).
-/// The `fsm/`, `triggers/`, and `roles/` subdirs at the ROOT level are skipped - they
-/// share the `strategies/` root but contain non-strategy YAML files with incompatible
-/// schemas. This skip is anchored to the root level only.
+/// Strategies may be in flat files or subdirectories.
+/// At the root level, directories named `fsm`, `triggers`, and `roles` are skipped -
+/// these contain non-strategy YAML files with incompatible schemas.
 pub fn load_dir(dir: &Path) -> eyre::Result<Vec<StrategyDefinition>> {
     let mut defs = Vec::new();
     load_dir_recursive(dir, dir, &mut defs)?;

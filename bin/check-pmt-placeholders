@@ -9,11 +9,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROMPTS_DIR="$REPO_ROOT/prompts"
+RESOURCES_DIR="$REPO_ROOT/resources"
 SRC_DIR="$REPO_ROOT/src"
 
 # Extract {placeholder} patterns from .pmt files
-pmt_placeholders=$(grep -roP '\{[a-z_]+\}' "$PROMPTS_DIR" --include='*.pmt' | \
+pmt_placeholders=$(grep -roP '\{[a-z_]+\}' "$RESOURCES_DIR" --include='*.pmt' | \
     awk -F: '{print $2}' | sort -u)
 
 # Extract .replace("{placeholder}" targets from Rust files

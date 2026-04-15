@@ -14,7 +14,7 @@ use crate::ipc::protocol::DaemonEvent;
 
 fn strategies_triggers_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.push("strategies/triggers");
+    dir.push("resources/engine/triggers");
     dir
 }
 
@@ -2194,7 +2194,7 @@ fn schema_validate_catches_guard_on_nonexistent_transition() {
 fn schema_validate_work_yml_guards_are_valid() {
     // The embedded work.yml guards (deps-ready, no-sessions-on-done) must pass validation.
     use crate::fsm::schema as fsm_schema;
-    let content = include_str!("../../strategies/fsm/work.yml");
+    let content = include_str!("../../resources/engine/fsm/work.yml");
     let mut def: FsmDefinition = serde_yaml::from_str(content).unwrap();
     fsm_schema::inject_transition_names(&mut def);
     let errors = fsm_schema::validate(&def, Some("work.yml"));
@@ -2203,7 +2203,7 @@ fn schema_validate_work_yml_guards_are_valid() {
 
 #[test]
 fn work_yml_guards_have_expected_conditions() {
-    let content = include_str!("../../strategies/fsm/work.yml");
+    let content = include_str!("../../resources/engine/fsm/work.yml");
     let def: FsmDefinition = serde_yaml::from_str(content).unwrap();
     assert!(
         def.guards.values().any(|g| g.condition == "deps-satisfied"),

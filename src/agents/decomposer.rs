@@ -152,12 +152,9 @@ impl<'a> DecomposerAgent<'a> {
     ///
     /// Uses `Resources::load()` to resolve the role config through the standard override
     /// chain (repo-local > XDG > embedded default), so role configs work out of the box
-    /// without a strategies/ directory on disk.
+    /// without a resources/ directory on disk.
     fn load_rule(&self, parent_collection: &str, config_name: &str) -> Result<DecomposerRule> {
-        let resource_path = format!(
-            "roles/decomposer{}.yml",
-            if config_name == "full" { String::new() } else { format!("-{}", config_name) }
-        );
+        let resource_path = format!("decompose/roles/{}.yml", config_name);
 
         let repo_path = &self.ctx.stores.config.project.repo_path;
         let content = crate::resources::Resources::load(&resource_path, Some(std::path::Path::new(repo_path)))
