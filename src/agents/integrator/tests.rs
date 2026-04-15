@@ -4,6 +4,7 @@ use crate::agents::{AgentContext, AgentKind, AgentSession, AgentStatus};
 use crate::config::{Config, ProjectConfig};
 use crate::daemon::context::Stores;
 use crate::domain::bundle::Bundle;
+use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
@@ -1658,4 +1659,109 @@ async fn test_noop_tick_validation_failure() {
     // Bundle should be Rejected
     let bundles = stores.bundles.read().unwrap();
     assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
+}
+
+// --- Phase 2: Integrator transition gate tests ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_transition_gate_excludes_locked_bundle() {
+    // One bundle transitions to Integrating cleanly; the other touches a locked
+    // resource owned by a different work, so the Accepted→Integrating transition
+    // fails and it is excluded from the tick.
+    let dir = TestDir::new("loopr-intg-gate1");
+    let stores = test_stores(&dir);
+
+    // bundle_a: clean path, should succeed
+    let mut bundle_a = Bundle::new("wi-1".into(), None, "feature/a".into(), vec!["claim-a".into()]);
+    bundle_a.paths = vec!["src/a.rs".into()];
+    bundle_a.force_status(BundleStatus::Accepted);
+    let bundle_a_id = bundle_a.id.clone();
+    stores.bundles.write().unwrap().insert(bundle_a.id.clone(), bundle_a);
+
+    // bundle_b: touches src/b.rs which is locked by wi-999, not wi-2
+    let mut bundle_b = Bundle::new("wi-2".into(), None, "feature/b".into(), vec!["claim-b".into()]);
+    bundle_b.paths = vec!["src/b.rs".into()];
+    bundle_b.force_status(BundleStatus::Accepted);
+    let bundle_b_id = bundle_b.id.clone();
+    stores.bundles.write().unwrap().insert(bundle_b.id.clone(), bundle_b);
+
+    // Advisory lock on src/b.rs owned by wi-999 (not wi-2)
+    let lock = Lock::new("src/b.rs".into(), "wi-999".into(), "coord-1".into());
+    stores.locks.write().unwrap().insert(lock.id.clone(), lock);
+
+    let agent = test_integrator(&dir, stores.clone(), test_config());
+    let result = agent.run_cycle().unwrap();
+
+    // The cycle should still publish - bundle_a succeeded
+    assert!(
+        matches!(result, IntegratorCycleResult::Published { .. }),
+        "expected Published (bundle_a succeeded), got {:?}",
+        result
+    );
+
+    // Verify the tick recorded both attempted and only the successful one
+    let ticks = stores.ticks.read().unwrap();
+    let tick = ticks
+        .values()
+        .find(|t| !t.bundle_ids.is_empty() || !t.attempted_bundle_ids.is_empty());
+    assert!(tick.is_some(), "expected a tick to exist");
+    let tick = tick.unwrap();
+
+    assert!(
+        tick.bundle_ids.contains(&bundle_a_id),
+        "bundle_a should be in bundle_ids"
+    );
+    assert!(
+        !tick.bundle_ids.contains(&bundle_b_id),
+        "bundle_b should NOT be in bundle_ids (excluded by gate)"
+    );
+    assert!(
+        tick.attempted_bundle_ids.contains(&bundle_b_id),
+        "bundle_b should be in attempted_bundle_ids (was attempted)"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_transition_gate_all_fail_fails_tick() {
+    // All bundles fail the Accepted→Integrating transition (all touch locked resources).
+    // The tick should be transitioned to Failed and the cycle returns Idle.
+    let dir = TestDir::new("loopr-intg-gate2");
+    let stores = test_stores(&dir);
+
+    // One bundle touching a locked resource
+    let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claim-x".into()]);
+    bundle.paths = vec!["src/locked.rs".into()];
+    bundle.force_status(BundleStatus::Accepted);
+    let bundle_id = bundle.id.clone();
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    // Lock on src/locked.rs owned by wi-999 (not wi-1)
+    let lock = Lock::new("src/locked.rs".into(), "wi-999".into(), "coord-1".into());
+    stores.locks.write().unwrap().insert(lock.id.clone(), lock);
+
+    let agent = test_integrator(&dir, stores.clone(), test_config());
+    let result = agent.run_cycle().unwrap();
+
+    // All bundles excluded -> returns Idle after failing the tick
+    assert_eq!(
+        result,
+        IntegratorCycleResult::Idle,
+        "expected Idle when all bundles fail transition gate"
+    );
+
+    // Verify the tick was created and then Failed
+    let ticks = stores.ticks.read().unwrap();
+    let failed_tick = ticks.values().find(|t| t.status() == TickStatus::Failed);
+    assert!(
+        failed_tick.is_some(),
+        "expected a Failed tick when all bundles excluded"
+    );
+
+    // The bundle stays in Accepted (not rejected, not merged) — will retry next cycle
+    let bundles = stores.bundles.read().unwrap();
+    assert_eq!(
+        bundles[&bundle_id].status(),
+        BundleStatus::Accepted,
+        "excluded bundle should stay Accepted for next cycle"
+    );
 }

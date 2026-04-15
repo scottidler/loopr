@@ -522,22 +522,44 @@ impl IntegratorAgent {
             return Err(eyre!("Failed to seal tick {}: {:?}", tick_id, seal_resp.error));
         }
 
-        // 8. Transition bundles: Accepted → Integrating
-        for bundle_id in &valid_bundle_ids {
-            let resp = self.ctx.bridge.request(
-                "bundle.transition",
+        // 8. Transition bundles: Accepted → Integrating (gate: only merge what transitions)
+        let attempted_bundle_ids = valid_bundle_ids.clone();
+        let valid_bundle_ids: Vec<String> = valid_bundle_ids
+            .into_iter()
+            .filter(|bundle_id| {
+                let resp = self.ctx.bridge.request(
+                    "bundle.transition",
+                    serde_json::json!({
+                        "id": bundle_id,
+                        "target_status": "Integrating",
+                        "role": "integrator",
+                    }),
+                );
+                if resp.is_error() {
+                    self.ctx.warn(&format!(
+                        "excluding bundle {} from tick: failed to transition to Integrating: {:?}",
+                        bundle_id, resp.error
+                    ));
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        // If no bundles survived the gate, fail the tick and return early.
+        if valid_bundle_ids.is_empty() {
+            self.ctx
+                .info("no bundles successfully transitioned to Integrating; failing tick");
+            let _ = self.ctx.bridge.request(
+                "tick.transition",
                 serde_json::json!({
-                    "id": bundle_id,
-                    "target_status": "Integrating",
+                    "id": tick_id,
+                    "target_status": "Failed",
                     "role": "integrator",
                 }),
             );
-            if resp.is_error() {
-                self.ctx.warn(&format!(
-                    "failed to transition bundle {} to Integrating: {:?}",
-                    bundle_id, resp.error
-                ));
-            }
+            return Ok(IntegratorCycleResult::Idle);
         }
 
         // Update tick with bundle IDs, attempted bundle IDs, and plan_id.
@@ -545,7 +567,7 @@ impl IntegratorAgent {
             let mut ticks = self.ctx.stores.write_ticks()?;
             if let Some(tick) = ticks.get_mut(&tick_id) {
                 tick.bundle_ids = valid_bundle_ids.clone();
-                tick.attempted_bundle_ids = valid_bundle_ids.clone();
+                tick.attempted_bundle_ids = attempted_bundle_ids;
                 if let Some(ref pid) = plan_id {
                     tick.plan_id = pid.clone();
                 }
@@ -1792,7 +1814,6 @@ fn get_git_head_sha(repo_path: &std::path::Path) -> Option<String> {
         })
 }
 
-// Phase 4 cutover: integrator tests disabled pending engine integration
-// #[allow(clippy::unwrap_used)]
-// #[cfg(test)]
-// mod tests;
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests;
