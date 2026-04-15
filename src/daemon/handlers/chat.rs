@@ -26,7 +26,9 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
             .filter(|w| {
                 !matches!(
                     w.status(),
-                    crate::domain::work::WorkStatus::Done | crate::domain::work::WorkStatus::Abandoned
+                    crate::domain::work::WorkStatus::Done
+                        | crate::domain::work::WorkStatus::Superseded
+                        | crate::domain::work::WorkStatus::Abandoned
                 )
             })
             .collect();

@@ -111,13 +111,13 @@ pub(super) fn handle_work_create(
             ));
         }
 
-        // Duplicate detection: reject work with same title in same phase (unless Abandoned)
+        // Duplicate detection: reject work with same title in same phase (unless Superseded/Abandoned)
         {
             let works = stores.read_works()?;
             let duplicate = works.values().find(|wi| {
                 wi.parent_id == parent_id
                     && wi.title.to_lowercase() == title.to_lowercase()
-                    && !matches!(wi.status(), WorkStatus::Abandoned)
+                    && !matches!(wi.status(), WorkStatus::Superseded | WorkStatus::Abandoned)
             });
             if let Some(dup) = duplicate {
                 return Ok(DaemonResponse::err(
@@ -495,12 +495,13 @@ pub(super) fn handle_work_transition(
         }
 
         // Increment attempt_count when Work is being reset to Ready from a non-Draft state.
-        // If the item exceeds MAX_WORK_ATTEMPTS, override target to Abandoned - this is the
-        // terminal backstop that prevents an infinite noop death loop.
+        // If the item exceeds MAX_WORK_ATTEMPTS, transition to Blocked with a NeedHelp signal
+        // instead of auto-abandoning. The coordinator evaluates and calls either Superseded
+        // (creates replacement) or Abandoned (declares fatal).
         let effective_status = if target_status == WorkStatus::Ready && from != WorkStatus::Draft {
             wi.attempt_count += 1;
             if wi.attempt_count >= MAX_WORK_ATTEMPTS {
-                WorkStatus::Abandoned
+                WorkStatus::Blocked
             } else {
                 target_status
             }
@@ -520,6 +521,24 @@ pub(super) fn handle_work_transition(
                 .update(wi_clone.clone())
         {
             return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        // Emit NeedHelp signal when max-attempts forces a work to Blocked.
+        // The coordinator evaluates and calls either Superseded or Abandoned.
+        if effective_status == WorkStatus::Blocked && wi_clone.attempt_count >= MAX_WORK_ATTEMPTS {
+            tracing::warn!(
+                "Work {} hit max attempts ({}) - blocked with NeedHelp signal for coordinator",
+                id,
+                wi_clone.attempt_count
+            );
+            let _ = event_tx.send(DaemonEvent::new(
+                "work.need_help",
+                serde_json::json!({
+                    "work_id": id,
+                    "attempt_count": wi_clone.attempt_count,
+                    "reason": "max attempts reached - coordinator must decide: Superseded (replace) or Abandoned (fatal)",
+                }),
+            ));
         }
 
         let wi_json = match serde_json::to_value(&wi_clone) {
@@ -1729,7 +1748,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_attempt_count_at_max_transitions_to_abandoned() {
+    async fn test_attempt_count_at_max_transitions_to_blocked() {
         let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1743,7 +1762,8 @@ mod tests {
             wi.force_status(crate::domain::work::WorkStatus::InProgress);
         }
 
-        // One more reset to Ready should tip it over and go to Abandoned
+        // One more reset to Ready should tip it over and go to Blocked (not Abandoned).
+        // The coordinator receives a NeedHelp signal and decides Superseded or Abandoned.
         let resp = dispatch(
             &stores,
             &tx,
@@ -1772,8 +1792,8 @@ mod tests {
         );
         assert_eq!(
             wi.status(),
-            crate::domain::work::WorkStatus::Abandoned,
-            "work should be Abandoned when attempt_count reaches MAX_WORK_ATTEMPTS"
+            crate::domain::work::WorkStatus::Blocked,
+            "work should be Blocked (not Abandoned) when attempt_count reaches MAX_WORK_ATTEMPTS"
         );
     }
 

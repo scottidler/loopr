@@ -757,7 +757,7 @@ pub(super) fn handle_decomposer_abandon_children(
                     if let Some(s) = specs.get_mut(&id)
                         && !s.status().is_terminal(&stores.fsm)
                     {
-                        s.force_status(crate::domain::spec::SpecStatus::Abandoned);
+                        s.force_status(crate::domain::spec::SpecStatus::Superseded);
                         s.updated_at = crate::id::now_millis();
                         if let Some(store) = &stores.store {
                             let _ = store.lock().ok().and_then(|mut sg| sg.update(s.clone()).ok());
@@ -780,7 +780,7 @@ pub(super) fn handle_decomposer_abandon_children(
                     if let Some(p) = phases.get_mut(&id)
                         && !p.status().is_terminal(&stores.fsm)
                     {
-                        p.force_status(crate::domain::phase::PhaseStatus::Abandoned);
+                        p.force_status(crate::domain::phase::PhaseStatus::Superseded);
                         p.updated_at = crate::id::now_millis();
                         if let Some(store) = &stores.store {
                             let _ = store.lock().ok().and_then(|mut sg| sg.update(p.clone()).ok());
@@ -803,7 +803,7 @@ pub(super) fn handle_decomposer_abandon_children(
                     if let Some(w) = works.get_mut(&id)
                         && !w.status().is_terminal(&stores.fsm)
                     {
-                        w.force_status(crate::domain::work::WorkStatus::Abandoned);
+                        w.force_status(crate::domain::work::WorkStatus::Superseded);
                         w.updated_at = crate::id::now_millis();
                         if let Some(store) = &stores.store {
                             let _ = store.lock().ok().and_then(|mut sg| sg.update(w.clone()).ok());

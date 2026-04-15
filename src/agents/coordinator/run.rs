@@ -460,7 +460,10 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             if let AgentAction::AssignAgent { target_id, .. } = action_ref
                 && let Ok(works) = stores.read_works()
                 && let Some(wi) = works.get(target_id)
-                && matches!(wi.status(), WorkStatus::Done | WorkStatus::Abandoned)
+                && matches!(
+                    wi.status(),
+                    WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+                )
             {
                 let err_msg = format!(
                     "INVALID: Work '{}' ({}) is already '{}'. \

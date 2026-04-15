@@ -51,7 +51,12 @@ pub(super) fn handle_bundle_create(
             let works = stores.read_works()?;
             match works.get(&work_id) {
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("work", &work_id))),
-                Some(work) if matches!(work.status(), WorkStatus::Done | WorkStatus::Abandoned) => {
+                Some(work)
+                    if matches!(
+                        work.status(),
+                        WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+                    ) =>
+                {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(

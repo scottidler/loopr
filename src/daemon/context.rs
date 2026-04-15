@@ -637,7 +637,12 @@ impl DaemonContext {
             match self.stores.read_works() {
                 Ok(works) => works
                     .values()
-                    .filter(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+                    .filter(|w| {
+                        matches!(
+                            w.status(),
+                            WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+                        )
+                    })
                     .map(|w| w.id.clone())
                     .collect(),
                 Err(_) => HashSet::new(),
@@ -991,7 +996,12 @@ impl DaemonContext {
             };
             let done_work_ids: Vec<String> = works
                 .values()
-                .filter(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+                .filter(|w| {
+                    matches!(
+                        w.status(),
+                        WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+                    )
+                })
                 .filter(|w| !active_work_ids.contains(&w.id))
                 .map(|w| w.id.clone())
                 .collect();

@@ -58,7 +58,12 @@ pub fn build_state_summary_with_sla(
         };
         let mut non_terminal: Vec<_> = works
             .values()
-            .filter(|w| !matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+            .filter(|w| {
+                !matches!(
+                    w.status(),
+                    WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+                )
+            })
             .collect();
         non_terminal.sort_by_key(|w| w.created_at);
         if !non_terminal.is_empty() {
@@ -131,7 +136,12 @@ pub fn build_state_summary_with_sla(
             .filter(|b| {
                 works
                     .get(&b.work_id)
-                    .map(|w| !matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+                    .map(|w| {
+                        !matches!(
+                            w.status(),
+                            WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+                        )
+                    })
                     .unwrap_or(true)
             })
             .collect();
@@ -269,7 +279,12 @@ pub fn build_state_summary_with_sla(
         };
         let non_terminal_raw: Vec<_> = phases
             .values()
-            .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .filter(|p| {
+                !matches!(
+                    p.status(),
+                    HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                )
+            })
             .cloned()
             .collect();
         let non_terminal = topo_sort_by_deps(&non_terminal_raw, |p| &p.id, |p| &p.dependencies, |p| p.created_at);
@@ -295,7 +310,12 @@ pub fn build_state_summary_with_sla(
         };
         let non_terminal_raw: Vec<_> = specs
             .values()
-            .filter(|s| !matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .filter(|s| {
+                !matches!(
+                    s.status(),
+                    HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                )
+            })
             .cloned()
             .collect();
         let non_terminal = topo_sort_by_deps(&non_terminal_raw, |s| &s.id, |s| &s.dependencies, |s| s.created_at);
@@ -321,7 +341,12 @@ pub fn build_state_summary_with_sla(
         };
         let mut non_terminal: Vec<_> = plans
             .values()
-            .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .filter(|p| {
+                !matches!(
+                    p.status(),
+                    HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                )
+            })
             .collect();
         non_terminal.sort_by_key(|p| p.created_at);
         if !non_terminal.is_empty() {
@@ -968,7 +993,10 @@ fn append_work_status(
     let mut actionable = Vec::new();
     let mut terminal = Vec::new();
     for wi in phase_works {
-        if matches!(wi.status(), WorkStatus::Done | WorkStatus::Abandoned) {
+        if matches!(
+            wi.status(),
+            WorkStatus::Done | WorkStatus::Superseded | WorkStatus::Abandoned
+        ) {
             terminal.push(*wi);
         } else {
             actionable.push(*wi);
