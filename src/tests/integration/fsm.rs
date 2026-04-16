@@ -3,7 +3,6 @@
 use serde_json::json;
 
 use crate::agents::AgentKind;
-use crate::config::InterviewMode;
 
 use super::fixtures::*;
 

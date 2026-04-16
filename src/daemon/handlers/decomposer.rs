@@ -1077,8 +1077,7 @@ pub(super) async fn handle_decomposer_re_decompose(
 // ─── Failure coordination handler ───────────────────────────────────────────
 
 /// `decomposer.handle_failure` - wired to decomposition.failed event via strategy.
-/// Updates CoordinatorState.decomposition_error so the coordinator has failure context.
-/// Also increments decomposition_attempts on the parent to eventually trigger the limit.
+/// Increments decomposition_attempts on the parent to eventually trigger the limit.
 #[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
 pub(super) fn handle_decomposer_failure(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {

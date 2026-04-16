@@ -17,18 +17,6 @@ pub enum ActionResult {
     LockAcquired(String),
     /// Lock released - contains lock_id.
     LockReleased(String),
-    /// Document validated - contains (verdict, summary, issue_messages).
-    DocumentValidated {
-        verdict: String,
-        summary: String,
-        issues: Vec<String>,
-    },
-    /// Coverage evaluated - contains (verdict, summary, gap_descriptions).
-    CoverageEvaluated {
-        verdict: String,
-        summary: String,
-        gaps: Vec<String>,
-    },
     Done(String),
     NeedHelp(String),
     /// Non-fatal error - fed back to the LLM so it can self-correct.
@@ -43,10 +31,7 @@ pub enum ActionResult {
         session_id: String,
         agent_type: String,
     },
-    /// Work dependency not met - cannot assign agent until deps are Done.
-    DependencyNotMet {
-        work_id: String,
-        message: String,
-    },
-    // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed - never produced by any code path.
+    // AssignAgent, AcceptBundle, ValidateDocument, EvaluateCoverage removed -
+    // replaced by engine strategies. DependencyNotMet, DocumentValidated,
+    // CoverageEvaluated result variants removed with them.
 }

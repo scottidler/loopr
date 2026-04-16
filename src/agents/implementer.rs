@@ -715,9 +715,6 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::ToolRegistered(n) => format!("registered tool: {}", n),
         ActionResult::LockAcquired(id) => format!("lock acquired: {}", id),
         ActionResult::LockReleased(id) => format!("lock released: {}", id),
-        ActionResult::DocumentValidated { verdict, summary, .. } => {
-            format!("validated: {} — {}", verdict, summary)
-        }
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
@@ -725,10 +722,6 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::AgentSpawned { session_id, agent_type } => {
             format!("spawned {} ({})", agent_type, session_id)
         }
-        ActionResult::CoverageEvaluated { verdict, gaps, .. } => format!("coverage: {} ({} gaps)", verdict, gaps.len()),
-        ActionResult::DependencyNotMet { work_id, message } => {
-            format!("dep not met for {}: {}", work_id, message)
-        } // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — dead variants
     }
 }
 

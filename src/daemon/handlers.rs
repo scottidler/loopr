@@ -131,7 +131,11 @@ pub async fn dispatch(
     req: DaemonRequest,
 ) -> DaemonResponse {
     trace!("dispatch(method={})", req.method);
-    let resp = match req.method.as_str() {
+    // v4 cutover: auto_start_agents hook removed. Engine strategies now handle:
+    // - Implementer spawning: spawn-implementer-for-ready-work strategy
+    // - Bundle triage: auto-triage-proposed-bundle strategy
+    // - Reviewer spawning: spawn-reviewer-for-triaged-bundle strategy
+    match req.method.as_str() {
         "system.handshake" => handle_handshake(stores, req),
         "system.init" => handle_system_init(stores, req),
         "system.status" => handle_status(stores, req),
@@ -210,14 +214,7 @@ pub async fn dispatch(
         "decomposer.re_decompose" => decomposer::handle_decomposer_re_decompose(stores, event_tx, req).await,
         "decomposer.handle_failure" => decomposer::handle_decomposer_failure(stores, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
-    };
-
-    // v4 cutover: auto_start_agents hook removed. Engine strategies now handle:
-    // - Implementer spawning: spawn-implementer-for-ready-work strategy
-    // - Bundle triage: auto-triage-proposed-bundle strategy
-    // - Reviewer spawning: spawn-reviewer-for-triaged-bundle strategy
-
-    resp
+    }
 }
 
 #[allow(clippy::unwrap_used)]

@@ -127,7 +127,7 @@ pub enum AgentAction {
         worktree: bool,
     },
 
-    // === Coordinator-only actions ===
+    // === Director judgment actions ===
     CreateWork {
         parent_id: String,
         title: String,
@@ -139,17 +139,9 @@ pub enum AgentAction {
         #[serde(default, deserialize_with = "string_or_vec")]
         dependencies: Vec<String>,
     },
-    AssignAgent {
-        agent_type: String,
-        target_id: String,
-    },
     SpawnResearcher {
         query: String,
         scope_id: String,
-    },
-    ValidateDocument {
-        collection: String,
-        id: String,
     },
     AcquireLock {
         resource: String,
@@ -157,9 +149,6 @@ pub enum AgentAction {
     },
     ReleaseLock {
         lock_id: String,
-    },
-    AcceptBundle {
-        bundle_id: String,
     },
     OverrideWork {
         work_id: String,
@@ -189,16 +178,13 @@ pub enum AgentAction {
         #[serde(default)]
         requires_replacement: bool,
     },
-    EvaluateCoverage {
-        parent_collection: String,
-        parent_id: String,
-    },
     ReviseParent {
         collection: String,
         id: String,
         reason: String,
         diagnostic: String,
     },
+    // === Director intake actions ===
     InterviewQuestion {
         #[serde(default, deserialize_with = "string_or_vec")]
         questions: Vec<String>,
@@ -425,17 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_action_assign_agent_serde() {
-        let action = AgentAction::AssignAgent {
-            agent_type: "implementer".to_string(),
-            target_id: "wi-1".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::AssignAgent { .. }));
-    }
-
-    #[test]
     fn test_agent_action_spawn_researcher_serde() {
         let action = AgentAction::SpawnResearcher {
             query: "Investigate auth module".to_string(),
@@ -444,17 +419,6 @@ mod tests {
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, AgentAction::SpawnResearcher { .. }));
-    }
-
-    #[test]
-    fn test_agent_action_validate_document_serde() {
-        let action = AgentAction::ValidateDocument {
-            collection: "plan".to_string(),
-            id: "p-1".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::ValidateDocument { .. }));
     }
 
     #[test]
@@ -476,16 +440,6 @@ mod tests {
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, AgentAction::ReleaseLock { .. }));
-    }
-
-    #[test]
-    fn test_agent_action_accept_bundle_serde() {
-        let action = AgentAction::AcceptBundle {
-            bundle_id: "b-1".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::AcceptBundle { .. }));
     }
 
     #[test]

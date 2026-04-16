@@ -5,7 +5,6 @@ mod lock;
 mod record;
 pub(super) mod scope;
 mod tool;
-mod validation;
 mod work;
 
 use std::path::Path;
@@ -93,7 +92,7 @@ pub async fn execute_action(
         AgentAction::Done { summary } => Ok(ActionResult::Done(summary.clone())),
         AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
 
-        // --- Coordinator document-creation actions ---
+        // --- Director judgment actions ---
         AgentAction::CreateWork {
             parent_id,
             title,
@@ -111,14 +110,8 @@ pub async fn execute_action(
             dependencies,
         ),
 
-        // --- Coordinator agent management actions ---
-        AgentAction::AssignAgent { agent_type, target_id } => work::handle_assign_agent(ctx, agent_type, target_id),
         AgentAction::SpawnResearcher { query, scope_id } => work::handle_spawn_researcher(ctx, query, scope_id),
-        AgentAction::ValidateDocument { collection, id } => validation::handle_validate_document(ctx, collection, id),
-        AgentAction::EvaluateCoverage {
-            parent_collection,
-            parent_id,
-        } => validation::handle_evaluate_coverage(ctx, parent_collection, parent_id),
+        // --- Director intake actions ---
         AgentAction::InterviewQuestion { questions } => record::handle_interview_question(ctx, questions),
         AgentAction::ProposePlan {
             title,
@@ -133,7 +126,6 @@ pub async fn execute_action(
         } => record::handle_revise_parent(ctx, collection, id, reason, diagnostic),
         AgentAction::AcquireLock { resource, holder_id } => lock::handle_acquire_lock(ctx, resource, holder_id),
         AgentAction::ReleaseLock { lock_id } => lock::handle_release_lock(ctx, lock_id),
-        AgentAction::AcceptBundle { bundle_id } => bundle::handle_accept_bundle(ctx, bundle_id),
         AgentAction::OverrideWork {
             work_id,
             target_status,

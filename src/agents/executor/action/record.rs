@@ -207,7 +207,7 @@ pub(super) fn handle_override_spec(
 pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
 
-    let interview_mode = bridge.config().agents.coordinator.interview_mode;
+    let interview_mode = bridge.config().agents.interview_mode;
     if interview_mode == crate::config::InterviewMode::Auto {
         // Auto mode: synthesize answer from goal + repo context
         // CoordinatorGoal has been removed - derive goal from the active plan title.

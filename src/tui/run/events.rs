@@ -206,7 +206,7 @@ pub fn format_orchestration_event(event: &DaemonEvent) -> Option<String> {
                 None
             }
         }
-        "coordinator.plan_accepted" => Some("Coordinator starting decomposition.".to_string()),
+        "coordinator.plan_accepted" => Some("Engine starting decomposition.".to_string()),
         _ => None,
     }
 }
@@ -703,7 +703,7 @@ mod tests {
         let event = DaemonEvent::new("coordinator.plan_accepted", serde_json::json!({"plan_id": "pl-1"}));
         assert_eq!(
             format_orchestration_event(&event),
-            Some("Coordinator starting decomposition.".to_string())
+            Some("Engine starting decomposition.".to_string())
         );
     }
 

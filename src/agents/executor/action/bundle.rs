@@ -6,7 +6,6 @@ use crate::agents::AgentContext;
 use crate::agents::executor::action::scope;
 use crate::agents::executor::result::ActionResult;
 use crate::agents::executor::util::resolve_latest_published_tick_id;
-use crate::domain::bundle::BundleStatus;
 
 /// Handle ProposeBundle action.
 pub(super) async fn handle_propose_bundle(
@@ -325,56 +324,6 @@ fn extract_paths_from_work(stores: &crate::daemon::context::Stores, work_id: &st
     tokens
 }
 
-/// Handle AcceptBundle action.
-pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
-    let bridge = &ctx.bridge;
-
-    if !bundle_id.starts_with("bd-") {
-        return Ok(ActionResult::ActionError(format!(
-            "accept_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
-            bundle_id
-        )));
-    }
-    // Pre-flight status guard: only Triaged or Reviewed bundles can be accepted
-    let bundles = bridge.stores().read_bundles()?;
-    match bundles.get(bundle_id) {
-        None => {
-            return Ok(ActionResult::ActionError(format!(
-                "accept_bundle: bundle {} not found",
-                bundle_id
-            )));
-        }
-        Some(bundle) if !matches!(bundle.status(), BundleStatus::Triaged | BundleStatus::Reviewed) => {
-            let hint = match bundle.status() {
-                BundleStatus::Proposed => "Bundle is still being triaged by the system.",
-                _ => "No accept action needed.",
-            };
-            return Ok(ActionResult::ActionError(format!(
-                "accept_bundle: bundle {} is {} not Triaged/Reviewed. {}",
-                bundle_id,
-                bundle.status(),
-                hint
-            )));
-        }
-        _ => {}
-    }
-    drop(bundles);
-    let resp = bridge.request(
-        "bundle.transition",
-        serde_json::json!({
-            "id": bundle_id,
-            "target_status": "Accepted",
-            "role": "coordinator",
-        }),
-    );
-    if resp.is_error() {
-        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        return Ok(ActionResult::ActionError(format!("accept_bundle failed: {}", msg)));
-    }
-    ctx.info(&format!("AcceptBundle: {} -> Accepted", bundle_id));
-    Ok(ActionResult::Transitioned(format!("bundle/{} -> Accepted", bundle_id)))
-}
-
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -501,121 +450,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("work_id"));
     }
 
-    // --- Group C: Agent management + domain actions ---
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_execute_accept_bundle() {
-        let dir = TestDir::new("loopr-exec-accept");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
-
-        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
-
-        let bundle_resp = ctx.bridge.request(
-            "bundle.create",
-            serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/accept",
-                "description": "Accept test",
-            }),
-        );
-        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
-        ctx.bridge.request(
-            "bundle.transition",
-            serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-        );
-        ctx.bridge.request(
-            "bundle.transition",
-            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-        );
-
-        let action = AgentAction::AcceptBundle {
-            bundle_id: bundle_id.clone(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Accepted")),
-            "expected Transitioned to Accepted, got: {:?}",
-            result
-        );
-    }
-
-    // --- Group D: Lifecycle paths ---
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_execute_accept_bundle_rejects_work_id() {
-        let dir = TestDir::new("loopr-exec-accept-wkid");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
-
-        let action = AgentAction::AcceptBundle {
-            bundle_id: "wk-12345".to_string(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not a bundle ID")),
-            "expected prefix validation error, got: {:?}",
-            result
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_execute_accept_bundle_full() {
-        let dir = TestDir::new("loopr-exec-acceptfull");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
-
-        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
-
-        let bundle_resp = ctx.bridge.request(
-            "bundle.create",
-            serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/accepterr",
-                "description": "Accept err test",
-            }),
-        );
-        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
-
-        let action = AgentAction::AcceptBundle {
-            bundle_id: bundle_id.clone(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("being triaged by the system")),
-            "expected corrective hint for Proposed bundle, got: {:?}",
-            result
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_accept_bundle_rejects_proposed_bundle() {
-        let dir = TestDir::new("loopr-exec-accept-prop");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
-
-        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
-
-        let bundle_resp = ctx.bridge.request(
-            "bundle.create",
-            serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/accept-prop",
-                "description": "Accept proposed test",
-            }),
-        );
-        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
-
-        let action = AgentAction::AcceptBundle {
-            bundle_id: bundle_id.clone(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("being triaged by the system")),
-            "expected corrective hint for Proposed bundle, got: {:?}",
-            result
-        );
-    }
+    // AcceptBundle tests removed - action replaced by accept-approved-bundle engine strategy
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_propose_bundle_includes_base_tick_id() {

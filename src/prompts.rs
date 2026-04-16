@@ -2,13 +2,9 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::config::Config;
-use crate::domain::bundle::BundleStatus;
-use crate::domain::plan::HierarchyStatus;
-use crate::domain::work::WorkStatus;
 use crate::resources::Resources;
 
 pub struct PromptStore {
-    pub coordinator: String,
     pub implementer: String,
     pub reviewer: String,
     pub researcher: String,
@@ -45,18 +41,6 @@ pub const SECTION_AC: &str = "Acceptance Criteria";
 pub const SECTION_OVERVIEW: &str = "Overview";
 pub const SECTION_IMPLEMENTATION: &str = "Implementation Notes";
 
-/// Replace status value placeholders with canonical VARIANT_NAMES from enums,
-/// and inject the configured abandon-ratio percentage threshold.
-fn interpolate_status_values(content: String, max_abandon_ratio: f64) -> String {
-    let pct = (max_abandon_ratio * 100.0).round() as u32;
-    content
-        .replace("{work_status_values}", &WorkStatus::VARIANT_NAMES.join(", "))
-        .replace("{bundle_status_values}", &BundleStatus::VARIANT_NAMES.join(", "))
-        .replace("{hierarchy_status_values}", &HierarchyStatus::VARIANT_NAMES.join(", "))
-        .replace("{work_override_statuses}", "Ready, Superseded, Abandoned, InReview")
-        .replace("{max_abandon_ratio_pct}", &pct.to_string())
-}
-
 /// Initialize the global prompt store from config. Call once at startup after config load.
 ///
 /// `repo_path` enables repo-local prompt overrides at `{repo}/resources/{name}.pmt`.
@@ -70,9 +54,7 @@ fn interpolate_status_values(content: String, max_abandon_ratio: f64) -> String 
 ///   fallback that would corrupt AR experimental data by scoring the baseline as the
 ///   trial prompt)
 pub fn init(config: &Config, repo_path: Option<&Path>) -> eyre::Result<()> {
-    let max_abandon_ratio = config.agents.coordinator.max_abandon_ratio;
-
-    // Convert config path to resource path: "coordinator" -> "coordinator.pmt",
+    // Convert config path to resource path: "agents/implementer" -> "agents/implementer.pmt",
     // "decompose/spec" -> "decompose/spec.pmt", "/abs/path.pmt" -> "/abs/path.pmt"
     let load = |configured_path: &str| -> eyre::Result<String> {
         let path = if configured_path.starts_with('/') {
@@ -85,7 +67,6 @@ pub fn init(config: &Config, repo_path: Option<&Path>) -> eyre::Result<()> {
 
     // OnceLock::set returns Err if already initialized - harmless no-op
     let _ = STORE.set(PromptStore {
-        coordinator: interpolate_status_values(load(&config.agents.coordinator.role.prompt)?, max_abandon_ratio),
         implementer: load(&config.agents.implementer.prompt)?,
         reviewer: load(&config.agents.reviewer.prompt)?,
         researcher: load(&config.agents.researcher.prompt)?,
@@ -122,7 +103,6 @@ pub fn init_defaults() {
         Resources::load(path, None).unwrap_or_else(|e| panic!("missing embedded resource {}: {}", path, e))
     };
     let _ = STORE.set(PromptStore {
-        coordinator: interpolate_status_values(load("agents/coordinator.pmt"), 0.4),
         implementer: load("agents/implementer.pmt"),
         reviewer: load("agents/reviewer.pmt"),
         researcher: load("agents/researcher.pmt"),
@@ -169,7 +149,6 @@ mod tests {
     fn test_defaults_non_empty() {
         init_defaults();
         let s = store();
-        assert!(!s.coordinator.is_empty());
         assert!(!s.implementer.is_empty());
         assert!(!s.reviewer.is_empty());
         assert!(!s.researcher.is_empty());
@@ -184,10 +163,7 @@ mod tests {
     fn test_defaults_match_resources() {
         init_defaults();
         let s = store();
-        // Coordinator is interpolated (status placeholders replaced)
-        let raw_coordinator = Resources::load("agents/coordinator.pmt", None).unwrap();
-        assert_eq!(s.coordinator, interpolate_status_values(raw_coordinator, 0.4));
-        // Other prompts are loaded verbatim from embedded resources
+        // Prompts are loaded verbatim from embedded resources
         assert_eq!(s.implementer, Resources::load("agents/implementer.pmt", None).unwrap());
         assert_eq!(s.reviewer, Resources::load("agents/reviewer.pmt", None).unwrap());
         assert_eq!(s.researcher, Resources::load("agents/researcher.pmt", None).unwrap());
@@ -217,17 +193,17 @@ mod tests {
         fs::create_dir_all(&resources_dir).unwrap();
         fs::create_dir_all(resources_dir.join("agents")).unwrap();
         fs::write(
-            resources_dir.join("agents/coordinator.pmt"),
-            "CUSTOM COORDINATOR PROMPT",
+            resources_dir.join("agents/implementer.pmt"),
+            "CUSTOM IMPLEMENTER PROMPT",
         )
         .unwrap();
 
-        let content = Resources::load("agents/coordinator.pmt", Some(&dir)).unwrap();
-        assert_eq!(content, "CUSTOM COORDINATOR PROMPT");
+        let content = Resources::load("agents/implementer.pmt", Some(&dir)).unwrap();
+        assert_eq!(content, "CUSTOM IMPLEMENTER PROMPT");
 
         // Non-overridden file falls back to embedded default
-        let implementer = Resources::load("agents/implementer.pmt", Some(&dir)).unwrap();
-        assert!(!implementer.is_empty());
+        let reviewer = Resources::load("agents/reviewer.pmt", Some(&dir)).unwrap();
+        assert!(!reviewer.is_empty());
     }
 
     #[test]
@@ -236,10 +212,10 @@ mod tests {
         let resources_dir = dir.join("resources");
         fs::create_dir_all(&resources_dir).unwrap();
         fs::create_dir_all(resources_dir.join("agents")).unwrap();
-        fs::write(resources_dir.join("agents/coordinator.pmt"), "   \n  ").unwrap();
+        fs::write(resources_dir.join("agents/implementer.pmt"), "   \n  ").unwrap();
 
         // Empty override treated as absent; falls back to embedded default
-        let content = Resources::load("agents/coordinator.pmt", Some(&dir)).unwrap();
+        let content = Resources::load("agents/implementer.pmt", Some(&dir)).unwrap();
         assert!(
             !content.trim().is_empty(),
             "should fall back to non-empty embedded default"
@@ -252,51 +228,6 @@ mod tests {
     // These verify the .pmt files contain the same key content that was
     // previously hardcoded in each agent's const SYSTEM_PROMPT.
     // =========================================================================
-
-    #[test]
-    fn test_coordinator_pmt_identity() {
-        init_defaults();
-        let p = &store().coordinator;
-        // Opening identity line
-        assert!(p.starts_with("You are the Coordinator agent in the Loopr development orchestrator."));
-        // Live action types
-        for action in [
-            "create_work",
-            "assign_agent",
-            "spawn_researcher",
-            "acquire_lock",
-            "release_lock",
-            "validate_document",
-            "accept_bundle",
-            "transition",
-            "create_learning",
-            "need_help",
-            "done",
-        ] {
-            assert!(p.contains(action), "coordinator.pmt missing action: {}", action);
-        }
-        // Dead actions must not appear (hallucination risk guard)
-        assert!(
-            !p.contains("create_plan"),
-            "coordinator.pmt must not contain create_plan"
-        );
-        assert!(
-            !p.contains("create_spec"),
-            "coordinator.pmt must not contain create_spec"
-        );
-        assert!(
-            !p.contains("create_phase"),
-            "coordinator.pmt must not contain create_phase"
-        );
-        // triage_bundle removed: bundles are now auto-triaged by the daemon (Fix 7)
-        assert!(
-            !p.contains("\"triage_bundle\""),
-            "coordinator.pmt must not contain triage_bundle - triage is now automatic"
-        );
-        // Key rules
-        assert!(p.contains("Create ALL Works for a Phase in a single batch"));
-        assert!(p.contains("ALWAYS respond with ONLY a JSON array"));
-    }
 
     #[test]
     fn test_implementer_pmt_identity() {
@@ -522,8 +453,7 @@ mod tests {
     fn test_all_pmt_files_have_substantial_content() {
         init_defaults();
         let s = store();
-        let fields: [(&str, &str); 14] = [
-            ("coordinator", &s.coordinator),
+        let fields: [(&str, &str); 13] = [
             ("implementer", &s.implementer),
             ("reviewer", &s.reviewer),
             ("researcher", &s.researcher),
@@ -553,8 +483,7 @@ mod tests {
         init_defaults();
         let s = store();
         // All agent and generation prompts should instruct JSON output
-        let json_prompts: [(&str, &str); 7] = [
-            ("coordinator", &s.coordinator),
+        let json_prompts: [(&str, &str); 6] = [
             ("implementer", &s.implementer),
             ("reviewer", &s.reviewer),
             ("researcher", &s.researcher),
@@ -569,16 +498,6 @@ mod tests {
                 name,
             );
         }
-    }
-
-    #[test]
-    fn test_coordinator_pmt_has_error_handling_guidance() {
-        init_defaults();
-        let p = &store().coordinator;
-        assert!(p.contains("do NOT retry the same action immediately"));
-        assert!(p.contains("need_help"));
-        assert!(p.contains("Lock Management"));
-        assert!(p.contains("Failure Learning"));
     }
 
     #[test]
@@ -606,43 +525,6 @@ mod tests {
         assert!(p.contains("Zero-Result Handling"));
         assert!(p.contains("File Size Limits"));
         assert!(p.contains("Learning Scope Values"));
-    }
-
-    #[test]
-    fn test_coordinator_status_placeholders_interpolated() {
-        init_defaults();
-        let p = &store().coordinator;
-        // No raw placeholders should remain
-        assert!(
-            !p.contains("{work_status_values}"),
-            "un-interpolated {{work_status_values}}"
-        );
-        assert!(
-            !p.contains("{bundle_status_values}"),
-            "un-interpolated {{bundle_status_values}}"
-        );
-        assert!(
-            !p.contains("{hierarchy_status_values}"),
-            "un-interpolated {{hierarchy_status_values}}"
-        );
-        assert!(
-            !p.contains("{work_override_statuses}"),
-            "un-interpolated {{work_override_statuses}}"
-        );
-        assert!(
-            !p.contains("{max_abandon_ratio_pct}"),
-            "un-interpolated {{max_abandon_ratio_pct}}"
-        );
-        // Canonical values should appear
-        assert!(p.contains("Draft"), "missing Draft in interpolated coordinator prompt");
-        assert!(
-            p.contains("InProgress"),
-            "missing InProgress in interpolated coordinator prompt"
-        );
-        assert!(
-            p.contains("Proposed"),
-            "missing Proposed (BundleStatus) in interpolated coordinator prompt"
-        );
     }
 
     // =========================================================================

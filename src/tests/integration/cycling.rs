@@ -2,8 +2,6 @@
 
 use serde_json::json;
 
-use crate::config::InterviewMode;
-
 use super::fixtures::*;
 
 /// Test 2: Dependency chain - WIs A->B->C with dependencies.

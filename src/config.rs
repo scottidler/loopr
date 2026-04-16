@@ -210,14 +210,14 @@ impl Default for StrategyConfig {
     }
 }
 
-/// How the Coordinator handles the interview phase.
+/// How the Director handles the interview phase.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InterviewMode {
-    /// Default: Coordinator asks questions, human answers via TUI.
+    /// Default: Director asks questions, human answers via TUI.
     #[default]
     Interactive,
-    /// Coordinator generates questions then self-answers from goal + repo context.
+    /// Director generates questions then self-answers from goal + repo context.
     /// Auto-approves the resulting Plan.
     Auto,
     /// Skip Interviewing entirely. Start in Planning state.
@@ -225,66 +225,8 @@ pub enum InterviewMode {
     Skip,
 }
 
-/// Coordinator-specific config extending AgentRoleConfig.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct CoordinatorConfig {
-    #[serde(flatten)]
-    pub role: AgentRoleConfig,
-    pub active_interval_secs: u64,
-    pub idle_interval_secs: u64,
-    pub max_validation_attempts: u32,
-    pub max_work_retries: u32,
-    pub phase_timeout_secs: u64,
-    pub goal_timeout_secs: u64,
-    #[serde(default)]
-    pub interview_mode: InterviewMode,
-    /// Maximum researchers the coordinator can spawn per scope before
-    /// being forced to escalate. Default: 3.
-    #[serde(default = "default_max_researcher_spawns")]
-    pub max_researcher_spawns: u32,
-    /// Maximum fraction of abandoned works (across all phases) before the GoalComplete
-    /// quality gate fires need_help instead of done. Default: 0.4 (40%).
-    /// A value of 1.0 effectively disables the gate.
-    #[serde(default = "default_max_abandon_ratio")]
-    pub max_abandon_ratio: f64,
-}
-
-fn default_max_researcher_spawns() -> u32 {
-    3
-}
-
 fn default_max_abandon_ratio() -> f64 {
     0.4
-}
-
-impl Default for CoordinatorConfig {
-    fn default() -> Self {
-        Self {
-            role: AgentRoleConfig {
-                llm: LlmConfig {
-                    model: "claude-opus-4-6".to_string(),
-                    api_key_env: "ANTHROPIC_API_KEY".to_string(),
-                    max_tokens: 8192,
-                    temperature: 0.2,
-                },
-                max_iterations: u32::MAX,
-                max_pool: 1,
-                session_timeout_secs: None, // Coordinator is long-lived
-                max_requeries: 3,
-                prompt: "agents/coordinator".to_string(),
-            },
-            active_interval_secs: 5,
-            idle_interval_secs: 30,
-            max_validation_attempts: 3,
-            max_work_retries: 3,
-            phase_timeout_secs: 3600,
-            goal_timeout_secs: 14400,
-            interview_mode: InterviewMode::default(),
-            max_researcher_spawns: default_max_researcher_spawns(),
-            max_abandon_ratio: default_max_abandon_ratio(),
-        }
-    }
 }
 
 /// Daemon-specific configuration.
@@ -411,7 +353,7 @@ impl<'de> serde::Deserialize<'de> for WorkerPoolSize {
     }
 }
 
-/// Agent system configuration — LLM agents running as Tokio tasks.
+/// Agent system configuration - LLM agents running as Tokio tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AgentConfig {
@@ -419,16 +361,23 @@ pub struct AgentConfig {
     pub auto_start_implementer: bool,
     pub auto_start_reviewer: bool,
     /// When true, persistent worker pool pulls Ready Works instead of
-    /// push-based AssignAgent. Default false (feature flag).
+    /// engine-driven spawn-implementer-for-ready-work strategy. Default false (feature flag).
     pub pull_based_workers: bool,
     /// Number of persistent worker tasks in the pull-based pool.
     /// Accepts a fixed count or "auto"/"nproc" to use available parallelism.
     pub worker_pool_size: WorkerPoolSize,
     pub implementer: AgentRoleConfig,
     pub reviewer: AgentRoleConfig,
-    pub coordinator: CoordinatorConfig,
     pub researcher: AgentRoleConfig,
     pub tools: Vec<ToolEntry>,
+    /// How the Director handles the interview phase.
+    #[serde(default)]
+    pub interview_mode: InterviewMode,
+    /// Maximum fraction of abandoned works (across all phases) before the GoalComplete
+    /// quality gate fires need_help instead of done. Default: 0.4 (40%).
+    /// A value of 1.0 effectively disables the gate.
+    #[serde(default = "default_max_abandon_ratio")]
+    pub max_abandon_ratio: f64,
 }
 
 impl Default for AgentConfig {
@@ -441,9 +390,10 @@ impl Default for AgentConfig {
             worker_pool_size: WorkerPoolSize::default(),
             implementer: AgentRoleConfig::default_implementer(),
             reviewer: AgentRoleConfig::default_reviewer(),
-            coordinator: CoordinatorConfig::default(),
             researcher: AgentRoleConfig::default_researcher(),
             tools: Vec::new(),
+            interview_mode: InterviewMode::default(),
+            max_abandon_ratio: default_max_abandon_ratio(),
         }
     }
 }
@@ -1231,24 +1181,6 @@ stale_policy: replan_at_safe_point
         assert_eq!(config.strategy.max_lock_ttl_minutes, 60);
     }
 
-    // --- CoordinatorConfig tests ---
-
-    #[test]
-    fn test_coordinator_config_default() {
-        let cc = CoordinatorConfig::default();
-        assert_eq!(cc.active_interval_secs, 5);
-        assert_eq!(cc.idle_interval_secs, 30);
-        assert_eq!(cc.max_validation_attempts, 3);
-        assert_eq!(cc.role.max_pool, 1);
-        assert!((cc.role.llm.temperature - 0.2).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_agent_config_has_coordinator() {
-        let ac = AgentConfig::default();
-        assert_eq!(ac.coordinator.role.max_pool, 1);
-    }
-
     #[test]
     fn test_agent_role_config_researcher_defaults() {
         let rc = AgentRoleConfig::default_researcher();
@@ -1406,27 +1338,9 @@ plan_approval_required: false
     }
 
     #[test]
-    fn test_coordinator_config_interview_mode_default() {
-        let cc = CoordinatorConfig::default();
-        assert_eq!(cc.interview_mode, InterviewMode::Interactive);
-    }
-
-    #[test]
-    fn test_coordinator_config_interview_mode_yaml() {
-        let yaml = r#"
-interview_mode: skip
-"#;
-        let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse coordinator config");
-        assert_eq!(cc.interview_mode, InterviewMode::Skip);
-    }
-
-    #[test]
-    fn test_coordinator_config_interview_mode_yaml_auto() {
-        let yaml = r#"
-interview_mode: auto
-"#;
-        let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse coordinator config");
-        assert_eq!(cc.interview_mode, InterviewMode::Auto);
+    fn test_agent_config_interview_mode_default() {
+        let ac = AgentConfig::default();
+        assert_eq!(ac.interview_mode, InterviewMode::Interactive);
     }
 
     // --- ChatConfig tests ---
@@ -1479,15 +1393,6 @@ max_iterations: 20
         let config = Config::default();
         assert_eq!(config.chat.model, "claude-sonnet-4-6");
         assert_eq!(config.chat.delegate_model, "claude-haiku-4-5-20251001");
-    }
-
-    #[test]
-    fn test_coordinator_config_interview_mode_yaml_omitted() {
-        let yaml = r#"
-active_interval_secs: 10
-"#;
-        let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse without interview_mode");
-        assert_eq!(cc.interview_mode, InterviewMode::Interactive);
     }
 
     #[test]
@@ -1729,7 +1634,6 @@ strategy:
         assert_eq!(AgentRoleConfig::default_implementer().prompt, "agents/implementer");
         assert_eq!(AgentRoleConfig::default_reviewer().prompt, "agents/reviewer");
         assert_eq!(AgentRoleConfig::default_researcher().prompt, "agents/researcher");
-        assert_eq!(CoordinatorConfig::default().role.prompt, "agents/coordinator");
     }
 
     #[test]

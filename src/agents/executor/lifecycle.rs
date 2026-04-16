@@ -570,14 +570,7 @@ mod tests {
                 repo_path: dir.to_path_buf(),
                 ..ProjectConfig::default()
             },
-            agents: crate::config::AgentConfig {
-                coordinator: crate::config::CoordinatorConfig {
-                    idle_interval_secs: 0,
-                    active_interval_secs: 0,
-                    ..crate::config::CoordinatorConfig::default()
-                },
-                ..crate::config::AgentConfig::default()
-            },
+            agents: crate::config::AgentConfig::default(),
             ..Config::default()
         };
         let store = Store::open(&dir).unwrap();

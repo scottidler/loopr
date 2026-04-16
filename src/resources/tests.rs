@@ -15,15 +15,12 @@ fn test_load_repo_override_dir_as_file_falls_through_to_embedded() {
     // named after a known file causes read_to_string to fail with IsADirectory.
     let override_dir = tmp.path().join("resources").join("agents");
     fs::create_dir_all(&override_dir).unwrap();
-    // The override_dir itself will be the "file" path for the coordinator prompt
-    // because repo.join("resources").join("agents/coordinator.pmt") resolves to
-    // a path whose parent (agents/) exists, but the "file" itself doesn't exist.
-    // Instead, make a directory *at* the exact file path to force IsADirectory.
-    let file_as_dir = tmp.path().join("resources").join("agents").join("coordinator.pmt");
+    // Make a directory *at* the exact file path to force IsADirectory.
+    let file_as_dir = tmp.path().join("resources").join("agents").join("implementer.pmt");
     fs::create_dir_all(&file_as_dir).unwrap();
 
     // Should fall through to the embedded default rather than returning an error.
-    let result = Resources::load("agents/coordinator.pmt", Some(tmp.path()));
+    let result = Resources::load("agents/implementer.pmt", Some(tmp.path()));
     assert!(
         result.is_ok(),
         "should fall through to embedded when override dir exists as directory"
@@ -90,8 +87,8 @@ fn test_load_dir_empty_string_prefix_returns_err() {
 
 #[test]
 fn test_load_embedded_prompt() {
-    let content = Resources::load("agents/coordinator.pmt", None).unwrap();
-    assert!(!content.is_empty(), "agents/coordinator.pmt should not be empty");
+    let content = Resources::load("agents/implementer.pmt", None).unwrap();
+    assert!(!content.is_empty(), "agents/implementer.pmt should not be empty");
 }
 
 #[test]
@@ -114,7 +111,7 @@ fn test_load_missing_returns_error() {
 
 #[test]
 fn test_exists_for_embedded_prompt() {
-    assert!(Resources::exists("agents/coordinator.pmt", None));
+    assert!(Resources::exists("agents/implementer.pmt", None));
 }
 
 #[test]
