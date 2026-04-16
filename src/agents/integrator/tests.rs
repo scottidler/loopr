@@ -1765,3 +1765,166 @@ async fn test_cycle_transition_gate_all_fail_fails_tick() {
         "excluded bundle should stay Accepted for next cycle"
     );
 }
+
+// ─── dry_run_merge ──────────────────────────────────────────────────────────
+
+fn git(dir: &Path, args: &[&str]) -> std::process::Output {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out
+}
+
+fn init_repo(dir: &Path) -> String {
+    git(dir, &["init"]);
+    git(dir, &["config", "user.email", "test@test.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(dir.join("base.txt"), "base").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "initial"]);
+    let out = git(dir, &["branch", "--show-current"]);
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dry_run_all_clean() {
+    let dir = TestDir::new("loopr-dryrun-clean");
+    let default_branch = init_repo(&dir);
+
+    // Create two non-conflicting feature branches
+    git(&dir, &["checkout", "-b", "feat-a"]);
+    std::fs::write(dir.join("a.txt"), "feature-a").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "add a"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    git(&dir, &["checkout", "-b", "feat-b"]);
+    std::fs::write(dir.join("b.txt"), "feature-b").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "add b"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    let pairs = vec![
+        ("bundle-1".to_string(), "feat-a".to_string()),
+        ("bundle-2".to_string(), "feat-b".to_string()),
+    ];
+    let result = dry_run_merge(&dir, &pairs).unwrap();
+    assert_eq!(result, vec!["bundle-1", "bundle-2"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dry_run_second_conflicts() {
+    let dir = TestDir::new("loopr-dryrun-conflict");
+    let default_branch = init_repo(&dir);
+
+    // First branch: non-conflicting
+    git(&dir, &["checkout", "-b", "feat-a"]);
+    std::fs::write(dir.join("a.txt"), "feature-a").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "add a"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    // Second branch: conflicts with first (both modify base.txt differently)
+    git(&dir, &["checkout", "-b", "feat-b"]);
+    std::fs::write(dir.join("base.txt"), "changed-by-b").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "modify base in b"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    // Diverge main to create conflict with feat-b
+    std::fs::write(dir.join("base.txt"), "changed-by-main").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "diverge main"]);
+
+    let pairs = vec![
+        ("bundle-1".to_string(), "feat-a".to_string()),
+        ("bundle-2".to_string(), "feat-b".to_string()),
+    ];
+    // feat-a merges clean, feat-b conflicts on base.txt
+    let result = dry_run_merge(&dir, &pairs).unwrap();
+    assert_eq!(result, vec!["bundle-1"], "only first bundle should pass");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dry_run_first_conflicts_returns_empty() {
+    let dir = TestDir::new("loopr-dryrun-first-conflict");
+    let default_branch = init_repo(&dir);
+
+    // Create a conflicting branch
+    git(&dir, &["checkout", "-b", "feat-conflict"]);
+    std::fs::write(dir.join("base.txt"), "branch-content").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "branch change"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    // Diverge main
+    std::fs::write(dir.join("base.txt"), "main-different").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "main diverge"]);
+
+    let pairs = vec![("bundle-1".to_string(), "feat-conflict".to_string())];
+    let result = dry_run_merge(&dir, &pairs).unwrap();
+    assert!(result.is_empty(), "conflicting first bundle should return empty");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dry_run_leaves_repo_unchanged() {
+    let dir = TestDir::new("loopr-dryrun-unchanged");
+    let default_branch = init_repo(&dir);
+
+    // Create feature branch
+    git(&dir, &["checkout", "-b", "feat-a"]);
+    std::fs::write(dir.join("a.txt"), "feature").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "add a"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    let sha_before = get_git_head_sha(&dir).unwrap();
+
+    let pairs = vec![("bundle-1".to_string(), "feat-a".to_string())];
+    let _ = dry_run_merge(&dir, &pairs).unwrap();
+
+    let sha_after = get_git_head_sha(&dir).unwrap();
+    assert_eq!(sha_before, sha_after, "HEAD SHA must be unchanged after dry-run");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dry_run_cumulative_a_then_b_conflicts_on_a() {
+    let dir = TestDir::new("loopr-dryrun-cumulative");
+    let default_branch = init_repo(&dir);
+
+    // feat-a: modifies base.txt (will merge clean with main)
+    git(&dir, &["checkout", "-b", "feat-a"]);
+    std::fs::write(dir.join("base.txt"), "modified-by-a").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "a modifies base"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    // feat-b: also modifies base.txt (conflicts with feat-a after cumulative merge)
+    git(&dir, &["checkout", "-b", "feat-b"]);
+    std::fs::write(dir.join("base.txt"), "modified-by-b").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "b modifies base"]);
+    git(&dir, &["checkout", &default_branch]);
+
+    let pairs = vec![
+        ("bundle-1".to_string(), "feat-a".to_string()),
+        ("bundle-2".to_string(), "feat-b".to_string()),
+    ];
+    // feat-a merges clean, but feat-b conflicts with feat-a (cumulative)
+    let result = dry_run_merge(&dir, &pairs).unwrap();
+    assert_eq!(
+        result,
+        vec!["bundle-1"],
+        "bundle-2 should conflict with cumulative state"
+    );
+}

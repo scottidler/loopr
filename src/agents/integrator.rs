@@ -524,7 +524,7 @@ impl IntegratorAgent {
 
         // 8. Transition bundles: Accepted → Integrating (gate: only merge what transitions)
         let attempted_bundle_ids = valid_bundle_ids.clone();
-        let valid_bundle_ids: Vec<String> = valid_bundle_ids
+        let mut valid_bundle_ids: Vec<String> = valid_bundle_ids
             .into_iter()
             .filter(|bundle_id| {
                 let resp = self.ctx.bridge.request(
@@ -586,7 +586,7 @@ impl IntegratorAgent {
         }
 
         // Gap #14: Merge bundle branches into integration branch
-        let branches: Vec<String> = {
+        let mut bundle_branches: Vec<(String, String)> = {
             let bundles = self.ctx.stores.read_bundles()?;
             let noop_count = valid_bundle_ids
                 .iter()
@@ -598,11 +598,18 @@ impl IntegratorAgent {
             }
             valid_bundle_ids
                 .iter()
-                .filter_map(|id| bundles.get(id.as_str()))
-                .filter(|b| !b.branch_name.is_empty())
-                .map(|b| b.branch_name.clone())
+                .filter_map(|id| {
+                    bundles.get(id.as_str()).and_then(|b| {
+                        if !b.branch_name.is_empty() {
+                            Some((id.clone(), b.branch_name.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .collect()
         };
+        let mut branches: Vec<String> = bundle_branches.iter().map(|(_, b)| b.clone()).collect();
         let repo_path = &self.ctx.stores.config.project.repo_path;
         let is_git_repo = repo_path.join(".git").exists();
 
@@ -642,6 +649,53 @@ impl IntegratorAgent {
             }
             // Record pre-merge SHA for validation rollback.
             pre_merge_sha = get_git_head_sha(repo_path);
+
+            // Pre-merge dry-run: test each bundle branch for git conflicts
+            // before committing to the real merge. Bundles that would conflict
+            // are excluded; subsequent untested bundles are also excluded.
+            if !bundle_branches.is_empty() {
+                match dry_run_merge(repo_path, &bundle_branches) {
+                    Ok(clean_ids) => {
+                        if clean_ids.len() < bundle_branches.len() {
+                            let excluded: Vec<String> = bundle_branches
+                                .iter()
+                                .filter(|(id, _)| !clean_ids.contains(id))
+                                .map(|(id, _)| id.clone())
+                                .collect();
+                            self.ctx.warn(&format!(
+                                "dry-run excluded {} bundle(s): {:?}",
+                                excluded.len(),
+                                excluded
+                            ));
+                            // Transition excluded bundles back from Integrating to Accepted
+                            for bid in &excluded {
+                                let resp = self.ctx.bridge.request(
+                                    "bundle.transition",
+                                    serde_json::json!({
+                                        "id": bid,
+                                        "target_status": "Accepted",
+                                        "role": "integrator",
+                                    }),
+                                );
+                                if resp.is_error() {
+                                    self.ctx.warn(&format!(
+                                        "failed to revert bundle {} to Accepted after dry-run exclusion",
+                                        bid
+                                    ));
+                                }
+                            }
+                            // Update valid_bundle_ids and branches to only include clean ones
+                            valid_bundle_ids.retain(|id| clean_ids.contains(id) || !excluded.contains(id));
+                            bundle_branches.retain(|(id, _)| clean_ids.contains(id));
+                            branches = bundle_branches.iter().map(|(_, b)| b.clone()).collect();
+                        }
+                    }
+                    Err(e) => {
+                        self.ctx.warn(&format!("dry-run merge check failed: {}", e));
+                        // Proceed with the real merge anyway - dry-run is advisory
+                    }
+                }
+            }
 
             if !branches.is_empty() {
                 match merge_bundle_branches(repo_path, &branches) {
@@ -1796,6 +1850,68 @@ fn run_validation_commands(commands: &[String]) -> (bool, String) {
         }
     }
     (true, log)
+}
+
+/// Cumulative dry-run merge of bundle branches. Merges are tested sequentially
+/// (A, then B on top of A, etc.) because that's how the real merge works.
+/// Returns the list of bundle_ids whose branches merge cleanly in sequence.
+/// Bundles that conflict cause the dry-run to stop - subsequent bundles are
+/// not tested since their dry-run would be against a different base than the
+/// real merge would use.
+fn dry_run_merge(
+    repo_path: &std::path::Path,
+    bundle_branches: &[(String, String)], // (bundle_id, branch_name)
+) -> Result<Vec<String>> {
+    tracing::debug!(
+        "dry_run_merge: testing {} bundles for merge conflicts",
+        bundle_branches.len()
+    );
+
+    let pre_merge_sha = get_git_head_sha(repo_path).ok_or_else(|| eyre!("dry_run_merge: failed to get HEAD SHA"))?;
+
+    let mut clean_ids = Vec::new();
+
+    for (bundle_id, branch) in bundle_branches {
+        let output = std::process::Command::new("git")
+            .args(["merge", "--no-commit", "--no-ff", branch])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| eyre!("dry_run_merge: git merge --no-commit {} failed: {}", branch, e))?;
+
+        if output.status.success() {
+            clean_ids.push(bundle_id.clone());
+            // Commit the trial merge so the next bundle merges on top
+            let _ = std::process::Command::new("git")
+                .args(["commit", "--no-edit", "-m", "dry-run"])
+                .current_dir(repo_path)
+                .output();
+        } else {
+            tracing::warn!(
+                "dry_run_merge: bundle {} ({}) would conflict; stopping",
+                bundle_id,
+                branch
+            );
+            let _ = std::process::Command::new("git")
+                .args(["merge", "--abort"])
+                .current_dir(repo_path)
+                .output();
+            break;
+        }
+    }
+
+    // Reset to pre-merge state regardless of outcome
+    let _ = std::process::Command::new("git")
+        .args(["reset", "--hard", &pre_merge_sha])
+        .current_dir(repo_path)
+        .output();
+
+    tracing::debug!(
+        "dry_run_merge: {}/{} bundles passed",
+        clean_ids.len(),
+        bundle_branches.len()
+    );
+
+    Ok(clean_ids)
 }
 
 /// Get the current git HEAD SHA in the given repo path.
