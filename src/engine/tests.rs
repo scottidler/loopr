@@ -203,14 +203,10 @@ fn loaded_strategies_cover_all_v3_behaviors() {
         "missing revise-parent-on-impossible-spec"
     );
 
-    // Tooling (2 strategies - v4 cutover)
+    // Tooling (1 strategy - v4 cutover)
     assert!(
         names.contains(&"register-tools-on-phase-active"),
         "missing register-tools-on-phase-active"
-    );
-    assert!(
-        names.contains(&"spawn-researcher-for-missing-tools"),
-        "missing spawn-researcher-for-missing-tools"
     );
 
     // Recovery additions (2 strategies - v4 cutover)

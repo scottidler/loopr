@@ -1,4 +1,4 @@
-# Tooling strategies: validation tool registration and researcher spawning.
+# Tooling strategies: validation tool registration.
 
 # When a phase becomes Active, register its validation commands as tools.
 register-tools-on-phase-active:
@@ -11,16 +11,7 @@ register-tools-on-phase-active:
       params:
         phase-id: $trigger.scope-id
 
-# When a phase is active but has no validation commands, spawn a researcher.
-spawn-researcher-for-missing-tools:
-  description: Spawn a researcher to discover test commands when none are configured
-  trigger: phase-active-no-validation
-  scope: phase
-  priority: 880
-  action:
-    - primitive: spawn-agent
-      guard: no-active-researcher-for-phase
-      params:
-        role: researcher
-        target-id: $trigger.scope-id
-        query: "discover test and validation commands for this phase"
+# NOTE: spawn-researcher-for-missing-tools removed - requires a state query
+# that can check runtime tool registration state, which doesn't exist yet.
+# The researcher spawning for missing tools will be added when the query
+# infrastructure supports it (future work).

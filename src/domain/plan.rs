@@ -87,6 +87,11 @@ pub struct Plan {
     /// Used by decomposition-attempt-limit threshold trigger to prevent infinite retry loops.
     #[serde(default)]
     pub decomposition_attempts: u32,
+    /// Number of times children have bubbled up failures to this plan.
+    /// Used to prevent infinite re-decomposition loops when specs are un-implementable.
+    /// Moved from CoordinatorState during v4 cutover.
+    #[serde(default)]
+    pub bubble_up_count: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -135,6 +140,7 @@ impl Plan {
             status: HierarchyStatus::Draft,
             tier: Tier::default(),
             decomposition_attempts: 0,
+            bubble_up_count: 0,
             created_at: now,
             updated_at: now,
         }

@@ -68,15 +68,6 @@ spec-children-all-abandoned:
     terminal-statuses:
       - abandoned
 
-# Fires when a phase is Active but has no validation commands registered.
-phase-active-no-validation:
-  type: state-query
-  scope: phase
-  query: field-equals
-  params:
-    field: has-validation-commands
-    value: false
-
 # Composite: escalation needed - any of the escalation conditions met.
 escalation-needed:
   type: composite

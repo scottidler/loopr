@@ -61,7 +61,7 @@ pub(super) fn run_validation_commands(commands: &[String]) -> (bool, String) {
 }
 
 /// Get the current git HEAD SHA in the given repo path.
-pub(super) fn get_git_head_sha(repo_path: &std::path::Path) -> Option<String> {
+pub fn get_git_head_sha(repo_path: &std::path::Path) -> Option<String> {
     Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(repo_path)

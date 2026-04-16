@@ -92,7 +92,7 @@ mod chat;
 mod common;
 mod decomposer;
 mod doc;
-mod integrator;
+pub mod integrator;
 mod learning;
 mod lock;
 mod phase;

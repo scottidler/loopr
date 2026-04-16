@@ -496,6 +496,80 @@ impl GuardConditionRegistry {
             }),
         );
 
+        // no-active-implementer-for-work: no non-terminal implementer session for this work.
+        r.register(
+            "no-active-implementer-for-work",
+            Box::new(|ctx, _collection, id| {
+                ctx.stores
+                    .agent_sessions
+                    .read()
+                    .ok()
+                    .map(|sessions| {
+                        !sessions.values().any(|s| {
+                            s.agent_type == crate::agents::AgentKind::Implementer
+                                && !s.status().is_terminal()
+                                && s.work_id.as_deref() == Some(id)
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
+        // no-active-reviewer-for-bundle: no non-terminal reviewer session for this bundle.
+        r.register(
+            "no-active-reviewer-for-bundle",
+            Box::new(|ctx, _collection, id| {
+                ctx.stores
+                    .agent_sessions
+                    .read()
+                    .ok()
+                    .map(|sessions| {
+                        !sessions.values().any(|s| {
+                            s.agent_type == crate::agents::AgentKind::Reviewer
+                                && !s.status().is_terminal()
+                                && s.bundle_id.as_deref() == Some(id)
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
+        // no-active-researcher-for-phase: no non-terminal researcher session for this phase.
+        r.register(
+            "no-active-researcher-for-phase",
+            Box::new(|ctx, _collection, id| {
+                ctx.stores
+                    .agent_sessions
+                    .read()
+                    .ok()
+                    .map(|sessions| {
+                        !sessions.values().any(|s| {
+                            s.agent_type == crate::agents::AgentKind::Researcher
+                                && !s.status().is_terminal()
+                                && s.target_id.as_deref() == Some(id)
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
+        // no-active-director: no non-terminal director session exists (global singleton).
+        r.register(
+            "no-active-director",
+            Box::new(|ctx, _collection, _id| {
+                ctx.stores
+                    .agent_sessions
+                    .read()
+                    .ok()
+                    .map(|sessions| {
+                        !sessions
+                            .values()
+                            .any(|s| s.agent_type == crate::agents::AgentKind::Director && !s.status().is_terminal())
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
         r
     }
 
