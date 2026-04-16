@@ -1,10 +1,10 @@
 # Upward feedback strategy: revise parent when children all fail.
 
-# When all works under a spec are abandoned, revise the parent spec
-# by transitioning it back to Draft for re-decomposition, and increment
-# the plan's bubble_up_count to prevent infinite loops.
+# When all works under a spec are abandoned AND bubble-up depth hasn't
+# been exceeded, revise the parent spec by transitioning it back to Draft
+# for re-decomposition. Increments the plan's bubble_up_count.
 revise-parent-on-impossible-spec:
-  description: Revise parent spec when all child works are abandoned
+  description: Revise parent spec when all child works are abandoned (with depth limit)
   trigger: spec-children-all-abandoned
   scope: spec
   priority: 870
@@ -12,6 +12,14 @@ revise-parent-on-impossible-spec:
     - primitive: increment-bubble-up
       params:
         spec-id: $trigger.scope-id
+    - name: depth-check
+      primitive: check-threshold
+      params:
+        collection: plan
+        id: $trigger.scope-id
+        field: bubble-up-count
+        max: 3
+  on-success:
     - primitive: transition-record
       params:
         collection: spec
@@ -19,3 +27,8 @@ revise-parent-on-impossible-spec:
         target-status: draft
         role: coordinator
         reason: children-all-abandoned-bubble-up
+  on-failure:
+    - primitive: escalate
+      params:
+        reason: bubble-up-depth-exceeded
+        scope-id: $trigger.scope-id
