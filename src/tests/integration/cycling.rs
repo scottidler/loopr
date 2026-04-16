@@ -161,8 +161,6 @@ async fn test_duplicate_work_rejection() {
 /// verify state tracks completion and can activate Phase 2.
 #[tokio::test]
 async fn test_phase_gate_advances_to_next_phase() {
-    use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -309,14 +307,6 @@ async fn test_phase_gate_advances_to_next_phase() {
     let wi_final = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id})).await;
     assert_eq!(wi_final["status"].as_str().unwrap(), "Done");
 
-    // Now simulate Coordinator FSM in the new model.
-    // The reconciliation loop handles phase promotion (Pending->Active) and completion detection.
-    // The coordinator FSM stays in Executing while phases are being worked on.
-    let goal_id = "test-goal".to_string();
-    let mut coord_state = CoordinatorState::new(goal_id, InterviewMode::Interactive);
-    coord_state.transition_to(CoordinatorFsmState::Executing);
-    assert_eq!(coord_state.fsm_state, CoordinatorFsmState::Executing);
-
     // Activate Phase 2 via IPC (reconciliation would do this automatically)
     dispatch_ok(
         &stores,
@@ -328,7 +318,5 @@ async fn test_phase_gate_advances_to_next_phase() {
     )
     .await;
 
-    // When all phases and works are complete, transition to GoalComplete
-    coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-    assert!(coord_state.fsm_state.is_terminal());
+    // Engine handles phase promotion and completion detection - no coordinator FSM needed.
 }

@@ -50,7 +50,7 @@ pub(super) fn test_agent_context(
     bridge: crate::agents::bridge::AgentIpcBridge,
     tx: broadcast::Sender<DaemonEvent>,
 ) -> crate::agents::AgentContext {
-    let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+    let session = AgentSession::new(AgentKind::Director, "test-model".into());
     crate::agents::AgentContext {
         session,
         stores: stores.clone(),
@@ -174,14 +174,10 @@ pub(super) async fn create_test_hierarchy(
     (plan_id, spec_id, phase_id)
 }
 
-/// Seed a coordinator goal directly into the store without IPC.
-/// Returns the goal id.
-pub(super) fn seed_goal(stores: &Arc<Stores>, goal_text: &str) -> String {
-    use crate::domain::coordinator_goal::CoordinatorGoal;
-    let goal = CoordinatorGoal::new(goal_text.to_string());
-    let id = goal.id.clone();
-    stores.coordinator_goals.write().unwrap().insert(id.clone(), goal);
-    id
+/// Seed a coordinator goal (no-op after CoordinatorGoal removal).
+/// Returns an empty string. Retained for call-site compatibility.
+pub(super) fn seed_goal(_stores: &Arc<Stores>, _goal_text: &str) -> String {
+    String::new()
 }
 
 pub(super) fn test_stores_with_persistence(dir: &std::path::Path) -> Arc<Stores> {

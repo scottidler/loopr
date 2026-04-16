@@ -12,6 +12,7 @@ pub mod reconcile;
 pub mod record;
 pub mod scoring;
 pub mod sweep;
+pub mod tooling;
 pub mod work;
 pub mod worktree;
 
@@ -87,5 +88,6 @@ pub fn register_all(registry: &mut PrimitiveRegistry) -> eyre::Result<()> {
     registry.register(Box::new(gitaudit::AuditBranches))?;
     registry.register(Box::new(conflict::CombineConflictingWorks))?;
     registry.register(Box::new(event::EmitEvent))?;
+    registry.register(Box::new(tooling::RegisterValidationTools))?;
     Ok(())
 }

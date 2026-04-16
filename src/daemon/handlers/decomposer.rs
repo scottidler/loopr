@@ -1156,31 +1156,8 @@ pub(super) fn handle_decomposer_failure(stores: &Arc<Stores>, req: DaemonRequest
             String::new()
         };
 
-        // Update CoordinatorState.decomposition_error only for the coordinator managing this plan
         if !root_plan_id.is_empty() {
-            // Find CoordinatorGoal whose title matches the plan (goals don't store plan_id directly,
-            // so we match by finding the active coordinator state for goals that manage this hierarchy).
-            // Best effort: set error on coordinator states that are in Decomposing state,
-            // scoped to goals associated with this specific plan_id via the plan's goal linkage.
-            let mut states = stores.write_coordinator_states()?;
-            for cs in states.values_mut() {
-                // Only update coordinator states in Decomposing - those are waiting on this plan
-                if cs.decomposition_error.is_none()
-                    && cs.fsm_state == crate::domain::coordinator_state::CoordinatorFsmState::Decomposing
-                {
-                    cs.decomposition_error = Some(reason.clone());
-                    cs.updated_at = crate::id::now_millis();
-                    if let Some(store) = &stores.store {
-                        let _ = store.lock().ok().and_then(|mut sg| sg.update(cs.clone()).ok());
-                    }
-                    debug!(
-                        "set decomposition_error on coordinator state {} (plan={})",
-                        cs.id, root_plan_id
-                    );
-                    // Only update the first Decomposing coordinator - stop after one match
-                    break;
-                }
-            }
+            debug!("decomposition.failed: root_plan_id={} reason={}", root_plan_id, reason);
         }
 
         Ok(DaemonResponse::ok(req.id, serde_json::json!({ "ok": true })))

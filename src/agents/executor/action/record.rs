@@ -210,12 +210,16 @@ pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]
     let interview_mode = bridge.config().agents.coordinator.interview_mode;
     if interview_mode == crate::config::InterviewMode::Auto {
         // Auto mode: synthesize answer from goal + repo context
+        // CoordinatorGoal has been removed - derive goal from the active plan title.
         let goal_text = {
-            let goals = ctx.stores.read_coordinator_goals()?;
-            goals
+            let plans = ctx.stores.read_plans()?;
+            plans
                 .values()
-                .find(|g| g.active)
-                .map(|g| g.goal.clone())
+                .find(|p| {
+                    p.status() == crate::domain::plan::PlanStatus::Active
+                        || p.status() == crate::domain::plan::PlanStatus::Draft
+                })
+                .map(|p| p.title.clone())
                 .unwrap_or_else(|| "No goal set.".to_string())
         };
         let repo_path = &bridge.config().project.repo_path;
@@ -289,7 +293,7 @@ mod tests {
     async fn test_execute_propose_plan() {
         let dir = TestDir::new("loopr-exec-proposeplan");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let action = AgentAction::ProposePlan {
             title: "Draft Plan".to_string(),
@@ -309,7 +313,7 @@ mod tests {
     async fn test_execute_create_work() {
         let dir = TestDir::new("loopr-exec-creatework");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 

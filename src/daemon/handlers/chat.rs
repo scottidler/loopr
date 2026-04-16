@@ -12,12 +12,7 @@ use crate::daemon::context::Stores;
 pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
     let mut status = String::with_capacity(1024);
 
-    // Coordinator FSM state
-    if let Ok(states) = stores.read_coordinator_states()
-        && let Some(state) = states.values().find(|s| !s.fsm_state.is_terminal())
-    {
-        status.push_str(&format!("Coordinator: {:?}\n", state.fsm_state));
-    }
+    // Engine-driven orchestration - no coordinator FSM state to report
 
     // Active Works
     if let Ok(works) = stores.read_works() {

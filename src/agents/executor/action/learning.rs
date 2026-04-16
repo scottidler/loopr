@@ -66,7 +66,7 @@ mod tests {
             applicable_roles: Some(vec!["implementer".to_string()]),
             files: Some(vec!["src/".to_string()]),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::LearningCreated(ref c) if c == "Always add tests"),
@@ -87,7 +87,7 @@ mod tests {
             applicable_roles: None,
             files: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::LearningCreated(_)));
     }

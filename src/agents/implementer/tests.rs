@@ -799,15 +799,10 @@ async fn test_run_implementer_session_iteration_persisted() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_implementer_context_includes_goal() {
-    use crate::domain::coordinator_goal::CoordinatorGoal;
     use std::sync::Mutex as StdMutex2;
 
     let dir = TestDir::new("loopr-impl-goal");
     let stores = setup_stores(&dir);
-
-    // Set a coordinator goal
-    let goal = CoordinatorGoal::new("Build a REST API for user management".to_string());
-    stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
 
     // Use a CapturingLlm that captures the prompt via shared Arc
     let captured_msg = Arc::new(StdMutex2::new(None::<String>));

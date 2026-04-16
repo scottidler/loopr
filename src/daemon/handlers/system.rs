@@ -8,7 +8,6 @@ use tracing::instrument;
 
 use crate::agents::AgentSession;
 use crate::domain::bundle::{Bundle, BundleStatus};
-use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::doc::Doc;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -90,7 +89,6 @@ pub(super) fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> Da
             Tick::collection_name(),
             Learning::collection_name(),
             Lock::collection_name(),
-            CoordinatorGoal::collection_name(),
             AgentSession::collection_name(),
         ];
 

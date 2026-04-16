@@ -70,12 +70,11 @@ pub(super) fn handle_agent_start(
                     ));
                 }
             }
-            AgentKind::Coordinator
+            AgentKind::Director
             | AgentKind::Researcher
             | AgentKind::Integrator
             | AgentKind::Chat
-            | AgentKind::Decomposer
-            | AgentKind::Director => {
+            | AgentKind::Decomposer => {
                 // These agents operate without worktrees; no target ID required at start time
             }
         }
@@ -89,14 +88,13 @@ pub(super) fn handle_agent_start(
 
         // Create agent session with model from config (before lock, no shared state)
         let model = match agent_type {
-            AgentKind::Coordinator => stores.config.agents.coordinator.role.llm.model.clone(),
+            AgentKind::Director => stores.config.agents.researcher.llm.model.clone(), // Director uses Opus
             AgentKind::Implementer => stores.config.agents.implementer.llm.model.clone(),
             AgentKind::Reviewer => stores.config.agents.reviewer.llm.model.clone(),
             AgentKind::Researcher => stores.config.agents.researcher.llm.model.clone(),
             AgentKind::Integrator => "deterministic".to_string(),
             AgentKind::Chat => stores.config.agents.implementer.llm.model.clone(),
             AgentKind::Decomposer => stores.config.decomposer.llm.model.clone(),
-            AgentKind::Director => stores.config.agents.researcher.llm.model.clone(), // Director uses Opus from role config
         };
         let mut session = AgentSession::new(agent_type, model);
         session.work_id = work_id;
@@ -591,14 +589,14 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let session = crate::agents::AgentSession::new(AgentKind::Coordinator, "model".to_string());
+        let session = crate::agents::AgentSession::new(AgentKind::Director, "model".to_string());
         stores
             .agent_sessions
             .write()
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "director" }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error(), "expected max_pool rejection");
         let err = resp.error.unwrap();
@@ -612,7 +610,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let mut session = crate::agents::AgentSession::new(AgentKind::Coordinator, "model".to_string());
+        let mut session = crate::agents::AgentSession::new(AgentKind::Director, "model".to_string());
         session.force_status(crate::agents::AgentStatus::Completed);
         stores
             .agent_sessions
@@ -620,7 +618,7 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "director" }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
     }
@@ -790,7 +788,7 @@ mod tests {
         use crate::config::Config;
         let config = Config::default();
         let cases: Vec<(AgentKind, String)> = vec![
-            (AgentKind::Coordinator, config.agents.coordinator.role.llm.model.clone()),
+            (AgentKind::Director, config.agents.researcher.llm.model.clone()),
             (AgentKind::Implementer, config.agents.implementer.llm.model.clone()),
             (AgentKind::Reviewer, config.agents.reviewer.llm.model.clone()),
             (AgentKind::Researcher, config.agents.researcher.llm.model.clone()),
@@ -798,18 +796,16 @@ mod tests {
         ];
         for (agent_type, expected_model) in cases {
             let model = match agent_type {
-                AgentKind::Coordinator => config.agents.coordinator.role.llm.model.clone(),
+                AgentKind::Director => config.agents.researcher.llm.model.clone(),
                 AgentKind::Implementer => config.agents.implementer.llm.model.clone(),
                 AgentKind::Reviewer => config.agents.reviewer.llm.model.clone(),
                 AgentKind::Researcher => config.agents.researcher.llm.model.clone(),
                 AgentKind::Integrator => "deterministic".to_string(),
                 AgentKind::Chat => config.agents.implementer.llm.model.clone(),
                 AgentKind::Decomposer => config.decomposer.llm.model.clone(),
-                AgentKind::Director => config.agents.researcher.llm.model.clone(),
             };
             assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
         }
-        assert_eq!(config.agents.coordinator.role.llm.model, "claude-opus-4-6");
     }
 
     #[tokio::test]

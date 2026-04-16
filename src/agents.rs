@@ -2,7 +2,6 @@ pub mod action;
 pub mod bridge;
 pub mod cache;
 pub mod context;
-pub mod coordinator;
 pub mod decomposer;
 pub mod director;
 pub mod error;
@@ -278,7 +277,7 @@ mod tests {
     fn test_agent_context_log_delegates() {
         let dir = make_test_dir("log-delegates");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         // These should not panic - they call standard log macros with [component:id] prefix
         ctx.info("info message");
@@ -369,7 +368,7 @@ mod tests {
     fn test_agent_context_emit_iteration_completed() {
         let dir = make_test_dir("emit-iter");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, mut rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, mut rx) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         ctx.emit_iteration_completed(3, "Planned 5 specs");
 
@@ -388,7 +387,7 @@ mod tests {
     fn test_agent_context_emit_iteration_completed_no_receivers() {
         let dir = make_test_dir("emit-no-rx");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, rx) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         // Drop receiver -- emit should not panic (uses `let _ =`)
         drop(rx);

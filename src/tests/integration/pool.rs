@@ -14,7 +14,7 @@ async fn test_pool_exhaustion_multi_type() {
     let ic = test_integrator_config();
 
     // Fill Coordinator pool (pool_size = 1)
-    let session = AgentSession::new(AgentKind::Coordinator, "model".into());
+    let session = AgentSession::new(AgentKind::Director, "model".into());
     stores
         .agent_sessions
         .write()
@@ -22,15 +22,7 @@ async fn test_pool_exhaustion_multi_type() {
         .insert(session.id.clone(), session);
 
     // Second Coordinator should be rejected
-    let code = dispatch_err(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "agent.start",
-        json!({"agent_type": "coordinator"}),
-    )
-    .await;
+    let code = dispatch_err(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
     assert_eq!(code, -32004, "expected pool_exhausted error code");
 
     // But Researcher should still work (different pool)
@@ -56,26 +48,10 @@ async fn test_agent_start_pool_check_atomic_under_lock() {
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
-    let resp = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "agent.start",
-        json!({"agent_type": "coordinator"}),
-    )
-    .await;
+    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
     assert!(resp["id"].as_str().is_some(), "first start should succeed");
 
-    let code = dispatch_err(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "agent.start",
-        json!({"agent_type": "coordinator"}),
-    )
-    .await;
+    let code = dispatch_err(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
     assert_eq!(code, -32004, "second start must be rejected with pool_exhausted");
 }
 
@@ -87,7 +63,7 @@ fn test_no_auto_start_coordinator_on_daemon_boot() {
     let sessions = stores.agent_sessions.read().unwrap();
     let coordinator_count = sessions
         .values()
-        .filter(|s| s.agent_type == crate::agents::AgentKind::Coordinator)
+        .filter(|s| s.agent_type == crate::agents::AgentKind::Director)
         .count();
     assert_eq!(coordinator_count, 0, "no coordinator should exist in fresh stores");
 }
@@ -100,7 +76,7 @@ async fn test_pool_allows_after_terminal_session() {
     let ic = test_integrator_config();
 
     // Add a Completed Coordinator session
-    let mut session = AgentSession::new(AgentKind::Coordinator, "model".into());
+    let mut session = AgentSession::new(AgentKind::Director, "model".into());
     let _ = session.transition_to(AgentStatus::Running);
     let _ = session.transition_to(AgentStatus::Completed);
     stores
@@ -110,14 +86,6 @@ async fn test_pool_allows_after_terminal_session() {
         .insert(session.id.clone(), session);
 
     // Should be allowed - terminal sessions don't count
-    let resp = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "agent.start",
-        json!({"agent_type": "coordinator"}),
-    )
-    .await;
+    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
     assert!(resp["id"].as_str().is_some());
 }

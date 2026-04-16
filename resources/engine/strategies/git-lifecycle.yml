@@ -22,6 +22,7 @@ merge-integration-to-main-on-goal:
     - primitive: merge-integration-to-main
       params:
         plan-id: $trigger.scope-id
+        message: "merge integration branch to main on goal completion"
   on-failure:
     - primitive: escalate
       params:

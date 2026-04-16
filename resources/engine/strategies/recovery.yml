@@ -63,6 +63,7 @@ handle-work-sla-breach:
     - primitive: override-work
       params:
         work-id: $trigger.scope-id
+        target-status: abandoned
         reason: sla-breach
 
 # When escalation is needed, spawn a Director agent to diagnose and act.

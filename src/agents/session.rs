@@ -162,8 +162,8 @@ mod tests {
 
     #[test]
     fn test_agent_session_new_coordinator() {
-        let session = AgentSession::new(AgentKind::Coordinator, "model".to_string());
-        assert_eq!(session.agent_type, AgentKind::Coordinator);
+        let session = AgentSession::new(AgentKind::Director, "model".to_string());
+        assert_eq!(session.agent_type, AgentKind::Director);
         assert!(session.target_id.is_none());
         assert!(session.query.is_none());
     }

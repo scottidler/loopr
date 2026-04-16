@@ -7,7 +7,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
-use crate::agents::{coordinator, director, implementer, integrator, researcher, reviewer};
+use crate::agents::{director, implementer, integrator, researcher, reviewer};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
@@ -51,12 +51,11 @@ pub async fn run_agent_task(
             AgentKind::Implementer => session.work_id.clone(),
             AgentKind::Reviewer => session.bundle_id.clone(),
             // Already handled by is_thinking_plane() above
-            AgentKind::Coordinator
+            AgentKind::Director
             | AgentKind::Researcher
             | AgentKind::Integrator
             | AgentKind::Chat
-            | AgentKind::Decomposer
-            | AgentKind::Director => None,
+            | AgentKind::Decomposer => None,
         }
     };
 
@@ -159,11 +158,10 @@ pub async fn run_agent_task(
         AgentKind::Implementer => stores.config.agents.implementer.session_timeout_secs,
         AgentKind::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
         AgentKind::Researcher => stores.config.agents.researcher.session_timeout_secs,
-        AgentKind::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
+        AgentKind::Director => Some(3600), // 1hr - Director may run long interview/escalation sessions
         AgentKind::Integrator => stores.config.integrator.session_timeout_secs,
         AgentKind::Chat => None,
         AgentKind::Decomposer => Some(600), // 10 min - single LLM call + child persistence
-        AgentKind::Director => Some(3600),  // 1hr - Director may run long interview/escalation sessions
     };
 
     let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx);
@@ -444,16 +442,6 @@ pub(super) async fn run_agent_loop(
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentKind::Coordinator => {
-            let config = stores.config.agents.coordinator.clone();
-            let conv_log = conversations_dir
-                .as_ref()
-                .map(|d| (d.clone(), format!("coordinate-{}", session_id)));
-            let llm = create_llm_client(&config.role, session_id, event_tx, conv_log)?;
-            let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
         AgentKind::Researcher => {
             let config = stores.config.agents.researcher.clone();
             let conv_log = conversations_dir
@@ -536,11 +524,10 @@ mod tests {
             AgentKind::Implementer => config.agents.implementer.session_timeout_secs,
             AgentKind::Reviewer => config.agents.reviewer.session_timeout_secs,
             AgentKind::Researcher => config.agents.researcher.session_timeout_secs,
-            AgentKind::Coordinator => config.agents.coordinator.role.session_timeout_secs,
+            AgentKind::Director => Some(3600),
             AgentKind::Integrator => config.integrator.session_timeout_secs,
             AgentKind::Chat => None,
             AgentKind::Decomposer => Some(600),
-            AgentKind::Director => Some(3600),
         }
     }
 
@@ -614,7 +601,7 @@ mod tests {
         let (event_tx, _rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        let session = AgentSession::new(AgentKind::Coordinator, "test-model".to_string());
+        let session = AgentSession::new(AgentKind::Director, "test-model".to_string());
         let session_id = session.id.clone();
         stores
             .agent_sessions
@@ -635,7 +622,7 @@ mod tests {
 
         run_agent_task(
             session_id.clone(),
-            AgentKind::Coordinator,
+            AgentKind::Director,
             stores.clone(),
             event_tx,
             worktree_mgr,
@@ -829,9 +816,8 @@ mod tests {
         assert_eq!(resolve_timeout(&config, AgentKind::Reviewer), Some(600));
         assert_eq!(resolve_timeout(&config, AgentKind::Researcher), Some(600));
         assert_eq!(resolve_timeout(&config, AgentKind::Integrator), Some(1200));
-        assert_eq!(resolve_timeout(&config, AgentKind::Coordinator), None);
-        assert_eq!(resolve_timeout(&config, AgentKind::Chat), None);
         assert_eq!(resolve_timeout(&config, AgentKind::Director), Some(3600));
+        assert_eq!(resolve_timeout(&config, AgentKind::Chat), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

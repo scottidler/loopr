@@ -81,7 +81,7 @@ pub async fn run_supervisor(
             };
             sessions
                 .get(&session_id)
-                .map(|s| s.agent_type == AgentKind::Coordinator)
+                .map(|s| s.agent_type == AgentKind::Director)
                 .unwrap_or(false)
         };
 
@@ -115,7 +115,7 @@ pub async fn run_supervisor(
             };
             sessions
                 .values()
-                .any(|s| s.agent_type == AgentKind::Coordinator && !s.status().is_terminal())
+                .any(|s| s.agent_type == AgentKind::Director && !s.status().is_terminal())
         };
 
         if has_active_coordinator {
@@ -253,7 +253,7 @@ mod tests {
         );
 
         // Insert a coordinator session
-        let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Director, "test-model".into());
         let session_id = session.id.clone();
         session.force_status(AgentStatus::Running);
         stores
@@ -305,7 +305,7 @@ mod tests {
         );
 
         // Insert a coordinator session
-        let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Director, "test-model".into());
         let session_id = session.id.clone();
         session.force_status(AgentStatus::Running);
         stores
@@ -386,7 +386,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Send a coordinator failure event
-        let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Director, "test-model".into());
         let session_id = session.id.clone();
         session.force_status(AgentStatus::Failed);
         stores
@@ -412,13 +412,13 @@ mod tests {
         );
 
         // Insert a failed coordinator
-        let mut failed = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut failed = AgentSession::new(AgentKind::Director, "test-model".into());
         let failed_id = failed.id.clone();
         failed.force_status(AgentStatus::Failed);
         stores.agent_sessions.write().unwrap().insert(failed_id.clone(), failed);
 
         // Insert an active (Running) coordinator — supervisor should skip restart
-        let mut active = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut active = AgentSession::new(AgentKind::Director, "test-model".into());
         active.force_status(AgentStatus::Running);
         stores.agent_sessions.write().unwrap().insert(active.id.clone(), active);
 
@@ -459,7 +459,7 @@ mod tests {
         );
 
         // Insert a coordinator session that fails
-        let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Director, "test-model".into());
         let session_id = session.id.clone();
         session.force_status(AgentStatus::Failed);
         stores

@@ -15,8 +15,6 @@ use crate::config::Config;
 use crate::config::ToolEntry;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::chat::ChatHistory;
-use crate::domain::coordinator_goal::CoordinatorGoal;
-use crate::domain::coordinator_state::CoordinatorState;
 use crate::domain::coverage::CoverageReport;
 use crate::domain::doc::Doc;
 use crate::domain::learning::Learning;
@@ -50,8 +48,6 @@ pub struct Stores {
     pub ticks: StdRwLock<HashMap<String, Tick>>,
     pub learnings: StdRwLock<HashMap<String, Learning>>,
     pub locks: StdRwLock<HashMap<String, Lock>>,
-    pub coordinator_goals: StdRwLock<HashMap<String, CoordinatorGoal>>,
-    pub coordinator_states: StdRwLock<HashMap<String, CoordinatorState>>,
     pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
     pub coverage_reports: StdRwLock<HashMap<String, CoverageReport>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
@@ -125,8 +121,6 @@ impl Stores {
         ticks: Tick,
         learnings: Learning,
         locks: Lock,
-        coordinator_goals: CoordinatorGoal,
-        coordinator_states: CoordinatorState,
         agent_sessions: AgentSession,
         coverage_reports: CoverageReport,
         agent_events: VecDeque<AgentEvent>,
@@ -222,8 +216,6 @@ impl Stores {
             ticks: StdRwLock::new(HashMap::new()),
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
-            coordinator_goals: StdRwLock::new(HashMap::new()),
-            coordinator_states: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
             coverage_reports: StdRwLock::new(HashMap::new()),
             runtime_tools: StdRwLock::new(HashMap::new()),
@@ -316,8 +308,6 @@ impl DaemonContext {
         store.rebuild_indexes::<Tick>()?;
         store.rebuild_indexes::<Learning>()?;
         store.rebuild_indexes::<Lock>()?;
-        store.rebuild_indexes::<CoordinatorGoal>()?;
-        store.rebuild_indexes::<CoordinatorState>()?;
         store.rebuild_indexes::<ValidationReport>()?;
         store.rebuild_indexes::<CoverageReport>()?;
         store.rebuild_indexes::<AgentSession>()?;
@@ -362,12 +352,6 @@ impl DaemonContext {
             for lock in store.list::<Lock>(&[])? {
                 stores.write_locks()?.insert(lock.id.clone(), lock);
             }
-            for goal in store.list::<CoordinatorGoal>(&[])? {
-                stores.write_coordinator_goals()?.insert(goal.id.clone(), goal);
-            }
-            for cs in store.list::<CoordinatorState>(&[])? {
-                stores.write_coordinator_states()?.insert(cs.id.clone(), cs);
-            }
             for cr in store.list::<CoverageReport>(&[])? {
                 stores.write_coverage_reports()?.insert(cr.id.clone(), cr);
             }
@@ -383,8 +367,6 @@ impl DaemonContext {
                 + stores.read_ticks()?.len()
                 + stores.read_learnings()?.len()
                 + stores.read_locks()?.len()
-                + stores.read_coordinator_goals()?.len()
-                + stores.read_coordinator_states()?.len()
                 + stores.read_coverage_reports()?.len()
                 + stores.read_agent_sessions()?.len();
             if hydrated > 0 {
@@ -1115,7 +1097,7 @@ impl DaemonContext {
 mod tests {
     use super::*;
     use crate::agents::AgentKind;
-    use crate::config::{InterviewMode, ProjectConfig};
+    use crate::config::ProjectConfig;
     use crate::test_util::TestDir;
 
     /// Create a test Config with repo_path pointing to a unique temp directory
@@ -1201,10 +1183,6 @@ mod tests {
             store
                 .create(Lock::new("file.rs".into(), "owner".into(), "coordinator".into()))
                 .unwrap();
-            store.create(CoordinatorGoal::new("goal".into())).unwrap();
-            store
-                .create(CoordinatorState::new("goal1".into(), InterviewMode::Interactive))
-                .unwrap();
             store
                 .create(AgentSession::new(AgentKind::Implementer, "model".into()))
                 .unwrap();
@@ -1226,8 +1204,6 @@ mod tests {
         assert_eq!(ctx.stores.ticks.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.learnings.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.locks.read().unwrap().len(), 1);
-        assert_eq!(ctx.stores.coordinator_goals.read().unwrap().len(), 1);
-        assert_eq!(ctx.stores.coordinator_states.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.agent_sessions.read().unwrap().len(), 1);
     }
 
@@ -1357,7 +1333,6 @@ mod tests {
         assert!(stores.ticks.read().unwrap().is_empty());
         assert!(stores.learnings.read().unwrap().is_empty());
         assert!(stores.locks.read().unwrap().is_empty());
-        assert!(stores.coordinator_goals.read().unwrap().is_empty());
         assert!(stores.agent_sessions.read().unwrap().is_empty());
     }
 
@@ -1746,7 +1721,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Director, "test-model".into());
         session.force_status(AgentStatus::Running);
         session.transition_to(AgentStatus::WaitingForLlm).unwrap();
         let session_id = session.id.clone();
@@ -1789,18 +1764,6 @@ mod tests {
 
         let sessions = ctx.stores.agent_sessions.read().unwrap();
         assert_eq!(sessions[&session_id].status(), AgentStatus::Completed);
-    }
-
-    #[test]
-    fn test_stores_coordinator_goal_insert_and_read() {
-        let stores = Stores::new();
-        let goal = CoordinatorGoal::new("Build auth system".into());
-        let id = goal.id.clone();
-        stores.coordinator_goals.write().unwrap().insert(id.clone(), goal);
-        let goals = stores.coordinator_goals.read().unwrap();
-        assert_eq!(goals.len(), 1);
-        assert_eq!(goals[&id].goal, "Build auth system");
-        assert!(goals[&id].active);
     }
 
     #[test]

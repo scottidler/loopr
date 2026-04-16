@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::trace;
 
@@ -75,12 +74,11 @@ fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
     let raw = match agent_type {
         AgentKind::Implementer => config.agents.implementer.max_pool,
         AgentKind::Reviewer => config.agents.reviewer.max_pool,
-        AgentKind::Coordinator => config.agents.coordinator.role.max_pool,
+        AgentKind::Director => 1, // Only one Director at a time
         AgentKind::Researcher => config.agents.researcher.max_pool,
         AgentKind::Integrator => 1,
         AgentKind::Chat => 1,
         AgentKind::Decomposer => config.agents.researcher.max_pool,
-        AgentKind::Director => 1, // Only one Director at a time
     };
     if raw == crate::config::MAX_POOL_UNLIMITED {
         config.agents.worker_pool_size.resolve()
@@ -93,7 +91,6 @@ mod agent;
 mod bundle;
 mod chat;
 mod common;
-mod coordinator;
 mod decomposer;
 mod doc;
 mod integrator;
@@ -111,7 +108,6 @@ mod worktree;
 use agent::*;
 use bundle::*;
 use chat::*;
-use coordinator::*;
 use doc::*;
 use integrator::*;
 use learning::*;
@@ -136,8 +132,6 @@ pub async fn dispatch(
     req: DaemonRequest,
 ) -> DaemonResponse {
     trace!("dispatch(method={})", req.method);
-    let method = req.method.clone();
-    let params = req.params.clone();
     let resp = match req.method.as_str() {
         "system.handshake" => handle_handshake(stores, req),
         "system.init" => handle_system_init(stores, req),
@@ -199,13 +193,8 @@ pub async fn dispatch(
         "coverage.evaluate" => handle_coverage_evaluate(stores, req).await,
         "tool.list" => handle_tool_list(stores, req),
         "tools.register" => handle_tools_register(stores, event_tx, req),
-        "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
-        "coordinator.get_state" => handle_coordinator_get_state(stores, req),
-        "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
-        "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
         "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
         "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
-        "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "chat.submit" => handle_chat_submit(stores, event_tx, req),
         "chat.attach" => handle_chat_attach(stores, req),
         "chat.history" => handle_chat_history(stores, req),
@@ -224,90 +213,12 @@ pub async fn dispatch(
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     };
 
-    // Gap #29: Post-dispatch auto-start hook (only on successful transitions)
-    if !resp.is_error() {
-        auto_start_agents(
-            stores,
-            event_tx,
-            worktree_mgr,
-            integrator_config,
-            fsm,
-            &method,
-            &params,
-            &resp,
-        )
-        .await;
-    }
+    // v4 cutover: auto_start_agents hook removed. Engine strategies now handle:
+    // - Implementer spawning: spawn-implementer-for-ready-work strategy
+    // - Bundle triage: auto-triage-proposed-bundle strategy
+    // - Reviewer spawning: spawn-reviewer-for-triaged-bundle strategy
 
     resp
-}
-
-/// Auto-start agents based on transition outcomes (Gap #29).
-async fn auto_start_agents(
-    stores: &Arc<Stores>,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    worktree_mgr: &WorktreeManager,
-    integrator_config: &IntegratorConfig,
-    fsm: &FsmInterpreter,
-    method: &str,
-    params: &serde_json::Value,
-    resp: &crate::ipc::protocol::DaemonResponse,
-) {
-    if method == "work.transition"
-        && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
-        && target.parse::<crate::domain::work::WorkStatus>().ok() == Some(crate::domain::work::WorkStatus::InProgress)
-        && stores.config.agents.auto_start_implementer
-        && !stores.config.agents.pull_based_workers  // Workers handle their own spawning
-        && let Some(wi_id) = params.get("id").and_then(|v| v.as_str())
-    {
-        let start_req = DaemonRequest::new(
-            0,
-            "agent.start",
-            json!({
-                "agent_type": "implementer", "work_id": wi_id,
-            }),
-        );
-        let _ = Box::pin(dispatch(
-            stores,
-            event_tx,
-            worktree_mgr,
-            integrator_config,
-            fsm,
-            start_req,
-        ))
-        .await;
-    }
-
-    // Fix 7: Auto-triage: when a bundle is created (starts in Proposed), immediately
-    // dispatch Proposed -> Triaged deterministically without LLM involvement.
-    // The existing Triaged hook below will then auto-spawn the reviewer.
-    if method == "bundle.create"
-        && stores.config.agents.auto_start_reviewer
-        && let Some(bid) = resp.result.as_ref().and_then(|r| r.get("id")).and_then(|v| v.as_str())
-        && bid.starts_with("bd-")
-    {
-        let triage_req = DaemonRequest::new(
-            0,
-            "bundle.transition",
-            json!({
-                "id": bid,
-                "target_status": "Triaged",
-                "role": "coordinator",
-            }),
-        );
-        let _ = Box::pin(dispatch(
-            stores,
-            event_tx,
-            worktree_mgr,
-            integrator_config,
-            fsm,
-            triage_req,
-        ))
-        .await;
-    }
-
-    // Reviewer spawning is now pull-based: workers poll for Triaged bundles
-    // via next_assignment(). The push-based hook has been removed (Phase 7).
 }
 
 #[allow(clippy::unwrap_used)]
@@ -622,7 +533,7 @@ pub(crate) mod tests {
         assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let collections = result["collections"].as_array().unwrap();
-        assert_eq!(collections.len(), 11);
+        assert_eq!(collections.len(), 10);
         assert!(collections.contains(&json!("plans")));
         assert!(collections.contains(&json!("specs")));
         assert!(collections.contains(&json!("phases")));
@@ -632,7 +543,6 @@ pub(crate) mod tests {
         assert!(collections.contains(&json!("ticks")));
         assert!(collections.contains(&json!("learnings")));
         assert!(collections.contains(&json!("locks")));
-        assert!(collections.contains(&json!("coordinator_goals")));
         assert!(collections.contains(&json!("agent_sessions")));
         // git_hooks_installed is best-effort - may be false in test environments
         // due to taskstore's configure_merge_driver not using current_dir
@@ -674,7 +584,7 @@ pub(crate) mod tests {
         assert!(max_pool_for(AgentKind::Implementer, &config) >= 1);
         // Reviewer default is now MAX_POOL_UNLIMITED, resolved to worker_pool_size (>= 1).
         assert!(max_pool_for(AgentKind::Reviewer, &config) >= 1);
-        assert_eq!(max_pool_for(AgentKind::Coordinator, &config), 1);
+        assert_eq!(max_pool_for(AgentKind::Director, &config), 1);
         assert_eq!(max_pool_for(AgentKind::Researcher, &config), 4);
         assert_eq!(max_pool_for(AgentKind::Integrator, &config), 1);
     }
@@ -762,14 +672,15 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_bundle_create_auto_triages_when_auto_start_reviewer() {
+    async fn test_bundle_create_stays_proposed_engine_handles_triage() {
+        // v4 cutover: auto_start_agents hook removed. Bundles stay Proposed after
+        // creation. The engine's auto-triage-proposed-bundle strategy handles triage.
         let (dir, stores, work_id) = setup_stores_with_bundle_parent().await;
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let ic = test_integrator_config();
         let fsm = test_fsm();
 
-        // Create a bundle - auto-triage should fire immediately
         let resp = dispatch(
             &stores,
             &tx,
@@ -786,19 +697,19 @@ pub(crate) mod tests {
         assert!(!resp.is_error(), "bundle.create should succeed: {:?}", resp.error);
         let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        // Bundle should now be Triaged (auto-triage fired in auto_start_agents)
+        // Bundle stays Proposed - engine strategy will triage it on next tick
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).expect("bundle should exist");
         assert_eq!(
             bundle.status(),
-            crate::domain::bundle::BundleStatus::Triaged,
-            "bundle should be auto-triaged to Triaged after creation"
+            crate::domain::bundle::BundleStatus::Proposed,
+            "bundle should stay Proposed after creation (engine handles triage)"
         );
     }
 
     #[tokio::test]
-    async fn test_bundle_create_no_auto_triage_when_disabled() {
-        // auto_start_reviewer defaults to false, so no auto-triage should happen
+    async fn test_bundle_create_proposed_with_full_hierarchy() {
+        // Bundles start in Proposed state; engine strategies handle triage.
         let (dir, stores_with_ts) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));

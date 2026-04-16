@@ -10,3 +10,4 @@ resolve-structural-conflict:
     - primitive: combine-conflicting-works
       params:
         work-ids: $trigger.event.conflicting-work-ids
+        conflicting-files: $trigger.event.conflicting-files

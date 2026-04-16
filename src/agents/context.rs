@@ -569,16 +569,11 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
-    /// Set the coordinator goal from stores (reads the active goal).
-    pub fn with_coordinator_goal(mut self) -> Self {
-        debug!("ContextBuilder::with_coordinator_goal()");
-        let goal = {
-            let Ok(goals) = self.stores.read_coordinator_goals() else {
-                return self;
-            };
-            goals.values().find(|g| g.active).map(|g| g.goal.clone())
-        };
-        self.coordinator_goal = goal;
+    /// Set the coordinator goal from stores.
+    /// Note: CoordinatorGoal type has been removed. This is now a no-op retained for
+    /// call-site compatibility. The goal text will be sourced from Plan.title in future.
+    pub fn with_coordinator_goal(self) -> Self {
+        debug!("ContextBuilder::with_coordinator_goal() [no-op]");
         self
     }
 

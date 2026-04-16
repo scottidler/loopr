@@ -58,45 +58,8 @@ async fn test_work_fsm_enforcement_via_dispatch() {
     );
 }
 
-#[tokio::test]
-async fn test_full_fsm_cycle() {
-    use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-
-    let stores = test_stores();
-    let goal_id = "goal-test-fsm".to_string();
-
-    // Insert CoordinatorState directly (the Coordinator agent would normally do this)
-    let mut state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
-    let state_id = state.id.clone();
-    assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
-
-    // Transition through all states: Interviewing -> Planning -> Executing -> GoalComplete
-    state.transition_to(CoordinatorFsmState::Planning);
-    assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
-
-    state.transition_to(CoordinatorFsmState::Executing);
-    assert_eq!(state.fsm_state, CoordinatorFsmState::Executing);
-
-    state.transition_to(CoordinatorFsmState::GoalComplete);
-    assert!(state.fsm_state.is_terminal());
-
-    // Verify state persists in stores
-    stores
-        .coordinator_states
-        .write()
-        .unwrap()
-        .insert(state_id.clone(), state.clone());
-
-    let retrieved = stores
-        .coordinator_states
-        .read()
-        .unwrap()
-        .get(&state_id)
-        .cloned()
-        .unwrap();
-    assert_eq!(retrieved.fsm_state, CoordinatorFsmState::GoalComplete);
-    assert_eq!(retrieved.goal_id, goal_id);
-}
+// test_full_fsm_cycle removed: CoordinatorState FSM has been deleted.
+// Coordinator responsibilities are now handled by the engine.
 
 #[tokio::test]
 async fn test_role_inference_from_agent_type() {
@@ -104,7 +67,7 @@ async fn test_role_inference_from_agent_type() {
 
     assert_eq!(AgentKind::Implementer.default_role(), Role::Implementer);
     assert_eq!(AgentKind::Reviewer.default_role(), Role::Reviewer);
-    assert_eq!(AgentKind::Coordinator.default_role(), Role::Coordinator);
+    assert_eq!(AgentKind::Director.default_role(), Role::Director);
     assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
     assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
 }

@@ -133,7 +133,7 @@ mod tests {
     async fn test_execute_validate_document() {
         let dir = TestDir::new("loopr-exec-valdoc");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 

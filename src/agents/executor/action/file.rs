@@ -451,7 +451,7 @@ mod tests {
             message: "test commit".to_string(),
             paths: vec![],
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Committed(ref msg) if msg == "test commit"),
@@ -497,7 +497,7 @@ mod tests {
             message: "add a.txt only".to_string(),
             paths: vec!["a.txt".to_string()],
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::Committed(_)));
     }
@@ -511,7 +511,7 @@ mod tests {
             path: "../../../etc/passwd".to_string(),
             content: "pwned".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("path traversal"));
@@ -527,7 +527,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
     }
@@ -541,7 +541,7 @@ mod tests {
             path: "deep/nested/dir/file.txt".to_string(),
             content: "nested content".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
         let content = std::fs::read_to_string(dir.join("deep/nested/dir/file.txt")).unwrap();
@@ -559,7 +559,7 @@ mod tests {
             glob: None,
             path: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileRead(ref content) if content.contains("fn main"))
@@ -577,7 +577,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         let action = AgentAction::ListDirectory { path: ".".to_string() };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileRead(ref content) if content.contains("file1.txt")),
@@ -803,7 +803,7 @@ mod tests {
     async fn test_no_auto_lock_without_work_id() {
         let dir = TestDir::new("loopr-exec-autolock-none");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let action = AgentAction::WriteFile {
             path: "src/lib.rs".to_string(),

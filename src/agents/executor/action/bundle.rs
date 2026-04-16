@@ -428,7 +428,7 @@ mod tests {
             .await
             .unwrap();
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -495,7 +495,7 @@ mod tests {
             noop_reason: None,
             noop_paths: vec![],
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work_id"));
@@ -507,7 +507,7 @@ mod tests {
     async fn test_execute_accept_bundle() {
         let dir = TestDir::new("loopr-exec-accept");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -546,7 +546,7 @@ mod tests {
     async fn test_execute_accept_bundle_rejects_work_id() {
         let dir = TestDir::new("loopr-exec-accept-wkid");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let action = AgentAction::AcceptBundle {
             bundle_id: "wk-12345".to_string(),
@@ -563,7 +563,7 @@ mod tests {
     async fn test_execute_accept_bundle_full() {
         let dir = TestDir::new("loopr-exec-acceptfull");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -592,7 +592,7 @@ mod tests {
     async fn test_accept_bundle_rejects_proposed_bundle() {
         let dir = TestDir::new("loopr-exec-accept-prop");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -659,7 +659,7 @@ mod tests {
             .await
             .unwrap();
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let mut tick = crate::domain::tick::Tick::new(1);
         tick.force_status(TickStatus::Published);
@@ -686,7 +686,7 @@ mod tests {
     async fn test_propose_bundle_uses_deterministic_branch_name() {
         let dir = TestDir::new("loopr-exec-f2branch");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Director);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
         ctx.bridge.request(

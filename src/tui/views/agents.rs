@@ -108,7 +108,7 @@ mod tests {
         let _ = s3.transition_to(AgentStatus::Running);
         app.state.agent_sessions.push(s3);
 
-        let s4 = AgentSession::new(AgentKind::Coordinator, "claude-sonnet-4-6".to_string());
+        let s4 = AgentSession::new(AgentKind::Director, "claude-sonnet-4-6".to_string());
         app.state.agent_sessions.push(s4);
 
         let mut terminal = test_terminal(80, 24);
@@ -118,7 +118,7 @@ mod tests {
         assert!(buffer_contains_text(buffer, "implementer"));
         assert!(buffer_contains_text(buffer, "reviewer"));
         assert!(buffer_contains_text(buffer, "researcher"));
-        assert!(buffer_contains_text(buffer, "coordinator"));
+        assert!(buffer_contains_text(buffer, "director"));
         assert!(buffer_contains_text(buffer, "iter:3"));
         assert!(buffer_contains_text(buffer, "Investigate auth"));
     }

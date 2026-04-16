@@ -528,7 +528,7 @@ mod tests {
             "coord".into(),
         ));
         app.state.agent_sessions.push(crate::agents::AgentSession::new(
-            crate::agents::AgentKind::Coordinator,
+            crate::agents::AgentKind::Director,
             "model".to_string(),
         ));
 

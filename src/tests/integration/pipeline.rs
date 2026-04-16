@@ -217,10 +217,6 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
 
     let wis = stores.works.read().unwrap();
     assert_eq!(wis[&wi_id].status(), crate::domain::work::WorkStatus::Done);
-
-    // Goal is still active
-    let goals = stores.coordinator_goals.read().unwrap();
-    assert!(goals.values().any(|g| g.active && g.goal == "Implement user auth"));
 }
 
 #[tokio::test]
@@ -378,18 +374,12 @@ async fn test_full_mvp4_pipeline() {
         );
     }
 
-    // Verify goal still active
-    let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({})).await;
-    assert_eq!(final_goal["goal"], "Build example website");
-    assert_eq!(final_goal["active"], true);
-
     // Verify record counts
     assert_eq!(stores.plans.read().unwrap().len(), 1);
     assert_eq!(stores.specs.read().unwrap().len(), 1);
     assert_eq!(stores.phases.read().unwrap().len(), 1);
     assert_eq!(stores.works.read().unwrap().len(), 1);
     assert_eq!(stores.bundles.read().unwrap().len(), 1);
-    assert_eq!(stores.coordinator_goals.read().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -751,11 +741,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
             .is_some_and(|s| s.contains("PASSED"))
     );
 
-    // --- 10. Goal still active ---
-    let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({})).await;
-    assert_eq!(final_goal["goal"], "Build portfolio site");
-
-    // --- 11. Verify counts ---
+    // --- 10. Verify counts ---
     assert_eq!(stores.plans.read().unwrap().len(), 1);
     assert_eq!(stores.specs.read().unwrap().len(), 1);
     assert_eq!(stores.phases.read().unwrap().len(), 1);
