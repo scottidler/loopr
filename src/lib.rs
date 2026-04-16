@@ -23,6 +23,7 @@ pub mod resources;
 pub mod scorer;
 pub mod session_summary;
 pub mod tools;
+pub mod treesitter;
 pub mod trigger;
 pub mod tui;
 pub mod validator;

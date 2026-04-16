@@ -460,7 +460,9 @@ fn extract_file_references(content: &str) -> Vec<std::path::PathBuf> {
 }
 
 /// Build file-content section for Spec-level decomposition.
-/// Reads up to 5 referenced files, 200 lines each.
+/// Reads up to 5 referenced files, using AST-aware structural summaries
+/// for supported languages (Python, Rust, JS/TS) and line-based truncation
+/// as fallback.
 fn file_content_section(repo_path: Option<&std::path::Path>, target_kind: DocKind, parent_content: &str) -> String {
     let Some(repo) = repo_path else {
         return String::new();
@@ -480,7 +482,8 @@ fn file_content_section(repo_path: Option<&std::path::Path>, target_kind: DocKin
         let Ok(content) = std::fs::read_to_string(&full) else {
             continue;
         };
-        let truncated: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+        let lang = crate::treesitter::detect_language(&full);
+        let truncated = crate::treesitter::structural_summary(&content, lang, 200);
         buf.push_str(&format!("\n### {}\n```\n{}\n```\n", file_ref.display(), truncated));
     }
     if buf.is_empty() {

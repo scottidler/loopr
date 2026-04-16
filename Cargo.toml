@@ -38,6 +38,11 @@ tracing-log = "0.2.0"
 regex = "1.12.3"
 keyby = { git = "https://github.com/scottidler/keyby.git", version = "0.1.0" }
 rust-embed = "8.11.0"
+tree-sitter = "0.26.8"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
 # Dependencies will be added via cargo add
 
 [dev-dependencies]
