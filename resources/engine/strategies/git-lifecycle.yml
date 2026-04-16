@@ -1,0 +1,39 @@
+# Git lifecycle strategies: integration branch creation, merge, and cleanup.
+
+# When a plan becomes Active, create its integration branch.
+create-integration-branch-on-plan-active:
+  description: Create integration branch when a plan becomes Active
+  trigger: plan-is-active
+  scope: plan
+  priority: 950
+  action:
+    - primitive: create-integration-branch
+      params:
+        plan-id: $trigger.scope-id
+
+# When a plan's goal completes, merge the integration branch to main.
+# Must fire BEFORE complete-plan-on-goal (higher priority).
+merge-integration-to-main-on-goal:
+  description: Merge integration branch to main when plan goal is complete
+  trigger: goal-complete
+  scope: plan
+  priority: 860
+  action:
+    - primitive: merge-integration-to-main
+      params:
+        plan-id: $trigger.scope-id
+  on-failure:
+    - primitive: escalate
+      params:
+        reason: integration-merge-to-main-failed
+
+# When a plan is abandoned, clean up its integration branch.
+delete-integration-branch-on-abandon:
+  description: Delete integration branch when a plan is abandoned
+  trigger: plan-abandoned
+  scope: plan
+  priority: 800
+  action:
+    - primitive: delete-integration-branch
+      params:
+        plan-id: $trigger.scope-id

@@ -307,7 +307,8 @@ impl App {
             Role::Implementer => Role::Reviewer,
             Role::Reviewer => Role::Researcher,
             Role::Researcher => Role::Decomposer,
-            Role::Decomposer => Role::Coordinator,
+            Role::Decomposer => Role::Director,
+            Role::Director => Role::Coordinator,
         };
     }
 
@@ -485,6 +486,8 @@ mod tests {
         assert_eq!(app.current_role, Role::Researcher);
         app.cycle_role();
         assert_eq!(app.current_role, Role::Decomposer);
+        app.cycle_role();
+        assert_eq!(app.current_role, Role::Director);
         app.cycle_role();
         assert_eq!(app.current_role, Role::Coordinator);
     }

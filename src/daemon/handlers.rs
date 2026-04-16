@@ -80,6 +80,7 @@ fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
         AgentKind::Integrator => 1,
         AgentKind::Chat => 1,
         AgentKind::Decomposer => config.agents.researcher.max_pool,
+        AgentKind::Director => 1, // Only one Director at a time
     };
     if raw == crate::config::MAX_POOL_UNLIMITED {
         config.agents.worker_pool_size.resolve()

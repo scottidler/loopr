@@ -1,0 +1,17 @@
+# Director agent role config.
+# The Director is the top-level thinking agent - the "go-between" from
+# the user to the system. It runs on Opus, activates on escalation or
+# user interaction, and has authority to revise the plan hierarchy.
+
+director:
+  model: claude-opus-4-6
+  max-tokens: 16384
+  temperature: 0.3
+  max-pool: 1
+  session-timeout-secs: 3600
+  prompt: agents/director
+  tools:
+    - read-file
+    - grep
+    - glob
+    - shell

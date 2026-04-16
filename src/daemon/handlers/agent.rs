@@ -74,7 +74,8 @@ pub(super) fn handle_agent_start(
             | AgentKind::Researcher
             | AgentKind::Integrator
             | AgentKind::Chat
-            | AgentKind::Decomposer => {
+            | AgentKind::Decomposer
+            | AgentKind::Director => {
                 // These agents operate without worktrees; no target ID required at start time
             }
         }
@@ -95,6 +96,7 @@ pub(super) fn handle_agent_start(
             AgentKind::Integrator => "deterministic".to_string(),
             AgentKind::Chat => stores.config.agents.implementer.llm.model.clone(),
             AgentKind::Decomposer => stores.config.decomposer.llm.model.clone(),
+            AgentKind::Director => stores.config.agents.researcher.llm.model.clone(), // Director uses Opus from role config
         };
         let mut session = AgentSession::new(agent_type, model);
         session.work_id = work_id;
@@ -803,6 +805,7 @@ mod tests {
                 AgentKind::Integrator => "deterministic".to_string(),
                 AgentKind::Chat => config.agents.implementer.llm.model.clone(),
                 AgentKind::Decomposer => config.decomposer.llm.model.clone(),
+                AgentKind::Director => config.agents.researcher.llm.model.clone(),
             };
             assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
         }

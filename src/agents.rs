@@ -4,6 +4,7 @@ pub mod cache;
 pub mod context;
 pub mod coordinator;
 pub mod decomposer;
+pub mod director;
 pub mod error;
 pub mod event;
 pub mod executor;

@@ -13,6 +13,7 @@ pub enum AgentKind {
     Integrator,
     Chat,
     Decomposer,
+    Director,
 }
 
 impl AgentKind {
@@ -26,6 +27,7 @@ impl AgentKind {
             AgentKind::Integrator => crate::domain::role::Role::Integrator,
             AgentKind::Chat => crate::domain::role::Role::Coordinator,
             AgentKind::Decomposer => crate::domain::role::Role::Decomposer,
+            AgentKind::Director => crate::domain::role::Role::Director,
         }
     }
 
@@ -39,6 +41,7 @@ impl AgentKind {
                 | AgentKind::Reviewer
                 | AgentKind::Chat
                 | AgentKind::Decomposer
+                | AgentKind::Director
         )
     }
 }
@@ -53,6 +56,7 @@ impl fmt::Display for AgentKind {
             AgentKind::Integrator => write!(f, "integrator"),
             AgentKind::Chat => write!(f, "chat"),
             AgentKind::Decomposer => write!(f, "decomposer"),
+            AgentKind::Director => write!(f, "director"),
         }
     }
 }
@@ -62,13 +66,14 @@ impl fmt::Display for AgentKind {
 mod tests {
     use super::*;
 
-    const ALL_AGENT_TYPES: [AgentKind; 6] = [
+    const ALL_AGENT_TYPES: [AgentKind; 7] = [
         AgentKind::Implementer,
         AgentKind::Reviewer,
         AgentKind::Coordinator,
         AgentKind::Researcher,
         AgentKind::Integrator,
         AgentKind::Decomposer,
+        AgentKind::Director,
     ];
 
     #[test]
@@ -79,6 +84,7 @@ mod tests {
         assert_eq!(AgentKind::Researcher.to_string(), "researcher");
         assert_eq!(AgentKind::Integrator.to_string(), "integrator");
         assert_eq!(AgentKind::Decomposer.to_string(), "decomposer");
+        assert_eq!(AgentKind::Director.to_string(), "director");
     }
 
     #[test]
@@ -109,6 +115,7 @@ mod tests {
         assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
         assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
         assert_eq!(AgentKind::Decomposer.default_role(), Role::Decomposer);
+        assert_eq!(AgentKind::Director.default_role(), Role::Director);
     }
 
     #[test]
@@ -119,5 +126,6 @@ mod tests {
         assert!(AgentKind::Researcher.is_thinking_plane());
         assert!(AgentKind::Integrator.is_thinking_plane());
         assert!(AgentKind::Decomposer.is_thinking_plane());
+        assert!(AgentKind::Director.is_thinking_plane());
     }
 }

@@ -1,0 +1,76 @@
+# Agent lifecycle strategies: replace v3's coordinator scheduling decisions.
+# These are the deterministic state transitions the coordinator performed via LLM
+# that were always mechanical - no judgment required.
+
+# When a work item becomes Ready, spawn an implementer agent.
+# Replaces the coordinator's AssignAgent action.
+spawn-implementer-for-ready-work:
+  description: Spawn an implementer agent when a work item becomes Ready
+  trigger: work-ready
+  scope: work
+  priority: 800
+  action:
+    - primitive: spawn-agent
+      guard: no-active-implementer-for-work
+      params:
+        role: implementer
+        work-id: $trigger.scope-id
+
+# When a bundle is proposed, auto-triage it to Triaged.
+# The coordinator did this as an LLM action but it was always mechanical.
+auto-triage-proposed-bundle:
+  description: Auto-triage proposed bundles to Triaged state
+  trigger: bundle-proposed
+  scope: bundle
+  priority: 850
+  action:
+    - primitive: transition-record
+      params:
+        collection: bundle
+        id: $trigger.scope-id
+        target-status: triaged
+        role: coordinator
+
+# When a bundle is triaged, spawn a reviewer agent.
+spawn-reviewer-for-triaged-bundle:
+  description: Spawn a reviewer agent when a bundle is triaged
+  trigger: bundle-triaged
+  scope: bundle
+  priority: 840
+  action:
+    - primitive: spawn-agent
+      guard: no-active-reviewer-for-bundle
+      params:
+        role: reviewer
+        bundle-id: $trigger.scope-id
+
+# When a reviewer approves a bundle, transition it to Accepted.
+accept-approved-bundle:
+  description: Accept bundles that reviewers have approved
+  trigger: reviewer-approved
+  scope: bundle
+  priority: 830
+  action:
+    - primitive: transition-record
+      params:
+        collection: bundle
+        id: $trigger.scope-id
+        target-status: accepted
+        role: reviewer
+
+# When a reviewer rejects a bundle, reject it and retry the work.
+handle-rejected-bundle:
+  description: Reject bundles that reviewers have rejected and retry the work
+  trigger: reviewer-rejected
+  scope: bundle
+  priority: 820
+  action:
+    - primitive: transition-record
+      params:
+        collection: bundle
+        id: $trigger.scope-id
+        target-status: rejected
+        role: reviewer
+    - primitive: retry-work
+      params:
+        work-id: $trigger.event.work-id

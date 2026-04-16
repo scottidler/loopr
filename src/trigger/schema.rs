@@ -19,6 +19,7 @@ const VALID_EVENTS: &[&str] = &[
     "decomposition.failed",
     "escalation",
     "reconciliation-failed",
+    "integration.conflict-detected",
 ];
 
 /// Comparison operators for threshold and ratio triggers.

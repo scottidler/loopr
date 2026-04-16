@@ -203,6 +203,14 @@ impl TokenBudget {
                 previous_summary: 0,
                 guidance: 500,
             },
+            Role::Director => Self {
+                work_target: 500,
+                learnings: 1500,
+                state_summary: 3000,
+                tools_or_actions: 500,
+                previous_summary: 700,
+                guidance: 1500,
+            },
         }
     }
 }

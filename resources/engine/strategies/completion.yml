@@ -1,0 +1,16 @@
+# Plan completion strategy: complete plan when goal is achieved.
+# Phase and spec completion already exist in reconciliation.yml (complete-phases, complete-specs).
+
+# When all specs under a plan are terminal and goal is complete, complete the plan.
+complete-plan-on-goal:
+  description: Complete a plan when its goal is achieved and all specs are terminal
+  trigger: goal-complete
+  scope: plan
+  priority: 850
+  action:
+    - primitive: transition-record
+      params:
+        collection: plan
+        id: $trigger.scope-id
+        target-status: complete
+        role: coordinator

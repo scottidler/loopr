@@ -52,3 +52,28 @@ abandon-ratio-escalation:
       params:
         reason: abandon-ratio-exceeded
         scope-id: $trigger.scope-id
+
+# When a work item breaches its SLA, override it.
+handle-work-sla-breach:
+  description: Override work items that breach their SLA deadline
+  trigger: work-sla-breach
+  scope: work
+  priority: 950
+  action:
+    - primitive: override-work
+      params:
+        work-id: $trigger.scope-id
+        reason: sla-breach
+
+# When escalation is needed, spawn a Director agent to diagnose and act.
+escalate-to-director:
+  description: Spawn a Director agent when mechanical recovery fails
+  trigger: escalation-needed
+  scope: plan
+  priority: 50
+  action:
+    - primitive: spawn-agent
+      guard: no-active-director
+      params:
+        role: director
+        target-id: $trigger.scope-id

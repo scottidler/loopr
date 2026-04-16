@@ -1,0 +1,96 @@
+# Agent lifecycle triggers: work readiness, bundle flow, reviewer verdicts.
+# These replace v3's coordinator scheduling decisions with engine-driven triggers.
+
+# Fires when a work item is Ready with no active implementer session.
+work-ready:
+  type: state-query
+  scope: work
+  query: field-equals
+  params:
+    field: status
+    value: Ready
+
+# Fires when a bundle is in Proposed state (newly created).
+bundle-proposed:
+  type: event
+  event: record.created
+  match:
+    collection: bundle
+
+# Fires when a bundle is Triaged with no active reviewer session.
+bundle-triaged:
+  type: state-query
+  scope: bundle
+  query: field-equals
+  params:
+    field: status
+    value: Triaged
+
+# Fires when a reviewer session completes with Approve verdict.
+reviewer-approved:
+  type: event
+  event: agent.status-changed
+  match:
+    status: completed
+    agent-type: reviewer
+    verdict: approve
+
+# Fires when a reviewer session completes with Reject or RequestChanges verdict.
+reviewer-rejected:
+  type: event
+  event: agent.status-changed
+  match:
+    status: completed
+    agent-type: reviewer
+    verdict: reject
+
+# Fires when a plan transitions to Abandoned.
+plan-abandoned:
+  type: state-query
+  scope: plan
+  query: field-equals
+  params:
+    field: status
+    value: Abandoned
+
+# Fires when integrate-tick detects a structural merge conflict.
+conflict-detected:
+  type: event
+  event: integration.conflict-detected
+
+# Fires when all works under a spec are Abandoned.
+spec-children-all-abandoned:
+  type: state-query
+  scope: spec
+  query: all-children-terminal
+  params:
+    child-collection: work
+    terminal-statuses:
+      - abandoned
+
+# Fires when a phase is Active but has no validation commands registered.
+phase-active-no-validation:
+  type: state-query
+  scope: phase
+  query: field-equals
+  params:
+    field: has-validation-commands
+    value: false
+
+# Composite: escalation needed - any of the escalation conditions met.
+escalation-needed:
+  type: composite
+  operator: or
+  triggers:
+    - abandon-ratio-exceeded
+    - work-sla-full-breach
+    - goal-timeout
+
+# Fires when a director agent session fails.
+director-failed:
+  type: event
+  event: agent.status-changed
+  match:
+    status: failed
+    agent-type: director
+  throttle-secs: 5

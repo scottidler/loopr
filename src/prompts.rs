@@ -35,6 +35,7 @@ pub struct PromptStore {
     pub decompose_work: String,
     pub decompose_validate: String,
     pub decompose_ratify: String,
+    pub director: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -113,6 +114,7 @@ pub fn init(config: &Config, repo_path: Option<&Path>) -> eyre::Result<()> {
         decompose_work: load(&config.decomposer.prompts.work)?,
         decompose_validate: load(&config.decomposer.prompts.validate)?,
         decompose_ratify: load(&config.decomposer.prompts.ratify)?,
+        director: Resources::load("agents/director.pmt", repo_path)?,
     });
     Ok(())
 }
@@ -149,6 +151,7 @@ pub fn init_defaults() {
         decompose_work: load("decompose/work/prompt.pmt"),
         decompose_validate: load("decompose/validate.pmt"),
         decompose_ratify: load("decompose/ratify.pmt"),
+        director: load("agents/director.pmt"),
     });
 }
 

@@ -7,7 +7,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
-use crate::agents::{coordinator, implementer, integrator, researcher, reviewer};
+use crate::agents::{coordinator, director, implementer, integrator, researcher, reviewer};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
@@ -55,7 +55,8 @@ pub async fn run_agent_task(
             | AgentKind::Researcher
             | AgentKind::Integrator
             | AgentKind::Chat
-            | AgentKind::Decomposer => None,
+            | AgentKind::Decomposer
+            | AgentKind::Director => None,
         }
     };
 
@@ -162,6 +163,7 @@ pub async fn run_agent_task(
         AgentKind::Integrator => stores.config.integrator.session_timeout_secs,
         AgentKind::Chat => None,
         AgentKind::Decomposer => Some(600), // 10 min - single LLM call + child persistence
+        AgentKind::Director => Some(3600),  // 1hr - Director may run long interview/escalation sessions
     };
 
     let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx);
@@ -483,6 +485,16 @@ pub(super) async fn run_agent_loop(
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
+        AgentKind::Director => {
+            let config = stores.config.agents.researcher.clone(); // Director uses Opus but shares config shape
+            let conv_log = conversations_dir
+                .as_ref()
+                .map(|d| (d.clone(), format!("director-{}", session_id)));
+            let llm = create_llm_client(&config, session_id, event_tx, conv_log)?;
+            let mut agent = director::DirectorAgent::new(ctx, llm, config);
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
     };
 
     // Unified iteration writeback
@@ -528,6 +540,7 @@ mod tests {
             AgentKind::Integrator => config.integrator.session_timeout_secs,
             AgentKind::Chat => None,
             AgentKind::Decomposer => Some(600),
+            AgentKind::Director => Some(3600),
         }
     }
 
@@ -818,6 +831,7 @@ mod tests {
         assert_eq!(resolve_timeout(&config, AgentKind::Integrator), Some(1200));
         assert_eq!(resolve_timeout(&config, AgentKind::Coordinator), None);
         assert_eq!(resolve_timeout(&config, AgentKind::Chat), None);
+        assert_eq!(resolve_timeout(&config, AgentKind::Director), Some(3600));
     }
 
     #[tokio::test(flavor = "multi_thread")]

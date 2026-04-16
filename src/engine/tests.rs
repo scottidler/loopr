@@ -148,6 +148,77 @@ fn loaded_strategies_cover_all_v3_behaviors() {
         names.contains(&"restart-coordinator-on-state"),
         "missing restart-coordinator-on-state"
     );
+
+    // Agent lifecycle (5 strategies - v4 cutover)
+    assert!(
+        names.contains(&"spawn-implementer-for-ready-work"),
+        "missing spawn-implementer-for-ready-work"
+    );
+    assert!(
+        names.contains(&"auto-triage-proposed-bundle"),
+        "missing auto-triage-proposed-bundle"
+    );
+    assert!(
+        names.contains(&"spawn-reviewer-for-triaged-bundle"),
+        "missing spawn-reviewer-for-triaged-bundle"
+    );
+    assert!(
+        names.contains(&"accept-approved-bundle"),
+        "missing accept-approved-bundle"
+    );
+    assert!(
+        names.contains(&"handle-rejected-bundle"),
+        "missing handle-rejected-bundle"
+    );
+
+    // Completion (1 strategy - v4 cutover)
+    assert!(
+        names.contains(&"complete-plan-on-goal"),
+        "missing complete-plan-on-goal"
+    );
+
+    // Git lifecycle (3 strategies - v4 cutover)
+    assert!(
+        names.contains(&"create-integration-branch-on-plan-active"),
+        "missing create-integration-branch-on-plan-active"
+    );
+    assert!(
+        names.contains(&"merge-integration-to-main-on-goal"),
+        "missing merge-integration-to-main-on-goal"
+    );
+    assert!(
+        names.contains(&"delete-integration-branch-on-abandon"),
+        "missing delete-integration-branch-on-abandon"
+    );
+
+    // Conflict resolution (1 strategy - v4 cutover)
+    assert!(
+        names.contains(&"resolve-structural-conflict"),
+        "missing resolve-structural-conflict"
+    );
+
+    // Feedback (1 strategy - v4 cutover)
+    assert!(
+        names.contains(&"revise-parent-on-impossible-spec"),
+        "missing revise-parent-on-impossible-spec"
+    );
+
+    // Tooling (2 strategies - v4 cutover)
+    assert!(
+        names.contains(&"register-tools-on-phase-active"),
+        "missing register-tools-on-phase-active"
+    );
+    assert!(
+        names.contains(&"spawn-researcher-for-missing-tools"),
+        "missing spawn-researcher-for-missing-tools"
+    );
+
+    // Recovery additions (2 strategies - v4 cutover)
+    assert!(
+        names.contains(&"handle-work-sla-breach"),
+        "missing handle-work-sla-breach"
+    );
+    assert!(names.contains(&"escalate-to-director"), "missing escalate-to-director");
 }
 
 #[test]
