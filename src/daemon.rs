@@ -1,6 +1,5 @@
 pub mod context;
 pub mod handlers;
-pub mod supervisor;
 pub mod work_queue;
 
 use std::sync::Arc;

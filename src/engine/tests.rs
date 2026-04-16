@@ -141,12 +141,12 @@ fn loaded_strategies_cover_all_v3_behaviors() {
 
     // Supervision (2 strategies)
     assert!(
-        names.contains(&"restart-coordinator-on-event"),
-        "missing restart-coordinator-on-event"
+        names.contains(&"restart-director-on-event"),
+        "missing restart-director-on-event"
     );
     assert!(
-        names.contains(&"restart-coordinator-on-state"),
-        "missing restart-coordinator-on-state"
+        names.contains(&"restart-director-on-state"),
+        "missing restart-director-on-state"
     );
 
     // Agent lifecycle (5 strategies - v4 cutover)
@@ -233,8 +233,8 @@ fn strategies_have_correct_scopes() {
     assert_eq!(by_name["promote-pending-phases"].scope, "phase");
     assert_eq!(by_name["promote-pending-works"].scope, "work");
     assert_eq!(by_name["integrate-accepted-bundles"].scope, "plan");
-    assert_eq!(by_name["restart-coordinator-on-event"].scope, "session");
-    assert_eq!(by_name["restart-coordinator-on-state"].scope, "plan");
+    assert_eq!(by_name["restart-director-on-event"].scope, "session");
+    assert_eq!(by_name["restart-director-on-state"].scope, "plan");
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn work_retry_strategy_has_named_step_for_context() {
 #[test]
 fn supervision_strategies_have_cooldown() {
     let defs = schema::load_dir(&strategies_dir()).unwrap();
-    let restart_state = defs.iter().find(|d| d.name == "restart-coordinator-on-state").unwrap();
+    let restart_state = defs.iter().find(|d| d.name == "restart-director-on-state").unwrap();
     assert!(
         restart_state.cooldown_secs.is_some(),
         "level-triggered supervisor strategy should have a cooldown"

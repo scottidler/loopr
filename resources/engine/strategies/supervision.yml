@@ -1,10 +1,10 @@
-# Supervision strategies: replace v3's supervisor restart logic.
+# Supervision strategies: restart Director on failure.
 # Dual pattern: event-driven (fast) + level-triggered (reliable, principle 8).
 
-# Fast reaction: restart coordinator immediately when a failure event arrives.
-restart-coordinator-on-event:
-  description: Restart coordinator after a failure event, up to max restarts
-  trigger: coordinator-failed
+# Fast reaction: restart Director immediately when a failure event arrives.
+restart-director-on-event:
+  description: Restart Director after a failure event, up to max restarts
+  trigger: director-failed
   scope: session
   priority: 1200
   action:
@@ -12,22 +12,22 @@ restart-coordinator-on-event:
       primitive: check-threshold
       params:
         collection: session
-        id: coordinator
+        id: director
         field: restart-count
         max: 5
   on-success:
     - primitive: spawn-agent
       params:
-        role: coordinator
+        role: director
   on-failure:
     - primitive: escalate
       params:
-        reason: coordinator-max-restarts-exceeded
+        reason: director-max-restarts-exceeded
 
 # Level-triggered fallback: catches missed events after restart or on cold start.
-restart-coordinator-on-state:
-  description: Restart coordinator if no active coordinator session exists (level-triggered fallback)
-  trigger: no-running-coordinator
+restart-director-on-state:
+  description: Restart Director if no active Director session exists (level-triggered fallback)
+  trigger: no-running-director
   scope: plan
   priority: 1100
   cooldown-secs: 60
@@ -36,14 +36,14 @@ restart-coordinator-on-state:
       primitive: check-threshold
       params:
         collection: session
-        id: coordinator
+        id: director
         field: restart-count
         max: 5
   on-success:
     - primitive: spawn-agent
       params:
-        role: coordinator
+        role: director
   on-failure:
     - primitive: escalate
       params:
-        reason: coordinator-max-restarts-exceeded
+        reason: director-max-restarts-exceeded

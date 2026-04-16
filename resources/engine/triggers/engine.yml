@@ -6,21 +6,6 @@ tick-published:
   event: tick.published
   scope: plan
 
-# Fires when a coordinator agent session transitions to failed
-coordinator-failed:
-  type: event
-  event: agent.status-changed
-  match:
-    status: failed
-  scope: session
-  throttle-secs: 5
-
-# Fires for plans with no Running or Paused coordinator sessions (level-triggered fallback)
-no-running-coordinator:
-  type: state-query
-  scope: plan
-  query: no-active-sessions
-
 # Fires when a plan has accepted bundles ready for integration.
 # Note: uses field-equals as a placeholder; a dedicated has-accepted-bundles
 # state query will replace this in Phase 3 when bundle-scoped queries exist.
@@ -31,3 +16,9 @@ bundles-ready-for-integration:
   params:
     field: has-accepted-bundles
     value: true
+
+# Fires for plans with no Running or Paused Director sessions (level-triggered fallback)
+no-running-director:
+  type: state-query
+  scope: plan
+  query: no-active-sessions
