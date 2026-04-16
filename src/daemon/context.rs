@@ -74,8 +74,9 @@ pub struct Stores {
     /// Per-session ring buffer of agent events for agent.output IPC method.
     pub agent_events: StdRwLock<HashMap<String, VecDeque<AgentEvent>>>,
     /// Fix #10: Advisory lock for main repo git operations (merge, reset).
-    /// Prevents concurrent Integrator merges from racing.
-    pub git_lock: StdMutex<()>,
+    /// Prevents concurrent integrate-tick / create-integration-branch from racing.
+    /// Uses tokio::sync::Mutex so it can be held across .await in engine primitives.
+    pub git_lock: tokio::sync::Mutex<()>,
     /// Signal for graceful shutdown of persistent workers.
     pub shutting_down: AtomicBool,
     /// Session directory for this daemon run. Used by AgentLogger for scoped log output.
@@ -163,8 +164,8 @@ impl Stores {
             .map_err(|_| eyre!("agent_handles lock poisoned"))
     }
 
-    pub fn lock_git(&self) -> Result<MutexGuard<'_, ()>> {
-        self.git_lock.lock().map_err(|_| eyre!("git_lock poisoned"))
+    pub async fn lock_git(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.git_lock.lock().await
     }
 
     /// Path to the reconciliation log for this daemon session.
@@ -230,7 +231,7 @@ impl Stores {
             ),
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
-            git_lock: StdMutex::new(()),
+            git_lock: tokio::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
             guidance: AgentGuidance::schema_only(),
             session_dir: None,

@@ -356,7 +356,16 @@ impl CompositionEngine {
             strategy_ctx: &mut HashMap::new(),
         };
 
-        primitive.execute(&mut prim_ctx, resolved_params).await
+        // Acquire git lock for primitives that mutate git state (merge, branch, checkout).
+        // This serializes concurrent integrate-tick / create-integration-branch / etc.
+        if primitive.requires_git_lock() {
+            let git_guard = ctx.stores.lock_git().await;
+            let result = primitive.execute(&mut prim_ctx, resolved_params).await;
+            drop(git_guard);
+            result
+        } else {
+            primitive.execute(&mut prim_ctx, resolved_params).await
+        }
     }
 
     // ─── Cooldown tracking ──────────────────────────────────────────────────
