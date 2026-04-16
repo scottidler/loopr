@@ -12,30 +12,6 @@ fn default_confidence() -> f32 {
     0.5
 }
 
-/// A code citation supporting a structural claim in a learning.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CodeCitation {
-    pub file_path: String,
-    pub line_number: u32,
-    pub excerpt: String,
-}
-
-/// Returns `true` when `content` makes a structural code claim (about function signatures,
-/// interface contracts, or API shapes). These learnings are marked tentative unless they
-/// carry a `code_citation`.
-///
-/// Markers are intentionally narrow: "signature", "interface contract", "function contract",
-/// "has signature", "takes a". Broad terms like "type" or "parameter" are excluded to
-/// avoid false positives on legitimate non-code learnings.
-pub fn is_structural_claim(content: &str) -> bool {
-    let lower = content.to_lowercase();
-    lower.contains("signature")
-        || lower.contains("interface contract")
-        || lower.contains("function contract")
-        || lower.contains("has signature")
-        || lower.contains("takes a")
-}
-
 /// Scope at which a learning applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -90,26 +66,12 @@ pub struct Learning {
     /// Default 0.5 for new learnings (neutral).
     #[serde(default = "default_confidence")]
     pub confidence: f32,
-
-    /// Code citation grounding a structural claim. When set, the learning is authoritative
-    /// for that specific claim (file/line/excerpt observed in actual merged code).
-    #[serde(default)]
-    pub code_citation: Option<CodeCitation>,
-
-    /// `true` when this learning makes a structural code claim (signature, interface
-    /// contract, etc.) but carries no `code_citation`. Tentative learnings are rendered
-    /// with a `[TENTATIVE]` prefix in agent context and cannot override implementer claims
-    /// that cite actual code.
-    #[serde(default)]
-    pub tentative: bool,
 }
 
 impl Learning {
     pub fn new(source_id: String, scope: LearningScope, content: String) -> Self {
         tracing::debug!("Learning::new(source_id={}, scope={})", source_id, scope);
         let now = id::now_millis();
-        // Auto-mark as tentative when content makes a structural claim without a citation.
-        let tentative = is_structural_claim(&content);
         Self {
             id: id::generate_id("ln"),
             source_id,
@@ -123,8 +85,6 @@ impl Learning {
             applicable_roles: None,
             files: Vec::new(),
             confidence: default_confidence(),
-            code_citation: None,
-            tentative,
         }
     }
 
@@ -597,120 +557,6 @@ mod tests {
         l.promoted = true;
         let fields = l.indexed_fields();
         assert_eq!(fields.get("promoted"), Some(&IndexValue::String("true".to_string())));
-    }
-
-    // --- Phase 2: CodeCitation and tentative tests ---
-
-    #[test]
-    fn test_is_structural_claim_signature() {
-        assert!(is_structural_claim(
-            "function update_bookmark has signature (db_path, id)"
-        ));
-        assert!(is_structural_claim("The function signature is foo(a, b)"));
-    }
-
-    #[test]
-    fn test_is_structural_claim_interface_contract() {
-        assert!(is_structural_claim(
-            "The interface contract specifies update_bookmark(db_path, id, fields: dict)"
-        ));
-        assert!(is_structural_claim("This violates the function contract"));
-    }
-
-    #[test]
-    fn test_is_structural_claim_has_signature() {
-        assert!(is_structural_claim("update_bookmark has signature (db_path, ...)"));
-    }
-
-    #[test]
-    fn test_is_structural_claim_takes_a() {
-        assert!(is_structural_claim("The function takes a dict as its second argument"));
-    }
-
-    #[test]
-    fn test_is_structural_claim_non_structural() {
-        // Broad terms that should NOT trigger the marker
-        assert!(!is_structural_claim("Always run tests before committing"));
-        assert!(!is_structural_claim("The type system enforces safety"));
-        assert!(!is_structural_claim("Check the parameter names for clarity"));
-        assert!(!is_structural_claim("Review passed with no issues"));
-    }
-
-    #[test]
-    fn test_learning_new_structural_is_tentative() {
-        let l = Learning::new(
-            "wi-1".to_string(),
-            LearningScope::Work,
-            "update_bookmark has signature (db_path, id, fields: dict)".to_string(),
-        );
-        assert!(l.tentative, "structural claim without citation should be tentative");
-        assert!(l.code_citation.is_none());
-    }
-
-    #[test]
-    fn test_learning_new_non_structural_not_tentative() {
-        let l = Learning::new(
-            "wi-1".to_string(),
-            LearningScope::Work,
-            "Always run tests before committing to catch regressions".to_string(),
-        );
-        assert!(!l.tentative, "non-structural learning should not be tentative");
-    }
-
-    #[test]
-    fn test_code_citation_serde_roundtrip() {
-        let citation = CodeCitation {
-            file_path: "src/database.py".to_string(),
-            line_number: 42,
-            excerpt: "def update_bookmark(db_path, bookmark_id, title=None):".to_string(),
-        };
-        let json = serde_json::to_string(&citation).unwrap();
-        let restored: CodeCitation = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.file_path, "src/database.py");
-        assert_eq!(restored.line_number, 42);
-        assert_eq!(
-            restored.excerpt,
-            "def update_bookmark(db_path, bookmark_id, title=None):"
-        );
-    }
-
-    #[test]
-    fn test_learning_with_citation_not_tentative() {
-        // A learning that would otherwise be structural but has a citation should stay non-tentative
-        // (citation overrides the auto-promotion rule when set externally)
-        let mut l = Learning::new(
-            "wi-1".to_string(),
-            LearningScope::Work,
-            "update_bookmark has signature (db_path, id, fields: dict)".to_string(),
-        );
-        // Attach a citation after creation (as a handler would do)
-        l.code_citation = Some(CodeCitation {
-            file_path: "database.py".to_string(),
-            line_number: 10,
-            excerpt: "def update_bookmark(db_path, id, fields: dict):".to_string(),
-        });
-        // tentative was set at creation time; the handler would also clear it when citing
-        l.tentative = false;
-        assert!(!l.tentative);
-        assert!(l.code_citation.is_some());
-    }
-
-    #[test]
-    fn test_learning_backward_compat_deserialize_no_tentative_fields() {
-        let json = r#"{
-            "id": "ln-old",
-            "source_id": "wi-1",
-            "scope": "work",
-            "content": "Old learning without new fields",
-            "reinforcements": 0,
-            "contradictions": 0,
-            "promoted": false,
-            "created_at": 1000000,
-            "updated_at": 2000000
-        }"#;
-        let l: Learning = serde_json::from_str(json).unwrap();
-        assert!(!l.tentative, "old records default to non-tentative");
-        assert!(l.code_citation.is_none());
     }
 
     // --- M2: LearningScope alias tests ---

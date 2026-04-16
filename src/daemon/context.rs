@@ -376,40 +376,6 @@ impl DaemonContext {
 
         stores.store = Some(Arc::new(StdMutex::new(store)));
 
-        // Retroactive migration: mark structural learnings as tentative.
-        // Any learning that makes a structural code claim (signature, interface contract, etc.)
-        // but has no code_citation is marked tentative so it cannot override implementer claims
-        // citing actual code. This is idempotent: already-tentative learnings are skipped.
-        {
-            use crate::domain::learning::is_structural_claim;
-            let to_update: Vec<crate::domain::learning::Learning> = {
-                let learnings = stores.read_learnings()?;
-                learnings
-                    .values()
-                    .filter(|l| !l.tentative && l.code_citation.is_none() && is_structural_claim(&l.content))
-                    .cloned()
-                    .collect()
-            };
-            if !to_update.is_empty() {
-                let store_arc = stores.store.as_ref().expect("store set above");
-                let mut store_guard = store_arc.lock().map_err(|_| eyre::eyre!("taskstore lock poisoned"))?;
-                let mut updated_count = 0usize;
-                for mut learning in to_update {
-                    learning.tentative = true;
-                    if store_guard.update(learning.clone()).is_ok() {
-                        stores.write_learnings()?.insert(learning.id.clone(), learning);
-                        updated_count += 1;
-                    }
-                }
-                if updated_count > 0 {
-                    info!(
-                        "Retroactive migration: marked {} structural learnings as tentative",
-                        updated_count
-                    );
-                }
-            }
-        }
-
         // Store config for handler access (agent spawning, etc.)
         stores.config = config.clone();
         stores.session_dir = Some(session_dir.clone());

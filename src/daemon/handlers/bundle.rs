@@ -183,33 +183,6 @@ pub(super) fn handle_bundle_create(
             ));
         }
 
-        // Dispute detection: if this work has a prior rejection whose verification text
-        // overlaps with this bundle's claims on structural keywords, mark as disputed.
-        // Disputed bundles are routed to an arbitrator instead of the normal reviewer queue.
-        {
-            const DISPUTE_MARKERS: &[&str] = &["signature", "interface contract", "function contract", "has signature"];
-            if let Ok(prior_bundles) = stores.read_bundles() {
-                let has_structural_rejection = prior_bundles
-                    .values()
-                    .filter(|b| b.work_id == work_id && b.status() == BundleStatus::Rejected)
-                    .any(|b| {
-                        let text = b.verification.to_lowercase();
-                        DISPUTE_MARKERS.iter().any(|m| text.contains(m))
-                    });
-                if has_structural_rejection {
-                    let claims_lower = bundle.claims.join(" ").to_lowercase();
-                    if DISPUTE_MARKERS.iter().any(|m| claims_lower.contains(m)) {
-                        bundle.disputed = true;
-                        tracing::info!(
-                            "bundle {} marked disputed: work {} has structural rejection with keyword overlap",
-                            bundle.id,
-                            work_id
-                        );
-                    }
-                }
-            }
-        }
-
         let bundle_json = match serde_json::to_value(&bundle) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
