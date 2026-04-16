@@ -76,7 +76,6 @@ fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
         AgentKind::Reviewer => config.agents.reviewer.max_pool,
         AgentKind::Director => 1, // Only one Director at a time
         AgentKind::Researcher => config.agents.researcher.max_pool,
-        AgentKind::Integrator => 1,
         AgentKind::Chat => 1,
         AgentKind::Decomposer => config.agents.researcher.max_pool,
     };
@@ -586,7 +585,6 @@ pub(crate) mod tests {
         assert!(max_pool_for(AgentKind::Reviewer, &config) >= 1);
         assert_eq!(max_pool_for(AgentKind::Director, &config), 1);
         assert_eq!(max_pool_for(AgentKind::Researcher, &config), 4);
-        assert_eq!(max_pool_for(AgentKind::Integrator, &config), 1);
     }
 
     // --- Fix 7: Auto-triage tests ---

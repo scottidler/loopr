@@ -9,7 +9,6 @@ pub mod event;
 pub mod executor;
 pub mod generation;
 pub mod implementer;
-pub mod integrator;
 pub mod kind;
 pub mod lifeguard;
 pub mod llm_client;

@@ -6,7 +6,6 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
-use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;
 use crate::domain::markdown::{build_children_markdown_content, read_full_markdown_or_empty};
 use crate::domain::tick::TickStatus;
@@ -16,6 +15,13 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError}
 use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
+
+/// Build the effective list of validation commands by combining global commands
+/// with any phase-scoped commands from the bundles in this tick.
+/// Currently returns global commands as-is; phase-scoped commands are a future extension.
+fn effective_validation_commands(global_commands: &[String], _bundle_ids: &[String], _stores: &Stores) -> Vec<String> {
+    global_commands.to_vec()
+}
 
 /// Run validation commands against the repo, returning (success, combined_log).
 pub(super) fn run_validation_commands(commands: &[String]) -> (bool, String) {

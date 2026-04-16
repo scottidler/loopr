@@ -27,7 +27,7 @@ pub(super) fn handle_agent_start(
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::invalid_params(
-                            "invalid agent_type (implementer|reviewer|coordinator|researcher|integrator)",
+                            "invalid agent_type (implementer|reviewer|director|researcher|chat|decomposer)",
                         ),
                     ));
                 }
@@ -52,7 +52,7 @@ pub(super) fn handle_agent_start(
             .map(|s| s.to_string());
 
         // Validate: Implementer needs work_id, Reviewer needs bundle_id
-        // Thinking plane agents (Coordinator, Researcher, Integrator) don't require either.
+        // Thinking plane agents (Director, Researcher, etc.) don't require either.
         match agent_type {
             AgentKind::Implementer => {
                 if work_id.is_none() {
@@ -70,11 +70,7 @@ pub(super) fn handle_agent_start(
                     ));
                 }
             }
-            AgentKind::Director
-            | AgentKind::Researcher
-            | AgentKind::Integrator
-            | AgentKind::Chat
-            | AgentKind::Decomposer => {
+            AgentKind::Director | AgentKind::Researcher | AgentKind::Chat | AgentKind::Decomposer => {
                 // These agents operate without worktrees; no target ID required at start time
             }
         }
@@ -92,7 +88,6 @@ pub(super) fn handle_agent_start(
             AgentKind::Implementer => stores.config.agents.implementer.llm.model.clone(),
             AgentKind::Reviewer => stores.config.agents.reviewer.llm.model.clone(),
             AgentKind::Researcher => stores.config.agents.researcher.llm.model.clone(),
-            AgentKind::Integrator => "deterministic".to_string(),
             AgentKind::Chat => stores.config.agents.implementer.llm.model.clone(),
             AgentKind::Decomposer => stores.config.decomposer.llm.model.clone(),
         };
@@ -792,7 +787,6 @@ mod tests {
             (AgentKind::Implementer, config.agents.implementer.llm.model.clone()),
             (AgentKind::Reviewer, config.agents.reviewer.llm.model.clone()),
             (AgentKind::Researcher, config.agents.researcher.llm.model.clone()),
-            (AgentKind::Integrator, "deterministic".to_string()),
         ];
         for (agent_type, expected_model) in cases {
             let model = match agent_type {
@@ -800,7 +794,6 @@ mod tests {
                 AgentKind::Implementer => config.agents.implementer.llm.model.clone(),
                 AgentKind::Reviewer => config.agents.reviewer.llm.model.clone(),
                 AgentKind::Researcher => config.agents.researcher.llm.model.clone(),
-                AgentKind::Integrator => "deterministic".to_string(),
                 AgentKind::Chat => config.agents.implementer.llm.model.clone(),
                 AgentKind::Decomposer => config.decomposer.llm.model.clone(),
             };

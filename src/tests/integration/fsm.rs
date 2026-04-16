@@ -69,5 +69,4 @@ async fn test_role_inference_from_agent_type() {
     assert_eq!(AgentKind::Reviewer.default_role(), Role::Reviewer);
     assert_eq!(AgentKind::Director.default_role(), Role::Director);
     assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
-    assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
 }

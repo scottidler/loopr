@@ -9,7 +9,6 @@ pub enum AgentKind {
     Implementer,
     Reviewer,
     Researcher,
-    Integrator,
     Chat,
     Decomposer,
     Director,
@@ -22,7 +21,6 @@ impl AgentKind {
             AgentKind::Implementer => crate::domain::role::Role::Implementer,
             AgentKind::Reviewer => crate::domain::role::Role::Reviewer,
             AgentKind::Researcher => crate::domain::role::Role::Researcher,
-            AgentKind::Integrator => crate::domain::role::Role::Integrator,
             AgentKind::Chat => crate::domain::role::Role::Director,
             AgentKind::Decomposer => crate::domain::role::Role::Decomposer,
             AgentKind::Director => crate::domain::role::Role::Director,
@@ -33,12 +31,7 @@ impl AgentKind {
     pub fn is_thinking_plane(&self) -> bool {
         matches!(
             self,
-            AgentKind::Researcher
-                | AgentKind::Integrator
-                | AgentKind::Reviewer
-                | AgentKind::Chat
-                | AgentKind::Decomposer
-                | AgentKind::Director
+            AgentKind::Researcher | AgentKind::Reviewer | AgentKind::Chat | AgentKind::Decomposer | AgentKind::Director
         )
     }
 }
@@ -49,7 +42,6 @@ impl fmt::Display for AgentKind {
             AgentKind::Implementer => write!(f, "implementer"),
             AgentKind::Reviewer => write!(f, "reviewer"),
             AgentKind::Researcher => write!(f, "researcher"),
-            AgentKind::Integrator => write!(f, "integrator"),
             AgentKind::Chat => write!(f, "chat"),
             AgentKind::Decomposer => write!(f, "decomposer"),
             AgentKind::Director => write!(f, "director"),
@@ -62,11 +54,10 @@ impl fmt::Display for AgentKind {
 mod tests {
     use super::*;
 
-    const ALL_AGENT_TYPES: [AgentKind; 6] = [
+    const ALL_AGENT_TYPES: [AgentKind; 5] = [
         AgentKind::Implementer,
         AgentKind::Reviewer,
         AgentKind::Researcher,
-        AgentKind::Integrator,
         AgentKind::Decomposer,
         AgentKind::Director,
     ];
@@ -76,7 +67,6 @@ mod tests {
         assert_eq!(AgentKind::Implementer.to_string(), "implementer");
         assert_eq!(AgentKind::Reviewer.to_string(), "reviewer");
         assert_eq!(AgentKind::Researcher.to_string(), "researcher");
-        assert_eq!(AgentKind::Integrator.to_string(), "integrator");
         assert_eq!(AgentKind::Decomposer.to_string(), "decomposer");
         assert_eq!(AgentKind::Director.to_string(), "director");
     }
@@ -106,7 +96,6 @@ mod tests {
         assert_eq!(AgentKind::Implementer.default_role(), Role::Implementer);
         assert_eq!(AgentKind::Reviewer.default_role(), Role::Reviewer);
         assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
-        assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
         assert_eq!(AgentKind::Decomposer.default_role(), Role::Decomposer);
         assert_eq!(AgentKind::Director.default_role(), Role::Director);
     }
@@ -116,7 +105,6 @@ mod tests {
         assert!(!AgentKind::Implementer.is_thinking_plane());
         assert!(AgentKind::Reviewer.is_thinking_plane());
         assert!(AgentKind::Researcher.is_thinking_plane());
-        assert!(AgentKind::Integrator.is_thinking_plane());
         assert!(AgentKind::Decomposer.is_thinking_plane());
         assert!(AgentKind::Director.is_thinking_plane());
     }

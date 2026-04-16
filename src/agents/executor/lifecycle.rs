@@ -7,7 +7,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
-use crate::agents::{director, implementer, integrator, researcher, reviewer};
+use crate::agents::{director, implementer, researcher, reviewer};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
@@ -31,7 +31,7 @@ pub async fn run_agent_task(
     info!("Agent task started: {} ({})", session_id, agent_type);
 
     // Create a worktree for the agent before starting the loop.
-    // Thinking plane agents (Coordinator, Researcher, Integrator) don't use worktrees.
+    // Thinking plane agents (Director, Researcher, etc.) don't use worktrees.
     // Implementers key on work_id, Reviewers on bundle_id.
     let worktree_key = if agent_type.is_thinking_plane() {
         None
@@ -51,11 +51,7 @@ pub async fn run_agent_task(
             AgentKind::Implementer => session.work_id.clone(),
             AgentKind::Reviewer => session.bundle_id.clone(),
             // Already handled by is_thinking_plane() above
-            AgentKind::Director
-            | AgentKind::Researcher
-            | AgentKind::Integrator
-            | AgentKind::Chat
-            | AgentKind::Decomposer => None,
+            AgentKind::Director | AgentKind::Researcher | AgentKind::Chat | AgentKind::Decomposer => None,
         }
     };
 
@@ -159,7 +155,6 @@ pub async fn run_agent_task(
         AgentKind::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
         AgentKind::Researcher => stores.config.agents.researcher.session_timeout_secs,
         AgentKind::Director => Some(3600), // 1hr - Director may run long interview/escalation sessions
-        AgentKind::Integrator => stores.config.integrator.session_timeout_secs,
         AgentKind::Chat => None,
         AgentKind::Decomposer => Some(600), // 10 min - single LLM call + child persistence
     };
@@ -452,12 +447,6 @@ pub(super) async fn run_agent_loop(
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentKind::Integrator => {
-            let config = stores.config.integrator.clone();
-            let mut agent = integrator::IntegratorAgent::new(ctx, config);
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
         AgentKind::Chat => {
             // Chat sessions are not started via run_agent_task - they use chat.submit IPC.
             // This arm should never be reached.
@@ -525,7 +514,6 @@ mod tests {
             AgentKind::Reviewer => config.agents.reviewer.session_timeout_secs,
             AgentKind::Researcher => config.agents.researcher.session_timeout_secs,
             AgentKind::Director => Some(3600),
-            AgentKind::Integrator => config.integrator.session_timeout_secs,
             AgentKind::Chat => None,
             AgentKind::Decomposer => Some(600),
         }
@@ -681,65 +669,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_run_agent_task_integrator_flow() {
-        crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-exec-integflow");
-
-        let config = Config {
-            project: ProjectConfig {
-                repo_path: dir.to_path_buf(),
-                ..ProjectConfig::default()
-            },
-            integrator: crate::config::IntegratorConfig {
-                interval_secs: 0,
-                enabled: true,
-                ..crate::config::IntegratorConfig::default()
-            },
-            ..Config::default()
-        };
-        let store = Store::open(&dir).unwrap();
-        let mut custom_stores = Stores::new();
-        custom_stores.store = Some(Arc::new(StdMutex::new(store)));
-        custom_stores.config = config;
-        let stores = Arc::new(custom_stores);
-
-        let (event_tx, _rx) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-
-        let session = AgentSession::new(AgentKind::Integrator, "test-model".to_string());
-        let session_id = session.id.clone();
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session_id.clone(), session);
-
-        let stores_clone = stores.clone();
-        let sid_clone = session_id.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let mut sessions = stores_clone.agent_sessions.write().unwrap();
-            if let Some(s) = sessions.get_mut(&sid_clone) {
-                let _ = s.transition_to(AgentStatus::Running);
-                let _ = s.transition_to(AgentStatus::Cancelled);
-            }
-        });
-
-        run_agent_task(
-            session_id.clone(),
-            AgentKind::Integrator,
-            stores.clone(),
-            event_tx,
-            worktree_mgr,
-        )
-        .await;
-
-        let sessions = stores.agent_sessions.read().unwrap();
-        let session = sessions.get(&session_id).unwrap();
-        assert!(session.status().is_terminal(), "integrator should reach terminal state");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_agent_task_worktree_cleanup() {
         let dir = TestDir::new("loopr-exec-wtcleanup");
 
@@ -815,7 +744,6 @@ mod tests {
         assert_eq!(resolve_timeout(&config, AgentKind::Implementer), Some(1800));
         assert_eq!(resolve_timeout(&config, AgentKind::Reviewer), Some(600));
         assert_eq!(resolve_timeout(&config, AgentKind::Researcher), Some(600));
-        assert_eq!(resolve_timeout(&config, AgentKind::Integrator), Some(1200));
         assert_eq!(resolve_timeout(&config, AgentKind::Director), Some(3600));
         assert_eq!(resolve_timeout(&config, AgentKind::Chat), None);
     }
