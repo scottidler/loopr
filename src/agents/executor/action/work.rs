@@ -981,6 +981,7 @@ mod tests {
             work_id: wi_id.clone(),
             target_status: "Ready".to_string(),
             reason: "stale rejection".to_string(),
+            requires_replacement: false,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
@@ -1014,6 +1015,7 @@ mod tests {
             work_id: wi_id.clone(),
             target_status: "Ready".to_string(),
             reason: "stale rejection".to_string(),
+            requires_replacement: false,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
@@ -1046,6 +1048,7 @@ mod tests {
             work_id: wi_id.clone(),
             target_status: "Ready".to_string(),
             reason: "no valid bundle".to_string(),
+            requires_replacement: false,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
@@ -1068,6 +1071,7 @@ mod tests {
             work_id: wi_id.clone(),
             target_status: "Abandoned".to_string(),
             reason: "pruning dead end".to_string(),
+            requires_replacement: false,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
@@ -1109,6 +1113,7 @@ mod tests {
             work_id: wi_id.clone(),
             target_status: "Ready".to_string(),
             reason: "stale rejection".to_string(),
+            requires_replacement: false,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 

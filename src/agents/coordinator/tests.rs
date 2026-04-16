@@ -1533,16 +1533,17 @@ async fn test_apply_fsm_goal_complete_passes_quality_gate() {
     assert!(!goal.active, "goal must be deactivated when gate passes");
 }
 
-// --- Phase 2: validate_action_coherence tests ---
+// --- Phase 1: validate_action_coherence tests (structured requires_replacement field) ---
 
 #[test]
 fn test_validate_action_coherence_no_warning_with_create_work() {
-    // abandon + create_work in same payload -> no warning
+    // requires_replacement=true + create_work in same payload -> no warning
     let actions = vec![
         AgentAction::OverrideWork {
             work_id: "wi-1".into(),
-            target_status: "Abandoned".into(),
-            reason: "Creating a replacement work for this".into(),
+            target_status: "Superseded".into(),
+            reason: "Replacing with better-scoped work".into(),
+            requires_replacement: true,
         },
         AgentAction::CreateWork {
             parent_id: "phase-1".into(),
@@ -1556,105 +1557,83 @@ fn test_validate_action_coherence_no_warning_with_create_work() {
     let warnings = validate_action_coherence(&actions, TEST_PREFIX);
     assert!(
         warnings.is_empty(),
-        "no warnings expected when create_work accompanies override_work"
+        "no warnings expected when create_work accompanies override_work with requires_replacement=true"
     );
 }
 
 #[test]
-fn test_validate_action_coherence_warns_when_promise_without_create() {
-    // abandon with "creating" in reason, no create_work -> warning
+fn test_validate_action_coherence_warns_when_requires_replacement_without_create() {
+    // requires_replacement=true but no create_work -> warning
     let actions = vec![AgentAction::OverrideWork {
         work_id: "wi-1".into(),
-        target_status: "Abandoned".into(),
-        reason: "Creating fix Work and replacement for this item".into(),
+        target_status: "Superseded".into(),
+        reason: "Superseding this work".into(),
+        requires_replacement: true,
     }];
     let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert_eq!(warnings.len(), 1, "should warn when promise not backed by action");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "should warn when requires_replacement=true but no create_work present"
+    );
     assert!(warnings[0].contains("wi-1"), "warning should mention the work ID");
+    assert!(
+        warnings[0].contains("requires_replacement=true"),
+        "warning should mention the field"
+    );
 }
 
 #[test]
 fn test_validate_action_coherence_no_warning_clean_abandon() {
-    // abandon with no creation intent -> no warning
+    // requires_replacement=false (clean abandon) -> no warning regardless of reason text
     let actions = vec![AgentAction::OverrideWork {
         work_id: "wi-2".into(),
         target_status: "Abandoned".into(),
-        reason: "Blocked by unresolvable dependency".into(),
+        reason: "Blocked by unresolvable dependency - creating new approach".into(),
+        requires_replacement: false,
     }];
     let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert!(warnings.is_empty(), "intentional clean abandons should not warn");
+    assert!(warnings.is_empty(), "requires_replacement=false never warns");
 }
 
 #[test]
-fn test_validate_action_coherence_no_warning_non_abandoned_override() {
-    // override to Ready (not Abandoned) with creating language -> no warning
+fn test_validate_action_coherence_default_false_no_warning() {
+    // requires_replacement defaults to false -> no warning even with creating-sounding reason
     let actions = vec![AgentAction::OverrideWork {
         work_id: "wi-3".into(),
-        target_status: "Ready".into(),
-        reason: "Creating fresh attempt".into(),
+        target_status: "Abandoned".into(),
+        reason: "Creating a fresh approach to this problem".into(),
+        requires_replacement: false,
     }];
     let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert!(warnings.is_empty(), "non-Abandoned overrides should not warn");
+    assert!(
+        warnings.is_empty(),
+        "requires_replacement=false is always coherent, regardless of reason text"
+    );
 }
 
 #[test]
-fn test_validate_action_coherence_negation_no_replacement_needed() {
-    // abandon with "no replacement is needed" in reason, no create_work -> no warning
+fn test_validate_action_coherence_requires_replacement_ready_override_no_create() {
+    // requires_replacement=true on Ready override without create_work -> warning
+    // (coherence gate applies to any target_status, not just Superseded)
     let actions = vec![AgentAction::OverrideWork {
         work_id: "wi-4".into(),
-        target_status: "Abandoned".into(),
-        reason: "No replacement is needed for this work item".into(),
+        target_status: "Ready".into(),
+        reason: "Resetting for retry".into(),
+        requires_replacement: true,
     }];
     let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert!(
-        warnings.is_empty(),
-        "negation 'no replacement' should suppress warning"
+    assert_eq!(
+        warnings.len(),
+        1,
+        "requires_replacement=true always requires create_work regardless of target_status"
     );
 }
 
 #[test]
-fn test_validate_action_coherence_negation_not_replacing() {
-    // abandon with "not replacing" in reason, no create_work -> no warning
-    let actions = vec![AgentAction::OverrideWork {
-        work_id: "wi-5".into(),
-        target_status: "Abandoned".into(),
-        reason: "Not replacing this item, the feature is out of scope".into(),
-    }];
-    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert!(
-        warnings.is_empty(),
-        "negation 'not replacing' should suppress warning"
-    );
-}
-
-#[test]
-fn test_validate_action_coherence_negation_without_replacement() {
-    // abandon with "without replacement" in reason, no create_work -> no warning
-    let actions = vec![AgentAction::OverrideWork {
-        work_id: "wi-6".into(),
-        target_status: "Abandoned".into(),
-        reason: "Abandoning without replacement, work is no longer relevant".into(),
-    }];
-    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert!(
-        warnings.is_empty(),
-        "negation 'without replacement' should suppress warning"
-    );
-}
-
-#[test]
-fn test_validate_action_coherence_negation_replacement_is_not() {
-    // abandon with "replacement is not" in reason, no create_work -> no warning
-    let actions = vec![AgentAction::OverrideWork {
-        work_id: "wi-7".into(),
-        target_status: "Abandoned".into(),
-        reason: "Replacement is not warranted for this work item".into(),
-    }];
-    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
-    assert!(
-        warnings.is_empty(),
-        "negation 'replacement is not' should suppress warning"
-    );
+fn test_validate_action_coherence_empty_actions() {
+    let warnings = validate_action_coherence(&[], TEST_PREFIX);
+    assert!(warnings.is_empty(), "empty action list should never warn");
 }
 
 // --- coherence enforcement run_iteration tests ---
@@ -1671,7 +1650,7 @@ async fn test_run_iteration_incoherent_actions_returns_continue_with_feedback() 
         &dir,
         &stores,
         vec![
-            r#"[{"action": "override_work", "work_id": "wi-1", "target_status": "Abandoned", "reason": "Creating replacement work for this item"}]"#
+            r#"[{"action": "override_work", "work_id": "wi-1", "target_status": "Superseded", "reason": "Replacing this work", "requires_replacement": true}]"#
                 .to_string(),
         ],
         CoordinatorConfig::default(),
@@ -1695,9 +1674,9 @@ async fn test_run_iteration_incoherent_actions_returns_continue_with_feedback() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_run_iteration_coherent_negation_executes_normally() {
-    // override_work with "no replacement is needed" and no create_work -> negation guard
-    // should let the actions through (no coherence failure).
+async fn test_run_iteration_coherent_requires_replacement_false_executes_normally() {
+    // override_work with requires_replacement=false and no create_work -> coherent
+    // (requires_replacement=false means no replacement is expected, so no gate fires).
     crate::prompts::init_defaults();
     let dir = TestDir::new("loopr-coord-coherence2");
     let stores = test_stores(&dir);
@@ -1706,7 +1685,7 @@ async fn test_run_iteration_coherent_negation_executes_normally() {
         &dir,
         &stores,
         vec![
-            r#"[{"action": "override_work", "work_id": "wi-1", "target_status": "Abandoned", "reason": "No replacement is needed, feature was descoped"}]"#
+            r#"[{"action": "override_work", "work_id": "wi-1", "target_status": "Abandoned", "reason": "Feature descoped, no replacement", "requires_replacement": false}]"#
                 .to_string(),
         ],
         CoordinatorConfig::default(),
@@ -1717,14 +1696,14 @@ async fn test_run_iteration_coherent_negation_executes_normally() {
     let result = agent.run_iteration(&mut coord_state, &mut guard).await;
 
     assert!(result.is_ok());
-    // Should NOT be Continue with coherence feedback - the negation guard allows it through.
+    // Should NOT be Continue with coherence feedback - requires_replacement=false passes the gate.
     // The override_work action will fail (no matching work in stores), but that's an action
     // execution failure, not a coherence failure.
     match result.unwrap() {
         IterationOutcome::Continue(feedback) => {
             assert!(
                 !feedback.contains("incoherent"),
-                "negation guard should have suppressed coherence check, but got: {}",
+                "requires_replacement=false should pass coherence gate, but got: {}",
                 feedback
             );
         }

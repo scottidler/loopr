@@ -39,7 +39,7 @@ Respond with a JSON array of actions:
     Researcher if no validation commands are declared.
 15. `need_help`       {"action": "need_help", "reason": "..."}
 15. `done`            {"action": "done", "summary": "..."}
-16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "<WorkStatus>", "reason": "..."}
+16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "<WorkStatus>", "reason": "...", "requires_replacement": true|false}
     Valid target_status values: {work_override_statuses}
     override_work ONLY works on Works in these states: InProgress, InReview, Blocked.
     - NEVER use override_work on a Ready Work. Use the normal `transition` action instead.
@@ -49,11 +49,15 @@ Respond with a JSON array of actions:
     - "Ready": Reset for re-assignment (kills active agents, releases locks)
     - "Superseded": This Work is being intentionally replaced. Create the replacement Work in the SAME action array. The Phase can still complete as long as at least one sibling Work is Done.
     - "Abandoned": This Work is a hard failure. No replacement is warranted. Human intervention required. Abandoned blocks Phase completion indefinitely.
-17. `override_phase`  {"action": "override_phase", "phase_id": "...", "target_status": "Superseded"|"Abandoned", "reason": "..."}
+    `requires_replacement` field:
+    - Set to true when using target_status "Superseded" - signals that a create_work action must appear in the SAME array.
+    - Set to false when using target_status "Abandoned" - no replacement is being created.
+    - If requires_replacement is true but no create_work action is present in the same array, the system rejects the entire action set and asks you to resubmit.
+17. `override_phase`  {"action": "override_phase", "phase_id": "...", "target_status": "Superseded"|"Abandoned", "reason": "...", "requires_replacement": true|false}
     Prune an entire Phase when it was the wrong decomposition (e.g., a "Deploy" phase for a local-only tool).
     - "Superseded": Phase was wrong, prune it. Spec can still complete if at least one sibling Phase is Complete.
     - "Abandoned": Phase is a hard failure. Spec stays Active indefinitely.
-18. `override_spec`   {"action": "override_spec", "spec_id": "...", "target_status": "Superseded"|"Abandoned", "reason": "..."}
+18. `override_spec`   {"action": "override_spec", "spec_id": "...", "target_status": "Superseded"|"Abandoned", "reason": "...", "requires_replacement": true|false}
     Prune an entire Spec when it is out of scope or structurally wrong.
     - "Superseded": Spec was wrong, prune it. Plan can still complete if at least one sibling Spec is Complete.
     - "Abandoned": Spec is a hard failure. Plan stays Active indefinitely.
@@ -100,10 +104,10 @@ See the System Rules section in your context for valid transitions and which rol
   (same AC as the original) with the fix Work as a dependency. Do NOT expand the original Work's
   file scope. Learning format example: "CROSS-FILE BUG: Work wk-abc blocked by defect in main.py. Details: wrong arg count."
 - When superseding a Work and creating a replacement, the `override_work` and `create_work`
-  actions MUST appear in the SAME JSON array. Do NOT describe intent in the reason field
-  without emitting the corresponding action. The system validates coherence: if your
-  override_work reason mentions "creating" or "replacing" but no create_work is present,
-  the system logs a warning and the replacement will NOT be created.
+  actions MUST appear in the SAME JSON array. Set `requires_replacement: true` on the
+  override_work. The system validates coherence: if requires_replacement is true but no
+  create_work is present in the same array, the system rejects the action set and asks you
+  to resubmit with the missing create_work included.
 - **Superseded vs Abandoned**: Use Superseded when replacing a Work/Phase/Spec with a better version. Use Abandoned ONLY when recovery is impossible and human intervention is needed. Abandoned permanently blocks parent completion. When in doubt, prefer Superseded with a replacement.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.
 

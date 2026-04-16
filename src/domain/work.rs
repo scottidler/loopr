@@ -10,6 +10,22 @@ use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
 use crate::prompts::SECTION_AC;
 
+/// Why a Work is currently in the Blocked state.
+/// Stored as an optional metadata field alongside status so the FSM is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockedReason {
+    /// Waiting for one or more dependencies to reach Done. Auto-resolved by
+    /// `unblock_dependents` when the last dependency transitions to Done.
+    DependencyWait,
+    /// Work has exhausted `MAX_WORK_ATTEMPTS` retries. The coordinator must
+    /// decide: Superseded (create replacement) or Abandoned (fatal failure).
+    ExhaustedRetries,
+    /// An unexpected system fault moved the work to Blocked (e.g. daemon restart
+    /// while the work was InProgress). Requires operator investigation.
+    SystemFault,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 pub enum WorkStatus {
     Draft,
@@ -54,6 +70,10 @@ pub struct Work {
     /// session completion.
     #[serde(default)]
     pub session_failure_count: u32,
+    /// Why this Work is currently Blocked. Set when entering Blocked, cleared on exit.
+    /// None on legacy records (treated as DependencyWait for backward compatibility).
+    #[serde(default)]
+    pub blocked_reason: Option<BlockedReason>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -126,6 +146,7 @@ impl Work {
             acceptance_criteria: AcceptanceCriteria::default(),
             attempt_count: 0,
             session_failure_count: 0,
+            blocked_reason: None,
             created_at: now,
             updated_at: now,
         }
@@ -400,5 +421,73 @@ mod tests {
                 "Abandoned"
             ]
         );
+    }
+
+    // --- BlockedReason tests ---
+
+    #[test]
+    fn test_blocked_reason_serde_roundtrip() {
+        for reason in [
+            BlockedReason::DependencyWait,
+            BlockedReason::ExhaustedRetries,
+            BlockedReason::SystemFault,
+        ] {
+            let json = serde_json::to_string(&reason).unwrap();
+            let deserialized: BlockedReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(reason, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_blocked_reason_snake_case_serialization() {
+        assert_eq!(
+            serde_json::to_string(&BlockedReason::DependencyWait).unwrap(),
+            "\"dependency_wait\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BlockedReason::ExhaustedRetries).unwrap(),
+            "\"exhausted_retries\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BlockedReason::SystemFault).unwrap(),
+            "\"system_fault\""
+        );
+    }
+
+    #[test]
+    fn test_work_blocked_reason_defaults_to_none() {
+        let wi = Work::new("phase-1".into(), "Test".into());
+        assert!(wi.blocked_reason.is_none(), "new Work must have no blocked_reason");
+    }
+
+    #[test]
+    fn test_work_blocked_reason_backward_compat() {
+        // Old JSONL records without blocked_reason should deserialize with None.
+        let json = serde_json::json!({
+            "id": "wk-old",
+            "parent_id": "phase-1",
+            "title": "Legacy Work",
+            "status": "Blocked",
+            "dependencies": [],
+            "acceptance_criteria": [],
+            "attempt_count": 0,
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let work: Work = serde_json::from_value(json).unwrap();
+        assert!(
+            work.blocked_reason.is_none(),
+            "legacy records without blocked_reason must deserialize as None"
+        );
+    }
+
+    #[test]
+    fn test_work_blocked_reason_serialized_and_deserialized() {
+        let mut wi = Work::new("phase-1".into(), "Test".into());
+        wi.blocked_reason = Some(BlockedReason::ExhaustedRetries);
+
+        let json = serde_json::to_string(&wi).unwrap();
+        let deserialized: Work = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.blocked_reason, Some(BlockedReason::ExhaustedRetries));
     }
 }

@@ -26,7 +26,7 @@ use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
 use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
-use crate::domain::work::{Work, WorkStatus};
+use crate::domain::work::{BlockedReason, Work, WorkStatus};
 use crate::guidance::AgentGuidance;
 use crate::ipc::protocol::{
     DaemonEvent, REASON_HANDLE_FINISHED, REASON_HOLDER_TERMINAL, REASON_HOLDER_WORK_DONE, REASON_LOCK_EXPIRED,
@@ -474,6 +474,7 @@ impl DaemonContext {
                 if wi.status() == WorkStatus::InProgress {
                     warn!("Recovering orphaned InProgress Work: {}", id);
                     wi.force_status(WorkStatus::Blocked);
+                    wi.blocked_reason = Some(BlockedReason::SystemFault);
                     wi.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = store_lock
                         && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))

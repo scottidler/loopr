@@ -165,16 +165,29 @@ pub enum AgentAction {
         work_id: String,
         target_status: String,
         reason: String,
+        /// Set to true when using target_status "Superseded" to indicate a replacement
+        /// Work will be created in the same action array. The coherence gate rejects
+        /// action sets where requires_replacement=true but no create_work is present.
+        #[serde(default)]
+        requires_replacement: bool,
     },
     OverridePhase {
         phase_id: String,
         target_status: String,
         reason: String,
+        /// Set to true when using target_status "Superseded" to indicate replacement
+        /// phases will be created in the same action array.
+        #[serde(default)]
+        requires_replacement: bool,
     },
     OverrideSpec {
         spec_id: String,
         target_status: String,
         reason: String,
+        /// Set to true when using target_status "Superseded" to indicate replacement
+        /// specs will be created in the same action array.
+        #[serde(default)]
+        requires_replacement: bool,
     },
     EvaluateCoverage {
         parent_collection: String,
@@ -520,6 +533,7 @@ mod tests {
             work_id: "wi-123".to_string(),
             target_status: "ready".to_string(),
             reason: "SLA breached: 3/3 attempts, 45min/30min".to_string(),
+            requires_replacement: false,
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
@@ -527,11 +541,28 @@ mod tests {
             work_id,
             target_status,
             reason,
+            requires_replacement,
         } = deserialized
         {
             assert_eq!(work_id, "wi-123");
             assert_eq!(target_status, "ready");
             assert!(reason.contains("SLA breached"));
+            assert!(!requires_replacement);
+        } else {
+            panic!("expected OverrideWork");
+        }
+    }
+
+    #[test]
+    fn test_agent_action_override_work_requires_replacement_default() {
+        // JSON without requires_replacement should deserialize with default=false
+        let json = r#"{"action": "override_work", "work_id": "wi-456", "target_status": "abandoned", "reason": "stuck in InProgress for 60min"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::OverrideWork {
+            requires_replacement, ..
+        } = action
+        {
+            assert!(!requires_replacement, "requires_replacement must default to false");
         } else {
             panic!("expected OverrideWork");
         }

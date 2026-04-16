@@ -603,9 +603,9 @@ fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
     }
 }
 
-/// Scan parsed coordinator actions for coherence: if an `override_work` with
-/// `target_status: "Abandoned"` mentions creating replacements in the reason
-/// field but no `create_work` action is present, log a warning.
+/// Scan parsed coordinator actions for coherence: if an `override_work` has
+/// `requires_replacement: true` but no `create_work` action is present in the
+/// same payload, log a warning.
 /// Returns a list of warning strings (empty if coherent).
 pub(crate) fn validate_action_coherence(actions: &[AgentAction], prefix: &str) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -614,30 +614,19 @@ pub(crate) fn validate_action_coherence(actions: &[AgentAction], prefix: &str) -
     for action in actions {
         if let AgentAction::OverrideWork {
             work_id,
-            target_status,
-            reason,
+            requires_replacement,
+            ..
         } = action
-            && target_status == "Abandoned"
+            && *requires_replacement
+            && !has_create
         {
-            let lower = reason.to_lowercase();
-            let mentions_create = lower.contains("creating")
-                || lower.contains("create_work")
-                || lower.contains("replacement")
-                || lower.contains("replacing")
-                || lower.contains("fix work");
-            let negation = lower.contains("no replacement")
-                || lower.contains("not replacing")
-                || lower.contains("without replacement")
-                || lower.contains("replacement is not");
-            if mentions_create && !has_create && !negation {
-                let msg = format!(
-                    "{} override_work on {} mentions creating replacements \
-                     but no create_work action in payload",
-                    prefix, work_id,
-                );
-                tracing::warn!("{}", msg);
-                warnings.push(msg);
-            }
+            let msg = format!(
+                "{} override_work on {} has requires_replacement=true \
+                 but no create_work action in payload",
+                prefix, work_id,
+            );
+            tracing::warn!("{}", msg);
+            warnings.push(msg);
         }
     }
     warnings

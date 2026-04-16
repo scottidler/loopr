@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
+use crate::domain::work::WorkStatus;
 use crate::tui::app::App;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
@@ -11,7 +12,29 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .state
         .works
         .iter()
-        .map(|wi| ListItem::new(Line::from(format!("[{}] {} ({})", wi.status(), wi.title, wi.id))))
+        .map(|wi| {
+            let status_label = if wi.status() == WorkStatus::Blocked {
+                if let Some(reason) = wi.blocked_reason {
+                    let reason_str = format!("{:?}", reason)
+                        .chars()
+                        .enumerate()
+                        .map(|(i, c)| {
+                            if i > 0 && c.is_uppercase() {
+                                format!("-{}", c.to_lowercase())
+                            } else {
+                                c.to_lowercase().to_string()
+                            }
+                        })
+                        .collect::<String>();
+                    format!("Blocked:{}", reason_str)
+                } else {
+                    "Blocked".to_string()
+                }
+            } else {
+                wi.status().to_string()
+            };
+            ListItem::new(Line::from(format!("[{}] {} ({})", status_label, wi.title, wi.id)))
+        })
         .collect();
 
     let list = List::new(items)

@@ -10,7 +10,7 @@ use crate::domain::markdown::{update_parent_children, write_doc_markdown};
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
-use crate::domain::work::{Work, WorkStatus};
+use crate::domain::work::{BlockedReason, Work, WorkStatus};
 use crate::fsm::runtime::FsmInterpreter;
 use crate::fsm::status::FsmStatus;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -327,11 +327,18 @@ pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
 /// is idempotent: calling it twice on the same done_id is harmless.
 fn unblock_dependents(stores: &Arc<Stores>, done_id: &str, event_tx: &broadcast::Sender<DaemonEvent>) {
     // Phase 1 (read): collect Blocked work IDs whose all deps are Done.
+    // Guard: only auto-promote DependencyWait or legacy None-reason works.
+    // ExhaustedRetries and SystemFault blocks require coordinator evaluation.
     let to_unblock: Vec<String> = {
         let Ok(works) = stores.read_works() else { return };
         works
             .values()
             .filter(|w| w.status() == WorkStatus::Blocked)
+            .filter(|w| {
+                // Only auto-unblock works blocked by dependency wait (or legacy records
+                // that predate the blocked_reason field, treated as DependencyWait).
+                matches!(w.blocked_reason, None | Some(BlockedReason::DependencyWait))
+            })
             .filter(|w| {
                 w.dependencies.iter().all(|dep_id| {
                     if dep_id == done_id {
@@ -516,6 +523,18 @@ pub(super) fn handle_work_transition(
         } else {
             target_status
         };
+
+        // Set or clear blocked_reason based on the transition.
+        if effective_status == WorkStatus::Blocked {
+            wi.blocked_reason = if wi.attempt_count >= MAX_WORK_ATTEMPTS {
+                Some(BlockedReason::ExhaustedRetries)
+            } else {
+                Some(BlockedReason::DependencyWait)
+            };
+        } else if from == WorkStatus::Blocked {
+            wi.blocked_reason = None;
+        }
+
         wi.force_status(effective_status);
         wi.updated_at = crate::id::now_millis();
         let wi_clone = wi.clone();
@@ -544,6 +563,7 @@ pub(super) fn handle_work_transition(
                 serde_json::json!({
                     "work_id": id,
                     "attempt_count": wi_clone.attempt_count,
+                    "blocked_reason": wi_clone.blocked_reason.map(|r| format!("{:?}", r)),
                     "reason": "max attempts reached - coordinator must decide: Superseded (replace) or Abandoned (fatal)",
                 }),
             ));
