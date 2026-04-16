@@ -77,6 +77,11 @@ pub struct Bundle {
     /// and pre-merge verification that the branch still has the expected commits.
     #[serde(default)]
     pub head_commit: Option<String>,
+    /// `true` when this bundle's claims directly address a prior rejection for the same
+    /// Work item using structural keywords (signature, interface contract, etc.).
+    /// Disputed bundles are routed to an arbitrator instead of the normal reviewer queue.
+    #[serde(default)]
+    pub disputed: bool,
     status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -131,6 +136,7 @@ impl Bundle {
             locks_used: Vec::new(),
             noop_reason: None,
             head_commit: None,
+            disputed: false,
             status: BundleStatus::Proposed,
             created_at: now,
             updated_at: now,

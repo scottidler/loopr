@@ -193,6 +193,13 @@ pub fn build_state_summary_with_sla(
                 if has_active_bundle {
                     continue;
                 }
+                // Phase 3: disputed bundles are adjudicated by the arbitrator, not the
+                // coordinator. The arbitrator's verdict (approve or cite-grounded reject)
+                // resolves the dispute. Skip override_work so the coordinator doesn't race
+                // the arbitrator.
+                if b.disputed {
+                    continue;
+                }
                 let reason = if b.verification.is_empty() {
                     "bundle was rejected by reviewer".to_string()
                 } else {

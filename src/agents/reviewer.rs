@@ -57,6 +57,11 @@ pub struct ReviewResult {
     #[serde(default)]
     pub issues: Vec<ReviewIssue>,
     pub summary: String,
+    /// For arbitration rejections: a file citation ("path/to/file.py:42: excerpt") that
+    /// grounds the rejection in actual code. Required when verdict is Reject on a disputed
+    /// bundle; rejection without a citation is treated as a parse failure and requeued.
+    #[serde(default)]
+    pub citation: Option<String>,
 }
 
 /// Parse the LLM response into a ReviewResult.
@@ -83,19 +88,48 @@ pub fn parse_review_result(response: &str, prefix: &str) -> Result<ReviewResult>
 /// Extract function signatures from files imported by `work_files` in the repository.
 ///
 /// Best-effort, regex-based (Tier-1 languages: Python, JS/TS, Rust).
-/// Hard caps: max 500 lines read per file, max 20 signatures total, max 5 lines per signature.
+///
+/// `head_commit`: the bundle's git HEAD SHA. When non-empty, touched files are read via
+/// `git show {head_commit}:{file}` so that imports added by the bundle (not yet on disk)
+/// are visible. Falls back to `std::fs::read_to_string` when `head_commit` is empty
+/// (noop bundles or legacy callers).
+///
+/// Hard caps: max 500 lines read per file, max 20 signatures total, max 5 lines per
+/// signature, MAX_SIG_TOKENS estimated tokens across all signatures.
 /// Returns an empty string if nothing useful can be extracted.
-pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) -> String {
+pub fn extract_referenced_signatures(repo_path: &Path, head_commit: &str, work_files: &[String]) -> String {
     const MAX_LINES_PER_FILE: usize = 500;
     const MAX_SIGS: usize = 20;
     const MAX_LINES_PER_SIG: usize = 5;
+    const MAX_SIG_TOKENS: usize = 3000;
 
     let mut all_sigs: Vec<String> = Vec::new();
 
     for work_file in work_files {
-        let file_path = repo_path.join(work_file);
-        let Ok(content) = std::fs::read_to_string(&file_path) else {
-            continue;
+        // Read touched files from the bundle's git commit when available so that
+        // imports added by the bundle are visible even before the worktree is merged.
+        let content = if !head_commit.is_empty() {
+            let Ok(output) = std::process::Command::new("git")
+                .args(["show", &format!("{}:{}", head_commit, work_file)])
+                .current_dir(repo_path)
+                .output()
+            else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            match String::from_utf8(output.stdout) {
+                Ok(c) => c,
+                Err(_) => continue,
+            }
+        } else {
+            // Noop bundle or legacy caller: read from disk.
+            let file_path = repo_path.join(work_file);
+            match std::fs::read_to_string(&file_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            }
         };
         let lines: Vec<&str> = content.lines().take(MAX_LINES_PER_FILE).collect();
 
@@ -142,7 +176,9 @@ pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) ->
         }
 
         // For each imported module, look for it relative to the work file's directory
-        // and relative to the repo root
+        // and relative to the repo root. Dep files are read from disk (they are already
+        // merged), so we always use repo_path for resolution.
+        let file_path = repo_path.join(work_file);
         let work_dir = file_path.parent().unwrap_or(repo_path);
         for mod_file in &imported_modules {
             if all_sigs.len() >= MAX_SIGS {
@@ -195,8 +231,31 @@ pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) ->
         return String::new();
     }
 
+    // Apply token ceiling: truncate sigs that would push estimated tokens over the limit.
+    {
+        let mut token_count = 0usize;
+        let mut kept = Vec::with_capacity(all_sigs.len());
+        for sig in all_sigs {
+            let sig_tokens = (sig.len() + 1) / 4; // +1 for newline separator
+            if token_count + sig_tokens > MAX_SIG_TOKENS {
+                break;
+            }
+            token_count += sig_tokens;
+            kept.push(sig);
+        }
+        all_sigs = kept;
+    }
+
+    if all_sigs.is_empty() {
+        return String::new();
+    }
+
     format!(
-        "\n## Referenced Signatures\n\n(Best-effort extraction — use for cross-module call verification only)\n\n```\n{}\n```\n",
+        "\n## Referenced Signatures (Cross-Boundary Dependencies)\n\n\
+         These signatures were read from files already merged into the integration branch.\n\
+         They are ground truth. If they differ from the work item's interface contract,\n\
+         trust the code here — the spec may be stale. Do NOT reject on that basis.\n\n\
+         ```\n{}\n```\n",
         all_sigs.join("\n")
     )
 }
@@ -248,25 +307,78 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
             );
         let work_title = ctx_builder.work_title().unwrap_or("unknown").to_string();
 
+        // Detect arbitration path: check if the bundle is disputed and build the dispute context.
+        let (is_disputed, dispute_section, bundle_work_id) = {
+            let bundles = self.ctx.stores.read_bundles().ok();
+            match bundles.as_ref().and_then(|bs| bs.get(self.bundle_id.as_str())) {
+                Some(b) if b.disputed => {
+                    let work_id = b.work_id.clone();
+                    let claims = b.claims.clone();
+                    let prior_rejection = bundles
+                        .as_ref()
+                        .and_then(|bs| {
+                            bs.values()
+                                .filter(|pb| {
+                                    pb.work_id == work_id
+                                        && pb.id != b.id
+                                        && pb.status() == crate::domain::bundle::BundleStatus::Rejected
+                                })
+                                .max_by_key(|pb| pb.created_at)
+                                .map(|pb| pb.verification.clone())
+                        })
+                        .unwrap_or_default();
+                    let section = format!(
+                        "\n## Dispute\n\n**Prior rejection reason:**\n{}\n\n**Implementer's counter-claim:**\n{}\n",
+                        prior_rejection,
+                        claims.join("\n")
+                    );
+                    (true, section, work_id)
+                }
+                Some(b) => (false, String::new(), b.work_id.clone()),
+                None => (false, String::new(), String::new()),
+            }
+        };
+
         // Extract cross-module signatures for files actually touched by the bundle.
+        // Read touched files via the bundle's head_commit (the bundle's git HEAD at proposal
+        // time) so that imports added by the bundle are visible before merge.
+        // For arbitration, sig injection is always run (non-optional) to give the arbitrator
+        // the ground-truth code context.
         let sig_section = {
-            let touched: Vec<String> = self
+            let (touched, head_commit) = self
                 .ctx
                 .stores
                 .read_bundles()
                 .ok()
-                .and_then(|bundles| bundles.get(self.bundle_id.as_str()).map(|b| b.paths.clone()))
+                .and_then(|bundles| {
+                    bundles
+                        .get(self.bundle_id.as_str())
+                        .map(|b| (b.paths.clone(), b.head_commit.clone().unwrap_or_default()))
+                })
                 .unwrap_or_default();
             let repo_path = &self.ctx.stores.config.project.repo_path;
-            extract_referenced_signatures(repo_path, &touched)
+            extract_referenced_signatures(repo_path, &head_commit, &touched)
         };
 
-        let assembled = ctx_builder.build(&crate::prompts::store().reviewer)?;
-        // Append referenced signatures (if any) to give the reviewer cross-module visibility.
-        let user_message = if sig_section.is_empty() {
-            assembled.user_message.clone()
+        // Choose the right prompt: arbitrator for disputed bundles, reviewer otherwise.
+        let prompts = crate::prompts::store();
+        let system_prompt = if is_disputed {
+            self.ctx
+                .info(&format!("arbitration path for disputed bundle {}", self.bundle_id));
+            &prompts.arbitrator
         } else {
-            format!("{}{}", assembled.user_message, sig_section)
+            &prompts.reviewer
+        };
+        let assembled = ctx_builder.build(system_prompt)?;
+
+        // Prepend dispute context and append sig section to the user message.
+        let user_message = {
+            let base = if is_disputed && !dispute_section.is_empty() {
+                format!("{}{}", dispute_section, assembled.user_message)
+            } else {
+                assembled.user_message.clone()
+            };
+            if sig_section.is_empty() { base } else { format!("{}{}", base, sig_section) }
         };
 
         let review = {
@@ -277,7 +389,38 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                 let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
                 let prefix = self.ctx.log_prefix();
                 match parse_review_result(&response, &prefix) {
-                    Ok(result) => break result,
+                    Ok(result) => {
+                        // Arbitration validation: a rejection must include a code citation.
+                        // Without a citation the arbitrator cannot ground its verdict in code,
+                        // so we treat it as a parse failure and requeue (max 1 extra retry).
+                        if is_disputed
+                            && result.verdict == ReviewVerdict::Reject
+                            && result.citation.as_ref().map(|c| c.is_empty()).unwrap_or(true)
+                        {
+                            requeries += 1;
+                            if requeries > self.config.max_requeries {
+                                return Err(crate::agents::error::AgentError::ParseExhausted {
+                                    attempts: self.config.max_requeries,
+                                }
+                                .into());
+                            }
+                            self.ctx.warn(&format!(
+                                "arbitration: reject verdict missing citation ({}/{}), requeuing",
+                                requeries, self.config.max_requeries
+                            ));
+                            let truncated: String = response.chars().take(200).collect();
+                            messages.push(ChatMessage::assistant(&truncated));
+                            messages.push(ChatMessage::user(
+                                "Your rejection verdict is missing a required code citation. \
+                                 Provide the `citation` field naming the specific file, line, and \
+                                 excerpt that proves the implementation is wrong. If you cannot \
+                                 cite actual code, change your verdict to `approve`.\n\n\
+                                 Respond with ONLY valid JSON.",
+                            ));
+                            continue;
+                        }
+                        break result;
+                    }
                     Err(parse_err) => {
                         requeries += 1;
                         if requeries > self.config.max_requeries {
@@ -304,6 +447,24 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                 }
             }
         };
+
+        // For arbitration approvals: increment contradictions on prior rejected learnings
+        // scoped to this work item. This lowers their confidence before the next reviewer.
+        if is_disputed && review.verdict == ReviewVerdict::Approve && !bundle_work_id.is_empty() {
+            let contradict_resp = self.ctx.bridge.request(
+                "learning.contradict_work",
+                serde_json::json!({
+                    "work_id": bundle_work_id,
+                }),
+            );
+            if contradict_resp.is_error() {
+                self.ctx.warn(&format!(
+                    "arbitration: failed to contradict work-scoped learnings for {}: {:?}",
+                    bundle_work_id, contradict_resp.error
+                ));
+            }
+        }
+        let _ = bundle_work_id; // suppress unused warning when not disputed
 
         self.ctx.info(&format!(
             "verdict: {} ({} issues) — {}",
@@ -998,5 +1159,170 @@ mod tests {
         assert!(prompt.contains("approve"));
         assert!(prompt.contains("request_changes"));
         assert!(prompt.contains("reject"));
+    }
+
+    // --- Phase 1: extract_referenced_signatures tests ---
+
+    fn init_git_repo(dir: &std::path::Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+    }
+
+    fn git_add_commit(dir: &std::path::Path, msg: &str) -> String {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", msg])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    #[test]
+    fn test_extract_signatures_reads_from_git_commit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        // Create database.py with a keyword-arg signature (already on disk = merged)
+        std::fs::write(
+            path.join("database.py"),
+            "def update_bookmark(db_path, bookmark_id, title=None, url=None, tags=None):\n    pass\n",
+        )
+        .unwrap();
+        // Create old main.py without the import
+        std::fs::write(path.join("main.py"), "# no imports yet\n").unwrap();
+        git_add_commit(path, "initial");
+
+        // Create new main.py with the import (as if added by the bundle)
+        std::fs::write(
+            path.join("main.py"),
+            "from database import update_bookmark\n\n# rest of main\n",
+        )
+        .unwrap();
+        let head_commit = git_add_commit(path, "add import");
+
+        // Sig extraction using the bundle's head_commit should find the signature
+        let sigs = extract_referenced_signatures(path, &head_commit, &["main.py".to_string()]);
+        assert!(
+            sigs.contains("update_bookmark"),
+            "expected keyword-arg signature in output, got: {}",
+            sigs
+        );
+    }
+
+    #[test]
+    fn test_extract_signatures_older_commit_yields_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        std::fs::write(
+            path.join("database.py"),
+            "def update_bookmark(db_path, id, fields: dict):\n    pass\n",
+        )
+        .unwrap();
+        // Old main.py: no import
+        std::fs::write(path.join("main.py"), "# placeholder\n").unwrap();
+        let old_commit = git_add_commit(path, "initial without import");
+
+        // The old commit's main.py has no imports, so sig extraction should yield nothing
+        let sigs = extract_referenced_signatures(path, &old_commit, &["main.py".to_string()]);
+        assert!(
+            sigs.is_empty(),
+            "older commit without import should yield empty sigs, got: {}",
+            sigs
+        );
+    }
+
+    #[test]
+    fn test_extract_signatures_fallback_to_disk_when_no_head_commit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        std::fs::write(path.join("database.py"), "def connect(host, port):\n    pass\n").unwrap();
+        std::fs::write(path.join("main.py"), "from database import connect\n").unwrap();
+        git_add_commit(path, "add files");
+
+        // Empty head_commit triggers disk fallback
+        let sigs = extract_referenced_signatures(path, "", &["main.py".to_string()]);
+        assert!(
+            sigs.contains("connect"),
+            "disk fallback should find signature, got: {}",
+            sigs
+        );
+    }
+
+    #[test]
+    fn test_extract_signatures_token_ceiling() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        // Generate a file with many function signatures to exceed the token ceiling
+        let many_fns: String = (0..200)
+            .map(|i| format!("def function_{i}(arg_a, arg_b, arg_c, arg_d, arg_e):\n    pass\n"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path.join("biglib.py"), &many_fns).unwrap();
+        // main.py imports it
+        std::fs::write(path.join("main.py"), "from biglib import function_0\n").unwrap();
+        let head_commit = git_add_commit(path, "big lib");
+
+        let sigs = extract_referenced_signatures(path, &head_commit, &["main.py".to_string()]);
+        // Result must not be empty (some sigs fit) and must not exceed roughly 3000*4 chars
+        // (the ceiling is 3000 estimated tokens, ~12000 chars)
+        assert!(!sigs.is_empty(), "should extract some sigs");
+        assert!(
+            sigs.len() < 14000,
+            "token ceiling should prevent unbounded output (got {} chars)",
+            sigs.len()
+        );
+    }
+
+    #[test]
+    fn test_extract_signatures_header_is_ground_truth() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        std::fs::write(path.join("api.py"), "def get_user(user_id: int) -> dict:\n    pass\n").unwrap();
+        std::fs::write(path.join("main.py"), "from api import get_user\n").unwrap();
+        let head_commit = git_add_commit(path, "api");
+
+        let sigs = extract_referenced_signatures(path, &head_commit, &["main.py".to_string()]);
+        assert!(
+            sigs.contains("Cross-Boundary Dependencies"),
+            "header should label these as cross-boundary ground truth, got: {}",
+            sigs
+        );
+        assert!(
+            sigs.contains("trust the code here"),
+            "header should instruct reviewer to trust the code, got: {}",
+            sigs
+        );
     }
 }

@@ -805,13 +805,25 @@ impl<'a> ContextBuilder<'a> {
             let scope_refs: Vec<(&str, LearningScope)> =
                 self.scope_ids.iter().map(|(id, scope)| (id.as_str(), *scope)).collect();
             let min_confidence = match self.role {
-                Role::Coordinator => 0.6,
+                // Coordinator and Reviewer use a higher threshold so only well-confirmed
+                // learnings influence critical decisions. Reviewer raised from 0.3 to 0.6
+                // so low-confidence tentative structural claims don't override code evidence.
+                Role::Coordinator | Role::Reviewer => 0.6,
                 _ => 0.3,
             };
             let selected = select_learnings(&learnings_map, &scope_refs, self.role, min_confidence, 20);
 
             if !selected.is_empty() {
-                let learning_strings: Vec<String> = selected.iter().map(|l| l.content.clone()).collect();
+                let learning_strings: Vec<String> = selected
+                    .iter()
+                    .map(|l| {
+                        if l.tentative {
+                            format!("[TENTATIVE - unverified structural claim] {}", l.content)
+                        } else {
+                            l.content.clone()
+                        }
+                    })
+                    .collect();
                 let truncated = truncate_list(&learning_strings, self.budget.learnings);
 
                 if !truncated.is_empty() {

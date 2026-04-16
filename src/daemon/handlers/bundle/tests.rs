@@ -1055,3 +1055,148 @@ async fn test_handle_bundle_update_rejects_too_many_loc() {
     .await;
     assert!(resp.is_error(), "expected loc policy rejection on update");
 }
+
+// === Phase 3: Dispute detection tests ===
+
+#[tokio::test]
+async fn test_bundle_create_disputed_when_prior_structural_rejection() {
+    let (_dir, stores) = test_stores();
+    let tx = test_event_tx();
+    let wm = test_worktree_mgr();
+    let (wi_id, first_bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
+
+    // Transition first bundle to Rejected with a structural rejection reason
+    {
+        let mut bundles = stores.bundles.write().unwrap();
+        let b = bundles.get_mut(&first_bundle_id).unwrap();
+        b.verification =
+            "update_bookmark has signature (db_path, id, fields: dict) - wrong interface contract".to_string();
+        b.force_status(crate::domain::bundle::BundleStatus::Rejected);
+    }
+
+    // Create a second bundle with claims that overlap on structural keywords
+    let resp = dispatch(
+        &stores,
+        &tx,
+        &wm,
+        &test_integrator_config(),
+        DaemonRequest::new(
+            50,
+            "bundle.create",
+            json!({
+                "work_id": wi_id,
+                "branch_name": "agent/wi-fix",
+                "claims": ["update_bookmark has signature (db_path, bookmark_id, **kwargs) matching actual code"]
+            }),
+        ),
+    )
+    .await;
+    assert!(!resp.is_error(), "second bundle should be created: {:?}", resp.error);
+    let bundle_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+    let disputed = resp.result.unwrap()["disputed"].as_bool().unwrap_or(false);
+    assert!(disputed, "bundle with structural keyword overlap should be disputed");
+
+    // Verify the in-store bundle is also marked disputed
+    let bundles = stores.bundles.read().unwrap();
+    let b = bundles.get(&bundle_id).unwrap();
+    assert!(b.disputed, "in-store bundle should be marked disputed");
+}
+
+#[tokio::test]
+async fn test_bundle_create_not_disputed_without_keyword_overlap() {
+    let (_dir, stores) = test_stores();
+    let tx = test_event_tx();
+    let wm = test_worktree_mgr();
+    let (wi_id, first_bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
+
+    // Reject first bundle with a structural rejection
+    {
+        let mut bundles = stores.bundles.write().unwrap();
+        let b = bundles.get_mut(&first_bundle_id).unwrap();
+        b.verification = "update_bookmark has signature (db_path, id, fields: dict)".to_string();
+        b.force_status(crate::domain::bundle::BundleStatus::Rejected);
+    }
+
+    // Create second bundle with claims that do NOT overlap on structural keywords
+    let resp = dispatch(
+        &stores,
+        &tx,
+        &wm,
+        &test_integrator_config(),
+        DaemonRequest::new(
+            50,
+            "bundle.create",
+            json!({
+                "work_id": wi_id,
+                "branch_name": "agent/wi-fix",
+                "claims": ["Added error handling and fixed the response format"]
+            }),
+        ),
+    )
+    .await;
+    assert!(!resp.is_error(), "second bundle should be created: {:?}", resp.error);
+    let disputed = resp.result.unwrap()["disputed"].as_bool().unwrap_or(false);
+    assert!(
+        !disputed,
+        "bundle without structural keyword overlap should not be disputed"
+    );
+}
+
+#[tokio::test]
+async fn test_bundle_create_not_disputed_when_no_prior_rejection() {
+    let (_dir, stores) = test_stores();
+    let tx = test_event_tx();
+    let wm = test_worktree_mgr();
+    let (wi_id, _) = create_test_work(&stores, &tx, &wm).await;
+
+    // First bundle for this work (no prior rejection exists)
+    let resp = dispatch(
+        &stores,
+        &tx,
+        &wm,
+        &test_integrator_config(),
+        DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_id": wi_id,
+                "branch_name": "agent/wi-first",
+                "claims": ["update_bookmark has signature (db_path, id) - implements interface contract"]
+            }),
+        ),
+    )
+    .await;
+    assert!(!resp.is_error(), "first bundle should be created: {:?}", resp.error);
+    let disputed = resp.result.unwrap()["disputed"].as_bool().unwrap_or(false);
+    assert!(!disputed, "first bundle with no prior rejection should not be disputed");
+}
+
+#[test]
+fn test_bundle_disputed_field_serde_roundtrip() {
+    let mut b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
+    assert!(!b.disputed, "default disputed is false");
+
+    b.disputed = true;
+    let json = serde_json::to_string(&b).unwrap();
+    let restored: Bundle = serde_json::from_str(&json).unwrap();
+    assert!(restored.disputed, "disputed=true should survive serde roundtrip");
+}
+
+#[test]
+fn test_bundle_disputed_backward_compat_deserialize() {
+    // Old JSONL records without disputed field should deserialize with disputed=false
+    let json = serde_json::json!({
+        "id": "bd-old",
+        "work_id": "wi-1",
+        "base_tick_id": null,
+        "branch_name": "agent/wi-1",
+        "paths": [],
+        "claims": [],
+        "verification": "",
+        "status": "Proposed",
+        "created_at": 1000,
+        "updated_at": 1000
+    });
+    let bundle: Bundle = serde_json::from_value(json).unwrap();
+    assert!(!bundle.disputed, "old records should deserialize with disputed=false");
+}
