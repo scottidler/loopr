@@ -753,3 +753,98 @@ impl Primitive for CreateLearning {
         Idempotency::GuardRequired
     }
 }
+
+/// Increments bubble_up_count on the Plan that owns the given Spec.
+/// Used by the revise-parent-on-impossible-spec strategy to track how many
+/// times children have bubbled up failures, preventing infinite re-decomposition.
+pub struct IncrementBubbleUp;
+
+impl Primitive for IncrementBubbleUp {
+    fn name(&self) -> &'static str {
+        "increment-bubble-up"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut PrimitiveContext<'_>,
+        params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            let spec_id = params["spec-id"]
+                .as_str()
+                .ok_or_else(|| eyre::eyre!("missing 'spec-id'"))?;
+
+            let plan_id = {
+                let specs = ctx
+                    .stores
+                    .specs
+                    .read()
+                    .map_err(|_| eyre::eyre!("specs lock poisoned"))?;
+                specs
+                    .get(spec_id)
+                    .map(|s| s.parent_id.clone())
+                    .ok_or_else(|| eyre::eyre!("spec not found: {}", spec_id))?
+            };
+
+            let new_count = {
+                let mut plans = ctx
+                    .stores
+                    .plans
+                    .write()
+                    .map_err(|_| eyre::eyre!("plans lock poisoned"))?;
+                let plan = plans
+                    .get_mut(&plan_id)
+                    .ok_or_else(|| eyre::eyre!("plan not found: {}", plan_id))?;
+                plan.bubble_up_count += 1;
+                plan.updated_at = crate::id::now_millis();
+                let count = plan.bubble_up_count;
+                if let Some(store) = &ctx.stores.store {
+                    let _ = store
+                        .lock()
+                        .map_err(|_| eyre::eyre!("taskstore lock poisoned"))?
+                        .update(plan.clone());
+                }
+                count
+            };
+
+            debug!(
+                "increment-bubble-up: plan {} bubble_up_count now {}",
+                plan_id, new_count
+            );
+
+            let mut values = HashMap::new();
+            values.insert("plan-id".to_string(), serde_json::json!(plan_id));
+            values.insert("bubble-up-count".to_string(), serde_json::json!(new_count));
+
+            Ok(PrimitiveOutput {
+                values,
+                summary: format!("plan '{}' bubble_up_count incremented to {}", plan_id, new_count),
+            })
+        })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        vec![
+            OutputField {
+                name: "plan-id".to_string(),
+                field_type: OutputType::String,
+            },
+            OutputField {
+                name: "bubble-up-count".to_string(),
+                field_type: OutputType::U32,
+            },
+        ]
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![InputField {
+            name: "spec-id".to_string(),
+            field_type: OutputType::String,
+            required: true,
+        }]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::NonIdempotent
+    }
+}

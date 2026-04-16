@@ -17,6 +17,12 @@ bundles-ready-for-integration:
     field: has-accepted-bundles
     value: true
 
+# Fires when a tick is created after integration - triggers async validation.
+tick-created:
+  type: event
+  event: tick.created
+  scope: tick
+
 # Fires for plans with no Running or Paused Director sessions (level-triggered fallback)
 no-running-director:
   type: state-query

@@ -1,14 +1,17 @@
 # Upward feedback strategy: revise parent when children all fail.
 
 # When all works under a spec are abandoned, revise the parent spec
-# by transitioning it back to Draft for re-decomposition.
-# This is the upward feedback loop the coordinator handled via ReviseParent.
+# by transitioning it back to Draft for re-decomposition, and increment
+# the plan's bubble_up_count to prevent infinite loops.
 revise-parent-on-impossible-spec:
   description: Revise parent spec when all child works are abandoned
   trigger: spec-children-all-abandoned
   scope: spec
   priority: 870
   action:
+    - primitive: increment-bubble-up
+      params:
+        spec-id: $trigger.scope-id
     - primitive: transition-record
       params:
         collection: spec

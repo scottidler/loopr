@@ -100,7 +100,7 @@ impl Primitive for IntegrateTick {
             let repo_path = &ctx.stores.config.project.repo_path;
 
             // Step 3: Merge each bundle branch into the integration branch
-            let mut merged_bundle_ids = Vec::new();
+            let mut merged_bundle_ids: Vec<(String, String)> = Vec::new(); // (bundle_id, work_id)
             let mut merge_failures = Vec::new();
 
             for (bundle_id, work_id, branch_name) in &accepted_bundles {
@@ -139,9 +139,9 @@ impl Primitive for IntegrateTick {
                 match merge {
                     Ok(output) if output.status.success() => {
                         info!("integrate-tick: merged bundle {} successfully", bundle_id);
-                        merged_bundle_ids.push(bundle_id.clone());
+                        merged_bundle_ids.push((bundle_id.clone(), work_id.clone()));
 
-                        // Transition bundle to Merged
+                        // Transition bundle to Merged (git merge succeeded)
                         let resp = ctx.bridge.request(
                             "bundle.transition",
                             json!({
@@ -154,18 +154,9 @@ impl Primitive for IntegrateTick {
                             warn!("integrate-tick: failed to transition bundle {} to Merged", bundle_id);
                         }
 
-                        // Transition work from InReview to Integrated
-                        let resp = ctx.bridge.request(
-                            "work.transition",
-                            json!({
-                                "id": work_id,
-                                "target_status": "Integrated",
-                                "role": "integrator",
-                            }),
-                        );
-                        if resp.is_error() {
-                            warn!("integrate-tick: failed to transition work {} to Integrated", work_id);
-                        }
+                        // NOTE: Work stays InReview until tick validation passes.
+                        // The tick-published event triggers sweep-integrated-to-done
+                        // which handles Work InReview -> Integrated -> Done.
 
                         // Emit bundle.merged event for implementer rebase
                         let _ = ctx.event_tx.send(crate::ipc::protocol::DaemonEvent::new(
@@ -220,12 +211,16 @@ impl Primitive for IntegrateTick {
                 });
             }
 
-            // Step 4: Create a Tick record for the merged bundles
+            // Step 4: Create a Tick record for the merged bundles.
+            // The Tick starts in Open state. Validation is NOT run here to avoid
+            // blocking the engine tick loop. The tick-published trigger + integrator.publish
+            // handler run validation asynchronously via a separate strategy.
+            let bundle_ids: Vec<String> = merged_bundle_ids.iter().map(|(bid, _)| bid.clone()).collect();
             let tick_resp = ctx.bridge.request(
                 "tick.create",
                 json!({
                     "plan_id": plan_id,
-                    "bundle_ids": merged_bundle_ids,
+                    "bundle_ids": bundle_ids,
                 }),
             );
 
@@ -240,19 +235,23 @@ impl Primitive for IntegrateTick {
                 eyre::bail!("integrate-tick: failed to create tick record");
             }
 
-            // Step 5: Validate and publish via existing handler endpoints
-            let publish_resp = ctx.bridge.request("integrator.publish", json!({ "tick_id": tick_id }));
-
-            let outcome = if publish_resp.is_error() {
-                warn!("integrate-tick: publish failed for tick {}", tick_id);
-                "failed"
-            } else {
-                "published"
-            };
-
+            // Step 5: Record the head SHA after merges
             let head_sha = crate::daemon::handlers::integrator::get_git_head_sha(repo_path);
 
-            // Step 6: Handle merge failures - reject bundles and reset works
+            // Step 6: Emit tick.created event - a separate strategy will handle
+            // validation asynchronously (integrator.publish) to avoid blocking
+            // the engine loop.
+            let _ = ctx.event_tx.send(crate::ipc::protocol::DaemonEvent::new(
+                "tick.created",
+                json!({
+                    "tick_id": tick_id,
+                    "plan_id": plan_id,
+                    "bundle_ids": bundle_ids,
+                    "merged_work_ids": merged_bundle_ids.iter().map(|(_, wid)| wid.clone()).collect::<Vec<_>>(),
+                }),
+            ));
+
+            // Step 7: Handle merge failures - reject bundles
             for failed_bundle_id in &merge_failures {
                 let resp = ctx.bridge.request(
                     "bundle.transition",
@@ -269,7 +268,7 @@ impl Primitive for IntegrateTick {
 
             let mut values = HashMap::new();
             values.insert("tick-id".to_string(), json!(tick_id));
-            values.insert("outcome".to_string(), json!(outcome));
+            values.insert("outcome".to_string(), json!("merged"));
             values.insert("merged-count".to_string(), json!(merged_bundle_ids.len()));
             values.insert("failed-count".to_string(), json!(merge_failures.len()));
             if let Some(sha) = &head_sha {
@@ -279,9 +278,8 @@ impl Primitive for IntegrateTick {
             Ok(PrimitiveOutput {
                 values,
                 summary: format!(
-                    "integrate-tick '{}': {} ({} merged, {} failed)",
+                    "integrate-tick '{}': merged ({} merged, {} failed)",
                     tick_id,
-                    outcome,
                     merged_bundle_ids.len(),
                     merge_failures.len()
                 ),
@@ -327,6 +325,115 @@ impl Primitive for IntegrateTick {
 
     fn requires_git_lock(&self) -> bool {
         true
+    }
+}
+
+/// Validates and publishes a tick, then transitions merged Works to Integrated.
+///
+/// Runs validation shell commands via integrator.publish IPC. If validation passes,
+/// transitions the merged Works from InReview to Integrated. If validation fails,
+/// the Works remain InReview for retry.
+///
+/// This primitive is triggered by tick.created events, NOT called from integrate-tick,
+/// to avoid blocking the engine tick loop during long-running validation commands.
+pub struct ValidateAndPublishTick;
+
+impl Primitive for ValidateAndPublishTick {
+    fn name(&self) -> &'static str {
+        "validate-and-publish-tick"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut PrimitiveContext<'_>,
+        params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            let tick_id = params["tick-id"]
+                .as_str()
+                .ok_or_else(|| eyre::eyre!("missing 'tick-id'"))?;
+
+            debug!("validate-and-publish-tick: tick_id={}", tick_id);
+
+            // Validate and publish via the existing handler (runs validation commands)
+            let publish_resp = ctx.bridge.request("integrator.publish", json!({ "tick_id": tick_id }));
+
+            let passed = !publish_resp.is_error();
+
+            if passed {
+                info!("validate-and-publish-tick: tick {} published successfully", tick_id);
+
+                // Transition merged Works from InReview to Integrated
+                let work_ids: Vec<String> = params["merged-work-ids"]
+                    .as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
+
+                for work_id in &work_ids {
+                    let resp = ctx.bridge.request(
+                        "work.transition",
+                        json!({
+                            "id": work_id,
+                            "target_status": "Integrated",
+                            "role": "integrator",
+                        }),
+                    );
+                    if resp.is_error() {
+                        warn!(
+                            "validate-and-publish-tick: failed to transition work {} to Integrated",
+                            work_id
+                        );
+                    }
+                }
+            } else {
+                warn!("validate-and-publish-tick: tick {} validation failed", tick_id);
+            }
+
+            let mut values = HashMap::new();
+            values.insert("passed".to_string(), json!(passed));
+            values.insert("tick-id".to_string(), json!(tick_id));
+
+            Ok(PrimitiveOutput {
+                values,
+                summary: format!(
+                    "validate-and-publish-tick '{}': {}",
+                    tick_id,
+                    if passed { "published" } else { "failed" }
+                ),
+            })
+        })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        vec![
+            OutputField {
+                name: "passed".to_string(),
+                field_type: OutputType::Bool,
+            },
+            OutputField {
+                name: "tick-id".to_string(),
+                field_type: OutputType::String,
+            },
+        ]
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![
+            InputField {
+                name: "tick-id".to_string(),
+                field_type: OutputType::String,
+                required: true,
+            },
+            InputField {
+                name: "merged-work-ids".to_string(),
+                field_type: OutputType::StringArray,
+                required: false,
+            },
+        ]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::Idempotent
     }
 }
 

@@ -57,6 +57,7 @@ pub fn register_all(registry: &mut PrimitiveRegistry) -> eyre::Result<()> {
 
     // Phase 5: Integration and complex primitives
     registry.register(Box::new(integration::IntegrateTick))?;
+    registry.register(Box::new(integration::ValidateAndPublishTick))?;
     registry.register(Box::new(integration::MergeBranches))?;
     registry.register(Box::new(integration::RunValidation))?;
     registry.register(Box::new(integration::CreateIntegrationBranch))?;
@@ -89,5 +90,6 @@ pub fn register_all(registry: &mut PrimitiveRegistry) -> eyre::Result<()> {
     registry.register(Box::new(conflict::CombineConflictingWorks))?;
     registry.register(Box::new(event::EmitEvent))?;
     registry.register(Box::new(tooling::RegisterValidationTools))?;
+    registry.register(Box::new(mutation::IncrementBubbleUp))?;
     Ok(())
 }

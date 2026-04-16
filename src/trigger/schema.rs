@@ -20,6 +20,7 @@ const VALID_EVENTS: &[&str] = &[
     "escalation",
     "reconciliation-failed",
     "integration.conflict-detected",
+    "tick.created",
 ];
 
 /// Comparison operators for threshold and ratio triggers.
