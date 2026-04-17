@@ -121,6 +121,35 @@ impl DirectorPatternTracker {
     pub fn rejection_count(&self, work_id: &str) -> usize {
         self.rejection_history.get(work_id).map(Vec::len).unwrap_or(0)
     }
+
+    /// Count of distinct error signatures observed for a given work. Multiple sessions
+    /// that failed with the same signature are counted once - Phase 7 uses this to
+    /// distinguish "same root cause, retried" (1 signature) from "different failures
+    /// each time" (N signatures). The latter suggests the work itself is sound and the
+    /// symptoms are environmental; the former suggests a true stuck state for Escalation.
+    pub fn unique_signature_count(&self, work_id: &str) -> usize {
+        let Some(history) = self.work_failure_history.get(work_id) else {
+            return 0;
+        };
+        let sigs: std::collections::HashSet<String> = history.iter().map(|(_, err)| error_signature(err)).collect();
+        sigs.len()
+    }
+}
+
+/// Stable signature for an error message. Phase 7 Lifeguard uses this to group failures
+/// by root cause across sessions: LLM outputs vary in whitespace and trailing tokens, so
+/// we normalize aggressively before hashing.
+///
+/// Strategy: lowercase, collapse whitespace, strip the first line after the first colon
+/// (which usually isolates the error kind from the stack trace), and take the leading
+/// 200 chars. This is deliberately cheap and heuristic - perfect grouping would need a
+/// semantic classifier; Phase 7 just needs something better than raw-string equality.
+pub fn error_signature(err: &str) -> String {
+    let trimmed = err.trim().to_lowercase();
+    // If the message has "key: detail" shape, keep the key portion for grouping.
+    let base = trimmed.split_once(':').map(|(k, _)| k).unwrap_or(&trimmed);
+    let collapsed: String = base.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(200).collect()
 }
 
 /// The Director agent.
@@ -306,19 +335,125 @@ impl<L: LlmClient> DirectorAgent<L> {
         }
     }
 
-    /// Rebuild the pattern tracker from persistent state.
+    /// Rebuild the pattern tracker from persistent state (JSONL ground truth via Stores).
     ///
-    /// Phase 2 provides the hook; Phase 7 fills in the query logic to read
-    /// `Work.session_failure_count`, rejected `Bundle` records, and `Spec.revision_count`.
-    /// The stub clears the tracker so subsequent event-driven updates start fresh
-    /// rather than accumulating alongside dropped events.
+    /// The Director is in-process with the daemon, so the canonical path is direct Stores
+    /// reads rather than round-tripping through `AgentIpcBridge`. Stores is the in-memory
+    /// cache over JSONL (see `.claude/rules/taskstore.md`) - same truth, zero IPC overhead.
+    ///
+    /// Invoked from three places:
+    /// 1. Monitoring entry (seed a freshly spawned Director with full history),
+    /// 2. `RecvError::Lagged` (tracker is flushed and rebuilt after dropped events),
+    /// 3. Phase 7 tests (property check: event-driven vs reconciled should match).
     async fn reconcile_from_ipc(&mut self) -> Result<()> {
         debug!(
-            "{} director: reconcile_from_ipc (Phase 7 fills this in)",
-            self.ctx.log_prefix()
+            "{} director: reconcile_from_ipc (plan_id={:?})",
+            self.ctx.log_prefix(),
+            self.plan_id
         );
         self.pattern_tracker.clear();
-        // Phase 7: query bridge.work_list(plan_id), bundle_list, spec_list and repopulate.
+
+        // Without a plan_id we don't have a scope to reconcile against (PlanIntake,
+        // legacy escalation). Leave the tracker cleared and return.
+        let Some(plan_id) = self.plan_id.clone() else {
+            return Ok(());
+        };
+
+        // Walk Plan -> Spec -> Phase -> Work to collect the work_ids in scope. The hierarchy
+        // is parent_id-driven, so we resolve it in three passes over the in-memory stores.
+        let spec_ids: Vec<String> = self
+            .ctx
+            .stores
+            .read_specs()
+            .map(|specs| {
+                specs
+                    .values()
+                    .filter(|s| s.parent_id == plan_id)
+                    .map(|s| s.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Spec revision count (decomposition_attempts is the persistent proxy for the
+        // design doc's revision_count - same concept, concrete field).
+        if let Ok(specs) = self.ctx.stores.read_specs() {
+            for s in specs.values() {
+                if s.parent_id == plan_id {
+                    self.pattern_tracker
+                        .spec_revision_count
+                        .insert(s.id.clone(), s.decomposition_attempts);
+                }
+            }
+        }
+
+        let phase_ids: Vec<String> = self
+            .ctx
+            .stores
+            .read_phases()
+            .map(|phases| {
+                phases
+                    .values()
+                    .filter(|p| spec_ids.contains(&p.parent_id))
+                    .map(|p| p.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let plan_work_ids: std::collections::HashSet<String> = self
+            .ctx
+            .stores
+            .read_works()
+            .map(|works| {
+                works
+                    .values()
+                    .filter(|w| phase_ids.contains(&w.parent_id))
+                    .map(|w| w.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Failure history: `session_failure_count` is the persistent aggregate of failed
+        // sessions per work. We synthesize placeholder (session_id, error) entries so the
+        // tracker's in-memory shape stays compatible with event-driven updates and the
+        // `failure_count(work_id)` helper returns the correct total.
+        if let Ok(works) = self.ctx.stores.read_works() {
+            for w in works.values() {
+                if !plan_work_ids.contains(&w.id) {
+                    continue;
+                }
+                if w.session_failure_count > 0 {
+                    let history: Vec<(String, String)> = (0..w.session_failure_count as usize)
+                        .map(|i| (format!("reconciled-{}-{}", w.id, i), "reconciled".to_string()))
+                        .collect();
+                    self.pattern_tracker.work_failure_history.insert(w.id.clone(), history);
+                }
+            }
+        }
+
+        // Bundle rejections: grouped by work_id. Only terminal-Rejected bundles count.
+        if let Ok(bundles) = self.ctx.stores.read_bundles() {
+            for b in bundles.values() {
+                if !plan_work_ids.contains(&b.work_id) {
+                    continue;
+                }
+                if matches!(b.status(), crate::domain::bundle::BundleStatus::Rejected) {
+                    self.pattern_tracker
+                        .rejection_history
+                        .entry(b.work_id.clone())
+                        .or_default()
+                        .push("rejected".to_string());
+                }
+            }
+        }
+
+        debug!(
+            "{} director: reconcile_from_ipc complete (works_in_plan={} failures={} rejections={} spec_revisions={})",
+            self.ctx.log_prefix(),
+            plan_work_ids.len(),
+            self.pattern_tracker.work_failure_history.len(),
+            self.pattern_tracker.rejection_history.len(),
+            self.pattern_tracker.spec_revision_count.len(),
+        );
         Ok(())
     }
 
@@ -340,6 +475,8 @@ impl<L: LlmClient> DirectorAgent<L> {
                 }
                 if matches!(self.mode, DirectorMode::PlanIntake) {
                     self.set_mode(DirectorMode::Monitoring);
+                    // Seed the tracker from persistent state now that we have a plan scope.
+                    self.reconcile_from_ipc().await?;
                 }
             }
             // Track agent failures for cross-session pattern detection. Phase 4 triggers
@@ -882,6 +1019,12 @@ impl<L: LlmClient> DirectorAgent<L> {
     /// Shared event-driven loop for PlanIntake, Monitoring, and UserIntervention modes.
     async fn event_loop(&mut self) -> Result<()> {
         let heartbeat = std::time::Duration::from_millis(HEARTBEAT_INTERVAL_MS);
+
+        // Entry-point reconciliation: freshly spawned or supervision-restarted Directors
+        // must seed their pattern tracker from ground truth before the first event.
+        if matches!(self.mode, DirectorMode::Monitoring) {
+            self.reconcile_from_ipc().await?;
+        }
 
         loop {
             if self.is_plan_terminal() || self.ctx.is_cancelled() {

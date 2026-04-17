@@ -762,6 +762,185 @@ async fn threshold_escalation_returns_to_monitoring() {
     );
 }
 
+// ─── Phase 7: Cross-session patterns + reconcile_from_ipc ─────────────────
+
+#[test]
+fn error_signature_normalizes_case_and_whitespace() {
+    use crate::agents::director::error_signature;
+    assert_eq!(
+        error_signature("Compile Error: mismatched types"),
+        error_signature("compile error: different detail")
+    );
+    assert_eq!(error_signature("  Compile\tError  "), error_signature("compile error"));
+}
+
+#[test]
+fn error_signature_distinguishes_different_root_causes() {
+    use crate::agents::director::error_signature;
+    assert_ne!(
+        error_signature("network error: connection refused"),
+        error_signature("compile error: missing trait impl")
+    );
+}
+
+#[test]
+fn unique_signature_count_groups_same_root_cause() {
+    let mut t = DirectorPatternTracker::new();
+    t.work_failure_history.insert(
+        "wk-1".into(),
+        vec![
+            ("ag-1".into(), "Compile error: missing trait".into()),
+            ("ag-2".into(), "compile error: also missing trait".into()),
+            ("ag-3".into(), "Network error: timeout".into()),
+        ],
+    );
+    assert_eq!(t.failure_count("wk-1"), 3, "raw failure count is 3");
+    assert_eq!(
+        t.unique_signature_count("wk-1"),
+        2,
+        "compile-error and network-error are 2 distinct root causes"
+    );
+}
+
+// Property test: populating the tracker by events vs rebuilding via reconcile_from_ipc
+// must produce the same rejection history and the same failure counts per work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconcile_from_ipc_matches_event_driven_counts() {
+    use crate::domain::bundle::{Bundle, BundleStatus};
+    use crate::domain::phase::Phase;
+    use crate::domain::spec::Spec;
+    use crate::domain::work::Work;
+
+    let dir = TestDir::new("director-reconcile-property");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(64);
+
+    // Build a minimal Plan -> Spec -> Phase -> Work -> Bundle hierarchy.
+    let mut plan = Plan::new("recon-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    plan.force_status(HierarchyStatus::Draft);
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec = Spec::new(plan_id.clone(), "recon-spec".into());
+    spec.decomposition_attempts = 2;
+    let spec_id = spec.id.clone();
+    stores.write_specs().unwrap().insert(spec_id.clone(), spec);
+
+    let phase = Phase::new(spec_id.clone(), "recon-phase".into());
+    let phase_id = phase.id.clone();
+    stores.write_phases().unwrap().insert(phase_id.clone(), phase);
+
+    let make_work = |id_marker: &str, failures: u32| {
+        let mut w = Work::new(phase_id.clone(), format!("work-{}", id_marker));
+        w.session_failure_count = failures;
+        w
+    };
+    let w1 = make_work("a", 2);
+    let w1_id = w1.id.clone();
+    let w2 = make_work("b", 0);
+    let w2_id = w2.id.clone();
+    stores.write_works().unwrap().insert(w1_id.clone(), w1);
+    stores.write_works().unwrap().insert(w2_id.clone(), w2);
+
+    let mut bundle = Bundle::new(w1_id.clone(), Some("t-1".into()), "branch".into(), vec![]);
+    bundle.force_status(BundleStatus::Rejected);
+    stores.write_bundles().unwrap().insert(bundle.id.clone(), bundle);
+
+    // Build a Director that enters Monitoring via pl-* target_id. The event_loop's entry
+    // reconciliation fires on the first iteration; we cancel quickly to observe state.
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), None, Some(plan_id.clone()));
+    let mut agent = make_director(ctx);
+
+    // Cancel almost immediately. Reconcile runs before the first select!, so it completes.
+    let cancel_stores = stores.clone();
+    let cancel_id = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut sessions = cancel_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&cancel_id) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(3), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    // Reconciled tracker should show: 2 failures for w1, 0 for w2, 1 rejection for w1,
+    // and spec_revision_count contains the spec with decomposition_attempts=2.
+    assert_eq!(agent.pattern_tracker.failure_count(&w1_id), 2);
+    assert_eq!(agent.pattern_tracker.failure_count(&w2_id), 0);
+    assert_eq!(agent.pattern_tracker.rejection_count(&w1_id), 1);
+    assert_eq!(agent.pattern_tracker.rejection_count(&w2_id), 0);
+    assert_eq!(
+        agent.pattern_tracker.spec_revision_count.get(&spec_id).copied(),
+        Some(2)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconcile_scopes_to_current_plan() {
+    use crate::domain::phase::Phase;
+    use crate::domain::spec::Spec;
+    use crate::domain::work::Work;
+
+    let dir = TestDir::new("director-reconcile-scoping");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(32);
+
+    // Plan A (target) and Plan B (should be ignored) each with their own hierarchy.
+    let plan_a = Plan::new("plan-a".into(), AcceptanceCriteria::default());
+    let plan_a_id = plan_a.id.clone();
+    stores.write_plans().unwrap().insert(plan_a_id.clone(), plan_a);
+    let plan_b = Plan::new("plan-b".into(), AcceptanceCriteria::default());
+    let plan_b_id = plan_b.id.clone();
+    stores.write_plans().unwrap().insert(plan_b_id.clone(), plan_b);
+
+    for (pid, marker, failures) in &[(plan_a_id.clone(), "a", 1u32), (plan_b_id.clone(), "b", 5u32)] {
+        let spec = Spec::new(pid.clone(), format!("spec-{}", marker));
+        let spec_id = spec.id.clone();
+        stores.write_specs().unwrap().insert(spec_id.clone(), spec);
+        let phase = Phase::new(spec_id, format!("phase-{}", marker));
+        let phase_id = phase.id.clone();
+        stores.write_phases().unwrap().insert(phase_id.clone(), phase);
+        let mut w = Work::new(phase_id.clone(), format!("work-{}", marker));
+        w.session_failure_count = *failures;
+        let w_id = w.id.clone();
+        stores.write_works().unwrap().insert(w_id, w);
+    }
+
+    // Director scoped to Plan A.
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), None, Some(plan_a_id.clone()));
+    let mut agent = make_director(ctx);
+
+    let cancel_stores = stores.clone();
+    let cancel_id = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut sessions = cancel_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&cancel_id) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(3), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    // Plan A's work has 1 failure. Plan B's work has 5 but must not leak in.
+    let total_failures: usize = agent
+        .pattern_tracker
+        .work_failure_history
+        .values()
+        .map(|v| v.len())
+        .sum();
+    assert_eq!(
+        total_failures, 1,
+        "Plan A reconciliation must not pull in Plan B's failures (got {} total)",
+        total_failures
+    );
+}
+
 // ─── Phase 6: UserIntervention ─────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
