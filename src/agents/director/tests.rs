@@ -264,6 +264,246 @@ async fn legacy_escalation_short_circuits_event_loop() {
     result.unwrap().unwrap();
 }
 
+// ─── Phase 4: Monitoring intelligence ──────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mode_change_emits_director_mode_changed_event() {
+    let dir = TestDir::new("director-mode-change-event");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, mut rx) = broadcast::channel(32);
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), None, None);
+    let mut agent = make_director(ctx);
+
+    // Seed a non-terminal plan so Monitoring keeps the loop alive.
+    let plan = Plan::new("to-monitor".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let driver_stores = stores.clone();
+    let driver_session = session_id.clone();
+    let driver_tx = event_tx.clone();
+    let driver_pid = plan_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let _ = driver_tx.send(DaemonEvent::new(
+            "doc.plan_accepted",
+            serde_json::json!({ "plan_id": driver_pid }),
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut sessions = driver_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&driver_session) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(5), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    // Drain the receiver and verify director.mode_changed was emitted with mode="monitoring".
+    let mut saw_mode_changed = false;
+    while let Ok(ev) = rx.try_recv() {
+        if ev.event == "director.mode_changed"
+            && ev.data.get("mode").and_then(|v| v.as_str()) == Some("monitoring")
+            && ev.data.get("session_id").and_then(|v| v.as_str()) == Some(session_id.as_str())
+        {
+            saw_mode_changed = true;
+            break;
+        }
+    }
+    assert!(
+        saw_mode_changed,
+        "director.mode_changed event must fire on PlanIntake → Monitoring"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failure_threshold_flips_mode_to_escalation() {
+    let dir = TestDir::new("director-failure-threshold");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, mut rx) = broadcast::channel(32);
+
+    // Seed a non-terminal plan and an Implementer session tied to a work_id so
+    // `resolve_work_id_for_session` returns a value.
+    let plan = Plan::new("threshold-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let mut impl_session = AgentSession::new(AgentKind::Implementer, "test-model".into());
+    impl_session.work_id = Some("wk-threshold".into());
+    let impl_sid = impl_session.id.clone();
+    stores
+        .agent_sessions
+        .write()
+        .unwrap()
+        .insert(impl_sid.clone(), impl_session);
+
+    // Enter Monitoring directly by spawning with a pl-* target_id.
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), None, Some(plan_id.clone()));
+    let mut agent = make_director(ctx);
+
+    let driver_tx = event_tx.clone();
+    let driver_sid = impl_sid.clone();
+    let driver_cancel_stores = stores.clone();
+    let driver_cancel_id = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Three failures on the same work → pattern tracker triggers threshold.
+        for _ in 0..3 {
+            let _ = driver_tx.send(DaemonEvent::new(
+                "agent.status_changed",
+                serde_json::json!({
+                    "session_id": driver_sid,
+                    "status": "failed",
+                    "error": "compile error",
+                }),
+            ));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut sessions = driver_cancel_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&driver_cancel_id) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(5), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    // Session store must reflect Escalation (set by the pattern check).
+    let sessions = stores.agent_sessions.read().unwrap();
+    let sess = sessions.get(&session_id).unwrap();
+    assert_eq!(
+        sess.director_mode,
+        Some(DirectorMode::Escalation),
+        "three failures on same work must flip the Director into Escalation"
+    );
+    drop(sessions);
+
+    // director.mode_changed event with mode="escalation" must have been broadcast.
+    let mut saw_escalation = false;
+    while let Ok(ev) = rx.try_recv() {
+        if ev.event == "director.mode_changed"
+            && ev.data.get("mode").and_then(|v| v.as_str()) == Some("escalation")
+        {
+            saw_escalation = true;
+        }
+    }
+    assert!(
+        saw_escalation,
+        "threshold breach must emit director.mode_changed with mode=escalation"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejection_threshold_flips_mode_to_escalation() {
+    let dir = TestDir::new("director-rejection-threshold");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(32);
+
+    let plan = Plan::new("rej-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), None, Some(plan_id.clone()));
+    let mut agent = make_director(ctx);
+
+    let driver_tx = event_tx.clone();
+    let driver_cancel_stores = stores.clone();
+    let driver_cancel_id = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        for _ in 0..3 {
+            let _ = driver_tx.send(DaemonEvent::new(
+                "bundle.rejected",
+                serde_json::json!({
+                    "bundle_work_id": "wk-rej",
+                    "reason": "diff-too-large",
+                }),
+            ));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut sessions = driver_cancel_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&driver_cancel_id) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(5), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    let sessions = stores.agent_sessions.read().unwrap();
+    let sess = sessions.get(&session_id).unwrap();
+    assert_eq!(
+        sess.director_mode,
+        Some(DirectorMode::Escalation),
+        "three bundle rejections on same work must flip to Escalation"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn below_threshold_stays_in_monitoring() {
+    let dir = TestDir::new("director-below-threshold");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(32);
+
+    let plan = Plan::new("below-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let mut impl_session = AgentSession::new(AgentKind::Implementer, "test-model".into());
+    impl_session.work_id = Some("wk-below".into());
+    let impl_sid = impl_session.id.clone();
+    stores
+        .agent_sessions
+        .write()
+        .unwrap()
+        .insert(impl_sid.clone(), impl_session);
+
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), None, Some(plan_id.clone()));
+    let mut agent = make_director(ctx);
+
+    let driver_tx = event_tx.clone();
+    let driver_sid = impl_sid.clone();
+    let driver_cancel_stores = stores.clone();
+    let driver_cancel_id = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Only 2 failures; threshold is 3, so mode should stay Monitoring.
+        for _ in 0..2 {
+            let _ = driver_tx.send(DaemonEvent::new(
+                "agent.status_changed",
+                serde_json::json!({
+                    "session_id": driver_sid,
+                    "status": "failed",
+                    "error": "compile error",
+                }),
+            ));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut sessions = driver_cancel_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&driver_cancel_id) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(5), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    let sessions = stores.agent_sessions.read().unwrap();
+    let sess = sessions.get(&session_id).unwrap();
+    assert_eq!(
+        sess.director_mode,
+        Some(DirectorMode::Monitoring),
+        "two failures must not trigger the 3-failure threshold"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_scoped_target_id_enters_monitoring_with_plan_id() {
     let dir = TestDir::new("director-plan-target-id");

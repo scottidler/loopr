@@ -40,9 +40,23 @@ use crate::tools::types::{ContentBlock, Message};
 const HEARTBEAT_INTERVAL_MS: u64 = 1_000;
 
 /// Stall threshold: if no relevant events arrive for this long during Monitoring,
-/// the heartbeat surfaces a stall warning. Not yet wired to escalation - Phase 4
-/// decides what action to take when stalls are detected.
+/// the heartbeat emits a `director.stall_detected` event. Phase 5 consumes the event
+/// and decides whether to enter Escalation.
 const STALL_THRESHOLD_SECS: u64 = 300;
+
+/// Re-emission throttle for stall detection. Once a stall has been announced, suppress
+/// repeat emissions until the idle interval doubles, so the TUI isn't spammed once per
+/// heartbeat after the threshold is first crossed.
+const STALL_REEMIT_SECS: u64 = 300;
+
+/// Failure-count threshold for cross-session escalation. When the same work_id has
+/// accumulated this many failures (across any implementer sessions), the Director
+/// transitions to Escalation. Design doc §Edge Cases codifies the default at 3.
+const WORK_FAILURE_THRESHOLD: usize = 3;
+
+/// Rejection-count threshold for cross-session escalation. Same semantics as
+/// `WORK_FAILURE_THRESHOLD` but counts bundle rejections for the work.
+const WORK_REJECTION_THRESHOLD: usize = 3;
 
 /// The Director's operating mode.
 ///
@@ -124,6 +138,9 @@ pub struct DirectorAgent<L: LlmClient> {
     lifeguard: Lifeguard,
     /// Monotonic clock reference used to detect stalls in Monitoring mode.
     last_event_at: Instant,
+    /// Last time a `director.stall_detected` event was emitted. Used to throttle
+    /// repeat emissions when the stall persists across heartbeats.
+    last_stall_emit_at: Option<Instant>,
     /// Total events observed across the session (debug/trace only).
     event_count: u64,
     /// Lazily-initialized PlanIntake LLM client. Created on first conversation turn so we
@@ -146,6 +163,7 @@ impl<L: LlmClient> DirectorAgent<L> {
             pattern_tracker: DirectorPatternTracker::new(),
             lifeguard: Lifeguard::new(),
             last_event_at: Instant::now(),
+            last_stall_emit_at: None,
             event_count: 0,
             planintake_llm: None,
         }
@@ -181,6 +199,67 @@ impl<L: LlmClient> DirectorAgent<L> {
         };
         if let Some(s) = sessions.get_mut(&self.ctx.session.id) {
             s.director_mode = Some(self.mode);
+        }
+    }
+
+    /// Serialize `DirectorMode` to the kebab-case string used on the wire.
+    /// Keep this in sync with the `#[serde(rename_all = "kebab-case")]` on the enum.
+    fn mode_str(mode: DirectorMode) -> &'static str {
+        match mode {
+            DirectorMode::PlanIntake => "plan-intake",
+            DirectorMode::Monitoring => "monitoring",
+            DirectorMode::Escalation => "escalation",
+            DirectorMode::UserIntervention => "user-intervention",
+        }
+    }
+
+    /// Transition to `new_mode`: update in-memory mode, persist to session store,
+    /// and broadcast `director.mode_changed` so the TUI and audit trail see the flip.
+    /// No-op when the mode is unchanged, so callers don't need to pre-check.
+    fn set_mode(&mut self, new_mode: DirectorMode) {
+        if self.mode == new_mode {
+            return;
+        }
+        let from = self.mode;
+        self.mode = new_mode;
+        self.persist_mode();
+        info!(
+            "{} director: mode {:?} -> {:?} (plan_id={:?})",
+            self.ctx.log_prefix(),
+            from,
+            new_mode,
+            self.plan_id
+        );
+        let _ = self.ctx.event_tx.send(DaemonEvent::director_mode_changed(
+            &self.ctx.session.id,
+            Self::mode_str(new_mode),
+            self.plan_id.as_deref(),
+        ));
+    }
+
+    /// Cross-session threshold check: if the tracker has accumulated enough failure or
+    /// rejection history for this work, flip to Escalation mode (observational in Phase 4;
+    /// Phase 5 re-dispatches the loop to the escalation handler). Safe to call after any
+    /// pattern-tracker mutation.
+    fn check_thresholds(&mut self, work_id: &str) {
+        if !matches!(self.mode, DirectorMode::Monitoring) {
+            return;
+        }
+        let failures = self.pattern_tracker.failure_count(work_id);
+        let rejections = self.pattern_tracker.rejection_count(work_id);
+        if failures >= WORK_FAILURE_THRESHOLD || rejections >= WORK_REJECTION_THRESHOLD {
+            warn!(
+                "{} director: threshold exceeded for work_id={} (failures={}, rejections={}) -> Escalation",
+                self.ctx.log_prefix(),
+                work_id,
+                failures,
+                rejections
+            );
+            // Phase 4 flips the mode for observability; the event loop continues running
+            // and the Director will return to Monitoring on the next Phase 5 pass. The
+            // `run()` dispatcher keys off the initial mode, not mid-loop transitions, so
+            // we don't re-enter legacy_escalation here.
+            self.set_mode(DirectorMode::Escalation);
         }
     }
 
@@ -240,6 +319,10 @@ impl<L: LlmClient> DirectorAgent<L> {
         self.event_count += 1;
         self.last_event_at = Instant::now();
 
+        // Work id whose threshold should be (re)checked after recording this event.
+        // Set only when the event actually touched a work's failure/rejection history.
+        let mut touched_work: Option<String> = None;
+
         match event.event.as_str() {
             // Plan acceptance completes the PlanIntake → Monitoring handoff.
             "doc.plan_accepted" => {
@@ -247,17 +330,12 @@ impl<L: LlmClient> DirectorAgent<L> {
                     self.plan_id = Some(pid.to_string());
                 }
                 if matches!(self.mode, DirectorMode::PlanIntake) {
-                    info!(
-                        "{} director: PlanIntake → Monitoring (plan_id={:?})",
-                        self.ctx.log_prefix(),
-                        self.plan_id
-                    );
-                    self.mode = DirectorMode::Monitoring;
-                    self.persist_mode();
+                    self.set_mode(DirectorMode::Monitoring);
                 }
             }
-            // Track agent failures for cross-session pattern detection (Phase 4 escalates;
-            // Phase 7 adds thresholding and error-signature grouping).
+            // Track agent failures for cross-session pattern detection. Phase 4 triggers
+            // Escalation when `WORK_FAILURE_THRESHOLD` is reached; Phase 7 refines with
+            // error-signature hash grouping.
             "agent.status_changed" => {
                 if let Some(status) = event.data.get("status").and_then(|v| v.as_str())
                     && status.eq_ignore_ascii_case("failed")
@@ -277,9 +355,10 @@ impl<L: LlmClient> DirectorAgent<L> {
                     if let Some(work_id) = self.resolve_work_id_for_session(&session_id) {
                         self.pattern_tracker
                             .work_failure_history
-                            .entry(work_id)
+                            .entry(work_id.clone())
                             .or_default()
                             .push((session_id, error));
+                        touched_work = Some(work_id);
                     }
                 }
             }
@@ -297,16 +376,22 @@ impl<L: LlmClient> DirectorAgent<L> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("stale")
                         .to_string();
+                    let work_id = work_id.to_string();
                     self.pattern_tracker
                         .rejection_history
-                        .entry(work_id.to_string())
+                        .entry(work_id.clone())
                         .or_default()
                         .push(reason);
+                    touched_work = Some(work_id);
                 }
             }
             _ => {
                 trace!("{} director: observed event {}", self.ctx.log_prefix(), event.event);
             }
+        }
+
+        if let Some(work_id) = touched_work {
+            self.check_thresholds(&work_id);
         }
         Ok(())
     }
@@ -371,15 +456,14 @@ impl<L: LlmClient> DirectorAgent<L> {
             DirectorMode::PlanIntake => self.planintake_turn(Some(message)).await,
             DirectorMode::Monitoring => {
                 // Phase 6 implements UserIntervention. Phase 3 just records the transition
-                // for observability and emits a user-visible acknowledgement.
-                self.mode = DirectorMode::UserIntervention;
-                self.persist_mode();
+                // for observability and emits a user-visible acknowledgement. `set_mode`
+                // handles persistence + mode_changed event emission.
+                self.set_mode(DirectorMode::UserIntervention);
                 self.emit_llm_text(&format!(
                     "[Director accepted user message during Monitoring; UserIntervention handling lands in Phase 6. Message: {}]",
                     message
                 ));
-                self.mode = DirectorMode::Monitoring;
-                self.persist_mode();
+                self.set_mode(DirectorMode::Monitoring);
                 Ok(())
             }
             DirectorMode::Escalation | DirectorMode::UserIntervention => {
@@ -556,12 +640,23 @@ impl<L: LlmClient> DirectorAgent<L> {
         if matches!(self.mode, DirectorMode::Monitoring) {
             let idle_secs = self.last_event_at.elapsed().as_secs();
             if idle_secs >= STALL_THRESHOLD_SECS {
-                warn!(
-                    "{} director: possible stall - no relevant events for {}s",
-                    self.ctx.log_prefix(),
-                    idle_secs
-                );
-                // Phase 4 decides what to do (probe state, escalate, notify user).
+                let should_emit = match self.last_stall_emit_at {
+                    None => true,
+                    Some(last) => last.elapsed().as_secs() >= STALL_REEMIT_SECS,
+                };
+                if should_emit {
+                    warn!(
+                        "{} director: possible stall - no relevant events for {}s",
+                        self.ctx.log_prefix(),
+                        idle_secs
+                    );
+                    let _ = self.ctx.event_tx.send(DaemonEvent::director_stall_detected(
+                        &self.ctx.session.id,
+                        self.plan_id.as_deref(),
+                        idle_secs,
+                    ));
+                    self.last_stall_emit_at = Some(Instant::now());
+                }
             }
         }
         Ok(())

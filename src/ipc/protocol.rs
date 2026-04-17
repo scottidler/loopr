@@ -389,6 +389,31 @@ impl DaemonEvent {
             }),
         )
     }
+
+    /// Emitted whenever the Director flips between modes.
+    pub fn director_mode_changed(session_id: &str, mode: &str, plan_id: Option<&str>) -> Self {
+        Self::new(
+            "director.mode_changed",
+            serde_json::json!({
+                "session_id": session_id,
+                "mode": mode,
+                "plan_id": plan_id,
+            }),
+        )
+    }
+
+    /// Emitted by the Director heartbeat when no broadcast events have arrived
+    /// during Monitoring for longer than the stall threshold.
+    pub fn director_stall_detected(session_id: &str, plan_id: Option<&str>, idle_secs: u64) -> Self {
+        Self::new(
+            "director.stall_detected",
+            serde_json::json!({
+                "session_id": session_id,
+                "plan_id": plan_id,
+                "idle_secs": idle_secs,
+            }),
+        )
+    }
 }
 
 /// Parse a raw JSON line into an IpcMessage.
