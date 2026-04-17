@@ -31,7 +31,7 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use eyre::Result;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
@@ -57,6 +57,20 @@ pub struct AgentContext {
     pub stores: Arc<Stores>,
     pub bridge: AgentIpcBridge,
     pub event_tx: broadcast::Sender<DaemonEvent>,
+    /// Broadcast receiver for long-lived agents (Director). Short-lived agents leave this as None.
+    ///
+    /// Subscribed off `event_tx` during `from_session_id` when `agent_type == Director`.
+    /// The Director's run loop selects on this receiver to observe daemon events.
+    /// `RecvError::Lagged(n)` must be handled: it means `n` events overflowed the fixed-capacity
+    /// circular buffer (hardcoded to 256 in `daemon::context`). See `State Reconciliation` in
+    /// `docs/design/2026-04-16-director-agent.md`.
+    pub event_rx: Option<broadcast::Receiver<DaemonEvent>>,
+    /// User message channel for long-lived Director sessions.
+    ///
+    /// Populated by `director.start_plan_intake` when spawning the Director; the handler
+    /// also stores the matching `mpsc::Sender` in `Stores.director_message_tx` keyed by
+    /// session id so `director.user_message` can forward messages to the running Director.
+    pub user_message_rx: Option<mpsc::Receiver<String>>,
     pub tool_runner: Arc<ToolRunner>,
     pub tool_executor: Arc<ToolExecutor>,
     pub read_cache: Mutex<ReadCache>,
@@ -64,6 +78,11 @@ pub struct AgentContext {
 
 impl AgentContext {
     /// Create an AgentContext by cloning the session from stores.
+    ///
+    /// Director sessions subscribe to the event broadcast channel automatically so the
+    /// Director's run loop can observe daemon events. `user_message_rx` is left `None` here;
+    /// the `director.start_plan_intake` handler injects it via `with_user_message_rx` before
+    /// spawning.
     pub fn from_session_id(
         session_id: &str,
         stores: Arc<Stores>,
@@ -88,15 +107,32 @@ impl AgentContext {
             stores.fsm.clone(),
         );
 
+        let event_rx = if session.agent_type == AgentKind::Director {
+            Some(event_tx.subscribe())
+        } else {
+            None
+        };
+
         Ok(Self {
             session,
             stores: stores.clone(),
             bridge,
             event_tx,
+            event_rx,
+            user_message_rx: None,
             tool_runner: stores.read_tool_runner()?,
             tool_executor: stores.read_tool_executor()?,
             read_cache: Mutex::new(ReadCache::default()),
         })
+    }
+
+    /// Attach an mpsc receiver for incoming user messages.
+    ///
+    /// Called by `director.start_plan_intake` before spawning the Director agent so the
+    /// Director can receive user chat during PlanIntake and UserIntervention modes.
+    pub fn with_user_message_rx(mut self, rx: mpsc::Receiver<String>) -> Self {
+        self.user_message_rx = Some(rx);
+        self
     }
 
     /// Acquire the read_cache lock, recovering from poison by logging a warning.
@@ -227,6 +263,8 @@ mod tests {
             stores: stores.clone(),
             bridge,
             event_tx,
+            event_rx: None,
+            user_message_rx: None,
             tool_runner: stores.read_tool_runner().unwrap(),
             tool_executor: stores.read_tool_executor().unwrap(),
             read_cache: Mutex::new(ReadCache::default()),
@@ -350,6 +388,91 @@ mod tests {
         let sessions = stores.agent_sessions.read().unwrap();
         let stored = sessions.get(&ctx.session.id).unwrap();
         assert_eq!(stored.iteration, 5);
+    }
+
+    #[test]
+    fn test_agent_context_director_subscribes_event_rx() {
+        let dir = make_test_dir("director-subscribes");
+        let stores = test_stores_with_dir(&dir);
+
+        let session = AgentSession::new(AgentKind::Director, "test-model".into());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let (event_tx, _event_rx) = broadcast::channel(16);
+        let ctx = AgentContext::from_session_id(&session_id, stores.clone(), event_tx.clone())
+            .expect("should create Director AgentContext");
+
+        assert!(
+            ctx.event_rx.is_some(),
+            "Director session must have event_rx Some (broadcast subscription)"
+        );
+        assert!(
+            ctx.user_message_rx.is_none(),
+            "user_message_rx should be None until director.start_plan_intake injects it"
+        );
+    }
+
+    #[test]
+    fn test_agent_context_non_director_has_no_event_rx() {
+        let dir = make_test_dir("non-director-no-event-rx");
+        let stores = test_stores_with_dir(&dir);
+
+        for kind in [
+            AgentKind::Implementer,
+            AgentKind::Reviewer,
+            AgentKind::Researcher,
+            AgentKind::Chat,
+            AgentKind::Decomposer,
+        ] {
+            let session = AgentSession::new(kind, "test-model".into());
+            let session_id = session.id.clone();
+            stores
+                .agent_sessions
+                .write()
+                .unwrap()
+                .insert(session_id.clone(), session);
+
+            let (event_tx, _event_rx) = broadcast::channel(16);
+            let ctx = AgentContext::from_session_id(&session_id, stores.clone(), event_tx)
+                .expect("should create AgentContext");
+
+            assert!(
+                ctx.event_rx.is_none(),
+                "{:?} should NOT subscribe to event broadcast",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_agent_context_with_user_message_rx() {
+        let dir = make_test_dir("with-user-message-rx");
+        let stores = test_stores_with_dir(&dir);
+
+        let session = AgentSession::new(AgentKind::Director, "test-model".into());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let (event_tx, _event_rx) = broadcast::channel(16);
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<String>(16);
+        let ctx = AgentContext::from_session_id(&session_id, stores, event_tx)
+            .expect("should create Director AgentContext")
+            .with_user_message_rx(msg_rx);
+
+        assert!(
+            ctx.user_message_rx.is_some(),
+            "with_user_message_rx must attach receiver"
+        );
+        drop(msg_tx);
     }
 
     #[test]

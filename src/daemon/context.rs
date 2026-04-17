@@ -83,6 +83,11 @@ pub struct Stores {
     pub session_dir: Option<std::path::PathBuf>,
     /// Chat session conversation histories, keyed by session ID (e.g., "default-chat").
     pub chat_sessions: StdRwLock<HashMap<String, ChatHistory>>,
+    /// mpsc senders for forwarding user chat messages to active Director sessions.
+    /// Keyed by Director `AgentSession.id`. Populated by `director.start_plan_intake`;
+    /// read by `director.user_message`; removed when the Director session terminates.
+    /// Runtime-only - not persisted (an mpsc::Sender can't survive process restart).
+    pub director_message_tx: StdRwLock<HashMap<String, tokio::sync::mpsc::Sender<String>>>,
     /// Daemon session ID (timestamp-based), set once at startup.
     pub session_id: String,
     /// Degraded mode: set when a catastrophic reconciliation fracture is detected.
@@ -236,6 +241,7 @@ impl Stores {
             guidance: AgentGuidance::schema_only(),
             session_dir: None,
             chat_sessions: StdRwLock::new(HashMap::new()),
+            director_message_tx: StdRwLock::new(HashMap::new()),
             session_id: String::new(),
             degraded: AtomicBool::new(false),
             reconciliation_last_sweep_at: AtomicU64::new(0),

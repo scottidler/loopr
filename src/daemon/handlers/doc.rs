@@ -210,8 +210,6 @@ pub(super) async fn accept_plan_markdown(
         json!({
             "child_count": child_count_for_response,
             "plan_id": &plan_id,
-            // Backward compat: CLI reads goal_id from the response
-            "goal_id": &plan_id,
         }),
     ))
 }
@@ -337,7 +335,6 @@ mod tests {
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["child_count"], 0);
-        assert!(result["goal_id"].as_str().is_some(), "goal_id must be present");
         assert!(result["plan_id"].as_str().is_some(), "plan_id must be present");
 
         // No Doc records - Doc intermediary is gone
@@ -480,7 +477,6 @@ mod tests {
 
         let result = resp.result.unwrap();
         assert_eq!(result["child_count"], 0);
-        assert!(result["goal_id"].as_str().is_some(), "goal_id must be present");
         assert!(result["plan_id"].as_str().is_some(), "plan_id must be present");
 
         // No Doc records - Doc intermediary is gone

@@ -326,6 +326,31 @@ impl StateQueryRegistry {
             }),
         );
 
+        // has-active-plan: at least one Plan is in a non-terminal status.
+        // Non-terminal = Draft | Pending | Active. Terminal = Complete | Superseded | Abandoned.
+        // Used by supervision strategies to skip Director spawn when no plan is executing.
+        // Scope-independent: ignores collection and id parameters.
+        r.register(
+            "has-active-plan",
+            Box::new(|ctx, _collection, _id, _params| {
+                ctx.stores
+                    .plans
+                    .read()
+                    .ok()
+                    .map(|plans| {
+                        plans.values().any(|p| {
+                            matches!(
+                                p.status(),
+                                crate::domain::plan::HierarchyStatus::Draft
+                                    | crate::domain::plan::HierarchyStatus::Pending
+                                    | crate::domain::plan::HierarchyStatus::Active
+                            )
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
         // field-equals: a specific field on the record equals a given value.
         r.register(
             "field-equals",
@@ -428,6 +453,30 @@ impl GuardConditionRegistry {
                             );
                             let matches_record = s.work_id.as_deref() == Some(id) || s.target_id.as_deref() == Some(id);
                             is_active && matches_record
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
+        // has-active-plan: at least one Plan is non-terminal (Draft | Pending | Active).
+        // Used by supervision strategies (restart-director-on-*) to prevent spawning a Director
+        // when no plan is executing. Scope-independent: ignores collection and id.
+        r.register(
+            "has-active-plan",
+            Box::new(|ctx, _collection, _id| {
+                ctx.stores
+                    .plans
+                    .read()
+                    .ok()
+                    .map(|plans| {
+                        plans.values().any(|p| {
+                            matches!(
+                                p.status(),
+                                crate::domain::plan::HierarchyStatus::Draft
+                                    | crate::domain::plan::HierarchyStatus::Pending
+                                    | crate::domain::plan::HierarchyStatus::Active
+                            )
                         })
                     })
                     .unwrap_or(false)

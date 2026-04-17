@@ -463,7 +463,7 @@ pub(super) async fn run_agent_loop(
             (result, agent.ctx.session.iteration)
         }
         AgentKind::Director => {
-            let config = stores.config.agents.researcher.clone(); // Director uses Opus but shares config shape
+            let config = stores.config.agents.director.clone();
             let conv_log = conversations_dir
                 .as_ref()
                 .map(|d| (d.clone(), format!("director-{}", session_id)));

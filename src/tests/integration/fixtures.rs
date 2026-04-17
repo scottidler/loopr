@@ -56,6 +56,8 @@ pub(super) fn test_agent_context(
         stores: stores.clone(),
         bridge,
         event_tx: tx,
+        event_rx: None,
+        user_message_rx: None,
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),

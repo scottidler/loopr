@@ -1541,7 +1541,8 @@ fn v3_safety_nets_have_highest_priority() {
 
     let hard_cap = by_name["work-attempt-hard-cap"].priority;
     let ratio_escalation = by_name["abandon-ratio-escalation"].priority;
-    let supervisor = by_name["restart-coordinator-on-event"].priority;
+    // v4-cutover renamed the supervisor strategy: Coordinator -> Director.
+    let supervisor = by_name["restart-director-on-event"].priority;
 
     assert!(hard_cap >= 1000, "hard cap priority {} < 1000", hard_cap);
     assert!(

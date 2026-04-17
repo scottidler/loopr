@@ -182,18 +182,18 @@ async fn run_headless(
     if let Some(err) = resp.error {
         bail!("doc.inject error: {}", err.message);
     }
-    let goal_id = resp
+    let plan_id = resp
         .result
         .as_ref()
-        .and_then(|r| r.get("goal_id"))
+        .and_then(|r| r.get("plan_id"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    eprintln!("Plan injected: {} (goal_id: {})", plan_path, goal_id);
+    eprintln!("Plan injected: {} (plan_id: {})", plan_path, plan_id);
 
     // Step 3: If no-monitor, exit now
     if no_monitor {
-        eprintln!("Goal ID: {goal_id}");
+        eprintln!("Plan ID: {plan_id}");
         eprintln!("Use `loopr coordinator goal` to check status.");
         return Ok(());
     }
@@ -205,7 +205,7 @@ async fn run_headless(
 
     loop {
         if start.elapsed() > timeout {
-            eprintln!("Timeout after {}s. Goal ID: {}", timeout_secs, goal_id);
+            eprintln!("Timeout after {}s. Plan ID: {}", timeout_secs, plan_id);
             std::process::exit(1);
         }
 
@@ -260,7 +260,7 @@ async fn run_headless(
                         std::process::exit(0);
                     }
                     if status == "NeedHelp" {
-                        eprintln!("Coordinator needs help. Goal ID: {}", goal_id);
+                        eprintln!("Coordinator needs help. Plan ID: {}", plan_id);
                         std::process::exit(2);
                     }
                 }

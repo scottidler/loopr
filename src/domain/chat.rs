@@ -57,10 +57,14 @@ pub struct ChatHistory {
     pub session_id: String,
     pub messages: Vec<Message>,
     pub funnel_state: FunnelState,
-    /// The coordinator goal_id associated with this chat session's execution.
+    /// The Plan id associated with this chat session's execution.
     /// Set when /accept transitions to Executing state.
+    #[serde(default, alias = "goal_id")]
+    pub plan_id: Option<String>,
+    /// Director AgentSession id currently attached to this chat session (PlanIntake or Monitoring).
+    /// None when no Director is active (e.g., pre-/plan chatting or after plan completion).
     #[serde(default)]
-    pub goal_id: Option<String>,
+    pub director_session_id: Option<String>,
     pub updated_at: i64,
 }
 
@@ -70,7 +74,8 @@ impl ChatHistory {
             session_id,
             messages: Vec::new(),
             funnel_state: FunnelState::Chat,
-            goal_id: None,
+            plan_id: None,
+            director_session_id: None,
             updated_at: chrono::Utc::now().timestamp_millis(),
         }
     }
@@ -150,23 +155,35 @@ mod tests {
         assert_eq!(history.session_id, "default-chat");
         assert!(history.messages.is_empty());
         assert_eq!(history.funnel_state, FunnelState::Chat);
-        assert!(history.goal_id.is_none());
+        assert!(history.plan_id.is_none());
+        assert!(history.director_session_id.is_none());
     }
 
     #[test]
-    fn test_chat_history_goal_id_serde_roundtrip() {
+    fn test_chat_history_plan_id_serde_roundtrip() {
         let mut history = ChatHistory::new("test-session".to_string());
-        history.goal_id = Some("cg-abc12".to_string());
+        history.plan_id = Some("pl-abc12".to_string());
+        history.director_session_id = Some("ag-dir01".to_string());
         let json = serde_json::to_string(&history).unwrap();
         let back: ChatHistory = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.goal_id, Some("cg-abc12".to_string()));
+        assert_eq!(back.plan_id, Some("pl-abc12".to_string()));
+        assert_eq!(back.director_session_id, Some("ag-dir01".to_string()));
     }
 
     #[test]
-    fn test_chat_history_goal_id_default_on_missing() {
-        // Backwards compatibility: old ChatHistory JSON without goal_id
+    fn test_chat_history_plan_id_default_on_missing() {
+        // Backwards compatibility: old ChatHistory JSON without plan_id/director_session_id
         let json = r#"{"session_id":"s","messages":[],"funnel_state":"chat","updated_at":0}"#;
         let history: ChatHistory = serde_json::from_str(json).unwrap();
-        assert!(history.goal_id.is_none());
+        assert!(history.plan_id.is_none());
+        assert!(history.director_session_id.is_none());
+    }
+
+    #[test]
+    fn test_chat_history_goal_id_alias_backward_compat() {
+        // Old JSON that wrote `goal_id` must still deserialize (via serde alias).
+        let json = r#"{"session_id":"s","messages":[],"funnel_state":"chat","goal_id":"pl-old123","updated_at":0}"#;
+        let history: ChatHistory = serde_json::from_str(json).unwrap();
+        assert_eq!(history.plan_id, Some("pl-old123".to_string()));
     }
 }

@@ -859,6 +859,72 @@ fn state_query_unknown_returns_false() {
     assert!(!reg.evaluate("no-such-query", &ctx, "work", "any-id", &HashMap::new()));
 }
 
+#[test]
+fn state_query_has_active_plan_false_when_empty() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(
+        !reg.evaluate("has-active-plan", &ctx, "plan", "ignored", &HashMap::new()),
+        "no plans => has-active-plan must be false"
+    );
+}
+
+#[test]
+fn state_query_has_active_plan_true_when_draft() {
+    use crate::domain::criteria::AcceptanceCriteria;
+    let stores = make_stores();
+    // Plan::new starts in Draft which is non-terminal.
+    let plan = Plan::new("Test Plan".to_owned(), AcceptanceCriteria::default());
+    stores.write_plans().unwrap().insert(plan.id.clone(), plan);
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(
+        reg.evaluate("has-active-plan", &ctx, "plan", "ignored", &HashMap::new()),
+        "one Draft plan => has-active-plan must be true"
+    );
+}
+
+#[test]
+fn state_query_has_active_plan_false_when_all_terminal() {
+    use crate::domain::criteria::AcceptanceCriteria;
+    use crate::domain::plan::HierarchyStatus;
+    let stores = make_stores();
+    for status in [
+        HierarchyStatus::Complete,
+        HierarchyStatus::Superseded,
+        HierarchyStatus::Abandoned,
+    ] {
+        let mut plan = Plan::new(format!("{:?}", status), AcceptanceCriteria::default());
+        plan.force_status(status);
+        stores.write_plans().unwrap().insert(plan.id.clone(), plan);
+    }
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(
+        !reg.evaluate("has-active-plan", &ctx, "plan", "ignored", &HashMap::new()),
+        "all-terminal plans => has-active-plan must be false"
+    );
+}
+
+#[test]
+fn guard_has_active_plan_mirrors_state_query() {
+    use crate::domain::criteria::AcceptanceCriteria;
+    use crate::domain::plan::HierarchyStatus;
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+
+    // Empty: false
+    assert!(!reg.evaluate("has-active-plan", &ctx, "plan", "ignored"));
+
+    // One Pending plan: true
+    let mut plan = Plan::new("p".to_owned(), AcceptanceCriteria::default());
+    plan.force_status(HierarchyStatus::Pending);
+    stores.write_plans().unwrap().insert(plan.id.clone(), plan);
+    assert!(reg.evaluate("has-active-plan", &ctx, "plan", "ignored"));
+}
+
 // --- GuardConditionRegistry ---
 
 #[test]

@@ -369,6 +369,7 @@ pub struct AgentConfig {
     pub implementer: AgentRoleConfig,
     pub reviewer: AgentRoleConfig,
     pub researcher: AgentRoleConfig,
+    pub director: AgentRoleConfig,
     pub tools: Vec<ToolEntry>,
     /// How the Director handles the interview phase.
     #[serde(default)]
@@ -391,6 +392,7 @@ impl Default for AgentConfig {
             implementer: AgentRoleConfig::default_implementer(),
             reviewer: AgentRoleConfig::default_reviewer(),
             researcher: AgentRoleConfig::default_researcher(),
+            director: AgentRoleConfig::default_director(),
             tools: Vec::new(),
             interview_mode: InterviewMode::default(),
             max_abandon_ratio: default_max_abandon_ratio(),
@@ -561,6 +563,22 @@ impl AgentRoleConfig {
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
             prompt: "agents/researcher".to_string(),
+        }
+    }
+
+    pub fn default_director() -> Self {
+        Self {
+            llm: LlmConfig {
+                model: "claude-opus-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 16384,
+                temperature: 0.3,
+            },
+            max_iterations: 20,
+            max_pool: 1,
+            session_timeout_secs: Some(3600), // 1 hour - spans plan lifetime
+            max_requeries: 3,
+            prompt: "agents/director".to_string(),
         }
     }
 }
@@ -976,6 +994,31 @@ mod tests {
         assert_eq!(rc.llm.max_tokens, 4096);
         assert!((rc.llm.temperature - 0.1).abs() < f32::EPSILON);
         assert_eq!(rc.max_requeries, 3);
+    }
+
+    #[test]
+    fn test_agent_role_config_director_defaults() {
+        let rc = AgentRoleConfig::default_director();
+        assert_eq!(rc.llm.model, "claude-opus-4-6", "Director runs on Opus by design");
+        assert_eq!(rc.max_pool, 1, "Director is a singleton - only one active at a time");
+        assert_eq!(rc.llm.max_tokens, 16384);
+        assert!((rc.llm.temperature - 0.3).abs() < f32::EPSILON);
+        assert_eq!(
+            rc.session_timeout_secs,
+            Some(3600),
+            "Director spans a plan lifetime (1 hour default)"
+        );
+        assert_eq!(rc.prompt, "agents/director");
+    }
+
+    #[test]
+    fn test_agent_config_default_includes_director() {
+        let ac = AgentConfig::default();
+        assert_eq!(
+            ac.director.llm.model, "claude-opus-4-6",
+            "AgentConfig must wire Director config - no Researcher-borrowing hack"
+        );
+        assert_eq!(ac.director.max_pool, 1);
     }
 
     #[test]

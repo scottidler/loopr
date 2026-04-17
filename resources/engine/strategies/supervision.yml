@@ -2,6 +2,7 @@
 # Dual pattern: event-driven (fast) + level-triggered (reliable, principle 8).
 
 # Fast reaction: restart Director immediately when a failure event arrives.
+# Guard on spawn-agent prevents restart after the plan has concluded.
 restart-director-on-event:
   description: Restart Director after a failure event, up to max restarts
   trigger: director-failed
@@ -17,6 +18,7 @@ restart-director-on-event:
         max: 5
   on-success:
     - primitive: spawn-agent
+      guard: has-active-plan
       params:
         role: director
   on-failure:
@@ -25,6 +27,8 @@ restart-director-on-event:
         reason: director-max-restarts-exceeded
 
 # Level-triggered fallback: catches missed events after restart or on cold start.
+# Guard on spawn-agent gates the level-triggered spawn so it only fires when a plan
+# is actually executing (otherwise every tick would try to spawn a Director).
 restart-director-on-state:
   description: Restart Director if no active Director session exists (level-triggered fallback)
   trigger: no-running-director
@@ -41,6 +45,7 @@ restart-director-on-state:
         max: 5
   on-success:
     - primitive: spawn-agent
+      guard: has-active-plan
       params:
         role: director
   on-failure:

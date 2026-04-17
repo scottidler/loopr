@@ -84,7 +84,7 @@ pub(super) fn handle_agent_start(
 
         // Create agent session with model from config (before lock, no shared state)
         let model = match agent_type {
-            AgentKind::Director => stores.config.agents.researcher.llm.model.clone(), // Director uses Opus
+            AgentKind::Director => stores.config.agents.director.llm.model.clone(),
             AgentKind::Implementer => stores.config.agents.implementer.llm.model.clone(),
             AgentKind::Reviewer => stores.config.agents.reviewer.llm.model.clone(),
             AgentKind::Researcher => stores.config.agents.researcher.llm.model.clone(),
@@ -783,14 +783,14 @@ mod tests {
         use crate::config::Config;
         let config = Config::default();
         let cases: Vec<(AgentKind, String)> = vec![
-            (AgentKind::Director, config.agents.researcher.llm.model.clone()),
+            (AgentKind::Director, config.agents.director.llm.model.clone()),
             (AgentKind::Implementer, config.agents.implementer.llm.model.clone()),
             (AgentKind::Reviewer, config.agents.reviewer.llm.model.clone()),
             (AgentKind::Researcher, config.agents.researcher.llm.model.clone()),
         ];
         for (agent_type, expected_model) in cases {
             let model = match agent_type {
-                AgentKind::Director => config.agents.researcher.llm.model.clone(),
+                AgentKind::Director => config.agents.director.llm.model.clone(),
                 AgentKind::Implementer => config.agents.implementer.llm.model.clone(),
                 AgentKind::Reviewer => config.agents.reviewer.llm.model.clone(),
                 AgentKind::Researcher => config.agents.researcher.llm.model.clone(),

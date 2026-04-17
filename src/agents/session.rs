@@ -42,6 +42,10 @@ pub struct AgentSession {
     /// branch diverges from the integration state.
     #[serde(default)]
     pub base_ref: Option<String>,
+    /// Director operating mode when `agent_type == Director`. None for all other agent kinds.
+    /// Observability field; set by the Director as it transitions between modes.
+    #[serde(default)]
+    pub director_mode: Option<crate::agents::director::DirectorMode>,
 }
 
 impl AgentSession {
@@ -64,6 +68,7 @@ impl AgentSession {
             daemon_session_id: None,
             error_kind: None,
             base_ref: None,
+            director_mode: None,
         }
     }
 
