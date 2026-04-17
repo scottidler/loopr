@@ -649,6 +649,31 @@ impl Primitive for CreateIntegrationBranch {
             let branch_name = format!("integration/{}", plan_id);
             debug!("create-integration-branch: {}", branch_name);
 
+            // Self-idempotency: if the branch already exists (any commit), return Ok.
+            // Only presence is checked - not base commit, not merge-base. Either would
+            // wedge the plan the moment an agent commits to the integration branch or
+            // `main` advances from another plan. The downstream caller is responsible
+            // for any deeper git-state reconciliation.
+            let show_ref = std::process::Command::new("git")
+                .args([
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{}", branch_name),
+                ])
+                .current_dir(ctx.repo_path)
+                .status();
+            if let Ok(status) = show_ref
+                && status.success()
+            {
+                let mut values = HashMap::new();
+                values.insert("branch-name".to_string(), serde_json::json!(branch_name));
+                return Ok(PrimitiveOutput {
+                    values,
+                    summary: format!("branch '{}' already exists", branch_name),
+                });
+            }
+
             let output = std::process::Command::new("git")
                 .args(["branch", &branch_name, "main"])
                 .current_dir(ctx.repo_path)
@@ -684,7 +709,10 @@ impl Primitive for CreateIntegrationBranch {
     }
 
     fn idempotency(&self) -> Idempotency {
-        Idempotency::GuardRequired
+        // Phase 4: downgraded from GuardRequired after adding a show-ref existence
+        // check inside execute(). The primitive is now self-idempotent - strategies
+        // referencing it no longer need to carry a guard clause.
+        Idempotency::Idempotent
     }
 
     fn requires_git_lock(&self) -> bool {

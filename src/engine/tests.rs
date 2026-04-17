@@ -1865,11 +1865,10 @@ fn validate_primitive_params_accepts_clean_strategy() {
 fn validate_guard_required_flags_missing_guard() {
     let registry = full_primitive_registry();
     let mut params = HashMap::new();
-    params.insert("plan-id".to_owned(), serde_json::json!("$trigger.scope-id"));
-    // create-integration-branch currently declares GuardRequired; Phase 4 downgrades it.
-    // Until Phase 4 lands, this test verifies the gate catches missing guards on
-    // any GuardRequired primitive.
-    let strategy = strategy_with_step("create-integration-branch", params, None);
+    params.insert("work-id".to_owned(), serde_json::json!("$trigger.scope-id"));
+    // create-worktree declares GuardRequired and the gate must flag any strategy
+    // invoking it without a guard clause.
+    let strategy = strategy_with_step("create-worktree", params, None);
     let results = schema::validate_guard_required(&[strategy], &registry);
     assert!(
         results.iter().any(|r| {
