@@ -101,10 +101,12 @@ impl Primitive for CombineConflictingWorks {
     }
 
     fn idempotency(&self) -> Idempotency {
-        // Phase 5: fired only by the conflict-detected event trigger. Re-invoking
-        // on a second fire would try to combine the same works again; the work-
-        // layer transition will reject the second attempt (Superseded -> * fails),
-        // so the primitive is effectively idempotent once the first call lands.
-        Idempotency::Idempotent
+        // Combines N works into one superseding Work record. Re-invocation creates
+        // a second superseding Work; the Superseded -> * transitions on the first
+        // set would reject, but the primitive still mutates state unconditionally
+        // (new combined work, new event emission). Genuinely non-idempotent.
+        // Resolve-structural-conflict uses it as the only action step, so "must be
+        // last" is satisfied.
+        Idempotency::NonIdempotent
     }
 }

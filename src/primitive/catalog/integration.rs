@@ -320,12 +320,12 @@ impl Primitive for IntegrateTick {
     }
 
     fn idempotency(&self) -> Idempotency {
-        // Phase 5: integrate-tick is the engine's merge-bundles-and-create-tick
-        // compound. Re-firing against an already-merged set of bundles is caught
-        // at the bundle layer (bundle.transition Accepted -> Merged will reject
-        // an already-Merged bundle). The strategy-level trigger is one-shot;
-        // the primitive itself handles the rest.
-        Idempotency::Idempotent
+        // Creates a new Tick and merges branches. Re-invocation attempts to create
+        // another Tick and re-merge; bundle.transition would reject the second pass
+        // but the primitive still performs git work and allocates IDs. Genuinely
+        // non-idempotent. integrate-accepted-bundles uses it as the only action
+        // step, so "must be last" is satisfied.
+        Idempotency::NonIdempotent
     }
 
     fn requires_git_lock(&self) -> bool {

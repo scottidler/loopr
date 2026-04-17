@@ -296,11 +296,13 @@ impl Primitive for RetryWork {
     }
 
     fn idempotency(&self) -> Idempotency {
-        // Phase 5: callers are one-shot event triggers (session-failure,
-        // reviewer-rejected). Re-invocation would double-increment attempt-count,
-        // which is the only observable side effect. The trigger semantics handle
-        // dedup at the strategy layer, making a strategy-side guard redundant.
-        Idempotency::Idempotent
+        // retry-work always increments attempt-count and resets status to Ready.
+        // A second invocation with the same work-id double-counts, so the primitive
+        // is genuinely non-idempotent. Callers must place retry-work last in the
+        // action sequence so a crash between the count and the reset cannot replay.
+        // Both current callers (work-retry-on-failure.on-success[0],
+        // handle-rejected-bundle.action[1]) satisfy that.
+        Idempotency::NonIdempotent
     }
 }
 
