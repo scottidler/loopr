@@ -329,6 +329,31 @@ async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
         );
     }
 
+    // Primitive-aware validation: every strategy's param set must match the primitive's
+    // declared input_schema, and every GuardRequired primitive invocation must carry a
+    // guard clause. Both gates run against the fully-built primitive registry.
+    let param_results = crate::engine::schema::validate_primitive_params(&strategies, &registry);
+    let guard_results = crate::engine::schema::validate_guard_required(&strategies, &registry);
+    let mut fatal_primitive = 0usize;
+    for result in param_results.iter().chain(guard_results.iter()) {
+        match result.severity {
+            crate::engine::schema::Severity::Error => {
+                error!("run_engine: primitive-aware validation error: {}", result.message);
+                fatal_primitive += 1;
+            }
+            crate::engine::schema::Severity::Warn => {
+                warn!("run_engine: primitive-aware validation warning: {}", result.message);
+            }
+        }
+    }
+    if fatal_primitive > 0 {
+        fatal!(
+            stores,
+            "run_engine: {} primitive-aware validation error(s), daemon shutting down",
+            fatal_primitive
+        );
+    }
+
     // Build trigger evaluator (takes ownership of triggers - after cross-validation)
     let state_queries = StateQueryRegistry::with_builtins();
     let trigger_evaluator = TriggerEvaluator::new(triggers, state_queries);

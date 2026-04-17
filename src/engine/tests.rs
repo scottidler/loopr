@@ -1787,3 +1787,182 @@ fn roles_are_not_loaded_as_strategies() {
         "decompose/roles/ was loaded as strategy; 'decomposer' should not appear as a strategy"
     );
 }
+
+// ─── Phase 1: primitive-aware validation gates ───────────────────────────────
+
+fn strategy_with_step(
+    primitive: &str,
+    params: HashMap<String, serde_json::Value>,
+    guard: Option<&str>,
+) -> StrategyDefinition {
+    StrategyDefinition {
+        name: "test-strategy".to_owned(),
+        description: String::new(),
+        trigger: "session-failure".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: primitive.to_owned(),
+            guard: guard.map(|g| g.to_owned()),
+            params,
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    }
+}
+
+#[test]
+fn validate_primitive_params_flags_missing_required_param() {
+    let registry = full_primitive_registry();
+    // spawn-agent requires `role` (pre-Phase-2 schema); omit it.
+    let strategy = strategy_with_step("spawn-agent", HashMap::new(), Some("no-active-sessions"));
+    let results = schema::validate_primitive_params(&[strategy], &registry);
+    assert!(
+        results
+            .iter()
+            .any(|r| { matches!(r.severity, schema::Severity::Error) && r.message.contains("required param") }),
+        "expected missing-required-param error, got {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_primitive_params_flags_unknown_param() {
+    let registry = full_primitive_registry();
+    let mut params = HashMap::new();
+    params.insert("role".to_owned(), serde_json::json!("decomposer"));
+    params.insert("totally-bogus-key".to_owned(), serde_json::json!("x"));
+    let strategy = strategy_with_step("spawn-agent", params, Some("no-active-sessions"));
+    let results = schema::validate_primitive_params(&[strategy], &registry);
+    assert!(
+        results.iter().any(|r| {
+            matches!(r.severity, schema::Severity::Error) && r.message.contains("unknown param 'totally-bogus-key'")
+        }),
+        "expected unknown-param error, got {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_primitive_params_accepts_clean_strategy() {
+    let registry = full_primitive_registry();
+    let mut params = HashMap::new();
+    params.insert("role".to_owned(), serde_json::json!("decomposer"));
+    params.insert("target-id".to_owned(), serde_json::json!("$trigger.scope-id"));
+    let strategy = strategy_with_step("spawn-agent", params, Some("no-active-sessions"));
+    let results = schema::validate_primitive_params(&[strategy], &registry);
+    assert!(
+        results.is_empty(),
+        "clean strategy should pass, got errors {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_guard_required_flags_missing_guard() {
+    let registry = full_primitive_registry();
+    let mut params = HashMap::new();
+    params.insert("plan-id".to_owned(), serde_json::json!("$trigger.scope-id"));
+    // create-integration-branch currently declares GuardRequired; Phase 4 downgrades it.
+    // Until Phase 4 lands, this test verifies the gate catches missing guards on
+    // any GuardRequired primitive.
+    let strategy = strategy_with_step("create-integration-branch", params, None);
+    let results = schema::validate_guard_required(&[strategy], &registry);
+    assert!(
+        results.iter().any(|r| {
+            matches!(r.severity, schema::Severity::Error) && r.message.contains("requires a guard clause")
+        }),
+        "expected guard-required error, got {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn validate_guard_required_accepts_guard_on_guardrequired_primitive() {
+    let registry = full_primitive_registry();
+    let mut params = HashMap::new();
+    params.insert("role".to_owned(), serde_json::json!("decomposer"));
+    let strategy = strategy_with_step("spawn-agent", params, Some("no-active-sessions"));
+    let results = schema::validate_guard_required(&[strategy], &registry);
+    assert!(
+        results.is_empty(),
+        "GuardRequired primitive with guard should pass, got {:?}",
+        results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+// ─── Phase 1 schema coverage lint: primitive execute() reads only declared keys ─
+
+/// Walk each primitive catalog source file and verify every `params.get("X")` /
+/// `params["X"]` / `params["X"].as_*` literal key appears in that file's declared
+/// `input_schema`. This closes the "ghost param" hole: a primitive could silently
+/// read a key it never declared, and `validate_primitive_params` would miss it.
+///
+/// This check is intentionally literal-grep. A syn-based parser is overkill for
+/// the current catalog (confirmed: no dynamic key construction anywhere).
+#[test]
+fn primitives_declare_every_param_they_read() {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    let mut catalog_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    catalog_dir.push("src/primitive/catalog");
+
+    // Keys whitelisted per-file: reading them from params is incidental (e.g.
+    // error-message helpers that forward any key through untouched) and not
+    // semantically a declared input.
+    let whitelist: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+
+    let mut failures: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&catalog_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let src = fs::read_to_string(&path).unwrap();
+        let file_name = path.file_stem().unwrap().to_string_lossy().to_string();
+        let whitelist_keys = whitelist.get(file_name.as_str()).cloned().unwrap_or_default();
+
+        // Extract all declared `name: "X"` literals in the file (input_schema entries).
+        // The regex is conservative: matches `name: "xxx"` where xxx has no `"`.
+        let declared: std::collections::HashSet<String> =
+            regex_all_captures(&src, r#"name:\s*"([^"]+)"\s*\.to_string\(\)"#)
+                .into_iter()
+                .collect();
+
+        // Extract all `params["X"]` and `params.get("X")` literal keys from the file.
+        let mut reads: std::collections::HashSet<String> = std::collections::HashSet::new();
+        reads.extend(regex_all_captures(&src, r#"params\[\s*"([^"]+)"\s*\]"#));
+        reads.extend(regex_all_captures(&src, r#"params\.get\(\s*"([^"]+)"\s*\)"#));
+
+        for key in &reads {
+            if whitelist_keys.contains(&key.as_str()) {
+                continue;
+            }
+            if !declared.contains(key) {
+                failures.push(format!(
+                    "{}: primitive reads '{}' but does not declare it in input_schema",
+                    file_name, key
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "primitive schema-coverage lint failures:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Small regex helper for the coverage lint: return all capture group 1 matches
+/// for the given pattern.
+fn regex_all_captures(haystack: &str, pattern: &str) -> Vec<String> {
+    let re = regex::Regex::new(pattern).unwrap();
+    re.captures_iter(haystack)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .collect()
+}

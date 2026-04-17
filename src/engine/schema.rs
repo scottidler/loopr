@@ -189,6 +189,23 @@ pub struct ValidationResult {
     pub message: String,
 }
 
+/// Kind of a strategy-to-primitive validation failure.
+/// Used by `validate_primitive_params` and `validate_guard_required` to structure
+/// their findings. The string values are lowercased human names for error messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StrategyValidationKind {
+    /// A strategy step declared a primitive but omitted one of the primitive's
+    /// required input params.
+    MissingRequiredParam { primitive: String, param: String },
+    /// A strategy step declared a param whose name is not in the primitive's
+    /// `input_schema`. Either the strategy has a typo or the primitive fails
+    /// to declare every param its `execute()` body reads.
+    UnknownParam { primitive: String, param: String },
+    /// A strategy step references a `GuardRequired` primitive without any
+    /// `guard:` clause, violating the primitive's declared idempotency contract.
+    GuardRequiredWithoutGuard { primitive: String, step_index: usize },
+}
+
 /// Cross-validate strategies against triggers.
 ///
 /// Checks trigger existence, enabled state, and composite sub-trigger disabled states.
@@ -255,6 +272,131 @@ pub fn validate_cross_references(
         }
     }
 
+    results
+}
+
+// ─── Primitive-aware validation ──────────────────────────────────────────────
+
+/// Build a params Value suitable for `validate_params()` by replacing
+/// `$trigger.*` and `$context.*` references with placeholder strings, so presence
+/// checks succeed on values whose real type is only known at runtime.
+fn resolve_for_validation(params: &HashMap<String, serde_json::Value>) -> serde_json::Value {
+    let mut resolved = serde_json::Map::new();
+    for (k, v) in params {
+        resolved.insert(k.clone(), resolve_value_for_validation(v));
+    }
+    serde_json::Value::Object(resolved)
+}
+
+fn resolve_value_for_validation(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::String(s) if s.starts_with('$') => serde_json::Value::String("placeholder".to_owned()),
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(resolve_value_for_validation).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let resolved: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), resolve_value_for_validation(v)))
+                .collect();
+            serde_json::Value::Object(resolved)
+        }
+        _ => v.clone(),
+    }
+}
+
+/// Walk every action/on-success/on-failure step in every strategy and confirm:
+/// - every required param declared by the primitive's `input_schema` is present, AND
+/// - every param the strategy declared appears in the primitive's `input_schema`
+///   (rejects typos and ghost params).
+///
+/// Strategies referencing primitives that are not in the registry are silently
+/// skipped here - `validate_cross_references` (or a primitive-registry reference
+/// check) already reports those; no point double-counting.
+pub fn validate_primitive_params(
+    strategies: &[StrategyDefinition],
+    registry: &crate::primitive::registry::PrimitiveRegistry,
+) -> Vec<ValidationResult> {
+    let mut results = Vec::new();
+    for strategy in strategies {
+        validate_primitive_params_for_seq(strategy, "action", &strategy.action, registry, &mut results);
+        validate_primitive_params_for_seq(strategy, "on-success", &strategy.on_success, registry, &mut results);
+        validate_primitive_params_for_seq(strategy, "on-failure", &strategy.on_failure, registry, &mut results);
+    }
+    results
+}
+
+fn validate_primitive_params_for_seq(
+    strategy: &StrategyDefinition,
+    seq_label: &str,
+    steps: &[ActionStep],
+    registry: &crate::primitive::registry::PrimitiveRegistry,
+    results: &mut Vec<ValidationResult>,
+) {
+    for step in steps {
+        let Some(primitive) = registry.get(&step.primitive) else {
+            continue;
+        };
+        let declared: HashSet<String> = primitive.input_schema().into_iter().map(|f| f.name).collect();
+        // Required-params check.
+        let resolved = resolve_for_validation(&step.params);
+        if let Err(e) = primitive.validate_params(&resolved) {
+            results.push(ValidationResult {
+                severity: Severity::Error,
+                message: format!(
+                    "strategy '{}' {}: primitive '{}': {}",
+                    strategy.name, seq_label, step.primitive, e
+                ),
+            });
+        }
+        // Unknown-param check.
+        for key in step.params.keys() {
+            if !declared.contains(key) {
+                results.push(ValidationResult {
+                    severity: Severity::Error,
+                    message: format!(
+                        "strategy '{}' {}: primitive '{}' rejects unknown param '{}'",
+                        strategy.name, seq_label, step.primitive, key
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Walk every action/on-success/on-failure step in every strategy and confirm
+/// that any step referencing a `GuardRequired` primitive carries a `guard:`
+/// clause. The engine does NOT itself enforce the declaration; this gate is
+/// what turns the declaration into a load-time constraint.
+pub fn validate_guard_required(
+    strategies: &[StrategyDefinition],
+    registry: &crate::primitive::registry::PrimitiveRegistry,
+) -> Vec<ValidationResult> {
+    use crate::primitive::types::Idempotency;
+
+    let mut results = Vec::new();
+    for strategy in strategies {
+        for (label, steps) in [
+            ("action", &strategy.action),
+            ("on-success", &strategy.on_success),
+            ("on-failure", &strategy.on_failure),
+        ] {
+            for (idx, step) in steps.iter().enumerate() {
+                let Some(primitive) = registry.get(&step.primitive) else {
+                    continue;
+                };
+                if primitive.idempotency() == Idempotency::GuardRequired && step.guard.is_none() {
+                    results.push(ValidationResult {
+                        severity: Severity::Error,
+                        message: format!(
+                            "strategy '{}' {}[{}]: primitive '{}' requires a guard clause (Idempotency::GuardRequired)",
+                            strategy.name, label, idx, step.primitive
+                        ),
+                    });
+                }
+            }
+        }
+    }
     results
 }
 
