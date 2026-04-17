@@ -682,3 +682,137 @@ adequate and that a syn-based parser is over-engineered for this check.
 
 Verbatim: *"The design is sound, structurally tight, and safe to
 implement. Approval granted."*
+
+---
+
+## Architect Round 3 Findings (2026-04-17)
+
+After Phase 6 shipped (v0.1.140), the Architect reviewed the implemented
+sweep and surfaced four issues. Summary of disposition in this follow-up.
+
+### Finding 1 (CRITICAL) — event payload casing mismatch — **FIXED**
+
+The trigger engine could not match real agent events at runtime. Verified
+the split:
+
+- `src/agents/event.rs` had `#[serde(rename_all = "snake_case")]`, emitting
+  `session_id` in payloads.
+- `src/ipc/protocol.rs` emitted event name `"agent.status_changed"`
+  (underscore).
+- `src/trigger/schema.rs` registered `"agent.status-changed"` (hyphen);
+  event name did not match.
+- `src/trigger/evaluate.rs:254` reads scope id via
+  `format!("{scope}-id")` (kebab); would never find `session_id`.
+- Director matched snake; TUI matched snake but read kebab payload (broken).
+
+Fix path (a): flipped to kebab everywhere. `AgentEvent` got
+`rename_all_fields = "kebab-case"` (serde 1.0.172+ renames fields in
+struct-like enum variants separately from variants). All eight
+`agent.*_*` event-name literals flipped. Director match arm and payload
+reads updated. Trigger schema `reconciliation-failed` corrected to
+`reconciliation.failed`. Tests and one integration test file updated.
+Commit: `fix(events): unify agent event naming on kebab-case`.
+
+### Finding 2 — idempotency falsification — **FIXED (NonIdempotent)**
+
+Three primitives had been downgraded to `Idempotent` with comments
+admitting re-invocation doubles side effects:
+
+- `retry-work` (`src/primitive/catalog/work.rs:298-305`) — always
+  increments `attempt_count` and transitions to Ready.
+- `combine-conflicting-works` (`src/primitive/catalog/conflict.rs:103`) —
+  creates a new superseding Work on every call.
+- `integrate-tick` (`src/primitive/catalog/integration.rs:322`) —
+  allocates a Tick and performs git merges on every call.
+
+Restored all three to `NonIdempotent` (the architect's allowed
+alternative to `GuardRequired`). `NonIdempotent`'s stated requirement is
+"must be last in action sequence or protected by cooldown"; all three
+invocations satisfy "must be last":
+
+- `work-retry-on-failure.on-success[0]`: retry-work is the last step.
+- `handle-rejected-bundle.action[1]`: retry-work is the last step.
+- `resolve-structural-conflict.action[0]`: combine-conflicting-works is
+  the only step.
+- `integrate-accepted-bundles.action[0]`: integrate-tick is the only step.
+
+Why not `GuardRequired`: `handle-rejected-bundle` has `scope: bundle`
+while retry-work targets a work-id from the trigger event payload. The
+existing guard signature `(ctx, collection, id)` passes the strategy
+scope + scope_id, so a work-level guard like
+`no-active-implementer-for-work` cannot resolve the right record in
+bundle-scoped strategies. A new `bundle-work-has-no-active-implementer`
+guard that resolves bundle→work-id is the correct long-term fix; noted
+as Round 4 work. `NonIdempotent` is accurate today and correctly drives
+the architectural requirement that these primitives stay last in their
+action sequence.
+
+Regression test `engine::tests::strategy_catalog_passes_primitive_aware_gates`
+continues to pass (the gate only inspects `GuardRequired`).
+
+Commit: `fix(primitives): restore honest idempotency on
+retry/combine/integrate`.
+
+### Finding 3 — typed-struct handler sweep — **DEFERRED**
+
+Phase 3 mandated `#[serde(rename_all = "kebab-case",
+deny_unknown_fields)]` typed params structs per handler, but only 4 of
+~19 handlers were converted (`AgentStartParams`, `BundleCreateParams`,
+`LearningCreateParams`, `WorktreeRefreshParams`). The other ~15 still
+use `params.get("foo-bar")` flips.
+
+Deferred to a follow-up. Rationale:
+
+- Architect explicitly marked this as correctness hardening, not a
+  blocker.
+- The E2E run (Finding 4) surfaced two pre-existing strategy-catalog
+  bugs (see below) that are higher-value blockers. The typed-struct
+  sweep should happen after those bugs are understood, since the
+  remediation may touch the same handlers.
+- 15 per-handler commits constitute a multi-session effort better
+  scoped as its own design doc.
+
+### Finding 4 — E2E rust-version end-to-end run — **COMPLETED, TWO NEW BUGS DISCOVERED**
+
+Ran `/e2e rust-version` (600s timeout). Exit code 1 (Timeout). Plan
+decomposed (pl-gmhj2) but into a runaway loop: 32 decomposer sessions
+spawned, 31 duplicate Works created with identical titles, 0 Specs, 0
+Phases, 0 Bundles, 0 implementers, 0 commits. Target `src/main.rs`
+unchanged.
+
+The Finding 1 event-casing fix did not regress behaviour; the engine
+convergence loop hit its iteration limit 167 times across the run,
+showing the trigger engine *is* matching events now. The loop itself
+is caused by two pre-existing bugs in the strategy catalog, unrelated
+to the primitive-wiring sweep:
+
+**Bug A — brief-mode `plan-decomposable` infinite loop.**
+`resources/engine/triggers/composites.yml:25` defines
+`plan-decomposable` as `plan-is-active AND plan-active-no-specs`. Brief
+mode plans (per `resources/decompose/roles/brief.yml`) produce Works
+directly from the Plan and never gain Specs, so
+`plan-active-no-specs` stays true forever. The strategy's
+`no-active-sessions` guard only gates while a prior decomposer is
+running; once each decomposer completes, a new one spawns. Fix likely
+needs a composite like `plan-has-no-children-of-any-kind` or a
+brief-mode-aware variant.
+
+**Bug B — dead `restart-director-on-state` strategy.** Two warnings per
+tick:
+
+```
+strategy 'restart-director-on-state' failed for '<plan-id>':
+  check-threshold not supported for collection 'session'
+strategy 'restart-director-on-state' on-failure wiring also failed:
+  escalate failed: method not found: coordinator.escalate
+```
+
+The strategy references a `check-threshold` primitive call against the
+`session` collection (unsupported) and an on-failure wiring that calls
+an IPC method (`coordinator.escalate`) that no longer exists after the
+coordinator → director rename. Strategy needs to be reshaped to use a
+supported collection and wire to the current director-escalation IPC
+surface, or removed if it no longer has a live role.
+
+Both bugs are pre-existing (visible since before the primitive-wiring
+sweep landed) and should be filed as separate tickets.
