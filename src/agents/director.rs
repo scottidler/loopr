@@ -1,50 +1,46 @@
+//! The Director agent - top-level thinking agent that bridges the user to the system.
+//!
+//! Four operating modes (state machine):
+//! - PlanIntake: interviews the user, shapes goals into Plans with AC (Phase 3 wires the conversation)
+//! - Monitoring: long-lived observer over a plan's lifetime (this file, Phase 2+)
+//! - Escalation: diagnoses and acts when mechanical recovery fails (Phase 5 rewrites the one-shot v1 path)
+//! - UserIntervention: translates user chat into plan modifications during execution (Phase 6)
+//!
+//! The Director does NOT schedule agents or drive the mechanical loop - that's the engine's job.
+//! It provides judgment for cases the engine can't handle.
+
+use std::collections::HashMap;
+use std::time::Instant;
+
 use eyre::Result;
+use futures::future::OptionFuture;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tokio::sync::broadcast::error::RecvError;
+use tracing::{debug, info, trace, warn};
 
 use crate::agents::implementer::LlmClient;
+use crate::agents::lifeguard::Lifeguard;
 use crate::agents::{Agent, AgentContext, AgentKind};
 use crate::config::AgentRoleConfig;
+use crate::ipc::protocol::DaemonEvent;
 
-/// The Director agent - top-level thinking agent that bridges the user to the system.
+/// Heartbeat cadence for the Director run loop.
 ///
-/// Four operating modes (state machine):
-/// - PlanIntake: interviews the user, shapes goals into Plans with AC
-/// - Monitoring: watches broadcast events for the active plan; maintains pattern tracker
-/// - Escalation: diagnoses and acts when mechanical recovery fails
-/// - UserIntervention: interprets user intent during execution
-///
-/// The Director does NOT schedule agents or drive the mechanical loop - that's
-/// the engine's job. The Director provides judgment for cases the engine can't handle.
-pub struct DirectorAgent<L: LlmClient> {
-    pub ctx: AgentContext,
-    llm: L,
-    config: AgentRoleConfig,
-}
+/// Heartbeat is the poll rate for two level-triggered checks: session cancellation and
+/// plan-terminal. In steady state the loop is event-driven; heartbeat exists solely so
+/// the loop remains responsive to shutdown even when the broadcast stream is quiet.
+/// 1 second is cheap (tokio::time::sleep is a microscopic allocation) and responsive
+/// enough for user-visible cancel latency.
+const HEARTBEAT_INTERVAL_MS: u64 = 1_000;
 
-impl<L: LlmClient> DirectorAgent<L> {
-    pub fn new(ctx: AgentContext, llm: L, config: AgentRoleConfig) -> Self {
-        Self { ctx, llm, config }
-    }
-
-    /// Determine the Director's initial activation mode from session metadata.
-    ///
-    /// Phase 1 retains the v3 stub's target_id-based dispatch so existing escalation
-    /// spawns still work until the full event-driven run loop lands in Phase 2.
-    fn activation_mode(&self) -> DirectorMode {
-        if self.ctx.session.target_id.is_some() {
-            DirectorMode::Escalation
-        } else {
-            DirectorMode::PlanIntake
-        }
-    }
-}
+/// Stall threshold: if no relevant events arrive for this long during Monitoring,
+/// the heartbeat surfaces a stall warning. Not yet wired to escalation - Phase 4
+/// decides what action to take when stalls are detected.
+const STALL_THRESHOLD_SECS: u64 = 300;
 
 /// The Director's operating mode.
 ///
-/// Persisted on `AgentSession.director_mode` for observability. Expansion over the
-/// v3 stub (`PlanIntake` + `Escalation`) to accommodate the long-lived monitoring
-/// loop (`Monitoring`) and synchronous user-in-the-loop path (`UserIntervention`).
+/// Persisted on `AgentSession.director_mode` for observability.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DirectorMode {
@@ -58,55 +54,424 @@ pub enum DirectorMode {
     UserIntervention,
 }
 
+/// In-memory cross-session pattern tracker.
+///
+/// Populated two ways:
+/// 1. Event-driven: `process_event` updates counters on relevant broadcast events.
+/// 2. IPC reconciliation: `reconcile_from_ipc` rebuilds from persistent `Work`/`Bundle`/`Spec`
+///    state (Phase 7 fills this in; Phase 2 provides the hook).
+///
+/// The tracker is a derived read cache - not a source of truth. Every counter it holds
+/// maps to persisted state: `Work.session_failure_count`, `Bundle` rejection records,
+/// `Spec.revision_count`. On `RecvError::Lagged` the tracker is flushed and rebuilt
+/// from IPC - dropped events are recovered from ground truth. See the design doc's
+/// `State Reconciliation` section.
+#[derive(Debug, Default)]
+pub struct DirectorPatternTracker {
+    /// Work IDs that have failed across multiple implementer sessions.
+    /// Key: work_id, Value: Vec<(session_id, failure_reason)>.
+    pub work_failure_history: HashMap<String, Vec<(String, String)>>,
+    /// Bundle rejection reasons grouped by work_id.
+    pub rejection_history: HashMap<String, Vec<String>>,
+    /// Number of times each spec has been revised via bubble-up.
+    pub spec_revision_count: HashMap<String, u32>,
+}
+
+impl DirectorPatternTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clear all state - used before reconciliation rebuilds.
+    pub fn clear(&mut self) {
+        self.work_failure_history.clear();
+        self.rejection_history.clear();
+        self.spec_revision_count.clear();
+    }
+
+    /// Count of distinct failures observed for a given work.
+    pub fn failure_count(&self, work_id: &str) -> usize {
+        self.work_failure_history.get(work_id).map(Vec::len).unwrap_or(0)
+    }
+
+    /// Count of distinct rejections observed for a given work's bundles.
+    pub fn rejection_count(&self, work_id: &str) -> usize {
+        self.rejection_history.get(work_id).map(Vec::len).unwrap_or(0)
+    }
+}
+
+/// The Director agent.
+pub struct DirectorAgent<L: LlmClient> {
+    pub ctx: AgentContext,
+    llm: L,
+    config: AgentRoleConfig,
+    mode: DirectorMode,
+    /// Plan id being monitored. Set when `doc.plan_accepted` arrives or when the session
+    /// is spawned with a plan-scoped `target_id` (e.g. supervision restart mid-plan).
+    plan_id: Option<String>,
+    pattern_tracker: DirectorPatternTracker,
+    /// Within-session Lifeguard. Cross-session detection is Phase 7 via `pattern_tracker`.
+    lifeguard: Lifeguard,
+    /// Monotonic clock reference used to detect stalls in Monitoring mode.
+    last_event_at: Instant,
+    /// Total events observed across the session (debug/trace only).
+    event_count: u64,
+}
+
+impl<L: LlmClient> DirectorAgent<L> {
+    pub fn new(ctx: AgentContext, llm: L, config: AgentRoleConfig) -> Self {
+        Self {
+            ctx,
+            llm,
+            config,
+            mode: DirectorMode::PlanIntake,
+            plan_id: None,
+            pattern_tracker: DirectorPatternTracker::new(),
+            lifeguard: Lifeguard::new(),
+            last_event_at: Instant::now(),
+            event_count: 0,
+        }
+    }
+
+    /// Decide the initial mode from session state.
+    ///
+    /// - No `target_id`: fresh chat-to-director handoff → PlanIntake (Phase 3 conversation loop).
+    /// - `target_id` starts with `pl-`: monitoring an existing plan (supervision restart or
+    ///   post-acceptance transition) → Monitoring.
+    /// - `target_id` otherwise: legacy escalation spawn (engine primitives still invoke this
+    ///   path pre-Phase 5) → Escalation (one-shot LLM call, preserves v1 behavior).
+    fn determine_initial_mode(&mut self) {
+        match self.ctx.session.target_id.as_deref() {
+            None => self.mode = DirectorMode::PlanIntake,
+            Some(tid) if tid.starts_with("pl-") => {
+                self.plan_id = Some(tid.to_string());
+                self.mode = DirectorMode::Monitoring;
+            }
+            Some(_) => self.mode = DirectorMode::Escalation,
+        }
+        self.persist_mode();
+    }
+
+    /// Write the current `mode` back to the session store for observability.
+    fn persist_mode(&self) {
+        let Ok(mut sessions) = self.ctx.stores.write_agent_sessions() else {
+            warn!(
+                "{} director: sessions lock poisoned; mode not persisted",
+                self.ctx.log_prefix()
+            );
+            return;
+        };
+        if let Some(s) = sessions.get_mut(&self.ctx.session.id) {
+            s.director_mode = Some(self.mode);
+        }
+    }
+
+    /// Query the plan's current status via the IPC bridge. Returns true for Complete /
+    /// Superseded / Abandoned. Also returns true if plan_id is set but the plan can no
+    /// longer be found (defensive: treat missing plan as terminal to avoid spinning).
+    fn is_plan_terminal(&self) -> bool {
+        let Some(plan_id) = &self.plan_id else {
+            // No plan yet (e.g., PlanIntake pre-acceptance). Not terminal - keep running.
+            return false;
+        };
+        let Ok(plans) = self.ctx.stores.read_plans() else {
+            warn!(
+                "{} director: plans lock poisoned; treating plan as terminal",
+                self.ctx.log_prefix()
+            );
+            return true;
+        };
+        match plans.get(plan_id) {
+            Some(plan) => {
+                use crate::domain::plan::HierarchyStatus;
+                matches!(
+                    plan.status(),
+                    HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
+                )
+            }
+            None => {
+                warn!(
+                    "{} director: plan {} no longer exists; terminating monitoring",
+                    self.ctx.log_prefix(),
+                    plan_id
+                );
+                true
+            }
+        }
+    }
+
+    /// Rebuild the pattern tracker from persistent state.
+    ///
+    /// Phase 2 provides the hook; Phase 7 fills in the query logic to read
+    /// `Work.session_failure_count`, rejected `Bundle` records, and `Spec.revision_count`.
+    /// The stub clears the tracker so subsequent event-driven updates start fresh
+    /// rather than accumulating alongside dropped events.
+    async fn reconcile_from_ipc(&mut self) -> Result<()> {
+        debug!(
+            "{} director: reconcile_from_ipc (Phase 7 fills this in)",
+            self.ctx.log_prefix()
+        );
+        self.pattern_tracker.clear();
+        // Phase 7: query bridge.work_list(plan_id), bundle_list, spec_list and repopulate.
+        Ok(())
+    }
+
+    /// Classify and record a broadcast event. No LLM calls here - judgment lands in
+    /// Phase 4 (Monitoring) and Phase 5 (Escalation).
+    async fn process_event(&mut self, event: DaemonEvent) -> Result<()> {
+        self.event_count += 1;
+        self.last_event_at = Instant::now();
+
+        match event.event.as_str() {
+            // Plan acceptance completes the PlanIntake → Monitoring handoff.
+            "doc.plan_accepted" => {
+                if let Some(pid) = event.data.get("plan_id").and_then(|v| v.as_str()) {
+                    self.plan_id = Some(pid.to_string());
+                }
+                if matches!(self.mode, DirectorMode::PlanIntake) {
+                    info!(
+                        "{} director: PlanIntake → Monitoring (plan_id={:?})",
+                        self.ctx.log_prefix(),
+                        self.plan_id
+                    );
+                    self.mode = DirectorMode::Monitoring;
+                    self.persist_mode();
+                }
+            }
+            // Track agent failures for cross-session pattern detection (Phase 4 escalates;
+            // Phase 7 adds thresholding and error-signature grouping).
+            "agent.status_changed" => {
+                if let Some(status) = event.data.get("status").and_then(|v| v.as_str())
+                    && status.eq_ignore_ascii_case("failed")
+                {
+                    let session_id = event
+                        .data
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    let error = event
+                        .data
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(no error)")
+                        .to_string();
+                    if let Some(work_id) = self.resolve_work_id_for_session(&session_id) {
+                        self.pattern_tracker
+                            .work_failure_history
+                            .entry(work_id)
+                            .or_default()
+                            .push((session_id, error));
+                    }
+                }
+            }
+            // Bundle rejections are the other primary signal for work-level failures.
+            "bundle.rejected_stale" | "bundle.rejected" => {
+                if let Some(work_id) = event
+                    .data
+                    .get("bundle_work_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| event.data.get("work_id").and_then(|v| v.as_str()))
+                {
+                    let reason = event
+                        .data
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stale")
+                        .to_string();
+                    self.pattern_tracker
+                        .rejection_history
+                        .entry(work_id.to_string())
+                        .or_default()
+                        .push(reason);
+                }
+            }
+            _ => {
+                trace!("{} director: observed event {}", self.ctx.log_prefix(), event.event);
+            }
+        }
+        Ok(())
+    }
+
+    /// Look up the work_id associated with an agent session by consulting Stores.
+    /// Returns None for sessions that don't target a work (Director, Researcher scoped to plan, etc.).
+    fn resolve_work_id_for_session(&self, session_id: &str) -> Option<String> {
+        let sessions = self.ctx.stores.read_agent_sessions().ok()?;
+        sessions.get(session_id).and_then(|s| s.work_id.clone())
+    }
+
+    /// Handle a user message from the `director.user_message` mpsc channel.
+    ///
+    /// Phase 2 just logs - Phase 3 wires the PlanIntake conversation loop and Phase 6
+    /// wires UserIntervention.
+    async fn handle_user_message(&mut self, message: String) -> Result<()> {
+        debug!(
+            "{} director: user message received in {:?} mode (Phase 3/6 wires handling): {} chars",
+            self.ctx.log_prefix(),
+            self.mode,
+            message.len()
+        );
+        // Phase 3: PlanIntake → append to message history + call LLM.
+        // Phase 6: Monitoring → transition to UserIntervention and translate intent.
+        Ok(())
+    }
+
+    /// Periodic heartbeat. Detects stalls (no events for STALL_THRESHOLD_SECS during
+    /// Monitoring) and provides a level-triggered backstop for terminal plan detection.
+    async fn heartbeat(&mut self) -> Result<()> {
+        trace!(
+            "{} director: heartbeat (events={} mode={:?})",
+            self.ctx.log_prefix(),
+            self.event_count,
+            self.mode
+        );
+        // Stall check only applies when Monitoring - PlanIntake is driven by user tempo,
+        // Escalation is driven by LLM call duration, UserIntervention is transient.
+        if matches!(self.mode, DirectorMode::Monitoring) {
+            let idle_secs = self.last_event_at.elapsed().as_secs();
+            if idle_secs >= STALL_THRESHOLD_SECS {
+                warn!(
+                    "{} director: possible stall - no relevant events for {}s",
+                    self.ctx.log_prefix(),
+                    idle_secs
+                );
+                // Phase 4 decides what to do (probe state, escalate, notify user).
+            }
+        }
+        Ok(())
+    }
+
+    /// Legacy one-shot Escalation behavior, preserved from v1 while Phase 5 pending.
+    /// This is the path engine primitives take today when they call `spawn-agent` with
+    /// `role: director` and a non-plan `target_id`.
+    async fn legacy_escalation(&mut self) -> Result<()> {
+        info!(
+            "{} director: escalation mode for target {:?}",
+            self.ctx.log_prefix(),
+            self.ctx.session.target_id
+        );
+        let system_prompt = crate::prompts::store().director.clone();
+        if system_prompt.is_empty() {
+            info!(
+                "{} director: no prompt configured, completing without LLM call",
+                self.ctx.log_prefix()
+            );
+            return Ok(());
+        }
+        let user_message = format!(
+            "Escalation: mechanical recovery failed for target {:?}. Diagnose and recommend action.",
+            self.ctx.session.target_id
+        );
+        match self.llm.call(&system_prompt, &user_message).await {
+            Ok(response) => info!(
+                "{} director: escalation diagnosis complete ({}B)",
+                self.ctx.log_prefix(),
+                response.len()
+            ),
+            Err(e) => info!(
+                "{} director: LLM call failed (expected in test): {}",
+                self.ctx.log_prefix(),
+                e
+            ),
+        }
+        Ok(())
+    }
+
+    /// Shared event-driven loop for PlanIntake, Monitoring, and UserIntervention modes.
+    async fn event_loop(&mut self) -> Result<()> {
+        let heartbeat = std::time::Duration::from_millis(HEARTBEAT_INTERVAL_MS);
+
+        loop {
+            if self.is_plan_terminal() || self.ctx.is_cancelled() {
+                info!(
+                    "{} director: exiting event loop (plan_terminal={} cancelled={})",
+                    self.ctx.log_prefix(),
+                    self.is_plan_terminal(),
+                    self.ctx.is_cancelled()
+                );
+                break;
+            }
+
+            // Destructure for disjoint borrows: event_rx and user_message_rx are separate
+            // fields so we can hold mutable references to both across the select!.
+            let AgentContext {
+                ref mut event_rx,
+                ref mut user_message_rx,
+                ..
+            } = self.ctx;
+
+            let event_rx = event_rx
+                .as_mut()
+                .expect("Director AgentContext must carry an event broadcast receiver");
+            let msg_fut: OptionFuture<_> = user_message_rx.as_mut().map(|rx| rx.recv()).into();
+
+            let recv_result: LoopTick = tokio::select! {
+                event = event_rx.recv() => LoopTick::Event(event),
+                Some(msg) = msg_fut => LoopTick::User(msg),
+                _ = tokio::time::sleep(heartbeat) => LoopTick::Heartbeat,
+            };
+
+            match recv_result {
+                LoopTick::Event(Ok(ev)) => self.process_event(ev).await?,
+                LoopTick::Event(Err(RecvError::Lagged(n))) => {
+                    warn!(
+                        "{} director: event stream lagged by {} events; reconciling from IPC",
+                        self.ctx.log_prefix(),
+                        n
+                    );
+                    self.reconcile_from_ipc().await?;
+                }
+                LoopTick::Event(Err(RecvError::Closed)) => {
+                    info!("{} director: event channel closed; exiting", self.ctx.log_prefix());
+                    break;
+                }
+                LoopTick::User(Some(msg)) => self.handle_user_message(msg).await?,
+                LoopTick::User(None) => {
+                    // Sender dropped. Drop the receiver so OptionFuture falls through in
+                    // future iterations rather than yielding None forever.
+                    self.ctx.user_message_rx = None;
+                }
+                LoopTick::Heartbeat => self.heartbeat().await?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Outcome of one tick of the event loop. Prevents overlapping mutable borrows of `self`
+/// by separating the select! branches from the handler calls.
+enum LoopTick {
+    Event(std::result::Result<DaemonEvent, RecvError>),
+    User(Option<String>),
+    Heartbeat,
+}
+
 impl<L: LlmClient> Agent for DirectorAgent<L> {
     fn agent_type(&self) -> AgentKind {
         AgentKind::Director
     }
 
     async fn run(&mut self) -> Result<()> {
-        let mode = self.activation_mode();
-        debug!(
-            "director: session={} mode={:?} target={:?} model={}",
-            self.ctx.session.id, mode, self.ctx.session.target_id, self.config.llm.model
-        );
         self.ctx.session.iteration = 1;
+        self.determine_initial_mode();
+        debug!(
+            "{} director: starting mode={:?} plan_id={:?} model={} (lifeguard enabled)",
+            self.ctx.log_prefix(),
+            self.mode,
+            self.plan_id,
+            self.config.llm.model,
+        );
+        // Silence unused-field warning until Phase 5/7 wire the lifeguard in.
+        let _ = &self.lifeguard;
 
-        match mode {
-            DirectorMode::PlanIntake => {
-                info!("director: plan intake mode (max_tokens={})", self.config.llm.max_tokens);
-                // PlanIntake conversation loop lands in Phase 3 (director.start_plan_intake handler).
-                // Phase 1 keeps this a no-op so supervision strategies can spawn the Director
-                // without triggering an LLM call or infinite loop.
-            }
-            DirectorMode::Escalation => {
-                info!("director: escalation mode for target {:?}", self.ctx.session.target_id);
-                // Build escalation context and call LLM for diagnosis.
-                let system_prompt = crate::prompts::store().director.clone();
-                if system_prompt.is_empty() {
-                    info!("director: no prompt configured, completing without LLM call");
-                    return Ok(());
-                }
-                let user_message = format!(
-                    "Escalation: mechanical recovery failed for target {:?}. Diagnose and recommend action.",
-                    self.ctx.session.target_id
-                );
-                match self.llm.call(&system_prompt, &user_message).await {
-                    Ok(response) => {
-                        info!("director: escalation diagnosis complete ({}B)", response.len());
-                    }
-                    Err(e) => {
-                        info!("director: LLM call failed (expected in test): {}", e);
-                    }
-                }
-            }
-            DirectorMode::Monitoring | DirectorMode::UserIntervention => {
-                // Monitoring and UserIntervention are entered via the event-driven run loop
-                // in Phase 2+, not via activation_mode(). This arm is unreachable in Phase 1
-                // but exhaustiveness checking needs it.
-                debug!("director: mode {:?} not yet implemented (Phase 2+)", mode);
+        match self.mode {
+            DirectorMode::Escalation => self.legacy_escalation().await,
+            DirectorMode::PlanIntake | DirectorMode::Monitoring | DirectorMode::UserIntervention => {
+                self.event_loop().await
             }
         }
-
-        Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
