@@ -51,8 +51,8 @@ pub(super) fn handle_spawn_researcher(ctx: &AgentContext, query: &str, scope_id:
     let resp = bridge.request(
         "agent.start",
         serde_json::json!({
-            "agent_type": "researcher",
-            "target_id": scope_id,
+            "agent-type": "researcher",
+            "target-id": scope_id,
             "query": query,
         }),
     );

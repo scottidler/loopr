@@ -20,7 +20,7 @@ restart-director-on-event:
     - primitive: spawn-agent
       guard: has-active-plan
       params:
-        role: director
+        agent-type: director
   on-failure:
     - primitive: escalate
       params:
@@ -47,7 +47,7 @@ restart-director-on-state:
     - primitive: spawn-agent
       guard: has-active-plan
       params:
-        role: director
+        agent-type: director
   on-failure:
     - primitive: escalate
       params:

@@ -291,9 +291,9 @@ fn execute_one(
             let resp = bridge.request(
                 "agent.start",
                 serde_json::json!({
-                    "agent_type": "researcher",
+                    "agent-type": "researcher",
                     "query": query,
-                    "target_id": scope,
+                    "target-id": scope,
                 }),
             );
             if resp.is_error() {

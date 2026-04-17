@@ -22,7 +22,7 @@ async fn test_pool_exhaustion_multi_type() {
         .insert(session.id.clone(), session);
 
     // Second Coordinator should be rejected
-    let code = dispatch_err(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
+    let code = dispatch_err(&stores, &tx, &wm, &ic, "agent.start", json!({"agent-type": "director"})).await;
     assert_eq!(code, -32004, "expected pool_exhausted error code");
 
     // But Researcher should still work (different pool)
@@ -32,7 +32,7 @@ async fn test_pool_exhaustion_multi_type() {
         &wm,
         &ic,
         "agent.start",
-        json!({"agent_type": "researcher"}),
+        json!({"agent-type": "researcher"}),
     )
     .await;
     assert!(resp["id"].as_str().is_some());
@@ -48,10 +48,10 @@ async fn test_agent_start_pool_check_atomic_under_lock() {
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
-    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
+    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent-type": "director"})).await;
     assert!(resp["id"].as_str().is_some(), "first start should succeed");
 
-    let code = dispatch_err(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
+    let code = dispatch_err(&stores, &tx, &wm, &ic, "agent.start", json!({"agent-type": "director"})).await;
     assert_eq!(code, -32004, "second start must be rejected with pool_exhausted");
 }
 
@@ -86,6 +86,6 @@ async fn test_pool_allows_after_terminal_session() {
         .insert(session.id.clone(), session);
 
     // Should be allowed - terminal sessions don't count
-    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
+    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent-type": "director"})).await;
     assert!(resp["id"].as_str().is_some());
 }

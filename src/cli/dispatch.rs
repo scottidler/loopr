@@ -445,18 +445,18 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
     match cmd {
         AgentCmd::StartImplementer { work_id } => (
             "agent.start".to_string(),
-            json!({ "agent_type": "implementer", "work_id": work_id }),
+            json!({ "agent-type": "implementer", "work-id": work_id }),
         ),
         AgentCmd::StartReviewer { bundle_id } => (
             "agent.start".to_string(),
-            json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
+            json!({ "agent-type": "reviewer", "bundle-id": bundle_id }),
         ),
-        AgentCmd::StartCoordinator => ("agent.start".to_string(), json!({ "agent_type": "coordinator" })),
-        AgentCmd::StartIntegrator => ("agent.start".to_string(), json!({ "agent_type": "integrator" })),
+        AgentCmd::StartCoordinator => ("agent.start".to_string(), json!({ "agent-type": "coordinator" })),
+        AgentCmd::StartIntegrator => ("agent.start".to_string(), json!({ "agent-type": "integrator" })),
         AgentCmd::StartResearcher { query, target_id } => {
-            let mut params = json!({ "agent_type": "researcher", "query": query });
+            let mut params = json!({ "agent-type": "researcher", "query": query });
             if let Some(tid) = target_id {
-                params["target_id"] = json!(tid);
+                params["target-id"] = json!(tid);
             }
             ("agent.start".to_string(), params)
         }

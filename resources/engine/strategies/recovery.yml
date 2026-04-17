@@ -76,5 +76,5 @@ escalate-to-director:
     - primitive: spawn-agent
       guard: no-active-director
       params:
-        role: director
+        agent-type: director
         target-id: $trigger.scope-id

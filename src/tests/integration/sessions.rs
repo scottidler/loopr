@@ -15,14 +15,14 @@ async fn test_multi_agent_session_coexistence() {
     let ic = test_integrator_config();
 
     // Start sessions of different types (use types that don't require work_id/bundle_id)
-    let coord = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
+    let coord = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent-type": "director"})).await;
     let researcher1 = dispatch_ok(
         &stores,
         &tx,
         &wm,
         &ic,
         "agent.start",
-        json!({"agent_type": "researcher"}),
+        json!({"agent-type": "researcher"}),
     )
     .await;
     let researcher2 = dispatch_ok(
@@ -31,7 +31,7 @@ async fn test_multi_agent_session_coexistence() {
         &wm,
         &ic,
         "agent.start",
-        json!({"agent_type": "researcher"}),
+        json!({"agent-type": "researcher"}),
     )
     .await;
 
@@ -56,7 +56,7 @@ async fn test_agent_pause_resume_lifecycle() {
     let ic = test_integrator_config();
 
     // Start a coordinator
-    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent_type": "director"})).await;
+    let resp = dispatch_ok(&stores, &tx, &wm, &ic, "agent.start", json!({"agent-type": "director"})).await;
     let session_id = resp["id"].as_str().unwrap().to_string();
 
     // Transition session to Running first (agent.start creates in Starting state)

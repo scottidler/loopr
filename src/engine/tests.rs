@@ -1817,7 +1817,7 @@ fn strategy_with_step(
 #[test]
 fn validate_primitive_params_flags_missing_required_param() {
     let registry = full_primitive_registry();
-    // spawn-agent requires `role` (pre-Phase-2 schema); omit it.
+    // spawn-agent requires `agent-type`; omit it.
     let strategy = strategy_with_step("spawn-agent", HashMap::new(), Some("no-active-sessions"));
     let results = schema::validate_primitive_params(&[strategy], &registry);
     assert!(
@@ -1833,7 +1833,7 @@ fn validate_primitive_params_flags_missing_required_param() {
 fn validate_primitive_params_flags_unknown_param() {
     let registry = full_primitive_registry();
     let mut params = HashMap::new();
-    params.insert("role".to_owned(), serde_json::json!("decomposer"));
+    params.insert("agent-type".to_owned(), serde_json::json!("decomposer"));
     params.insert("totally-bogus-key".to_owned(), serde_json::json!("x"));
     let strategy = strategy_with_step("spawn-agent", params, Some("no-active-sessions"));
     let results = schema::validate_primitive_params(&[strategy], &registry);
@@ -1850,7 +1850,7 @@ fn validate_primitive_params_flags_unknown_param() {
 fn validate_primitive_params_accepts_clean_strategy() {
     let registry = full_primitive_registry();
     let mut params = HashMap::new();
-    params.insert("role".to_owned(), serde_json::json!("decomposer"));
+    params.insert("agent-type".to_owned(), serde_json::json!("decomposer"));
     params.insert("target-id".to_owned(), serde_json::json!("$trigger.scope-id"));
     let strategy = strategy_with_step("spawn-agent", params, Some("no-active-sessions"));
     let results = schema::validate_primitive_params(&[strategy], &registry);
@@ -1884,7 +1884,7 @@ fn validate_guard_required_flags_missing_guard() {
 fn validate_guard_required_accepts_guard_on_guardrequired_primitive() {
     let registry = full_primitive_registry();
     let mut params = HashMap::new();
-    params.insert("role".to_owned(), serde_json::json!("decomposer"));
+    params.insert("agent-type".to_owned(), serde_json::json!("decomposer"));
     let strategy = strategy_with_step("spawn-agent", params, Some("no-active-sessions"));
     let results = schema::validate_guard_required(&[strategy], &registry);
     assert!(

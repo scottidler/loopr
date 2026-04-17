@@ -348,8 +348,8 @@ fn test_agent_start_implementer_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.start");
-    assert_eq!(params["agent_type"], "implementer");
-    assert_eq!(params["work_id"], "wi-1");
+    assert_eq!(params["agent-type"], "implementer");
+    assert_eq!(params["work-id"], "wi-1");
 }
 
 #[test]
@@ -361,8 +361,8 @@ fn test_agent_start_reviewer_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.start");
-    assert_eq!(params["agent_type"], "reviewer");
-    assert_eq!(params["bundle_id"], "b-1");
+    assert_eq!(params["agent-type"], "reviewer");
+    assert_eq!(params["bundle-id"], "b-1");
 }
 
 #[test]
@@ -447,7 +447,7 @@ fn test_agent_start_coordinator_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.start");
-    assert_eq!(params["agent_type"], "coordinator");
+    assert_eq!(params["agent-type"], "coordinator");
 }
 
 #[test]
@@ -460,9 +460,9 @@ fn test_agent_start_researcher_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.start");
-    assert_eq!(params["agent_type"], "researcher");
+    assert_eq!(params["agent-type"], "researcher");
     assert_eq!(params["query"], "How does auth work?");
-    assert_eq!(params["target_id"], "wi-1");
+    assert_eq!(params["target-id"], "wi-1");
 }
 
 #[test]
@@ -474,7 +474,7 @@ fn test_agent_start_researcher_no_target() {
         },
     };
     let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert!(params["target_id"].is_null());
+    assert!(params["target-id"].is_null());
 }
 
 #[test]
@@ -590,9 +590,9 @@ fn test_agent_start_with_all_optional_params() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.start");
-    assert_eq!(params["agent_type"], "researcher");
+    assert_eq!(params["agent-type"], "researcher");
     assert_eq!(params["query"], "What API patterns exist?");
-    assert_eq!(params["target_id"], "spec-9");
+    assert_eq!(params["target-id"], "spec-9");
 
     // Also test integrator start (no optional params — different path)
     let cmd2 = Command::Agent {
@@ -600,7 +600,7 @@ fn test_agent_start_with_all_optional_params() {
     };
     let (method2, params2) = command_to_ipc(&cmd2, Role::Integrator);
     assert_eq!(method2, "agent.start");
-    assert_eq!(params2["agent_type"], "integrator");
+    assert_eq!(params2["agent-type"], "integrator");
 }
 
 // --- Coverage gap tests for uncovered branches ---

@@ -13,7 +13,7 @@ spawn-implementer-for-ready-work:
     - primitive: spawn-agent
       guard: no-active-implementer-for-work
       params:
-        role: implementer
+        agent-type: implementer
         work-id: $trigger.scope-id
 
 # When a bundle is proposed, auto-triage it to Triaged.
@@ -41,7 +41,7 @@ spawn-reviewer-for-triaged-bundle:
     - primitive: spawn-agent
       guard: no-active-reviewer-for-bundle
       params:
-        role: reviewer
+        agent-type: reviewer
         bundle-id: $trigger.scope-id
 
 # When a reviewer approves a bundle, transition it to Accepted.

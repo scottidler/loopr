@@ -22,17 +22,24 @@ impl Primitive for SpawnAgent {
         params: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
         Box::pin(async move {
-            debug!("spawn-agent: role={} target-id={}", params["role"], params["target-id"]);
+            debug!(
+                "spawn-agent: agent-type={} target-id={}",
+                params["agent-type"], params["target-id"]
+            );
 
             let resp = ctx.bridge.request("agent.start", params);
             if let Some(err) = &resp.error {
                 eyre::bail!("spawn-agent failed: {}", err.message);
             }
 
+            // Handler returns the full session JSON; its id field is `id`.
+            // Fall back to the historical `session_id` key so a daemon that
+            // predates this change still returns a usable value.
             let session_id = resp
                 .result
                 .as_ref()
-                .and_then(|r| r["session_id"].as_str())
+                .and_then(|r| r.get("id").or_else(|| r.get("session_id")))
+                .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
@@ -56,14 +63,24 @@ impl Primitive for SpawnAgent {
     fn input_schema(&self) -> Vec<InputField> {
         vec![
             InputField {
-                name: "role".to_string(),
+                name: "agent-type".to_string(),
                 field_type: OutputType::String,
                 required: true,
             },
             InputField {
+                name: "work-id".to_string(),
+                field_type: OutputType::String,
+                required: false,
+            },
+            InputField {
+                name: "bundle-id".to_string(),
+                field_type: OutputType::String,
+                required: false,
+            },
+            InputField {
                 name: "target-id".to_string(),
                 field_type: OutputType::String,
-                required: false, // Optional: coordinators are spawned without a target
+                required: false,
             },
             InputField {
                 name: "model".to_string(),
@@ -72,6 +89,11 @@ impl Primitive for SpawnAgent {
             },
             InputField {
                 name: "context-from".to_string(),
+                field_type: OutputType::String,
+                required: false,
+            },
+            InputField {
+                name: "query".to_string(),
                 field_type: OutputType::String,
                 required: false,
             },

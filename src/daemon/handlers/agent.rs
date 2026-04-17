@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
@@ -12,7 +13,27 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-#[instrument(skip_all, fields(agent_type = ?req.params.get("agent_type"), work_id = ?req.params.get("work_id"), bundle_id = ?req.params.get("bundle_id")))]
+/// Wire-format params for `agent.start`. Keys arrive kebab-case; Rust fields stay
+/// snake_case. `deny_unknown_fields` catches caller drift loudly.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct AgentStartParams {
+    agent_type: AgentKind,
+    #[serde(default)]
+    work_id: Option<String>,
+    #[serde(default)]
+    bundle_id: Option<String>,
+    #[serde(default)]
+    target_id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    context_from: Option<String>,
+    #[serde(default)]
+    query: Option<String>,
+}
+
+#[instrument(skip_all, fields(agent_type = ?req.params.get("agent-type"), work_id = ?req.params.get("work-id"), bundle_id = ?req.params.get("bundle-id")))]
 pub(super) fn handle_agent_start(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -20,45 +41,32 @@ pub(super) fn handle_agent_start(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let agent_type: AgentKind = match req.params.get("agent_type") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(t) => t,
-                Err(_) => {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::invalid_params(
-                            "invalid agent_type (implementer|reviewer|director|researcher|chat|decomposer)",
-                        ),
-                    ));
-                }
-            },
-            None => {
+        let parsed: AgentStartParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("agent_type is required"),
+                    RpcError::invalid_params(&format!("invalid agent.start params: {}", e)),
                 ));
             }
         };
 
-        let work_id = req
-            .params
-            .get("work_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let bundle_id = req
-            .params
-            .get("bundle_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let agent_type = parsed.agent_type;
+        let work_id = parsed.work_id;
+        let bundle_id = parsed.bundle_id;
+        let target_id = parsed.target_id;
+        let query = parsed.query;
+        let _model_override = parsed.model;
+        let _context_from = parsed.context_from;
 
-        // Validate: Implementer needs work_id, Reviewer needs bundle_id
+        // Validate: Implementer needs work-id, Reviewer needs bundle-id
         // Thinking plane agents (Director, Researcher, etc.) don't require either.
         match agent_type {
             AgentKind::Implementer => {
                 if work_id.is_none() {
                     return Ok(DaemonResponse::err(
                         req.id,
-                        RpcError::invalid_params("work_id is required for implementer agents"),
+                        RpcError::invalid_params("work-id is required for implementer agents"),
                     ));
                 }
             }
@@ -66,7 +74,7 @@ pub(super) fn handle_agent_start(
                 if bundle_id.is_none() {
                     return Ok(DaemonResponse::err(
                         req.id,
-                        RpcError::invalid_params("bundle_id is required for reviewer agents"),
+                        RpcError::invalid_params("bundle-id is required for reviewer agents"),
                     ));
                 }
             }
@@ -74,13 +82,6 @@ pub(super) fn handle_agent_start(
                 // These agents operate without worktrees; no target ID required at start time
             }
         }
-
-        let target_id = req
-            .params
-            .get("target_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
 
         // Create agent session with model from config (before lock, no shared state)
         let model = match agent_type {
@@ -137,9 +138,9 @@ pub(super) fn handle_agent_start(
                 ));
             }
 
-            // Gap #26: Researcher dedup by target_id
+            // Gap #26: Researcher dedup by target-id
             if agent_type == AgentKind::Researcher
-                && let Some(tid) = req.params.get("target_id").and_then(|v| v.as_str())
+                && let Some(tid) = session.target_id.as_deref()
             {
                 let has_existing = sessions.values().any(|s| {
                     s.agent_type == AgentKind::Researcher
@@ -150,7 +151,7 @@ pub(super) fn handle_agent_start(
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
-                            "Non-terminal Researcher session already exists for target_id '{}'",
+                            "Non-terminal Researcher session already exists for target-id '{}'",
                             tid
                         )),
                     ));
@@ -591,7 +592,7 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "director" }));
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent-type": "director" }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error(), "expected max_pool rejection");
         let err = resp.error.unwrap();
@@ -613,7 +614,7 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "director" }));
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent-type": "director" }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
     }
@@ -820,7 +821,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "agent.start",
-            json!({"agent_type": "implementer", "work_id": "wi-1"}),
+            json!({"agent-type": "implementer", "work-id": "wi-1"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
 
@@ -853,7 +854,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "agent.start",
-            json!({"agent_type": "implementer", "work_id": "wi-1"}),
+            json!({"agent-type": "implementer", "work-id": "wi-1"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
 
@@ -886,7 +887,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "agent.start",
-            json!({"agent_type": "implementer", "work_id": "wi-2"}),
+            json!({"agent-type": "implementer", "work-id": "wi-2"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
 
@@ -954,5 +955,63 @@ mod tests {
         .await;
         assert!(!resp.is_error(), "agent.status fallback failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["id"], session_id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_start_accepts_kebab_case_params() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({
+                "agent-type": "implementer",
+                "work-id": "wi-1",
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        assert!(
+            !resp.is_error(),
+            "expected kebab-case agent.start to succeed, got error: {:?}",
+            resp.error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_agent_start_rejects_snake_case_agent_type() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({
+                "agent_type": "implementer",
+                "work-id": "wi-1",
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        assert!(resp.is_error(), "snake_case agent_type should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_agent_start_rejects_unknown_field() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({
+                "agent-type": "director",
+                "totally-bogus-param": "xyz",
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        assert!(resp.is_error(), "unknown field should be rejected");
     }
 }

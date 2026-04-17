@@ -12,7 +12,7 @@ decompose-plan:
     - primitive: spawn-agent
       guard: no-active-sessions
       params:
-        role: decomposer
+        agent-type: decomposer
         target-id: $trigger.scope-id
 
 decompose-spec:
@@ -24,7 +24,7 @@ decompose-spec:
     - primitive: spawn-agent
       guard: no-active-sessions
       params:
-        role: decomposer
+        agent-type: decomposer
         target-id: $trigger.scope-id
 
 decompose-phase:
@@ -36,5 +36,5 @@ decompose-phase:
     - primitive: spawn-agent
       guard: no-active-sessions
       params:
-        role: decomposer
+        agent-type: decomposer
         target-id: $trigger.scope-id
