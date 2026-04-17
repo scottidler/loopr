@@ -176,7 +176,11 @@ pub(super) fn handle_director_start_plan_intake(
 /// `try_send` to avoid blocking the IPC request when the buffer is full (returns a
 /// transient error in that case so the caller can retry or fall back to `chat.submit`).
 #[instrument(skip_all, fields(session_id = ?req.params.get("session_id")))]
-pub(super) fn handle_director_user_message(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+pub(super) fn handle_director_user_message(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
     try_handler!(req.id, {
         let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
@@ -220,6 +224,16 @@ pub(super) fn handle_director_user_message(stores: &Arc<Stores>, req: DaemonRequ
                     session_id,
                     message.len()
                 );
+                // Design doc §API: also emit a director.user_message broadcast event so the
+                // TUI (and any other observer) sees user intervention messages in the audit
+                // trail without having to inspect the Director's mpsc channel.
+                let _ = event_tx.send(DaemonEvent::new(
+                    "director.user_message",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "message": message,
+                    }),
+                ));
                 Ok(DaemonResponse::ok(
                     req.id,
                     serde_json::json!({ "status": "Received", "session_id": session_id }),
@@ -350,13 +364,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn user_message_requires_active_director_session() {
         let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
 
         let req = DaemonRequest::new(
             1,
             "director.user_message",
             json!({ "session_id": "ag-ghost", "message": "hello" }),
         );
-        let resp = handle_director_user_message(&stores, req);
+        let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
         let err = resp.error.unwrap();
         assert!(err.message.contains("director_session"), "got: {}", err.message);
@@ -365,6 +380,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn user_message_delivers_through_mpsc() {
         let (_dir, stores) = test_stores();
+        let bcast = test_event_tx();
+        let mut bcast_rx = bcast.subscribe();
 
         let (tx, mut rx) = mpsc::channel::<String>(4);
         stores.director_message_tx.write().unwrap().insert("ag-test".into(), tx);
@@ -374,24 +391,33 @@ mod tests {
             "director.user_message",
             json!({ "session_id": "ag-test", "message": "hello" }),
         );
-        let resp = handle_director_user_message(&stores, req);
+        let resp = handle_director_user_message(&stores, &bcast, req);
         assert!(!resp.is_error());
 
         let msg = rx.try_recv().expect("message should be delivered");
         assert_eq!(msg, "hello");
+
+        // Design doc §API: director.user_message also emits a broadcast event for TUI audit.
+        let ev = bcast_rx
+            .try_recv()
+            .expect("director.user_message event should be emitted");
+        assert_eq!(ev.event, "director.user_message");
+        assert_eq!(ev.data.get("message").and_then(|v| v.as_str()), Some("hello"));
+        assert_eq!(ev.data.get("session_id").and_then(|v| v.as_str()), Some("ag-test"));
     }
 
     #[test]
     fn user_message_requires_session_id_and_message() {
         let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
 
         let req = DaemonRequest::new(1, "director.user_message", json!({ "message": "x" }));
-        let resp = handle_director_user_message(&stores, req);
+        let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("session_id"));
 
         let req = DaemonRequest::new(2, "director.user_message", json!({ "session_id": "ag-x" }));
-        let resp = handle_director_user_message(&stores, req);
+        let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("message"));
     }

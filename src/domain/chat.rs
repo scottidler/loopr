@@ -12,7 +12,7 @@ use crate::tools::types::Message;
 pub enum FunnelState {
     /// Free conversation.
     Chat,
-    /// Coordinator asking clarifying questions.
+    /// Director conducting plan intake (PlanIntake mode); asking clarifying questions.
     Interview,
     /// Draft plan proposed, awaiting user review.
     PlanDraft,

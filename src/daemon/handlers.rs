@@ -205,7 +205,7 @@ pub async fn dispatch(
         "chat.history" => handle_chat_history(stores, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "director.start_plan_intake" => handle_director_start_plan_intake(stores, event_tx, worktree_mgr, req),
-        "director.user_message" => handle_director_user_message(stores, req),
+        "director.user_message" => handle_director_user_message(stores, event_tx, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
         "agent.resume" => handle_agent_resume(stores, event_tx, req),

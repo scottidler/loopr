@@ -31,7 +31,7 @@ pub mod colors {
 pub enum ChatMode {
     /// Free-form LLM conversation (TUI-side).
     Chat,
-    /// Coordinator interview + plan drafting (daemon-side).
+    /// Director interview + plan drafting (daemon-side PlanIntake mode).
     Plan,
 }
 

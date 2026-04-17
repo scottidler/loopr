@@ -2,8 +2,9 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-16
-**Status:** In Review
+**Status:** Implemented
 **Review Passes Completed:** 5/5 + Architect round 1 (broadcast semantics, pattern-tracker persistence, state-query registration)
+**Implementation:** v4 branch, commits `54b77fa` (Phase 1), `d68427c` (Phase 2), `82767be` (Phase 3), `f8ba895` (Phase 4), `1dba9c4` (Phase 5), `1ce214d` (Phase 6), `5247ec6` (Phase 7)
 
 ## Summary
 
