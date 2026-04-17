@@ -471,15 +471,15 @@ async fn failure_threshold_flips_mode_to_escalation() {
     let driver_sid = impl_sid.clone();
     let driver_cancel_stores = stores.clone();
     let driver_cancel_id = session_id.clone();
-    // Phase 7 semantics: the signature threshold is tripped by N *distinct* root causes,
-    // so we emit 3 different errors (not 3 copies of the same one) to exercise the
-    // `unique_signature_count >= failure_signature_threshold` branch.
+    // Phase 7 semantics: the signature threshold is tripped by a same-root-cause loop -
+    // `failure_total >= failure_signature_threshold` AND `unique_signature_count == 1`.
+    // Emit 3 copies of the same error to exercise that branch.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
         for err in [
             "compile error: missing trait",
-            "timeout: agent deadline",
-            "network: connection refused",
+            "compile error: missing trait",
+            "compile error: missing trait",
         ] {
             let _ = driver_tx.send(DaemonEvent::new(
                 "agent.status_changed",
@@ -541,15 +541,15 @@ async fn rejection_threshold_flips_mode_to_escalation() {
     let driver_tx = event_tx.clone();
     let driver_cancel_stores = stores.clone();
     let driver_cancel_id = session_id.clone();
-    // Phase 7 semantics: the theme threshold is tripped by N distinct reviewer complaints.
-    // Emit three rejections with three distinct themes (different first sentences) to
-    // exercise the `unique_theme_count >= rejection_theme_threshold` branch.
+    // Phase 7 semantics: the theme threshold is tripped by a same-theme reviewer loop -
+    // `rejection_total >= rejection_theme_threshold` AND `unique_theme_count == 1`.
+    // Emit three rejections with the same theme to exercise that branch.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
         for reason in [
             "diff-too-large for single bundle",
-            "missing unit tests on error path",
-            "unhandled concurrency race in cache",
+            "diff-too-large for single bundle",
+            "diff-too-large for single bundle",
         ] {
             let _ = driver_tx.send(DaemonEvent::new(
                 "bundle.rejected",
@@ -946,13 +946,14 @@ async fn threshold_escalation_returns_to_monitoring() {
     let driver_sid = impl_sid.clone();
     let driver_cancel_stores = stores.clone();
     let driver_cancel_id = session_id.clone();
-    // Phase 7 semantics: three distinct root causes trip the signature threshold.
+    // Phase 7 semantics: same-root-cause loop - three copies of the same error trip
+    // the signature threshold (`failure_total >= N` AND `unique_signature_count == 1`).
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
         for err in [
             "compile error: missing trait",
-            "timeout: agent deadline",
-            "network: connection refused",
+            "compile error: missing trait",
+            "compile error: missing trait",
         ] {
             let _ = driver_tx.send(DaemonEvent::new(
                 "agent.status_changed",
@@ -1090,6 +1091,11 @@ async fn reconcile_from_ipc_matches_event_driven_counts() {
     let mut bundle = Bundle::new(w1_id.clone(), Some("t-1".into()), "branch".into(), vec![]);
     bundle.force_status(BundleStatus::Rejected);
     stores.write_bundles().unwrap().insert(bundle.id.clone(), bundle);
+    // Second rejected bundle on the same work so the rejection restart-degradation
+    // assertion has a meaningful sample (one bundle trivially satisfies unique==1).
+    let mut bundle2 = Bundle::new(w1_id.clone(), Some("t-1".into()), "branch-2".into(), vec![]);
+    bundle2.force_status(BundleStatus::Rejected);
+    stores.write_bundles().unwrap().insert(bundle2.id.clone(), bundle2);
 
     // Build a Director that enters Monitoring via pl-* target_id. The event_loop's entry
     // reconciliation fires on the first iteration; we cancel quickly to observe state.
@@ -1111,15 +1117,31 @@ async fn reconcile_from_ipc_matches_event_driven_counts() {
     assert!(result.is_ok());
     result.unwrap().unwrap();
 
-    // Reconciled tracker should show: 2 failures for w1, 0 for w2, 1 rejection for w1,
+    // Reconciled tracker should show: 2 failures for w1, 0 for w2, 2 rejections for w1,
     // and spec_revision_count contains the spec with decomposition_attempts=2.
     assert_eq!(agent.pattern_tracker.failure_count(&w1_id), 2);
     assert_eq!(agent.pattern_tracker.failure_count(&w2_id), 0);
-    assert_eq!(agent.pattern_tracker.rejection_count(&w1_id), 1);
+    assert_eq!(agent.pattern_tracker.rejection_count(&w1_id), 2);
     assert_eq!(agent.pattern_tracker.rejection_count(&w2_id), 0);
     assert_eq!(
         agent.pattern_tracker.spec_revision_count.get(&spec_id).copied(),
         Some(2)
+    );
+
+    // Restart-degradation invariant: historical placeholders must not collapse to a
+    // single signature/theme. If they did, the same-root-cause predicate in
+    // `check_thresholds` (`unique == 1`) would falsely fire the moment the daemon
+    // restarts. Each synthetic entry must be unique so the signature/theme paths
+    // gracefully degrade to the total-count safety net.
+    assert_eq!(
+        agent.pattern_tracker.unique_signature_count(&w1_id),
+        2,
+        "each historical failure placeholder must contribute a distinct signature"
+    );
+    assert_eq!(
+        agent.pattern_tracker.unique_theme_count(&w1_id),
+        2,
+        "each historical rejection placeholder must contribute a distinct theme"
     );
 }
 

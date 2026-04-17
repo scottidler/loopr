@@ -370,12 +370,14 @@ impl<L: LlmClient> DirectorAgent<L> {
     ///
     /// Four escalation conditions, any of which trips the switch:
     ///
-    /// 1. `unique_signature_count >= failure_signature_threshold` - the implementer has
-    ///    failed with the same root cause that many distinct times (same-root-cause loop).
+    /// 1. Same-root-cause loop: `failure_count >= failure_signature_threshold`
+    ///    AND `unique_signature_count == 1`. The implementer has failed that many
+    ///    times with a single distinct root cause - a true stuck state.
     /// 2. `failure_count       >= failure_total_threshold`        - raw failure tally,
     ///    catches environmental flapping where each failure looks different.
-    /// 3. `unique_theme_count  >= rejection_theme_threshold`      - the reviewer keeps
-    ///    writing the same complaint (implementer isn't addressing it).
+    /// 3. Same-theme reviewer loop: `rejection_count >= rejection_theme_threshold`
+    ///    AND `unique_theme_count == 1`. The reviewer keeps writing the same
+    ///    complaint and the implementer isn't addressing it.
     /// 4. `rejection_count     >= rejection_total_threshold`      - raw rejection tally,
     ///    safety net for rejections that don't theme-cluster cleanly.
     ///
@@ -391,9 +393,9 @@ impl<L: LlmClient> DirectorAgent<L> {
         let theme_count = self.pattern_tracker.unique_theme_count(work_id);
         let rejection_total = self.pattern_tracker.rejection_count(work_id);
 
-        let signatures_tripped = signature_count >= thresholds.failure_signature_threshold;
+        let signatures_tripped = failure_total >= thresholds.failure_signature_threshold && signature_count == 1;
         let failures_tripped = failure_total >= thresholds.failure_total_threshold;
-        let themes_tripped = theme_count >= thresholds.rejection_theme_threshold;
+        let themes_tripped = rejection_total >= thresholds.rejection_theme_threshold && theme_count == 1;
         let rejections_tripped = rejection_total >= thresholds.rejection_total_threshold;
 
         if signatures_tripped || failures_tripped || themes_tripped || rejections_tripped {
@@ -584,6 +586,14 @@ impl<L: LlmClient> DirectorAgent<L> {
         // sessions per work. Synthesize placeholder (session_id, error) entries so the
         // tracker's in-memory shape stays compatible with event-driven updates.
         //
+        // IMPORTANT: each placeholder error must be unique so historical events
+        // contribute distinct signatures. The same-root-cause loop predicate in
+        // `check_thresholds` requires `unique_signature_count == 1`; if all historical
+        // placeholders shared one string, any restart would collapse the signature set
+        // to 1 and falsely trigger escalation. Making each placeholder unique cleanly
+        // degrades restart-recovered state to the total-count safety net until new
+        // live events arrive with real signatures.
+        //
         // Spec-level abandonment tracking (Phase 7): populate the spec totals and
         // abandoned sets so `check_spec_thresholds` has the sample size to evaluate the
         // ratio immediately after reconcile. `work.parent_id` is a phase id, so we walk
@@ -592,7 +602,12 @@ impl<L: LlmClient> DirectorAgent<L> {
         for w in &works {
             if w.session_failure_count > 0 {
                 let history: Vec<(String, String)> = (0..w.session_failure_count as usize)
-                    .map(|i| (format!("reconciled-{}-{}", w.id, i), "reconciled".to_string()))
+                    .map(|i| {
+                        (
+                            format!("reconciled-{}-{}", w.id, i),
+                            format!("reconciled-{}-{}", w.id, i),
+                        )
+                    })
                     .collect();
                 self.pattern_tracker.work_failure_history.insert(w.id.clone(), history);
             }
@@ -606,6 +621,9 @@ impl<L: LlmClient> DirectorAgent<L> {
         }
 
         // Bundle rejections: bundle.list filters by work_id; aggregate across all works.
+        // Same placeholder-uniqueness rationale as the failure history above: the
+        // bundle id is stable per rejection, so use it as the placeholder theme so
+        // historical rejections never collapse to `unique_theme_count == 1`.
         let mut rejection_count = 0usize;
         for w in &works {
             let bundles: Vec<crate::domain::bundle::Bundle> =
@@ -616,7 +634,7 @@ impl<L: LlmClient> DirectorAgent<L> {
                         .rejection_history
                         .entry(b.work_id.clone())
                         .or_default()
-                        .push("rejected".to_string());
+                        .push(format!("rejected-{}", b.id));
                     rejection_count += 1;
                 }
             }
