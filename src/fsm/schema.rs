@@ -12,6 +12,7 @@ const VALID_ROLES: &[&str] = &[
     "reviewer",
     "researcher",
     "decomposer",
+    "director",
 ];
 
 /// Authorization rule for a transition to a target state.

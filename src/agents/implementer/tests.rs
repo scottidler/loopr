@@ -68,8 +68,10 @@ fn setup_stores(dir: &Path) -> Arc<Stores> {
     stores.store = Some(Arc::new(StdMutex::new(store)));
     stores.config = config;
 
-    // Populate hierarchy
-    let plan = Plan::new("Test Plan".into(), "criteria".into());
+    // Populate hierarchy. Plan title doubles as the "Project Goal" banner rendered at
+    // the top of the Implementer's context (see ContextBuilder::with_coordinator_goal).
+    // Tests that assert on goal text anchor on this specific phrasing.
+    let plan = Plan::new("REST API for user management".into(), "criteria".into());
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
@@ -271,7 +273,7 @@ async fn test_context_builder_for_implementer() {
         .build(&crate::prompts::store().implementer)
         .unwrap();
 
-    assert!(assembled.user_message.contains("Test Plan"));
+    assert!(assembled.user_message.contains("REST API for user management"));
     assert!(assembled.user_message.contains("Test Spec"));
     assert!(assembled.user_message.contains("Test Phase"));
     assert!(assembled.user_message.contains("Test Work"));
@@ -804,6 +806,10 @@ async fn test_run_implementer_session_iteration_persisted() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_implementer_context_includes_goal() {
     use std::sync::Mutex as StdMutex2;
+
+    // prompts::store() panics if never initialized; agents lazily access it via the
+    // ContextBuilder build pass.
+    crate::prompts::init_defaults();
 
     let dir = TestDir::new("loopr-impl-goal");
     let stores = setup_stores(&dir);

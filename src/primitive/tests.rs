@@ -308,3 +308,14 @@ fn test_default_registry() {
     let reg = PrimitiveRegistry::default();
     assert!(reg.is_empty());
 }
+
+#[test]
+fn primitive_catalog_has_all_64_builtins() {
+    let mut reg = PrimitiveRegistry::new();
+    crate::primitive::catalog::register_all(&mut reg).expect("failed to register catalog");
+    assert_eq!(
+        reg.len(),
+        64,
+        "Primitive registry should have exactly 64 built-ins; update this test when adding or removing one"
+    );
+}

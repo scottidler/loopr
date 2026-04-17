@@ -46,69 +46,82 @@ pub enum IpcMessage {
 // --- Standard RPC error codes ---
 
 impl RpcError {
+    // Code constants. Kept in sync with the constructor functions below.
+    // Callers that need to inspect `resp.error.code` should match against these rather
+    // than against raw integer literals.
+    pub const CODE_METHOD_NOT_FOUND: i32 = -32601;
+    pub const CODE_INVALID_PARAMS: i32 = -32602;
+    pub const CODE_INTERNAL: i32 = -32603;
+    pub const CODE_TRANSITION_REJECTED: i32 = -32000;
+    pub const CODE_NOT_FOUND: i32 = -32001;
+    pub const CODE_STALE_BUNDLE: i32 = -32002;
+    pub const CODE_VALIDATION_REQUIRED: i32 = -32003;
+    pub const CODE_POOL_EXHAUSTED: i32 = -32004;
+    pub const CODE_PRECONDITION_FAILED: i32 = -32005;
+
     pub fn method_not_found(method: &str) -> Self {
         Self {
-            code: -32601,
+            code: Self::CODE_METHOD_NOT_FOUND,
             message: format!("method not found: {method}"),
         }
     }
 
     pub fn invalid_params(detail: &str) -> Self {
         Self {
-            code: -32602,
+            code: Self::CODE_INVALID_PARAMS,
             message: format!("invalid params: {detail}"),
         }
     }
 
     pub fn internal(detail: &str) -> Self {
         Self {
-            code: -32603,
+            code: Self::CODE_INTERNAL,
             message: format!("internal error: {detail}"),
         }
     }
 
     pub fn transition_rejected(detail: &str) -> Self {
         Self {
-            code: -32000,
+            code: Self::CODE_TRANSITION_REJECTED,
             message: format!("transition rejected: {detail}"),
         }
     }
 
     pub fn not_found(collection: &str, id: &str) -> Self {
         Self {
-            code: -32001,
+            code: Self::CODE_NOT_FOUND,
             message: format!("not found: {collection}/{id}"),
         }
     }
 
     pub fn stale_bundle(base_tick_id: &str, latest_tick_id: &str) -> Self {
         Self {
-            code: -32002,
+            code: Self::CODE_STALE_BUNDLE,
             message: format!(
-                "staleness guard: base_tick_id '{base_tick_id}' is behind latest Published Tick '{latest_tick_id}' — refresh worktree and re-propose"
+                "staleness guard: base_tick_id '{base_tick_id}' is behind latest Published Tick '{latest_tick_id}' - refresh worktree and re-propose"
             ),
         }
     }
 
     pub fn validation_required(collection: &str, id: &str) -> Self {
         Self {
-            code: -32003,
+            code: Self::CODE_VALIDATION_REQUIRED,
             message: format!(
-                "Draft → Active requires a passing validation report for {collection}/{id}. Run 'validator.validate' first."
+                "Draft -> Active requires a passing validation report for {collection}/{id}. Run 'validator.validate' first."
             ),
         }
     }
 
     pub fn pool_exhausted(detail: &str) -> Self {
         Self {
-            code: -32004,
+            code: Self::CODE_POOL_EXHAUSTED,
             message: format!("pool exhausted: {detail}"),
         }
     }
 
     pub fn precondition_failed(detail: &str) -> Self {
         Self {
-            code: -32005,
+            code: Self::CODE_PRECONDITION_FAILED,
             message: format!("precondition failed: {detail}"),
         }
     }

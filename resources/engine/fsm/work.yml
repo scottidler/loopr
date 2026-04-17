@@ -22,35 +22,35 @@ transitions:
   draft:
     pending: { by: [coordinator] }
     ready: { by: [coordinator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   pending:
     ready: { by: [coordinator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   ready:
     in-progress: { by: [coordinator] }
     blocked: { by: [coordinator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
     done: { by: [coordinator] }
   in-progress:
     blocked: {}
     in-review: { by: [implementer] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   blocked:
     ready: { by: [coordinator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   in-review:
     in-progress: { by: [coordinator] }
     integrated: { by: [integrator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   integrated:
     done: { by: [coordinator, integrator] }
-    abandoned: { by: [coordinator] }
+    abandoned: { by: [coordinator, director] }
 
 overrides:
   in-progress:

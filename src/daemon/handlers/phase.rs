@@ -232,6 +232,8 @@ pub(super) fn handle_phase_transition(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
+
         let mut phases = stores.write_phases()?;
         let phase = match phases.get_mut(&id) {
             Some(p) => p,
@@ -240,12 +242,22 @@ pub(super) fn handle_phase_transition(
 
         let from = phase.status();
         let role_str = role.to_string();
-        match fsm.validate_transition(
-            HierarchyStatus::fsm_name(),
-            from.to_yaml_name(),
-            target_status.to_yaml_name(),
-            &role_str,
-        ) {
+        let validation = if is_override {
+            fsm.validate_override(
+                HierarchyStatus::fsm_name(),
+                from.to_yaml_name(),
+                target_status.to_yaml_name(),
+                &role_str,
+            )
+        } else {
+            fsm.validate_transition(
+                HierarchyStatus::fsm_name(),
+                from.to_yaml_name(),
+                target_status.to_yaml_name(),
+                &role_str,
+            )
+        };
+        match validation {
             Err(e) => {
                 let _ = event_tx.send(DaemonEvent::transition_rejected(
                     "phases",

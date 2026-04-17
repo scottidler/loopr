@@ -8,8 +8,27 @@
 //!
 //! The Director does NOT schedule agents or drive the mechanical loop - that's the engine's job.
 //! It provides judgment for cases the engine can't handle.
+//!
+//! ## Stores access policy
+//!
+//! Domain truth (Spec / Phase / Work / Bundle state used for reconciliation or decisions)
+//! MUST be read via `AgentIpcBridge` so the Director sees the same filtered view as every
+//! other actor. See `reconcile_from_ipc` and `bridge_list`.
+//!
+//! Direct `self.ctx.stores.*` access in this file is strictly permitted only for
+//! *Agent Metadata and Chat Context* (`AgentSession`, `ChatHistory`):
+//!   - persisting the Director's current mode on its own `AgentSession` (`persist_mode`)
+//!   - resolving session <-> work / chat-session ids
+//!     (`resolve_work_id_for_session`, `resolve_chat_session_id`, `planintake_turn`)
+//!
+//! Routing these through IPC would mean the daemon talking to itself through a socket to
+//! read global `AgentSession` / `ChatHistory` metadata - not domain state. If you add a
+//! new Stores access, it must fit the metadata bucket above. Anything touching
+//! domain records (`Plan` / `Spec` / `Phase` / `Work` / `Bundle`) goes through the bridge
+//! (see `is_plan_terminal` for the `plan.get` pattern, `reconcile_from_ipc` for list-style
+//! queries).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -42,24 +61,12 @@ pub mod actions;
 /// enough for user-visible cancel latency.
 const HEARTBEAT_INTERVAL_MS: u64 = 1_000;
 
-/// Stall threshold: if no relevant events arrive for this long during Monitoring,
-/// the heartbeat emits a `director.stall_detected` event. Phase 5 consumes the event
-/// and decides whether to enter Escalation.
-const STALL_THRESHOLD_SECS: u64 = 300;
-
-/// Re-emission throttle for stall detection. Once a stall has been announced, suppress
-/// repeat emissions until the idle interval doubles, so the TUI isn't spammed once per
-/// heartbeat after the threshold is first crossed.
-const STALL_REEMIT_SECS: u64 = 300;
-
-/// Failure-count threshold for cross-session escalation. When the same work_id has
-/// accumulated this many failures (across any implementer sessions), the Director
-/// transitions to Escalation. Design doc §Edge Cases codifies the default at 3.
-const WORK_FAILURE_THRESHOLD: usize = 3;
-
-/// Rejection-count threshold for cross-session escalation. Same semantics as
-/// `WORK_FAILURE_THRESHOLD` but counts bundle rejections for the work.
-const WORK_REJECTION_THRESHOLD: usize = 3;
+// Phase 7 thresholds are now configurable via `AgentConfig::director_thresholds`
+// (see `src/config.rs::DirectorThresholds`). The Director reads them from
+// `self.ctx.stores.config.agents.director_thresholds` at each use site so runtime config
+// reloads take effect without restarting the Director. Historical hardcoded constants
+// (STALL_THRESHOLD_SECS, WORK_FAILURE_THRESHOLD, WORK_REJECTION_THRESHOLD) were removed
+// in the Phase 7 wiring pass - do not reintroduce them.
 
 /// The Director's operating mode.
 ///
@@ -98,6 +105,14 @@ pub struct DirectorPatternTracker {
     pub rejection_history: HashMap<String, Vec<String>>,
     /// Number of times each spec has been revised via bubble-up.
     pub spec_revision_count: HashMap<String, u32>,
+    /// Spec id -> set of work ids observed as Abandoned under that spec. Feeds the
+    /// spec-level abandonment-ratio escalation (design doc Phase 7 "abandon-ratio-
+    /// escalation" pattern). Using a set means a work reported twice (via event + IPC
+    /// reconciliation) counts once.
+    pub spec_abandoned_works: HashMap<String, HashSet<String>>,
+    /// Spec id -> set of work ids observed at all under that spec (any status). The
+    /// denominator for the abandonment ratio.
+    pub spec_total_works: HashMap<String, HashSet<String>>,
 }
 
 impl DirectorPatternTracker {
@@ -110,14 +125,19 @@ impl DirectorPatternTracker {
         self.work_failure_history.clear();
         self.rejection_history.clear();
         self.spec_revision_count.clear();
+        self.spec_abandoned_works.clear();
+        self.spec_total_works.clear();
     }
 
-    /// Count of distinct failures observed for a given work.
+    /// Total failure count across all sessions for a given work (any root cause). Use
+    /// together with `unique_signature_count` - the raw count catches environmental
+    /// flapping, the signature count catches a stuck root cause.
     pub fn failure_count(&self, work_id: &str) -> usize {
         self.work_failure_history.get(work_id).map(Vec::len).unwrap_or(0)
     }
 
-    /// Count of distinct rejections observed for a given work's bundles.
+    /// Total rejection count across all bundles for a given work (any reviewer-feedback
+    /// theme). Use together with `unique_theme_count`.
     pub fn rejection_count(&self, work_id: &str) -> usize {
         self.rejection_history.get(work_id).map(Vec::len).unwrap_or(0)
     }
@@ -131,8 +151,58 @@ impl DirectorPatternTracker {
         let Some(history) = self.work_failure_history.get(work_id) else {
             return 0;
         };
-        let sigs: std::collections::HashSet<String> = history.iter().map(|(_, err)| error_signature(err)).collect();
+        let sigs: HashSet<String> = history.iter().map(|(_, err)| error_signature(err)).collect();
         sigs.len()
+    }
+
+    /// Count of distinct rejection themes observed for a given work's bundles. Themes
+    /// are derived from reviewer feedback by `rejection_theme`. Semantics parallel
+    /// `unique_signature_count`: N themes means N different kinds of complaint; 1 theme
+    /// means the same complaint keeps coming back (likely a real defect the implementer
+    /// isn't addressing).
+    pub fn unique_theme_count(&self, work_id: &str) -> usize {
+        let Some(history) = self.rejection_history.get(work_id) else {
+            return 0;
+        };
+        let themes: HashSet<String> = history.iter().map(|r| rejection_theme(r)).collect();
+        themes.len()
+    }
+
+    /// Record that `work_id` under `spec_id` was abandoned. Both sets are used by
+    /// `abandonment_ratio`. Idempotent - replaying the same abandonment event does not
+    /// double-count.
+    pub fn observe_abandonment(&mut self, spec_id: &str, work_id: &str) {
+        self.spec_total_works
+            .entry(spec_id.to_string())
+            .or_default()
+            .insert(work_id.to_string());
+        self.spec_abandoned_works
+            .entry(spec_id.to_string())
+            .or_default()
+            .insert(work_id.to_string());
+    }
+
+    /// Record that `work_id` exists under `spec_id` regardless of its current status.
+    /// Call this whenever a work event surfaces a spec link, so the denominator of the
+    /// abandonment ratio reflects total observed works (not just the abandoned ones).
+    pub fn observe_spec_work(&mut self, spec_id: &str, work_id: &str) {
+        self.spec_total_works
+            .entry(spec_id.to_string())
+            .or_default()
+            .insert(work_id.to_string());
+    }
+
+    /// Fraction of a spec's observed works that are in the abandoned set. Returns
+    /// `(ratio, sample_size)`. `sample_size` is the total-works count; callers should
+    /// require `sample_size >= min_sample` before treating the ratio as actionable, so
+    /// a 2-work spec with 1 abandonment does not read as 50% and escalate prematurely.
+    pub fn abandonment_ratio(&self, spec_id: &str) -> (f64, usize) {
+        let total = self.spec_total_works.get(spec_id).map(HashSet::len).unwrap_or(0);
+        if total == 0 {
+            return (0.0, 0);
+        }
+        let abandoned = self.spec_abandoned_works.get(spec_id).map(HashSet::len).unwrap_or(0);
+        (abandoned as f64 / total as f64, total)
     }
 }
 
@@ -150,6 +220,24 @@ pub fn error_signature(err: &str) -> String {
     let base = trimmed.split_once(':').map(|(k, _)| k).unwrap_or(&trimmed);
     let collapsed: String = base.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed.chars().take(200).collect()
+}
+
+/// Coarse theme for reviewer rejection feedback. Used to bucket distinct reviewer
+/// complaints so the Director can tell "same complaint 4 times" (escalate - implementer
+/// isn't addressing it) from "4 different complaints" (implementer is making progress
+/// each round, just imperfectly).
+///
+/// Strategy mirrors `error_signature`: lowercase, collapse whitespace, and take the
+/// leading 64 characters of the first-line / first-sentence. Deliberately cheap and
+/// heuristic - a future refinement could use embedding similarity, but length-prefix is
+/// enough for the threshold decision today.
+pub fn rejection_theme(reason: &str) -> String {
+    let trimmed = reason.trim().to_lowercase();
+    // First sentence or first line, whichever is shorter - reviewers tend to lead with
+    // the headline, then elaborate.
+    let first = trimmed.split(['.', '\n']).next().unwrap_or(&trimmed);
+    let collapsed: String = first.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(64).collect()
 }
 
 /// The Director agent.
@@ -275,71 +363,176 @@ impl<L: LlmClient> DirectorAgent<L> {
         ));
     }
 
-    /// Cross-session threshold check: if the tracker has accumulated enough failure or
-    /// rejection history for this work, flip to Escalation mode (observational in Phase 4;
-    /// Phase 5 re-dispatches the loop to the escalation handler). Safe to call after any
-    /// pattern-tracker mutation.
+    /// Cross-session threshold check. Flips to Escalation when the tracker has observed
+    /// enough of the "same root cause" or "same reviewer complaint" for this work, or
+    /// when raw failure / rejection tallies (any signature, any theme) climb past the
+    /// total-count safety nets.
+    ///
+    /// Four escalation conditions, any of which trips the switch:
+    ///
+    /// 1. `unique_signature_count >= failure_signature_threshold` - the implementer has
+    ///    failed with the same root cause that many distinct times (same-root-cause loop).
+    /// 2. `failure_count       >= failure_total_threshold`        - raw failure tally,
+    ///    catches environmental flapping where each failure looks different.
+    /// 3. `unique_theme_count  >= rejection_theme_threshold`      - the reviewer keeps
+    ///    writing the same complaint (implementer isn't addressing it).
+    /// 4. `rejection_count     >= rejection_total_threshold`      - raw rejection tally,
+    ///    safety net for rejections that don't theme-cluster cleanly.
+    ///
+    /// All thresholds are sourced from `AgentConfig::director_thresholds`.
     fn check_thresholds(&mut self, work_id: &str) {
         if !matches!(self.mode, DirectorMode::Monitoring) {
             return;
         }
-        let failures = self.pattern_tracker.failure_count(work_id);
-        let rejections = self.pattern_tracker.rejection_count(work_id);
-        if failures >= WORK_FAILURE_THRESHOLD || rejections >= WORK_REJECTION_THRESHOLD {
+        let thresholds = self.ctx.stores.config.agents.director_thresholds;
+
+        let signature_count = self.pattern_tracker.unique_signature_count(work_id);
+        let failure_total = self.pattern_tracker.failure_count(work_id);
+        let theme_count = self.pattern_tracker.unique_theme_count(work_id);
+        let rejection_total = self.pattern_tracker.rejection_count(work_id);
+
+        let signatures_tripped = signature_count >= thresholds.failure_signature_threshold;
+        let failures_tripped = failure_total >= thresholds.failure_total_threshold;
+        let themes_tripped = theme_count >= thresholds.rejection_theme_threshold;
+        let rejections_tripped = rejection_total >= thresholds.rejection_total_threshold;
+
+        if signatures_tripped || failures_tripped || themes_tripped || rejections_tripped {
             warn!(
-                "{} director: threshold exceeded for work_id={} (failures={}, rejections={}) -> Escalation",
+                "{} director: escalating work_id={} (unique-signatures={}/{} total-failures={}/{} unique-themes={}/{} total-rejections={}/{})",
                 self.ctx.log_prefix(),
                 work_id,
-                failures,
-                rejections
+                signature_count,
+                thresholds.failure_signature_threshold,
+                failure_total,
+                thresholds.failure_total_threshold,
+                theme_count,
+                thresholds.rejection_theme_threshold,
+                rejection_total,
+                thresholds.rejection_total_threshold,
             );
-            // Flip the mode and stash the target work_id; the event loop's post-handler
-            // hook consumes this on the next iteration to run `enter_escalation`, which
-            // flips the mode back to Monitoring when done.
             self.pending_escalation_target = Some(work_id.to_string());
             self.set_mode(DirectorMode::Escalation);
         }
     }
 
-    /// Query the plan's current status via the IPC bridge. Returns true for Complete /
-    /// Superseded / Abandoned. Also returns true if plan_id is set but the plan can no
-    /// longer be found (defensive: treat missing plan as terminal to avoid spinning).
+    /// Cross-session spec-level threshold check. Fires when a spec has accumulated enough
+    /// abandoned works (relative to its total) that the spec itself - not any individual
+    /// work - warrants Director judgment.
+    ///
+    /// Guarded by `spec_min_works_for_ratio` so a tiny spec doesn't escalate on the first
+    /// abandonment. Escalation target is the spec id (prefixed for the escalation handler
+    /// to distinguish spec-level from work-level targets).
+    fn check_spec_thresholds(&mut self, spec_id: &str) {
+        if !matches!(self.mode, DirectorMode::Monitoring) {
+            return;
+        }
+        let thresholds = self.ctx.stores.config.agents.director_thresholds;
+        let (ratio, sample) = self.pattern_tracker.abandonment_ratio(spec_id);
+        if sample < thresholds.spec_min_works_for_ratio {
+            trace!(
+                "{} director: spec {} abandonment sample too small ({}/{}), skipping",
+                self.ctx.log_prefix(),
+                spec_id,
+                sample,
+                thresholds.spec_min_works_for_ratio
+            );
+            return;
+        }
+        if ratio >= thresholds.spec_abandonment_ratio {
+            warn!(
+                "{} director: escalating spec_id={} (abandonment ratio {:.2} >= {:.2}, sample={})",
+                self.ctx.log_prefix(),
+                spec_id,
+                ratio,
+                thresholds.spec_abandonment_ratio,
+                sample,
+            );
+            // Spec-level escalation flags the spec itself as the target. Downstream
+            // escalation handler inspects the target prefix (`sp-*`) to branch on it.
+            self.pending_escalation_target = Some(spec_id.to_string());
+            self.set_mode(DirectorMode::Escalation);
+        }
+    }
+
+    /// Query the plan's current status via the IPC bridge (`plan.get`).
+    ///
+    /// Returns true when the plan has reached a terminal domain status (Complete /
+    /// Superseded / Abandoned), or when the plan no longer exists in the daemon (deleted
+    /// out from under us - nothing left to monitor). Returns false on transient bridge
+    /// failures or malformed responses, so a broken daemon socket does not silently
+    /// euthanize an otherwise-live Director.
+    ///
+    /// The two error-path defaults are deliberately asymmetric:
+    ///
+    /// - `RpcError::not_found` (code `-32001`) from `plan.get` → terminal. The plan is
+    ///   gone; continuing to poll would hot-loop forever.
+    /// - Any other IPC error, or deserialize failure → active. Assume transient.
     fn is_plan_terminal(&self) -> bool {
         let Some(plan_id) = &self.plan_id else {
             // No plan yet (e.g., PlanIntake pre-acceptance). Not terminal - keep running.
             return false;
         };
-        let Ok(plans) = self.ctx.stores.read_plans() else {
+        let resp = self
+            .ctx
+            .bridge
+            .request("plan.get", serde_json::json!({ "id": plan_id }));
+        if resp.is_error() {
+            let code = resp.error.as_ref().map(|e| e.code);
+            let msg = resp.error.as_ref().map(|e| e.message.as_str()).unwrap_or("");
+            if code == Some(crate::ipc::protocol::RpcError::CODE_NOT_FOUND) {
+                warn!(
+                    "{} director: plan {} no longer exists (not_found); terminating monitoring",
+                    self.ctx.log_prefix(),
+                    plan_id
+                );
+                return true;
+            }
             warn!(
-                "{} director: plans lock poisoned; treating plan as terminal",
-                self.ctx.log_prefix()
+                "{} director: plan.get failed for {} (code={:?}); treating plan as active to avoid dropping session ({})",
+                self.ctx.log_prefix(),
+                plan_id,
+                code,
+                msg
+            );
+            return false;
+        }
+        let Some(result) = resp.result else {
+            // OK response with null payload - should not happen for plan.get in practice
+            // (the handler returns not_found as an error), but guard anyway. Treat as
+            // missing-and-terminal rather than active to match the not_found semantic.
+            warn!(
+                "{} director: plan {} returned null result; terminating monitoring",
+                self.ctx.log_prefix(),
+                plan_id
             );
             return true;
         };
-        match plans.get(plan_id) {
-            Some(plan) => {
+        match serde_json::from_value::<crate::domain::plan::Plan>(result) {
+            Ok(plan) => {
                 use crate::domain::plan::HierarchyStatus;
                 matches!(
                     plan.status(),
                     HierarchyStatus::Complete | HierarchyStatus::Superseded | HierarchyStatus::Abandoned
                 )
             }
-            None => {
+            Err(e) => {
                 warn!(
-                    "{} director: plan {} no longer exists; terminating monitoring",
+                    "{} director: plan.get result deserialize failed for {} ({}); treating as active",
                     self.ctx.log_prefix(),
-                    plan_id
+                    plan_id,
+                    e
                 );
-                true
+                false
             }
         }
     }
 
-    /// Rebuild the pattern tracker from persistent state (JSONL ground truth via Stores).
+    /// Rebuild the pattern tracker from persistent state by querying `Stores` through
+    /// `AgentIpcBridge`, per design doc "State Reconciliation" section.
     ///
-    /// The Director is in-process with the daemon, so the canonical path is direct Stores
-    /// reads rather than round-tripping through `AgentIpcBridge`. Stores is the in-memory
-    /// cache over JSONL (see `.claude/rules/taskstore.md`) - same truth, zero IPC overhead.
+    /// The Director walks Plan -> Spec -> Phase -> Work -> Bundle through the bridge's
+    /// `spec.list` / `phase.list` / `work.list` / `bundle.list` methods, so the same
+    /// data path used by external agents is exercised here.
     ///
     /// Invoked from three places:
     /// 1. Monitoring entry (seed a freshly spawned Director with full history),
@@ -359,89 +552,72 @@ impl<L: LlmClient> DirectorAgent<L> {
             return Ok(());
         };
 
-        // Walk Plan -> Spec -> Phase -> Work to collect the work_ids in scope. The hierarchy
-        // is parent_id-driven, so we resolve it in three passes over the in-memory stores.
-        let spec_ids: Vec<String> = self
-            .ctx
-            .stores
-            .read_specs()
-            .map(|specs| {
-                specs
-                    .values()
-                    .filter(|s| s.parent_id == plan_id)
-                    .map(|s| s.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        // spec.list(parent_id=plan_id) -> Vec<Spec>
+        let specs: Vec<crate::domain::spec::Spec> =
+            self.bridge_list("spec.list", serde_json::json!({ "parent_id": plan_id }))?;
 
-        // Spec revision count (decomposition_attempts is the persistent proxy for the
-        // design doc's revision_count - same concept, concrete field).
-        if let Ok(specs) = self.ctx.stores.read_specs() {
-            for s in specs.values() {
-                if s.parent_id == plan_id {
-                    self.pattern_tracker
-                        .spec_revision_count
-                        .insert(s.id.clone(), s.decomposition_attempts);
+        // Record spec revision counts (decomposition_attempts is the persistent proxy for
+        // the design doc's revision_count).
+        for s in &specs {
+            self.pattern_tracker
+                .spec_revision_count
+                .insert(s.id.clone(), s.decomposition_attempts);
+        }
+
+        // For each spec, phase.list(parent_id=spec_id) -> Vec<Phase>
+        let mut phases: Vec<crate::domain::phase::Phase> = Vec::new();
+        for s in &specs {
+            let ph: Vec<crate::domain::phase::Phase> =
+                self.bridge_list("phase.list", serde_json::json!({ "parent_id": s.id }))?;
+            phases.extend(ph);
+        }
+
+        // For each phase, work.list(parent_id=phase_id) -> Vec<Work>
+        let mut works: Vec<crate::domain::work::Work> = Vec::new();
+        for p in &phases {
+            let ws: Vec<crate::domain::work::Work> =
+                self.bridge_list("work.list", serde_json::json!({ "parent_id": p.id }))?;
+            works.extend(ws);
+        }
+
+        // Failure history: session_failure_count is the persistent aggregate of failed
+        // sessions per work. Synthesize placeholder (session_id, error) entries so the
+        // tracker's in-memory shape stays compatible with event-driven updates.
+        //
+        // Spec-level abandonment tracking (Phase 7): populate the spec totals and
+        // abandoned sets so `check_spec_thresholds` has the sample size to evaluate the
+        // ratio immediately after reconcile. `work.parent_id` is a phase id, so we walk
+        // phase -> spec via the phases vec built above.
+        let phase_to_spec: HashMap<&str, &str> = phases.iter().map(|p| (p.id.as_str(), p.parent_id.as_str())).collect();
+        for w in &works {
+            if w.session_failure_count > 0 {
+                let history: Vec<(String, String)> = (0..w.session_failure_count as usize)
+                    .map(|i| (format!("reconciled-{}-{}", w.id, i), "reconciled".to_string()))
+                    .collect();
+                self.pattern_tracker.work_failure_history.insert(w.id.clone(), history);
+            }
+            if let Some(spec_id) = phase_to_spec.get(w.parent_id.as_str()) {
+                self.pattern_tracker.observe_spec_work(spec_id, &w.id);
+                use crate::domain::work::WorkStatus;
+                if matches!(w.status(), WorkStatus::Abandoned) {
+                    self.pattern_tracker.observe_abandonment(spec_id, &w.id);
                 }
             }
         }
 
-        let phase_ids: Vec<String> = self
-            .ctx
-            .stores
-            .read_phases()
-            .map(|phases| {
-                phases
-                    .values()
-                    .filter(|p| spec_ids.contains(&p.parent_id))
-                    .map(|p| p.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let plan_work_ids: std::collections::HashSet<String> = self
-            .ctx
-            .stores
-            .read_works()
-            .map(|works| {
-                works
-                    .values()
-                    .filter(|w| phase_ids.contains(&w.parent_id))
-                    .map(|w| w.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // Failure history: `session_failure_count` is the persistent aggregate of failed
-        // sessions per work. We synthesize placeholder (session_id, error) entries so the
-        // tracker's in-memory shape stays compatible with event-driven updates and the
-        // `failure_count(work_id)` helper returns the correct total.
-        if let Ok(works) = self.ctx.stores.read_works() {
-            for w in works.values() {
-                if !plan_work_ids.contains(&w.id) {
-                    continue;
-                }
-                if w.session_failure_count > 0 {
-                    let history: Vec<(String, String)> = (0..w.session_failure_count as usize)
-                        .map(|i| (format!("reconciled-{}-{}", w.id, i), "reconciled".to_string()))
-                        .collect();
-                    self.pattern_tracker.work_failure_history.insert(w.id.clone(), history);
-                }
-            }
-        }
-
-        // Bundle rejections: grouped by work_id. Only terminal-Rejected bundles count.
-        if let Ok(bundles) = self.ctx.stores.read_bundles() {
-            for b in bundles.values() {
-                if !plan_work_ids.contains(&b.work_id) {
-                    continue;
-                }
+        // Bundle rejections: bundle.list filters by work_id; aggregate across all works.
+        let mut rejection_count = 0usize;
+        for w in &works {
+            let bundles: Vec<crate::domain::bundle::Bundle> =
+                self.bridge_list("bundle.list", serde_json::json!({ "work_id": w.id }))?;
+            for b in &bundles {
                 if matches!(b.status(), crate::domain::bundle::BundleStatus::Rejected) {
                     self.pattern_tracker
                         .rejection_history
                         .entry(b.work_id.clone())
                         .or_default()
                         .push("rejected".to_string());
+                    rejection_count += 1;
                 }
             }
         }
@@ -449,12 +625,26 @@ impl<L: LlmClient> DirectorAgent<L> {
         debug!(
             "{} director: reconcile_from_ipc complete (works_in_plan={} failures={} rejections={} spec_revisions={})",
             self.ctx.log_prefix(),
-            plan_work_ids.len(),
+            works.len(),
             self.pattern_tracker.work_failure_history.len(),
-            self.pattern_tracker.rejection_history.len(),
+            rejection_count,
             self.pattern_tracker.spec_revision_count.len(),
         );
         Ok(())
+    }
+
+    /// Dispatch a list-style IPC request through the bridge and deserialize the result
+    /// array. Returns an empty vector if the handler replies with a null/missing result.
+    fn bridge_list<T: serde::de::DeserializeOwned>(&self, method: &str, params: serde_json::Value) -> Result<Vec<T>> {
+        let resp = self.ctx.bridge.request(method, params);
+        if resp.is_error() {
+            let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+            return Err(eyre::eyre!("{} failed: {}", method, msg));
+        }
+        let Some(result) = resp.result else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_value::<Vec<T>>(result).map_err(|e| eyre::eyre!("{} result deserialize failed: {}", method, e))
     }
 
     /// Classify and record a broadcast event. No LLM calls here - judgment lands in
@@ -466,6 +656,9 @@ impl<L: LlmClient> DirectorAgent<L> {
         // Work id whose threshold should be (re)checked after recording this event.
         // Set only when the event actually touched a work's failure/rejection history.
         let mut touched_work: Option<String> = None;
+        // Spec id whose abandonment ratio should be (re)checked. Set when a work under
+        // this spec transitions to Abandoned.
+        let mut touched_spec: Option<String> = None;
 
         match event.event.as_str() {
             // Plan acceptance completes the PlanIntake → Monitoring handoff.
@@ -531,6 +724,29 @@ impl<L: LlmClient> DirectorAgent<L> {
                     touched_work = Some(work_id);
                 }
             }
+            // Work abandonment: update spec-level abandonment tracking so the Director
+            // can escalate at the spec level when a threshold fraction of a spec's works
+            // have been abandoned. Cheap: only two bridge calls, and abandonments are rare.
+            "transition.completed" => {
+                let collection = event.data.get("collection").and_then(|v| v.as_str());
+                let target = event.data.get("to").and_then(|v| v.as_str());
+                if collection == Some("work")
+                    && target == Some("Abandoned")
+                    && let Some(work_id) = event.data.get("id").and_then(|v| v.as_str())
+                {
+                    if let Some(spec_id) = self.resolve_spec_for_work(work_id) {
+                        self.pattern_tracker.observe_spec_work(&spec_id, work_id);
+                        self.pattern_tracker.observe_abandonment(&spec_id, work_id);
+                        touched_spec = Some(spec_id);
+                    } else {
+                        trace!(
+                            "{} director: could not resolve spec for abandoned work {}",
+                            self.ctx.log_prefix(),
+                            work_id
+                        );
+                    }
+                }
+            }
             _ => {
                 trace!("{} director: observed event {}", self.ctx.log_prefix(), event.event);
             }
@@ -539,7 +755,34 @@ impl<L: LlmClient> DirectorAgent<L> {
         if let Some(work_id) = touched_work {
             self.check_thresholds(&work_id);
         }
+        if let Some(spec_id) = touched_spec {
+            self.check_spec_thresholds(&spec_id);
+        }
         Ok(())
+    }
+
+    /// Walk `work.get(work_id) -> phase_id` then `phase.get(phase_id) -> spec_id` via
+    /// the bridge. Returns None if either call fails or the response is not a Work/Phase
+    /// with a parent id. Used by spec-level abandonment tracking in `process_event`.
+    fn resolve_spec_for_work(&self, work_id: &str) -> Option<String> {
+        let work_resp = self
+            .ctx
+            .bridge
+            .request("work.get", serde_json::json!({ "id": work_id }));
+        if work_resp.is_error() {
+            return None;
+        }
+        let work: crate::domain::work::Work = serde_json::from_value(work_resp.result?).ok()?;
+
+        let phase_resp = self
+            .ctx
+            .bridge
+            .request("phase.get", serde_json::json!({ "id": work.parent_id }));
+        if phase_resp.is_error() {
+            return None;
+        }
+        let phase: crate::domain::phase::Phase = serde_json::from_value(phase_resp.result?).ok()?;
+        Some(phase.parent_id)
     }
 
     /// Look up the work_id associated with an agent session by consulting Stores.
@@ -766,7 +1009,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         Ok(())
     }
 
-    /// Periodic heartbeat. Detects stalls (no events for STALL_THRESHOLD_SECS during
+    /// Periodic heartbeat. Detects stalls (configurable `stall_threshold_secs` during
     /// Monitoring) and provides a level-triggered backstop for terminal plan detection.
     async fn heartbeat(&mut self) -> Result<()> {
         trace!(
@@ -778,17 +1021,19 @@ impl<L: LlmClient> DirectorAgent<L> {
         // Stall check only applies when Monitoring - PlanIntake is driven by user tempo,
         // Escalation is driven by LLM call duration, UserIntervention is transient.
         if matches!(self.mode, DirectorMode::Monitoring) {
+            let thresholds = self.ctx.stores.config.agents.director_thresholds;
             let idle_secs = self.last_event_at.elapsed().as_secs();
-            if idle_secs >= STALL_THRESHOLD_SECS {
+            if idle_secs >= thresholds.stall_threshold_secs {
                 let should_emit = match self.last_stall_emit_at {
                     None => true,
-                    Some(last) => last.elapsed().as_secs() >= STALL_REEMIT_SECS,
+                    Some(last) => last.elapsed().as_secs() >= thresholds.stall_reemit_secs,
                 };
                 if should_emit {
                     warn!(
-                        "{} director: possible stall - no relevant events for {}s",
+                        "{} director: possible stall - no relevant events for {}s (threshold={}s)",
                         self.ctx.log_prefix(),
-                        idle_secs
+                        idle_secs,
+                        thresholds.stall_threshold_secs
                     );
                     let _ = self.ctx.event_tx.send(DaemonEvent::director_stall_detected(
                         &self.ctx.session.id,
@@ -834,7 +1079,7 @@ impl<L: LlmClient> DirectorAgent<L> {
             "User message: {}\n\nExecution context (JSON):\n{}\n\n\
              Translate the user's intent into concrete actions. Return a JSON object with \
              an 'actions' array. Each action must have a 'type' field with one of: \
-             revise-work, abandon-work, spawn-researcher, message-user.",
+             revise-work, re-decompose, abandon-work, spawn-researcher, message-user.",
             message,
             serde_json::to_string_pretty(&context).unwrap_or_default(),
         );
@@ -971,7 +1216,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         let context = self.build_escalation_context(target_work_id.as_deref());
         let user_message = format!(
             "Escalation context (JSON):\n{}\n\nRecommend corrective actions as a JSON object with an 'actions' array. \
-             Each action must have a 'type' field with one of: revise-work, abandon-work, spawn-researcher, message-user.",
+             Each action must have a 'type' field with one of: revise-work, re-decompose, abandon-work, spawn-researcher, message-user.",
             serde_json::to_string_pretty(&context).unwrap_or_default(),
         );
 
@@ -1027,11 +1272,10 @@ impl<L: LlmClient> DirectorAgent<L> {
         }
 
         loop {
-            if self.is_plan_terminal() || self.ctx.is_cancelled() {
+            if self.ctx.is_cancelled() {
                 info!(
-                    "{} director: exiting event loop (plan_terminal={} cancelled={})",
+                    "{} director: exiting event loop (cancelled={})",
                     self.ctx.log_prefix(),
-                    self.is_plan_terminal(),
                     self.ctx.is_cancelled()
                 );
                 break;
@@ -1076,7 +1320,16 @@ impl<L: LlmClient> DirectorAgent<L> {
                     // future iterations rather than yielding None forever.
                     self.ctx.user_message_rx = None;
                 }
-                LoopTick::Heartbeat => self.heartbeat().await?,
+                LoopTick::Heartbeat => {
+                    self.heartbeat().await?;
+                    if self.is_plan_terminal() {
+                        info!(
+                            "{} director: plan is terminal, exiting event loop",
+                            self.ctx.log_prefix()
+                        );
+                        break;
+                    }
+                }
             }
 
             // Post-handler: if pattern detection flipped the mode to Escalation, run

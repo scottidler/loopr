@@ -157,12 +157,68 @@ fn pattern_tracker_clear_resets_all() {
         .insert("wk-1".into(), vec![("ag-1".into(), "err".into())]);
     t.rejection_history.insert("wk-2".into(), vec!["stale".into()]);
     t.spec_revision_count.insert("sp-1".into(), 3);
+    t.observe_abandonment("sp-9", "wk-99");
 
     t.clear();
 
     assert!(t.work_failure_history.is_empty());
     assert!(t.rejection_history.is_empty());
     assert!(t.spec_revision_count.is_empty());
+    assert!(t.spec_abandoned_works.is_empty());
+    assert!(t.spec_total_works.is_empty());
+}
+
+#[test]
+fn unique_theme_count_groups_same_reviewer_complaint() {
+    let mut t = DirectorPatternTracker::new();
+    t.rejection_history.insert(
+        "wk-1".into(),
+        vec![
+            // Same first sentence, different tail -> same theme.
+            "Missing tests for error path. The happy path is covered.".into(),
+            "Missing tests for error path. Need negative cases too.".into(),
+            // Distinct first sentence -> second theme.
+            "Inadequate error handling in the parser.".into(),
+        ],
+    );
+    assert_eq!(
+        t.unique_theme_count("wk-1"),
+        2,
+        "two reviewers citing 'Missing tests for error path' should collapse to one theme"
+    );
+}
+
+#[test]
+fn abandonment_ratio_respects_sample_size() {
+    let mut t = DirectorPatternTracker::new();
+
+    // Empty spec -> ratio 0, sample 0
+    let (r, n) = t.abandonment_ratio("sp-1");
+    assert_eq!((r, n), (0.0, 0));
+
+    // One total, one abandoned -> 1.0, 1
+    t.observe_spec_work("sp-1", "wk-1");
+    t.observe_abandonment("sp-1", "wk-1");
+    let (r, n) = t.abandonment_ratio("sp-1");
+    assert_eq!((r, n), (1.0, 1));
+
+    // Four total, two abandoned -> 0.5, 4
+    t.observe_spec_work("sp-1", "wk-2");
+    t.observe_spec_work("sp-1", "wk-3");
+    t.observe_spec_work("sp-1", "wk-4");
+    t.observe_abandonment("sp-1", "wk-2");
+    let (r, n) = t.abandonment_ratio("sp-1");
+    assert!((r - 0.5).abs() < 1e-9);
+    assert_eq!(n, 4);
+}
+
+#[test]
+fn observe_abandonment_is_idempotent() {
+    let mut t = DirectorPatternTracker::new();
+    t.observe_abandonment("sp-1", "wk-1");
+    t.observe_abandonment("sp-1", "wk-1"); // replay - should not double-count
+    let (r, n) = t.abandonment_ratio("sp-1");
+    assert_eq!((r, n), (1.0, 1));
 }
 
 // ─── Mode dispatch ─────────────────────────────────────────────────────────
@@ -215,6 +271,31 @@ async fn monitoring_plan_terminal_exits_loop() {
     );
     result.unwrap().unwrap();
     assert_eq!(agent.ctx.session.director_mode, None); // sessions may not be updated post-exit in this short path
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn monitoring_missing_plan_exits_loop() {
+    // Regression: a Director whose plan has been deleted from Stores must exit cleanly
+    // rather than hot-loop forever. plan.get returns RpcError::not_found (code -32001);
+    // is_plan_terminal must map that to terminal=true.
+    let dir = TestDir::new("director-monitoring-missing");
+    let stores = test_stores_arc(&dir);
+
+    // NB: no plan inserted. The Director carries a plan_id that points at nothing.
+    // Use the `pl-` prefix so determine_initial_mode routes this into Monitoring (not
+    // Escalation); Monitoring is the mode that exercises is_plan_terminal.
+    let missing_plan_id = "pl-ghost-never-inserted".to_string();
+
+    let (event_tx, _rx) = broadcast::channel(16);
+    let (ctx, _sid) = director_ctx(stores.clone(), event_tx.clone(), None, Some(missing_plan_id));
+    let mut agent = make_director(ctx);
+
+    let result = tokio::time::timeout(Duration::from_secs(2), agent.run()).await;
+    assert!(
+        result.is_ok(),
+        "Director must exit quickly when plan is missing (not_found must map to terminal)"
+    );
+    result.unwrap().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -390,15 +471,22 @@ async fn failure_threshold_flips_mode_to_escalation() {
     let driver_sid = impl_sid.clone();
     let driver_cancel_stores = stores.clone();
     let driver_cancel_id = session_id.clone();
+    // Phase 7 semantics: the signature threshold is tripped by N *distinct* root causes,
+    // so we emit 3 different errors (not 3 copies of the same one) to exercise the
+    // `unique_signature_count >= failure_signature_threshold` branch.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
-        for _ in 0..3 {
+        for err in [
+            "compile error: missing trait",
+            "timeout: agent deadline",
+            "network: connection refused",
+        ] {
             let _ = driver_tx.send(DaemonEvent::new(
                 "agent.status_changed",
                 serde_json::json!({
                     "session_id": driver_sid,
                     "status": "failed",
-                    "error": "compile error",
+                    "error": err,
                 }),
             ));
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -453,14 +541,21 @@ async fn rejection_threshold_flips_mode_to_escalation() {
     let driver_tx = event_tx.clone();
     let driver_cancel_stores = stores.clone();
     let driver_cancel_id = session_id.clone();
+    // Phase 7 semantics: the theme threshold is tripped by N distinct reviewer complaints.
+    // Emit three rejections with three distinct themes (different first sentences) to
+    // exercise the `unique_theme_count >= rejection_theme_threshold` branch.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
-        for _ in 0..3 {
+        for reason in [
+            "diff-too-large for single bundle",
+            "missing unit tests on error path",
+            "unhandled concurrency race in cache",
+        ] {
             let _ = driver_tx.send(DaemonEvent::new(
                 "bundle.rejected",
                 serde_json::json!({
                     "bundle_work_id": "wk-rej",
-                    "reason": "diff-too-large",
+                    "reason": reason,
                 }),
             ));
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -484,7 +579,7 @@ async fn rejection_threshold_flips_mode_to_escalation() {
     }
     assert!(
         saw_escalation,
-        "three bundle rejections must emit director.mode_changed mode=escalation"
+        "three distinct bundle rejection themes must emit director.mode_changed mode=escalation"
     );
     let sessions = stores.agent_sessions.read().unwrap();
     let sess = sessions.get(&session_id).unwrap();
@@ -620,6 +715,50 @@ fn parse_actions_errors_on_non_json() {
     assert!(parse_actions("this is not json").is_err());
 }
 
+#[test]
+fn parse_actions_accepts_re_decompose_phase() {
+    use crate::agents::director::actions::{DirectorAction, ReDecomposeTarget, parse_actions};
+    let payload = r#"{"actions": [
+        {"type": "re-decompose", "target_type": "phase", "target_id": "ph-7", "reason": "AC too vague"}
+    ]}"#;
+    let actions = parse_actions(payload).unwrap();
+    assert_eq!(actions.len(), 1);
+    match &actions[0] {
+        DirectorAction::ReDecompose {
+            target_type,
+            target_id,
+            reason,
+        } => {
+            assert_eq!(*target_type, ReDecomposeTarget::Phase);
+            assert_eq!(target_id, "ph-7");
+            assert_eq!(reason.as_deref(), Some("AC too vague"));
+        }
+        other => panic!("expected ReDecompose, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_actions_accepts_re_decompose_spec() {
+    use crate::agents::director::actions::{DirectorAction, ReDecomposeTarget, parse_actions};
+    let payload = r#"{"actions": [
+        {"type": "re-decompose", "target_type": "spec", "target_id": "sp-2"}
+    ]}"#;
+    let actions = parse_actions(payload).unwrap();
+    assert_eq!(actions.len(), 1);
+    match &actions[0] {
+        DirectorAction::ReDecompose {
+            target_type,
+            target_id,
+            reason,
+        } => {
+            assert_eq!(*target_type, ReDecomposeTarget::Spec);
+            assert_eq!(target_id, "sp-2");
+            assert!(reason.is_none());
+        }
+        other => panic!("expected ReDecompose, got {:?}", other),
+    }
+}
+
 // ─── Phase 5: Escalation flow ──────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -656,6 +795,107 @@ async fn escalation_emits_diagnosis_and_action_events() {
     }
     assert!(saw_diagnosis, "message-user must emit director.diagnosis");
     assert!(saw_action_taken, "every action must emit director.action_taken");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn re_decompose_action_transitions_phase_to_draft() {
+    use crate::agents::director::actions::{DirectorAction, ReDecomposeTarget, execute_actions};
+    use crate::domain::phase::Phase;
+    use crate::domain::spec::Spec;
+    use crate::worktree::manager::WorktreeManager;
+
+    let dir = TestDir::new("director-redecompose-phase");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(32);
+
+    let plan = Plan::new("rd-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec = Spec::new(plan_id.clone(), "rd-spec".into());
+    spec.force_status(HierarchyStatus::Active);
+    let spec_id = spec.id.clone();
+    stores.write_specs().unwrap().insert(spec_id.clone(), spec);
+
+    let mut phase = Phase::new(spec_id.clone(), "rd-phase".into());
+    phase.force_status(HierarchyStatus::Active);
+    let phase_id = phase.id.clone();
+    stores.write_phases().unwrap().insert(phase_id.clone(), phase);
+
+    let worktree_mgr = WorktreeManager::new(
+        stores.config.project.repo_path.clone(),
+        stores.config.project.repo_path.join(".worktrees"),
+    );
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx.clone(),
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
+
+    let action = DirectorAction::ReDecompose {
+        target_type: ReDecomposeTarget::Phase,
+        target_id: phase_id.clone(),
+        reason: Some("missing coverage".into()),
+    };
+    let report = tokio::task::spawn_blocking(move || execute_actions(&[action], &bridge, &event_tx, "director-test"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.ok, 1, "re-decompose should succeed: {:?}", report.details);
+    assert_eq!(report.failed, 0);
+
+    let phases = stores.read_phases().unwrap();
+    let status = phases.get(&phase_id).unwrap().status();
+    assert_eq!(status, HierarchyStatus::Draft, "phase must be Draft after re-decompose");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn re_decompose_action_transitions_spec_to_draft() {
+    use crate::agents::director::actions::{DirectorAction, ReDecomposeTarget, execute_actions};
+    use crate::domain::spec::Spec;
+    use crate::worktree::manager::WorktreeManager;
+
+    let dir = TestDir::new("director-redecompose-spec");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(32);
+
+    let plan = Plan::new("rd-plan-s".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec = Spec::new(plan_id.clone(), "rd-spec-s".into());
+    spec.force_status(HierarchyStatus::Active);
+    let spec_id = spec.id.clone();
+    stores.write_specs().unwrap().insert(spec_id.clone(), spec);
+
+    let worktree_mgr = WorktreeManager::new(
+        stores.config.project.repo_path.clone(),
+        stores.config.project.repo_path.join(".worktrees"),
+    );
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx.clone(),
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
+
+    let action = DirectorAction::ReDecompose {
+        target_type: ReDecomposeTarget::Spec,
+        target_id: spec_id.clone(),
+        reason: None,
+    };
+    let report = tokio::task::spawn_blocking(move || execute_actions(&[action], &bridge, &event_tx, "director-test"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.ok, 1, "re-decompose should succeed: {:?}", report.details);
+
+    let specs = stores.read_specs().unwrap();
+    let status = specs.get(&spec_id).unwrap().status();
+    assert_eq!(status, HierarchyStatus::Draft, "spec must be Draft after re-decompose");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -706,15 +946,20 @@ async fn threshold_escalation_returns_to_monitoring() {
     let driver_sid = impl_sid.clone();
     let driver_cancel_stores = stores.clone();
     let driver_cancel_id = session_id.clone();
+    // Phase 7 semantics: three distinct root causes trip the signature threshold.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
-        for _ in 0..3 {
+        for err in [
+            "compile error: missing trait",
+            "timeout: agent deadline",
+            "network: connection refused",
+        ] {
             let _ = driver_tx.send(DaemonEvent::new(
                 "agent.status_changed",
                 serde_json::json!({
                     "session_id": driver_sid,
                     "status": "failed",
-                    "error": "compile error",
+                    "error": err,
                 }),
             ));
             tokio::time::sleep(Duration::from_millis(10)).await;

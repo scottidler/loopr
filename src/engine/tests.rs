@@ -96,6 +96,16 @@ fn loaded_strategies_cover_all_v3_behaviors() {
     let defs = schema::load_dir(&strategies_dir()).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
 
+    // Exact-count guard. Update this number AND add a .contains() assertion below whenever
+    // you add or remove a strategy. Subset-only coverage checks let new strategies slip in
+    // without review; the length assert makes drift fail CI loudly.
+    assert_eq!(
+        names.len(),
+        28,
+        "strategy loader should expose exactly 28 strategies; got {:?}",
+        names
+    );
+
     // Recovery (3 strategies)
     assert!(
         names.contains(&"work-retry-on-failure"),
@@ -215,6 +225,12 @@ fn loaded_strategies_cover_all_v3_behaviors() {
         "missing handle-work-sla-breach"
     );
     assert!(names.contains(&"escalate-to-director"), "missing escalate-to-director");
+
+    // Tick validation (1 strategy)
+    assert!(
+        names.contains(&"validate-and-publish-tick"),
+        "missing validate-and-publish-tick"
+    );
 }
 
 #[test]

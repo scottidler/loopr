@@ -17,4 +17,5 @@ mod sessions;
 mod tick;
 
 mod decomposition;
+mod director;
 mod handoff;

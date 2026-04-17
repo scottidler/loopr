@@ -493,7 +493,7 @@ director.user_message    { session_id, message: String }
   - When in Monitoring mode and a user message arrives, enter UserIntervention mode
   - Build execution context: current plan hierarchy state, active works, recent events, recent failures
   - Call LLM with the intervention system prompt + user message + execution context
-  - LLM translates user intent to actions (same action vocabulary as Escalation: revise-work, re-prioritize, abandon, message-user)
+  - LLM translates user intent to actions (same action vocabulary as Escalation: revise-work, re-decompose, abandon-work, spawn-researcher, message-user)
   - Execute actions via IPC bridge
   - Stream response to TUI via `agent.llm_output` (user sees the Director's interpretation)
   - Return to Monitoring

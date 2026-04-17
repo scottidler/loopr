@@ -569,11 +569,20 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
-    /// Set the coordinator goal from stores.
-    /// Note: CoordinatorGoal type has been removed. This is now a no-op retained for
-    /// call-site compatibility. The goal text will be sourced from Plan.title in future.
-    pub fn with_coordinator_goal(self) -> Self {
-        debug!("ContextBuilder::with_coordinator_goal() [no-op]");
+    /// Populate the "Project Goal" section from the loaded `Plan.title`. Must be called
+    /// AFTER `load_*_hierarchy` so `self.plan` is set; otherwise the section is omitted.
+    ///
+    /// The v3 CoordinatorGoal record type was removed in the v4 cutover, but agents still
+    /// need a one-line "why this plan exists" banner at the top of their context. The
+    /// Plan's title serves that role: it's the short user-visible summary created at
+    /// chat-to-plan time.
+    pub fn with_coordinator_goal(mut self) -> Self {
+        debug!("ContextBuilder::with_coordinator_goal()");
+        if let Some((title, _)) = &self.plan
+            && !title.is_empty()
+        {
+            self.coordinator_goal = Some(title.clone());
+        }
         self
     }
 

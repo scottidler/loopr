@@ -353,6 +353,68 @@ impl<'de> serde::Deserialize<'de> for WorkerPoolSize {
     }
 }
 
+/// Director-specific pattern-detection and stall-detection thresholds.
+///
+/// These knobs drive the Director's Monitoring -> Escalation transitions. They are
+/// intentionally separate from `AgentRoleConfig` (which is shared across agent roles)
+/// because they describe the Director's judgment layer, not its LLM plumbing.
+///
+/// See `src/agents/director.rs` for the consumer. Design doc:
+/// `docs/design/2026-04-16-director-agent.md` Phase 7.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct DirectorThresholds {
+    /// Distinct failure-signature count per work that flips Monitoring -> Escalation.
+    /// A work that has failed N times with the SAME root cause counts as 1 signature;
+    /// the Director escalates when distinct root causes reach this count. This is the
+    /// design-doc "same root cause N times" semantic.
+    pub failure_signature_threshold: usize,
+
+    /// Total failure count per work (any signature) that flips to Escalation. Separate
+    /// from the signature threshold so environmental flapping still triggers eventually
+    /// even when each failure is unique.
+    pub failure_total_threshold: usize,
+
+    /// Distinct rejection-theme count per work that flips to Escalation. Reviewer
+    /// feedback text is hashed to a coarse theme (see `rejection_theme` in director.rs);
+    /// this counter measures "how many distinct complaints," not raw rejection tally.
+    pub rejection_theme_threshold: usize,
+
+    /// Total rejection count per work (any theme) that flips to Escalation.
+    pub rejection_total_threshold: usize,
+
+    /// Fraction of a spec's works that must have reached Abandoned before the Director
+    /// escalates the spec itself (spec-level pattern rather than work-level). Range [0.0, 1.0].
+    pub spec_abandonment_ratio: f64,
+
+    /// Minimum number of works under a spec before `spec_abandonment_ratio` is evaluated.
+    /// Prevents a 2-work spec with 1 abandonment (50%) from escalating prematurely.
+    pub spec_min_works_for_ratio: usize,
+
+    /// Seconds of broadcast silence in Monitoring mode before a `director.stall_detected`
+    /// event is emitted. Replaces the old hardcoded `STALL_THRESHOLD_SECS` const.
+    pub stall_threshold_secs: u64,
+
+    /// Seconds between consecutive stall emissions, so the TUI is not spammed once per
+    /// heartbeat after the first stall crosses the threshold.
+    pub stall_reemit_secs: u64,
+}
+
+impl Default for DirectorThresholds {
+    fn default() -> Self {
+        Self {
+            failure_signature_threshold: 3,
+            failure_total_threshold: 6,
+            rejection_theme_threshold: 3,
+            rejection_total_threshold: 6,
+            spec_abandonment_ratio: 0.5,
+            spec_min_works_for_ratio: 3,
+            stall_threshold_secs: 300,
+            stall_reemit_secs: 300,
+        }
+    }
+}
+
 /// Agent system configuration - LLM agents running as Tokio tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -370,6 +432,9 @@ pub struct AgentConfig {
     pub reviewer: AgentRoleConfig,
     pub researcher: AgentRoleConfig,
     pub director: AgentRoleConfig,
+    /// Director-specific pattern / stall thresholds. See `DirectorThresholds`.
+    #[serde(default)]
+    pub director_thresholds: DirectorThresholds,
     pub tools: Vec<ToolEntry>,
     /// How the Director handles the interview phase.
     #[serde(default)]
@@ -393,6 +458,7 @@ impl Default for AgentConfig {
             reviewer: AgentRoleConfig::default_reviewer(),
             researcher: AgentRoleConfig::default_researcher(),
             director: AgentRoleConfig::default_director(),
+            director_thresholds: DirectorThresholds::default(),
             tools: Vec::new(),
             interview_mode: InterviewMode::default(),
             max_abandon_ratio: default_max_abandon_ratio(),

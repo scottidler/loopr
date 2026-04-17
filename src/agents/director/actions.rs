@@ -6,6 +6,8 @@
 //!
 //! Design doc section "Director Modes → Escalation" defines the vocabulary:
 //! - `revise-work { work_id, acceptance_criteria? }`: rewrite a Work's AC and reset it to Pending
+//! - `re-decompose { target_type, target_id, reason? }`: transition parent spec or phase to
+//!   Draft so the engine re-runs decomposition
 //! - `abandon-work { work_id, reason? }`: move a Work to Abandoned
 //! - `spawn-researcher { query, scope? }`: dispatch a Researcher to investigate
 //! - `message-user { text }`: emit a `director.diagnosis` event for the TUI
@@ -22,6 +24,30 @@ use tracing::{debug, info, warn};
 use crate::agents::bridge::AgentIpcBridge;
 use crate::ipc::protocol::DaemonEvent;
 
+/// Which level of the hierarchy a `re-decompose` action targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReDecomposeTarget {
+    Spec,
+    Phase,
+}
+
+impl ReDecomposeTarget {
+    pub fn method(self) -> &'static str {
+        match self {
+            ReDecomposeTarget::Spec => "spec.transition",
+            ReDecomposeTarget::Phase => "phase.transition",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReDecomposeTarget::Spec => "spec",
+            ReDecomposeTarget::Phase => "phase",
+        }
+    }
+}
+
 /// Structured action the Director can emit from an LLM call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -32,6 +58,12 @@ pub enum DirectorAction {
         acceptance_criteria: Option<Vec<String>>,
         #[serde(default)]
         title: Option<String>,
+    },
+    ReDecompose {
+        target_type: ReDecomposeTarget,
+        target_id: String,
+        #[serde(default)]
+        reason: Option<String>,
     },
     AbandonWork {
         work_id: String,
@@ -196,6 +228,37 @@ fn execute_one(
                         "updated + reset to Pending".into(),
                     )
                 }
+            }
+        }
+        DirectorAction::ReDecompose {
+            target_type,
+            target_id,
+            reason,
+        } => {
+            let reason_str = reason.clone().unwrap_or_else(|| "director-redecompose".into());
+            let resp = bridge.request(
+                target_type.method(),
+                serde_json::json!({
+                    "id": target_id,
+                    "target_status": "draft",
+                    "role": "director",
+                    "override": true,
+                    "reason": reason_str,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                (
+                    "re-decompose",
+                    Some(target_id.clone()),
+                    format!("{} failed: {}", target_type.method(), msg),
+                )
+            } else {
+                (
+                    "re-decompose",
+                    Some(target_id.clone()),
+                    format!("{} transitioned to Draft", target_type.as_str()),
+                )
             }
         }
         DirectorAction::AbandonWork { work_id, reason } => {

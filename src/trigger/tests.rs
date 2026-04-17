@@ -88,80 +88,100 @@ fn load_from_resources_passes_validation() {
 }
 
 #[test]
-fn loaded_triggers_cover_all_27_v3_conditions() {
+fn loaded_triggers_cover_all_57_definitions() {
     let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
 
-    // Threshold triggers (8)
-    assert!(
-        names.contains(&"work-retry-exhaustion"),
-        "missing work-retry-exhaustion"
-    );
-    assert!(
-        names.contains(&"session-failure-limit"),
-        "missing session-failure-limit"
-    );
-    assert!(
-        names.contains(&"action-repetition-loop"),
-        "missing action-repetition-loop"
-    );
-    assert!(
-        names.contains(&"error-repetition-loop"),
-        "missing error-repetition-loop"
-    );
-    assert!(names.contains(&"parse-failure-limit"), "missing parse-failure-limit");
-    assert!(
-        names.contains(&"researcher-spawn-limit"),
-        "missing researcher-spawn-limit"
-    );
-    assert!(
-        names.contains(&"self-correction-limit"),
-        "missing self-correction-limit"
-    );
-    assert!(names.contains(&"restart-limit"), "missing restart-limit");
+    // Exact-count guard. Update this number AND the required-names list below whenever
+    // you add or remove a trigger. Subset-only coverage checks let new triggers slip in
+    // without review; the length assert makes drift fail CI loudly.
+    //
+    // Grouped by source YAML for maintenance, but order of the list is not meaningful.
+    let required: &[&str] = &[
+        // agent-events.yml
+        "bundle-proposed",
+        "bundle-triaged",
+        "reviewer-approved",
+        "reviewer-rejected",
+        "session-failure",
+        "transition-completed",
+        "record-created",
+        "decomposition-completed",
+        "decomposition-failed",
+        // agent-lifecycle.yml
+        "work-ready",
+        "phase-active-no-works",
+        "spec-active-no-phases",
+        "plan-active-no-specs",
+        "bundles-ready-for-integration",
+        "director-failed",
+        "tick-created",
+        "tick-published",
+        // composites.yml
+        "work-sla-full-breach",
+        // engine.yml
+        "goal-complete",
+        "goal-timeout",
+        "escalation-needed",
+        "plan-is-active",
+        "spec-is-active",
+        "phase-is-active",
+        "phase-parent-active",
+        "conflict-detected",
+        "plan-abandoned",
+        // plan-quality-gates.yml
+        "coverage-incomplete",
+        "spec-children-all-abandoned",
+        // reconciliation.yml
+        "plan-approved",
+        "plan-decomposable",
+        "spec-decomposable",
+        "phase-decomposable",
+        "work-promotable",
+        "phase-promotable",
+        "phase-deps-terminal",
+        "phase-children-terminal",
+        "spec-children-terminal",
+        "hierarchy-deps-terminal",
+        "hierarchy-exists",
+        "parent-active",
+        "work-deps-done",
+        "no-running-director",
+        // work-safety-nets.yml
+        "work-retry-exhaustion",
+        "session-failure-limit",
+        "action-repetition-loop",
+        "error-repetition-loop",
+        "parse-failure-limit",
+        "researcher-spawn-limit",
+        "self-correction-limit",
+        "restart-limit",
+        "abandon-ratio-exceeded",
+        "decomposition-attempt-limit",
+        "spec-decomposition-attempt-limit",
+        "phase-decomposition-attempt-limit",
+        "plan-specs-terminal",
+        // work-sla.yml
+        "work-sla-breach",
+    ];
 
-    // Ratio trigger (1)
-    assert!(
-        names.contains(&"abandon-ratio-exceeded"),
-        "missing abandon-ratio-exceeded"
+    assert_eq!(
+        names.len(),
+        57,
+        "trigger loader should expose exactly 57 triggers; got {} ({:?})",
+        names.len(),
+        names
+    );
+    assert_eq!(
+        required.len(),
+        57,
+        "required-names list should have exactly 57 entries (got {})",
+        required.len()
     );
 
-    // Event triggers (5)
-    assert!(names.contains(&"session-failure"), "missing session-failure");
-    assert!(names.contains(&"transition-completed"), "missing transition-completed");
-    assert!(names.contains(&"record-created"), "missing record-created");
-    assert!(
-        names.contains(&"decomposition-completed"),
-        "missing decomposition-completed"
-    );
-    assert!(names.contains(&"decomposition-failed"), "missing decomposition-failed");
-
-    // Timer triggers (2)
-    assert!(names.contains(&"work-sla-breach"), "missing work-sla-breach");
-    assert!(names.contains(&"goal-timeout"), "missing goal-timeout");
-
-    // State-query triggers (9)
-    assert!(
-        names.contains(&"phase-children-terminal"),
-        "missing phase-children-terminal"
-    );
-    assert!(
-        names.contains(&"spec-children-terminal"),
-        "missing spec-children-terminal"
-    );
-    assert!(
-        names.contains(&"hierarchy-deps-terminal"),
-        "missing hierarchy-deps-terminal"
-    );
-    assert!(names.contains(&"work-deps-done"), "missing work-deps-done");
-    assert!(names.contains(&"parent-active"), "missing parent-active");
-    assert!(names.contains(&"plan-approved"), "missing plan-approved");
-    assert!(names.contains(&"hierarchy-exists"), "missing hierarchy-exists");
-    assert!(names.contains(&"goal-complete"), "missing goal-complete");
-    assert!(names.contains(&"coverage-incomplete"), "missing coverage-incomplete");
-
-    // Composite trigger (1)
-    assert!(names.contains(&"work-sla-full-breach"), "missing work-sla-full-breach");
+    for r in required {
+        assert!(names.contains(r), "missing trigger {}", r);
+    }
 }
 
 #[test]
@@ -677,9 +697,15 @@ fn children_returns_empty_when_no_match() {
 // --- StateQueryRegistry ---
 
 #[test]
-fn state_query_registry_has_all_10_builtins() {
+fn state_query_registry_has_all_11_builtins() {
     let reg = StateQueryRegistry::with_builtins();
     let names = reg.names();
+    assert_eq!(
+        names.len(),
+        11,
+        "state query registry should have exactly 11 built-ins; update this test when adding or removing one (got {:?})",
+        names
+    );
     for required in &[
         "all-children-terminal",
         "all-children-done",
@@ -691,6 +717,7 @@ fn state_query_registry_has_all_10_builtins() {
         "no-active-sessions",
         "field-equals",
         "field-is-true",
+        "has-active-plan",
     ] {
         assert!(names.contains(required), "missing built-in query: {}", required);
     }
@@ -928,14 +955,25 @@ fn guard_has_active_plan_mirrors_state_query() {
 // --- GuardConditionRegistry ---
 
 #[test]
-fn guard_registry_has_all_4_builtins() {
+fn guard_registry_has_all_9_builtins() {
     let reg = GuardConditionRegistry::with_builtins();
     let names = reg.names();
+    assert_eq!(
+        names.len(),
+        9,
+        "guard registry should have exactly 9 built-ins; update this test when adding or removing one (got {:?})",
+        names
+    );
     for required in &[
         "no-active-sessions",
+        "has-active-plan",
         "deps-satisfied",
         "validation-passed",
         "all-ac-passing",
+        "no-active-implementer-for-work",
+        "no-active-reviewer-for-bundle",
+        "no-active-researcher-for-phase",
+        "no-active-director",
     ] {
         assert!(names.contains(required), "missing built-in guard: {}", required);
     }

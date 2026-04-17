@@ -18,17 +18,21 @@ transitions:
   draft:
     pending: { by: [coordinator] }
     active: { by: [coordinator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   pending:
     active: { by: [coordinator] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
   active:
     complete: { by: [coordinator, decomposer] }
-    superseded: { by: [coordinator] }
-    abandoned: { by: [coordinator] }
+    superseded: { by: [coordinator, director] }
+    abandoned: { by: [coordinator, director] }
 
-overrides: {}
+overrides:
+  active:
+    draft: { by: [director] }
+  pending:
+    draft: { by: [director] }
 
 guards: {}

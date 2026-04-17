@@ -6,6 +6,7 @@ use tracing::trace;
 use crate::agents::AgentKind;
 use crate::config::IntegratorConfig;
 use crate::fsm::runtime::FsmInterpreter;
+use crate::ipc::method::DaemonMethod;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
@@ -137,87 +138,135 @@ pub async fn dispatch(
     // - Implementer spawning: spawn-implementer-for-ready-work strategy
     // - Bundle triage: auto-triage-proposed-bundle strategy
     // - Reviewer spawning: spawn-reviewer-for-triaged-bundle strategy
-    match req.method.as_str() {
-        "system.handshake" => handle_handshake(stores, req),
-        "system.init" => handle_system_init(stores, req),
-        "system.status" => handle_status(stores, req),
-        "system.shutdown" => handle_shutdown(event_tx, req),
-        "system.recover" => handle_recover(stores, req),
-        "plan.create" => handle_plan_create(stores, event_tx, req),
-        "plan.get" => handle_plan_get(stores, req),
-        "plan.list" => handle_plan_list(stores, req),
-        "plan.transition" => handle_plan_transition(stores, event_tx, fsm, req),
-        "plan.update" => handle_plan_update(stores, event_tx, req),
-        "spec.create" => handle_spec_create(stores, event_tx, req),
-        "spec.get" => handle_spec_get(stores, req),
-        "spec.list" => handle_spec_list(stores, req),
-        "spec.transition" => handle_spec_transition(stores, event_tx, fsm, req),
-        "spec.update" => handle_spec_update(stores, event_tx, req),
-        "phase.create" => handle_phase_create(stores, event_tx, req),
-        "phase.get" => handle_phase_get(stores, req),
-        "phase.list" => handle_phase_list(stores, req),
-        "phase.transition" => handle_phase_transition(stores, event_tx, fsm, req),
-        "phase.update" => handle_phase_update(stores, event_tx, req),
-        "work.create" => handle_work_create(stores, event_tx, req),
-        "work.get" => handle_work_get(stores, req),
-        "work.list" => handle_work_list(stores, req),
-        "work.transition" => handle_work_transition(stores, event_tx, fsm, req),
-        "work.update" => handle_work_update(stores, event_tx, req),
-        "bundle.create" => handle_bundle_create(stores, event_tx, req),
-        "bundle.get" => handle_bundle_get(stores, req),
-        "bundle.list" => handle_bundle_list(stores, req),
-        "bundle.transition" => handle_bundle_transition(stores, event_tx, fsm, req),
-        "bundle.update" => handle_bundle_update(stores, event_tx, req),
-        "tick.create" => handle_tick_create(stores, event_tx, req),
-        "tick.get" => handle_tick_get(stores, req),
-        "tick.list" => handle_tick_list(stores, req),
-        "tick.transition" => handle_tick_transition(stores, event_tx, fsm, req),
-        "tick.update" => handle_tick_update(stores, event_tx, req),
-        "learning.create" => handle_learning_create(stores, event_tx, req),
-        "learning.get" => handle_learning_get(stores, req),
-        "learning.list" => handle_learning_list(stores, req),
-        "learning.update" => handle_learning_update(stores, event_tx, req),
-        "learning.reinforce" => handle_learning_reinforce(stores, event_tx, req),
-        "learning.contradict" => handle_learning_contradict(stores, event_tx, req),
-        "learning.promote" => handle_learning_promote(stores, event_tx, req),
-        "learning.demote" => handle_learning_demote(stores, event_tx, req),
-        "lock.create" => handle_lock_create(stores, event_tx, req),
-        "lock.get" => handle_lock_get(stores, req),
-        "lock.list" => handle_lock_list(stores, req),
-        "lock.release" => handle_lock_release(stores, event_tx, req),
-        "lock.expire" => handle_lock_expire(stores, event_tx, req),
-        "worktree.create" => handle_worktree_create(stores, event_tx, worktree_mgr, req),
-        "worktree.list" => handle_worktree_list(worktree_mgr, req),
-        "worktree.cleanup" => handle_worktree_cleanup(stores, event_tx, worktree_mgr, req),
-        "worktree.refresh" => handle_worktree_refresh(worktree_mgr, req),
-        "integrator.validate" => handle_integrator_validate(stores, event_tx, integrator_config, req),
-        "integrator.publish" => handle_integrator_publish(stores, event_tx, integrator_config, req),
-        "validator.validate" => handle_validator_validate(stores, req).await,
-        "validator.report" => handle_validator_report(stores, req),
-        "validator.reports" => handle_validator_reports(stores, req),
-        "coverage.evaluate" => handle_coverage_evaluate(stores, req).await,
-        "tool.list" => handle_tool_list(stores, req),
-        "tools.register" => handle_tools_register(stores, event_tx, req),
-        "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
-        "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
-        "chat.submit" => handle_chat_submit(stores, event_tx, req),
-        "chat.attach" => handle_chat_attach(stores, req),
-        "chat.history" => handle_chat_history(stores, req),
-        "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
-        "director.start_plan_intake" => handle_director_start_plan_intake(stores, event_tx, worktree_mgr, req),
-        "director.user_message" => handle_director_user_message(stores, event_tx, req),
-        "agent.stop" => handle_agent_stop(stores, event_tx, req),
-        "agent.pause" => handle_agent_pause(stores, event_tx, req),
-        "agent.resume" => handle_agent_resume(stores, event_tx, req),
-        "agent.status" => handle_agent_status(stores, req),
-        "agent.list" => handle_agent_list(stores, req),
-        "agent.output" => handle_agent_output(stores, req),
-        "decomposer.decompose" => decomposer::handle_decomposer_decompose(stores, event_tx, req).await,
-        "decomposer.ratify" => decomposer::handle_decomposer_ratify(stores, req).await,
-        "decomposer.abandon_children" => decomposer::handle_decomposer_abandon_children(stores, event_tx, req),
-        "decomposer.re_decompose" => decomposer::handle_decomposer_re_decompose(stores, event_tx, req).await,
-        "decomposer.handle_failure" => decomposer::handle_decomposer_failure(stores, req),
-        _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
+
+    // Parse the wire-string method into our typed method vocabulary. Unknown strings
+    // short-circuit to a JSON-RPC method-not-found error. Once parsed, the match below
+    // is exhaustive - adding a variant to `DaemonMethod` without handling it here fails
+    // compilation.
+    let method: DaemonMethod = match req.method.parse() {
+        Ok(m) => m,
+        Err(_) => return DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
+    };
+
+    match method {
+        // system.*
+        DaemonMethod::SystemHandshake => handle_handshake(stores, req),
+        DaemonMethod::SystemInit => handle_system_init(stores, req),
+        DaemonMethod::SystemStatus => handle_status(stores, req),
+        DaemonMethod::SystemShutdown => handle_shutdown(event_tx, req),
+        DaemonMethod::SystemRecover => handle_recover(stores, req),
+
+        // plan.*
+        DaemonMethod::PlanCreate => handle_plan_create(stores, event_tx, req),
+        DaemonMethod::PlanGet => handle_plan_get(stores, req),
+        DaemonMethod::PlanList => handle_plan_list(stores, req),
+        DaemonMethod::PlanTransition => handle_plan_transition(stores, event_tx, fsm, req),
+        DaemonMethod::PlanUpdate => handle_plan_update(stores, event_tx, req),
+
+        // spec.*
+        DaemonMethod::SpecCreate => handle_spec_create(stores, event_tx, req),
+        DaemonMethod::SpecGet => handle_spec_get(stores, req),
+        DaemonMethod::SpecList => handle_spec_list(stores, req),
+        DaemonMethod::SpecTransition => handle_spec_transition(stores, event_tx, fsm, req),
+        DaemonMethod::SpecUpdate => handle_spec_update(stores, event_tx, req),
+
+        // phase.*
+        DaemonMethod::PhaseCreate => handle_phase_create(stores, event_tx, req),
+        DaemonMethod::PhaseGet => handle_phase_get(stores, req),
+        DaemonMethod::PhaseList => handle_phase_list(stores, req),
+        DaemonMethod::PhaseTransition => handle_phase_transition(stores, event_tx, fsm, req),
+        DaemonMethod::PhaseUpdate => handle_phase_update(stores, event_tx, req),
+
+        // work.*
+        DaemonMethod::WorkCreate => handle_work_create(stores, event_tx, req),
+        DaemonMethod::WorkGet => handle_work_get(stores, req),
+        DaemonMethod::WorkList => handle_work_list(stores, req),
+        DaemonMethod::WorkTransition => handle_work_transition(stores, event_tx, fsm, req),
+        DaemonMethod::WorkUpdate => handle_work_update(stores, event_tx, req),
+
+        // bundle.*
+        DaemonMethod::BundleCreate => handle_bundle_create(stores, event_tx, req),
+        DaemonMethod::BundleGet => handle_bundle_get(stores, req),
+        DaemonMethod::BundleList => handle_bundle_list(stores, req),
+        DaemonMethod::BundleTransition => handle_bundle_transition(stores, event_tx, fsm, req),
+        DaemonMethod::BundleUpdate => handle_bundle_update(stores, event_tx, req),
+
+        // tick.*
+        DaemonMethod::TickCreate => handle_tick_create(stores, event_tx, req),
+        DaemonMethod::TickGet => handle_tick_get(stores, req),
+        DaemonMethod::TickList => handle_tick_list(stores, req),
+        DaemonMethod::TickTransition => handle_tick_transition(stores, event_tx, fsm, req),
+        DaemonMethod::TickUpdate => handle_tick_update(stores, event_tx, req),
+
+        // learning.*
+        DaemonMethod::LearningCreate => handle_learning_create(stores, event_tx, req),
+        DaemonMethod::LearningGet => handle_learning_get(stores, req),
+        DaemonMethod::LearningList => handle_learning_list(stores, req),
+        DaemonMethod::LearningUpdate => handle_learning_update(stores, event_tx, req),
+        DaemonMethod::LearningReinforce => handle_learning_reinforce(stores, event_tx, req),
+        DaemonMethod::LearningContradict => handle_learning_contradict(stores, event_tx, req),
+        DaemonMethod::LearningPromote => handle_learning_promote(stores, event_tx, req),
+        DaemonMethod::LearningDemote => handle_learning_demote(stores, event_tx, req),
+
+        // lock.*
+        DaemonMethod::LockCreate => handle_lock_create(stores, event_tx, req),
+        DaemonMethod::LockGet => handle_lock_get(stores, req),
+        DaemonMethod::LockList => handle_lock_list(stores, req),
+        DaemonMethod::LockRelease => handle_lock_release(stores, event_tx, req),
+        DaemonMethod::LockExpire => handle_lock_expire(stores, event_tx, req),
+
+        // worktree.*
+        DaemonMethod::WorktreeCreate => handle_worktree_create(stores, event_tx, worktree_mgr, req),
+        DaemonMethod::WorktreeList => handle_worktree_list(worktree_mgr, req),
+        DaemonMethod::WorktreeCleanup => handle_worktree_cleanup(stores, event_tx, worktree_mgr, req),
+        DaemonMethod::WorktreeRefresh => handle_worktree_refresh(worktree_mgr, req),
+
+        // integrator.*
+        DaemonMethod::IntegratorValidate => handle_integrator_validate(stores, event_tx, integrator_config, req),
+        DaemonMethod::IntegratorPublish => handle_integrator_publish(stores, event_tx, integrator_config, req),
+
+        // validator.*
+        DaemonMethod::ValidatorValidate => handle_validator_validate(stores, req).await,
+        DaemonMethod::ValidatorReport => handle_validator_report(stores, req),
+        DaemonMethod::ValidatorReports => handle_validator_reports(stores, req),
+
+        // coverage.*
+        DaemonMethod::CoverageEvaluate => handle_coverage_evaluate(stores, req).await,
+
+        // tool.* / tools.*
+        DaemonMethod::ToolList => handle_tool_list(stores, req),
+        DaemonMethod::ToolsRegister => handle_tools_register(stores, event_tx, req),
+
+        // doc.*
+        DaemonMethod::DocAccept => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
+        DaemonMethod::DocInject => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
+
+        // chat.*
+        DaemonMethod::ChatSubmit => handle_chat_submit(stores, event_tx, req),
+        DaemonMethod::ChatAttach => handle_chat_attach(stores, req),
+        DaemonMethod::ChatHistory => handle_chat_history(stores, req),
+
+        // agent.*
+        DaemonMethod::AgentStart => handle_agent_start(stores, event_tx, worktree_mgr, req),
+        DaemonMethod::AgentStop => handle_agent_stop(stores, event_tx, req),
+        DaemonMethod::AgentPause => handle_agent_pause(stores, event_tx, req),
+        DaemonMethod::AgentResume => handle_agent_resume(stores, event_tx, req),
+        DaemonMethod::AgentStatus => handle_agent_status(stores, req),
+        DaemonMethod::AgentList => handle_agent_list(stores, req),
+        DaemonMethod::AgentOutput => handle_agent_output(stores, req),
+
+        // director.*
+        DaemonMethod::DirectorStartPlanIntake => handle_director_start_plan_intake(stores, event_tx, worktree_mgr, req),
+        DaemonMethod::DirectorUserMessage => handle_director_user_message(stores, event_tx, req),
+
+        // decomposer.*
+        DaemonMethod::DecomposerDecompose => decomposer::handle_decomposer_decompose(stores, event_tx, req).await,
+        DaemonMethod::DecomposerRatify => decomposer::handle_decomposer_ratify(stores, req).await,
+        DaemonMethod::DecomposerAbandonChildren => {
+            decomposer::handle_decomposer_abandon_children(stores, event_tx, req)
+        }
+        DaemonMethod::DecomposerReDecompose => decomposer::handle_decomposer_re_decompose(stores, event_tx, req).await,
+        DaemonMethod::DecomposerHandleFailure => decomposer::handle_decomposer_failure(stores, req),
     }
 }
 
