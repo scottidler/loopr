@@ -762,6 +762,118 @@ async fn threshold_escalation_returns_to_monitoring() {
     );
 }
 
+// ─── Phase 6: UserIntervention ─────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_message_in_monitoring_enters_intervention_and_returns() {
+    crate::prompts::init_defaults();
+
+    let dir = TestDir::new("director-user-intervention");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, mut rx) = broadcast::channel(64);
+
+    let plan = Plan::new("intervention-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let (tx_msg, rx_msg) = mpsc::channel::<String>(8);
+    // Scripted response: single message-user action confirming receipt.
+    let response = r#"{"actions": [{"type": "message-user", "text": "acknowledged"}]}"#;
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), Some(rx_msg), Some(plan_id.clone()));
+    let mut agent = make_scripted_director(ctx, response);
+
+    let driver_stores = stores.clone();
+    let driver_session = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tx_msg.send("prioritize the lint fix please".to_string()).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let mut sessions = driver_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&driver_session) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(5), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    // Mode transitions fired: Monitoring -> UserIntervention -> Monitoring
+    let mut modes: Vec<String> = Vec::new();
+    let mut saw_diagnosis = false;
+    while let Ok(ev) = rx.try_recv() {
+        if ev.event == "director.mode_changed"
+            && let Some(m) = ev.data.get("mode").and_then(|v| v.as_str())
+        {
+            modes.push(m.to_string());
+        }
+        if ev.event == "director.diagnosis" && ev.data.get("text").and_then(|v| v.as_str()) == Some("acknowledged") {
+            saw_diagnosis = true;
+        }
+    }
+    assert!(
+        modes.contains(&"user-intervention".to_string()),
+        "user-intervention mode must be entered (modes: {:?})",
+        modes
+    );
+    assert_eq!(
+        modes.last().map(|s| s.as_str()),
+        Some("monitoring"),
+        "final mode must be monitoring (modes: {:?})",
+        modes
+    );
+    assert!(saw_diagnosis, "director.diagnosis must carry the LLM's acknowledgement");
+
+    let sessions = stores.agent_sessions.read().unwrap();
+    let sess = sessions.get(&session_id).unwrap();
+    assert_eq!(
+        sess.director_mode,
+        Some(DirectorMode::Monitoring),
+        "Director must return to Monitoring after UserIntervention"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_intervention_tolerates_unparseable_llm() {
+    crate::prompts::init_defaults();
+
+    let dir = TestDir::new("director-intervention-bad-json");
+    let stores = test_stores_arc(&dir);
+    let (event_tx, _rx) = broadcast::channel(16);
+
+    let plan = Plan::new("bad-json-plan".into(), AcceptanceCriteria::default());
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    let (tx_msg, rx_msg) = mpsc::channel::<String>(8);
+    let (ctx, session_id) = director_ctx(stores.clone(), event_tx.clone(), Some(rx_msg), Some(plan_id.clone()));
+    let mut agent = make_scripted_director(ctx, "not JSON");
+
+    let driver_stores = stores.clone();
+    let driver_session = session_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tx_msg.send("help me".to_string()).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let mut sessions = driver_stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&driver_session) {
+            s.force_status(crate::agents::AgentStatus::Cancelled);
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(5), agent.run()).await;
+    assert!(result.is_ok());
+    result.unwrap().unwrap();
+
+    let sessions = stores.agent_sessions.read().unwrap();
+    let sess = sessions.get(&session_id).unwrap();
+    assert_eq!(
+        sess.director_mode,
+        Some(DirectorMode::Monitoring),
+        "parse failure must still flip back to Monitoring"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_scoped_target_id_enters_monitoring_with_plan_id() {
     let dir = TestDir::new("director-plan-target-id");

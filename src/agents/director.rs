@@ -464,16 +464,10 @@ impl<L: LlmClient> DirectorAgent<L> {
         match self.mode {
             DirectorMode::PlanIntake => self.planintake_turn(Some(message)).await,
             DirectorMode::Monitoring => {
-                // Phase 6 implements UserIntervention. Phase 3 just records the transition
-                // for observability and emits a user-visible acknowledgement. `set_mode`
-                // handles persistence + mode_changed event emission.
                 self.set_mode(DirectorMode::UserIntervention);
-                self.emit_llm_text(&format!(
-                    "[Director accepted user message during Monitoring; UserIntervention handling lands in Phase 6. Message: {}]",
-                    message
-                ));
+                let result = self.user_intervention_turn(message).await;
                 self.set_mode(DirectorMode::Monitoring);
-                Ok(())
+                result
             }
             DirectorMode::Escalation | DirectorMode::UserIntervention => {
                 debug!(
@@ -668,6 +662,90 @@ impl<L: LlmClient> DirectorAgent<L> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Run one UserIntervention pass. Builds the same execution-context snapshot as
+    /// Escalation, prepends the user's message, calls the LLM for an action plan, and
+    /// executes any parsed actions via the shared IPC bridge path.
+    ///
+    /// Errors from the LLM call and empty/unparseable responses are logged and swallowed -
+    /// the user sees an acknowledgement either way and the Director flips back to
+    /// Monitoring (flip is handled by the caller).
+    async fn user_intervention_turn(&mut self, message: String) -> Result<()> {
+        info!(
+            "{} director: UserIntervention turn ({} chars)",
+            self.ctx.log_prefix(),
+            message.len()
+        );
+
+        let system_prompt = crate::prompts::store().director.clone();
+        if system_prompt.is_empty() {
+            warn!(
+                "{} director: no director prompt configured; emitting echo acknowledgement",
+                self.ctx.log_prefix()
+            );
+            self.emit_llm_text(&format!(
+                "[Director received your message but no prompt is configured: {}]",
+                message
+            ));
+            return Ok(());
+        }
+
+        let context = self.build_escalation_context(None);
+        let user_message = format!(
+            "User message: {}\n\nExecution context (JSON):\n{}\n\n\
+             Translate the user's intent into concrete actions. Return a JSON object with \
+             an 'actions' array. Each action must have a 'type' field with one of: \
+             revise-work, abandon-work, spawn-researcher, message-user.",
+            message,
+            serde_json::to_string_pretty(&context).unwrap_or_default(),
+        );
+
+        let response = match self.llm.call(&system_prompt, &user_message).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    "{} director: intervention LLM call failed: {}",
+                    self.ctx.log_prefix(),
+                    e
+                );
+                self.emit_llm_text(&format!("[Director LLM call failed: {}]", e));
+                return Ok(());
+            }
+        };
+
+        let actions = match parse_actions(&response) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!(
+                    "{} director: intervention response parse failed: {} (response preview: {:.200})",
+                    self.ctx.log_prefix(),
+                    e,
+                    response
+                );
+                // Show the raw response so the user sees what the Director proposed even
+                // when the action parser chokes.
+                self.emit_llm_text(&response);
+                return Ok(());
+            }
+        };
+
+        if actions.is_empty() {
+            debug!("{} director: intervention produced no actions", self.ctx.log_prefix());
+            self.emit_llm_text(&response);
+            return Ok(());
+        }
+
+        let report = execute_actions(&actions, &self.ctx.bridge, &self.ctx.event_tx, &self.ctx.session.id);
+        info!(
+            "{} director: intervention executed {} actions (ok={} failed={} skipped={})",
+            self.ctx.log_prefix(),
+            actions.len(),
+            report.ok,
+            report.failed,
+            report.skipped
+        );
         Ok(())
     }
 
