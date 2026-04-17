@@ -840,10 +840,10 @@ mod tests {
 
         // Should have received ToolStarted + ToolCompleted events
         let event1 = rx.try_recv().unwrap();
-        assert_eq!(event1.event, "agent.tool_started");
+        assert_eq!(event1.event, "agent.tool-started");
 
         let event2 = rx.try_recv().unwrap();
-        assert_eq!(event2.event, "agent.tool_completed");
+        assert_eq!(event2.event, "agent.tool-completed");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

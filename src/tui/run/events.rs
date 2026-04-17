@@ -29,7 +29,7 @@ pub const CHAT_SESSION_ID: &str = "default-chat";
 
 /// Extract LLM chunk text from a DaemonEvent, if it's an LlmOutput event for the Chat session.
 pub fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
-    if event.event != "agent.llm_output" {
+    if event.event != "agent.llm-output" {
         return None;
     }
     let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
@@ -48,7 +48,7 @@ pub fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
 /// Extract a tool event from a DaemonEvent and convert to a ChatMessage for display.
 pub fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
     match event.event.as_str() {
-        "agent.tool_started" => {
+        "agent.tool-started" => {
             let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
             if let AgentEvent::ToolStarted { session_id, tool } = agent_event
                 && session_id == CHAT_SESSION_ID
@@ -60,7 +60,7 @@ pub fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
             }
             None
         }
-        "agent.tool_completed" => {
+        "agent.tool-completed" => {
             let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
             if let AgentEvent::ToolCompleted {
                 session_id,
@@ -79,7 +79,7 @@ pub fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
             }
             None
         }
-        "agent.timing_info" => {
+        "agent.timing-info" => {
             let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
             if let AgentEvent::TimingInfo {
                 session_id,
@@ -186,7 +186,7 @@ pub fn format_orchestration_event(event: &DaemonEvent) -> Option<String> {
                 _ => None,
             }
         }
-        "agent.status_changed" => {
+        "agent.status-changed" => {
             let agent_type = data.get("agent-type").and_then(|v| v.as_str()).unwrap_or("");
             let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
             let session_id = data.get("session-id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn test_orch_event_agent_running() {
         let event = DaemonEvent::new(
-            "agent.status_changed",
+            "agent.status-changed",
             serde_json::json!({"agent-type": "implementer", "status": "Running", "session-id": "sess-1"}),
         );
         assert_eq!(
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn test_orch_event_agent_completed() {
         let event = DaemonEvent::new(
-            "agent.status_changed",
+            "agent.status-changed",
             serde_json::json!({"agent-type": "reviewer", "status": "Completed", "session-id": "sess-2"}),
         );
         assert_eq!(
@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn test_orch_event_coordinator_status_ignored() {
         let event = DaemonEvent::new(
-            "agent.status_changed",
+            "agent.status-changed",
             serde_json::json!({"agent-type": "coordinator", "status": "Running", "session-id": "sess-c"}),
         );
         assert_eq!(format_orchestration_event(&event), None);

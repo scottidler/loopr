@@ -4,7 +4,7 @@ use crate::agents::status::AgentStatus;
 
 /// Events emitted by agents, broadcast through the daemon event system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "kebab-case")]
 pub enum AgentEvent {
     StatusChange {
         session_id: String,

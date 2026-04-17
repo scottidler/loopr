@@ -510,11 +510,11 @@ mod tests {
 
         // Verify the event was received
         let event = rx.try_recv().unwrap();
-        assert_eq!(event.event, "agent.iteration_completed");
+        assert_eq!(event.event, "agent.iteration-completed");
 
         // Verify payload contents
         let data = event.data;
-        assert_eq!(data["session_id"], ctx.session.id);
+        assert_eq!(data["session-id"], ctx.session.id);
         assert_eq!(data["iteration"], 3);
         assert_eq!(data["summary"], "Planned 5 specs");
     }

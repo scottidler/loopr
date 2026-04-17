@@ -263,7 +263,7 @@ impl DaemonEvent {
             status,
             error: None,
         };
-        Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
+        Self::new("agent.status-changed", serde_json::to_value(event).unwrap_or_default())
     }
 
     pub fn agent_status_failed(session_id: &str, error: Option<String>) -> Self {
@@ -272,7 +272,7 @@ impl DaemonEvent {
             status: AgentStatus::Failed,
             error,
         };
-        Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
+        Self::new("agent.status-changed", serde_json::to_value(event).unwrap_or_default())
     }
 
     pub fn agent_tool_started(session_id: &str, tool: &str) -> Self {
@@ -280,7 +280,7 @@ impl DaemonEvent {
             session_id: session_id.to_string(),
             tool: tool.to_string(),
         };
-        Self::new("agent.tool_started", serde_json::to_value(event).unwrap_or_default())
+        Self::new("agent.tool-started", serde_json::to_value(event).unwrap_or_default())
     }
 
     pub fn agent_tool_completed(session_id: &str, tool: &str, exit_code: i32, duration_ms: u64) -> Self {
@@ -290,7 +290,7 @@ impl DaemonEvent {
             exit_code,
             duration_ms,
         };
-        Self::new("agent.tool_completed", serde_json::to_value(event).unwrap_or_default())
+        Self::new("agent.tool-completed", serde_json::to_value(event).unwrap_or_default())
     }
 
     pub fn agent_action_completed(session_id: &str, action_summary: &str) -> Self {
@@ -299,7 +299,7 @@ impl DaemonEvent {
             action_summary: action_summary.to_string(),
         };
         Self::new(
-            "agent.action_completed",
+            "agent.action-completed",
             serde_json::to_value(event).unwrap_or_default(),
         )
     }
@@ -311,7 +311,7 @@ impl DaemonEvent {
             summary: summary.to_string(),
         };
         Self::new(
-            "agent.iteration_completed",
+            "agent.iteration-completed",
             serde_json::to_value(event).unwrap_or_default(),
         )
     }
@@ -322,7 +322,7 @@ impl DaemonEvent {
             new_tick_id: new_tick_id.to_string(),
         };
         Self::new(
-            "agent.staleness_detected",
+            "agent.staleness-detected",
             serde_json::to_value(event).unwrap_or_default(),
         )
     }
@@ -365,7 +365,7 @@ impl DaemonEvent {
             label: label.to_string(),
             detail: detail.to_string(),
         };
-        Self::new("agent.timing_info", serde_json::to_value(event).unwrap_or_default())
+        Self::new("agent.timing-info", serde_json::to_value(event).unwrap_or_default())
     }
 
     pub fn learning_policy_contradicted(learning_id: &str) -> Self {
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn test_event_agent_timing_info() {
         let event = DaemonEvent::agent_timing_info("chat-1", "iter 0", "total=3204ms llm=2891ms tools=298ms");
-        assert_eq!(event.event, "agent.timing_info");
+        assert_eq!(event.event, "agent.timing-info");
         let data: AgentEvent = serde_json::from_value(event.data).unwrap();
         match data {
             AgentEvent::TimingInfo {
@@ -666,7 +666,7 @@ mod tests {
         let event = DaemonEvent::agent_timing_info("s1", "loop_complete", "total=4360ms iterations=2");
         let json = serde_json::to_string(&event).unwrap();
         let parsed: DaemonEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.event, "agent.timing_info");
+        assert_eq!(parsed.event, "agent.timing-info");
         assert_eq!(event, parsed);
     }
 

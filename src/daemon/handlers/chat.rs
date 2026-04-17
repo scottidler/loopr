@@ -266,7 +266,7 @@ pub(super) fn handle_chat_submit(
                     }
                     // Emit final chunk marker
                     let _ = event_tx_clone.send(DaemonEvent::new(
-                        "agent.llm_output",
+                        "agent.llm-output",
                         serde_json::json!(crate::agents::AgentEvent::LlmOutput {
                             session_id: session_id_clone.clone(),
                             chunk: String::new(),

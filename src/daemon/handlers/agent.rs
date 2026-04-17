@@ -266,7 +266,7 @@ pub(super) fn handle_agent_stop(
                 }
                 // Emit final event so TUI knows streaming stopped
                 let _ = event_tx.send(DaemonEvent::new(
-                    "agent.llm_output",
+                    "agent.llm-output",
                     serde_json::json!(crate::agents::AgentEvent::LlmOutput {
                         session_id: session_id.to_string(),
                         chunk: String::new(),

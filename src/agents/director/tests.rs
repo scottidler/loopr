@@ -482,9 +482,9 @@ async fn failure_threshold_flips_mode_to_escalation() {
             "compile error: missing trait",
         ] {
             let _ = driver_tx.send(DaemonEvent::new(
-                "agent.status_changed",
+                "agent.status-changed",
                 serde_json::json!({
-                    "session_id": driver_sid,
+                    "session-id": driver_sid,
                     "status": "failed",
                     "error": err,
                 }),
@@ -621,9 +621,9 @@ async fn below_threshold_stays_in_monitoring() {
         // Only 2 failures; threshold is 3, so mode should stay Monitoring.
         for _ in 0..2 {
             let _ = driver_tx.send(DaemonEvent::new(
-                "agent.status_changed",
+                "agent.status-changed",
                 serde_json::json!({
-                    "session_id": driver_sid,
+                    "session-id": driver_sid,
                     "status": "failed",
                     "error": "compile error",
                 }),
@@ -956,9 +956,9 @@ async fn threshold_escalation_returns_to_monitoring() {
             "compile error: missing trait",
         ] {
             let _ = driver_tx.send(DaemonEvent::new(
-                "agent.status_changed",
+                "agent.status-changed",
                 serde_json::json!({
-                    "session_id": driver_sid,
+                    "session-id": driver_sid,
                     "status": "failed",
                     "error": err,
                 }),

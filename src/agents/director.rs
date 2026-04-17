@@ -693,13 +693,13 @@ impl<L: LlmClient> DirectorAgent<L> {
             // Track agent failures for cross-session pattern detection. Phase 4 triggers
             // Escalation when `WORK_FAILURE_THRESHOLD` is reached; Phase 7 refines with
             // error-signature hash grouping.
-            "agent.status_changed" => {
+            "agent.status-changed" => {
                 if let Some(status) = event.data.get("status").and_then(|v| v.as_str())
                     && status.eq_ignore_ascii_case("failed")
                 {
                     let session_id = event
                         .data
-                        .get("session_id")
+                        .get("session-id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("?")
                         .to_string();
@@ -846,7 +846,7 @@ impl<L: LlmClient> DirectorAgent<L> {
     /// Handle a user message from the `director.user_message` mpsc channel.
     ///
     /// PlanIntake: append to the chat history, run one tool-use turn, persist the
-    /// assistant response, stream output via `agent.llm_output`.
+    /// assistant response, stream output via `agent.llm-output`.
     ///
     /// Monitoring: transition to UserIntervention and delegate (Phase 6 fills in the
     /// intent-translation LLM call; Phase 3 logs and immediately returns to Monitoring).
@@ -878,12 +878,12 @@ impl<L: LlmClient> DirectorAgent<L> {
         }
     }
 
-    /// Stream a text response to the TUI via `agent.llm_output` events. Uses the same
+    /// Stream a text response to the TUI via `agent.llm-output` events. Uses the same
     /// event shape that Chat and Implementer emit so the TUI doesn't need Director-specific
     /// rendering.
     fn emit_llm_text(&self, text: &str) {
         let _ = self.ctx.event_tx.send(DaemonEvent::new(
-            "agent.llm_output",
+            "agent.llm-output",
             serde_json::json!(AgentEvent::LlmOutput {
                 session_id: self.ctx.session.id.clone(),
                 chunk: text.to_string(),
@@ -891,7 +891,7 @@ impl<L: LlmClient> DirectorAgent<L> {
             }),
         ));
         let _ = self.ctx.event_tx.send(DaemonEvent::new(
-            "agent.llm_output",
+            "agent.llm-output",
             serde_json::json!(AgentEvent::LlmOutput {
                 session_id: self.ctx.session.id.clone(),
                 chunk: String::new(),
@@ -1011,7 +1011,7 @@ impl<L: LlmClient> DirectorAgent<L> {
                     history.updated_at = chrono::Utc::now().timestamp_millis();
                 }
                 let _ = self.ctx.event_tx.send(DaemonEvent::new(
-                    "agent.llm_output",
+                    "agent.llm-output",
                     serde_json::json!(AgentEvent::LlmOutput {
                         session_id: self.ctx.session.id.clone(),
                         chunk: String::new(),

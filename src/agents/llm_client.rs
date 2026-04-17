@@ -94,7 +94,7 @@ impl AgentLlmClient {
     /// Emit an LlmOutput event through the broadcast channel.
     fn emit_chunk(&self, chunk: &str, is_final: bool) {
         let event = DaemonEvent::new(
-            "agent.llm_output",
+            "agent.llm-output",
             serde_json::json!(AgentEvent::LlmOutput {
                 session_id: self.session_id.clone(),
                 chunk: chunk.to_string(),
@@ -731,7 +731,7 @@ mod tests {
         client.emit_chunk("Hello", false);
 
         let event = event_rx.try_recv().unwrap();
-        assert_eq!(event.event, "agent.llm_output");
+        assert_eq!(event.event, "agent.llm-output");
         let agent_event: AgentEvent = serde_json::from_value(event.data).unwrap();
         if let AgentEvent::LlmOutput {
             session_id,
@@ -773,7 +773,7 @@ mod tests {
         client.emit_status(AgentStatus::WaitingForLlm);
 
         let event = event_rx.try_recv().unwrap();
-        assert_eq!(event.event, "agent.status_changed");
+        assert_eq!(event.event, "agent.status-changed");
     }
 
     // --- Streaming accumulation tests ---

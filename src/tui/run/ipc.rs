@@ -359,8 +359,8 @@ mod tests {
     #[test]
     fn test_event_collection_agent_llm_output() {
         let event = DaemonEvent::new(
-            "agent.llm_output",
-            serde_json::json!({"session-id": "s1", "chunk": "hello", "is_final": false}),
+            "agent.llm-output",
+            serde_json::json!({"session-id": "s1", "chunk": "hello", "is-final": false}),
         );
         assert_eq!(event_collection(&event), Some("agent"));
     }

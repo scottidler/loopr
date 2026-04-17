@@ -1983,7 +1983,7 @@ fn v3_work_retry_exhaustion_fires_at_max_attempts() {
 
 #[test]
 fn v3_session_failure_event_fires() {
-    // v3: agent.status_changed(failed)
+    // v3: agent.status-changed(failed)
     let stores = make_stores();
     let events = vec![DaemonEvent::new(
         "agent.status-changed",

@@ -553,7 +553,7 @@ mod tests {
             events.push(e);
         }
         assert!(
-            events.iter().any(|e| e.event == "agent.status_changed"),
+            events.iter().any(|e| e.event == "agent.status-changed"),
             "expected agent status change events"
         );
     }

@@ -18,7 +18,7 @@ const VALID_EVENTS: &[&str] = &[
     "decomposition.completed",
     "decomposition.failed",
     "escalation",
-    "reconciliation-failed",
+    "reconciliation.failed",
     "integration.conflict-detected",
     "tick.created",
 ];

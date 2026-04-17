@@ -88,7 +88,7 @@ fn test_prompt_executing_includes_status() {
 // LLM smoke test helpers
 // ---------------------------------------------------------------------------
 
-/// Wait for the `agent.llm_output` event with `is_final: true`.
+/// Wait for the `agent.llm-output` event with `is-final: true`.
 async fn wait_for_final(client: &mut IpcClient, buffered: &mut VecDeque<DaemonEvent>, timeout: Duration) -> Result<()> {
     tokio::time::timeout(timeout, async {
         loop {
@@ -98,17 +98,17 @@ async fn wait_for_final(client: &mut IpcClient, buffered: &mut VecDeque<DaemonEv
                 match client.recv().await? {
                     Some(IpcMessage::Event(e)) => e,
                     Some(IpcMessage::Response(_)) => continue,
-                    None => return Err(eyre!("daemon disconnected while waiting for llm_output")),
+                    None => return Err(eyre!("daemon disconnected while waiting for llm-output")),
                 }
             };
 
-            if event.event == "agent.llm_output" && event.data["is_final"].as_bool() == Some(true) {
+            if event.event == "agent.llm-output" && event.data["is-final"].as_bool() == Some(true) {
                 return Ok(());
             }
         }
     })
     .await
-    .map_err(|_| eyre!("timed out waiting for agent.llm_output(is_final=true)"))?
+    .map_err(|_| eyre!("timed out waiting for agent.llm-output(is-final=true)"))?
 }
 
 /// Extract the last assistant message text from chat.history messages array.
