@@ -273,8 +273,14 @@ pub fn apply_action(app: &mut App, action: Action) {
                     "/plan" if app.funnel_state == FunnelState::Chat => {
                         app.chat_mode = ChatMode::Plan;
                         app.funnel_state = FunnelState::Interview;
-                        app.chat_history
-                            .push(ChatMessage::system("Entering Plan mode. Focusing on your goal.".into()));
+                        // Hand off to the Director: subsequent chat.submit calls are routed
+                        // to director.user_message via ChatHistory.director_session_id.
+                        app.pending_ipc = Some(IpcAction::StartPlanIntake {
+                            chat_session_id: crate::tui::run::events::CHAT_SESSION_ID.to_string(),
+                        });
+                        app.chat_history.push(ChatMessage::system(
+                            "Entering Plan mode. The Director is joining the conversation.".into(),
+                        ));
                     }
                     "/plan" => {
                         // Already in Plan mode — ignore
@@ -975,7 +981,11 @@ mod tests {
         apply_action(&mut app, Action::ChatSubmit);
         assert_eq!(app.chat_mode, ChatMode::Plan);
         assert_eq!(app.funnel_state, FunnelState::Interview);
-        assert!(app.pending_ipc.is_none()); // no IPC — local state only
+        // Phase 3 wires /plan to a director.start_plan_intake handoff.
+        assert!(matches!(
+            app.pending_ipc,
+            Some(crate::tui::app::IpcAction::StartPlanIntake { .. })
+        ));
         assert!(
             app.chat_history
                 .iter()

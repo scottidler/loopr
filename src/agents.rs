@@ -113,13 +113,27 @@ impl AgentContext {
             None
         };
 
+        // Directors: pull out the mpsc Receiver the handler stashed in stores.
+        // Handed off through Stores because run_agent_task has no signature-level
+        // parameter for it and we don't want to ripple a new argument through every
+        // caller. Keyed by session_id so concurrent Director sessions don't collide.
+        let user_message_rx = if session.agent_type == AgentKind::Director {
+            stores
+                .director_user_message_rx_pending
+                .write()
+                .ok()
+                .and_then(|mut map| map.remove(&session.id))
+        } else {
+            None
+        };
+
         Ok(Self {
             session,
             stores: stores.clone(),
             bridge,
             event_tx,
             event_rx,
-            user_message_rx: None,
+            user_message_rx,
             tool_runner: stores.read_tool_runner()?,
             tool_executor: stores.read_tool_executor()?,
             read_cache: Mutex::new(ReadCache::default()),

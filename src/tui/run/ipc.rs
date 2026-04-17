@@ -68,6 +68,10 @@ pub async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
             serde_json::json!({ "id": id, "target_status": "Active" }),
         ),
         IpcAction::AcceptPlan(markdown) => ("doc.accept".to_string(), serde_json::json!({ "markdown": markdown })),
+        IpcAction::StartPlanIntake { chat_session_id } => (
+            "director.start_plan_intake".to_string(),
+            serde_json::json!({ "chat_session_id": chat_session_id }),
+        ),
     };
     if let Err(e) = client.request(&method, params).await {
         warn!("Failed to dispatch IPC action {method}: {e}");

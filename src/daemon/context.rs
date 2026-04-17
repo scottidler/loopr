@@ -88,6 +88,13 @@ pub struct Stores {
     /// read by `director.user_message`; removed when the Director session terminates.
     /// Runtime-only - not persisted (an mpsc::Sender can't survive process restart).
     pub director_message_tx: StdRwLock<HashMap<String, tokio::sync::mpsc::Sender<String>>>,
+    /// Pending mpsc receivers waiting to be picked up by the Director's `AgentContext`.
+    /// `director.start_plan_intake` creates the `(Sender, Receiver)` pair and needs to
+    /// hand the receiver to the Director agent, but `run_agent_task` builds
+    /// `AgentContext` on its own and there's no signature-level injection point.
+    /// So we stash the receiver here keyed by session_id; `AgentContext::from_session_id`
+    /// pops it back out when the Director wakes up. Runtime-only.
+    pub director_user_message_rx_pending: StdRwLock<HashMap<String, tokio::sync::mpsc::Receiver<String>>>,
     /// Daemon session ID (timestamp-based), set once at startup.
     pub session_id: String,
     /// Degraded mode: set when a catastrophic reconciliation fracture is detected.
@@ -242,6 +249,7 @@ impl Stores {
             session_dir: None,
             chat_sessions: StdRwLock::new(HashMap::new()),
             director_message_tx: StdRwLock::new(HashMap::new()),
+            director_user_message_rx_pending: StdRwLock::new(HashMap::new()),
             session_id: String::new(),
             degraded: AtomicBool::new(false),
             reconciliation_last_sweep_at: AtomicU64::new(0),

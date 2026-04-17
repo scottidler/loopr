@@ -109,6 +109,46 @@ pub(super) fn handle_chat_submit(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        // If a Director is already handling this chat session, forward the message via the
+        // Director's mpsc channel instead of spinning up a Chat agent. This is the
+        // post-/plan routing path: the Director owns the conversation.
+        {
+            let director_session_id: Option<String> = stores
+                .chat_sessions
+                .read()
+                .map_err(|_| eyre::eyre!("chat_sessions lock poisoned"))?
+                .get(&session_id)
+                .and_then(|h| h.director_session_id.clone());
+            if let Some(dsid) = director_session_id {
+                let tx = stores
+                    .director_message_tx
+                    .read()
+                    .map_err(|_| eyre::eyre!("director_message_tx lock poisoned"))?
+                    .get(&dsid)
+                    .cloned();
+                if let Some(tx) = tx {
+                    return Ok(match tx.try_send(message) {
+                        Ok(()) => DaemonResponse::ok(
+                            req.id,
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "routed_to": "director",
+                                "director_session_id": dsid,
+                            }),
+                        ),
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => DaemonResponse::err(
+                            req.id,
+                            RpcError::pool_exhausted("Director message buffer full; retry shortly"),
+                        ),
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                            DaemonResponse::err(req.id, RpcError::not_found("director_session", &dsid))
+                        }
+                    });
+                }
+                // Sender was removed (Director shut down). Fall through to regular chat behavior.
+            }
+        }
+
         // Lazy-create ChatHistory + append user message
         let messages = {
             let mut sessions = stores

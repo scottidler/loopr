@@ -114,6 +114,14 @@ pub enum IpcAction {
     },
     /// Accept a plan via the doc.accept path (TUI chat /accept).
     AcceptPlan(String),
+    /// Start a Director PlanIntake session (TUI chat /plan).
+    ///
+    /// Fires `director.start_plan_intake` with the current chat session id so the
+    /// Director takes over the conversation. Subsequent chat.submit calls are routed
+    /// to the Director via its mpsc channel (daemon-side).
+    StartPlanIntake {
+        chat_session_id: String,
+    },
 }
 
 /// TUI views, cycled with Tab. Chat is the default.

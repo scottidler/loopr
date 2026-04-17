@@ -10,6 +10,7 @@
 //! It provides judgment for cases the engine can't handle.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use eyre::Result;
@@ -20,9 +21,14 @@ use tracing::{debug, info, trace, warn};
 
 use crate::agents::implementer::LlmClient;
 use crate::agents::lifeguard::Lifeguard;
-use crate::agents::{Agent, AgentContext, AgentKind};
+use crate::agents::llm_client::AgentLlmClient;
+use crate::agents::{Agent, AgentContext, AgentEvent, AgentKind};
 use crate::config::AgentRoleConfig;
+use crate::domain::chat::ChatHistory;
 use crate::ipc::protocol::DaemonEvent;
+use crate::tools::agentic_loop::run_tool_loop;
+use crate::tools::context::ToolContext;
+use crate::tools::types::{ContentBlock, Message};
 
 /// Heartbeat cadence for the Director run loop.
 ///
@@ -109,6 +115,10 @@ pub struct DirectorAgent<L: LlmClient> {
     /// Plan id being monitored. Set when `doc.plan_accepted` arrives or when the session
     /// is spawned with a plan-scoped `target_id` (e.g. supervision restart mid-plan).
     plan_id: Option<String>,
+    /// Chat session whose history seeds the PlanIntake conversation. Resolved via reverse
+    /// lookup on `ChatHistory.director_session_id == self.ctx.session.id` when PlanIntake
+    /// begins.
+    chat_session_id: Option<String>,
     pattern_tracker: DirectorPatternTracker,
     /// Within-session Lifeguard. Cross-session detection is Phase 7 via `pattern_tracker`.
     lifeguard: Lifeguard,
@@ -116,6 +126,12 @@ pub struct DirectorAgent<L: LlmClient> {
     last_event_at: Instant,
     /// Total events observed across the session (debug/trace only).
     event_count: u64,
+    /// Lazily-initialized PlanIntake LLM client. Created on first conversation turn so we
+    /// don't spin one up for Directors that never reach PlanIntake (supervision restarts
+    /// into Monitoring, legacy Escalation). The Director's generic `llm: L` satisfies the
+    /// `LlmClient` trait used by `legacy_escalation`; run_tool_loop needs `AgenticLlm`
+    /// which is why we use the concrete `AgentLlmClient` here.
+    planintake_llm: Option<Arc<AgentLlmClient>>,
 }
 
 impl<L: LlmClient> DirectorAgent<L> {
@@ -126,10 +142,12 @@ impl<L: LlmClient> DirectorAgent<L> {
             config,
             mode: DirectorMode::PlanIntake,
             plan_id: None,
+            chat_session_id: None,
             pattern_tracker: DirectorPatternTracker::new(),
             lifeguard: Lifeguard::new(),
             last_event_at: Instant::now(),
             event_count: 0,
+            planintake_llm: None,
         }
     }
 
@@ -300,19 +318,227 @@ impl<L: LlmClient> DirectorAgent<L> {
         sessions.get(session_id).and_then(|s| s.work_id.clone())
     }
 
+    /// Resolve the chat_session_id tied to this Director (if any) by reverse lookup
+    /// on `ChatHistory.director_session_id`. Cached after the first call.
+    fn resolve_chat_session_id(&mut self) -> Option<String> {
+        if self.chat_session_id.is_some() {
+            return self.chat_session_id.clone();
+        }
+        let sessions = self.ctx.stores.chat_sessions.read().ok()?;
+        let mine = sessions.iter().find_map(|(sid, h)| {
+            if h.director_session_id.as_deref() == Some(&self.ctx.session.id) {
+                Some(sid.clone())
+            } else {
+                None
+            }
+        });
+        self.chat_session_id = mine.clone();
+        mine
+    }
+
+    /// Lazily create (or reuse) the Director's PlanIntake LLM client.
+    fn planintake_llm_client(&mut self) -> Result<Arc<AgentLlmClient>> {
+        if let Some(ref llm) = self.planintake_llm {
+            return Ok(llm.clone());
+        }
+        let llm = AgentLlmClient::new(
+            self.config.clone(),
+            format!("{}:planintake", self.ctx.session.id),
+            self.ctx.event_tx.clone(),
+        )?;
+        let llm = Arc::new(llm);
+        self.planintake_llm = Some(llm.clone());
+        Ok(llm)
+    }
+
     /// Handle a user message from the `director.user_message` mpsc channel.
     ///
-    /// Phase 2 just logs - Phase 3 wires the PlanIntake conversation loop and Phase 6
-    /// wires UserIntervention.
+    /// PlanIntake: append to the chat history, run one tool-use turn, persist the
+    /// assistant response, stream output via `agent.llm_output`.
+    ///
+    /// Monitoring: transition to UserIntervention and delegate (Phase 6 fills in the
+    /// intent-translation LLM call; Phase 3 logs and immediately returns to Monitoring).
+    ///
+    /// Escalation: ignored (Escalation doesn't serve user messages directly).
     async fn handle_user_message(&mut self, message: String) -> Result<()> {
         debug!(
-            "{} director: user message received in {:?} mode (Phase 3/6 wires handling): {} chars",
+            "{} director: user message in {:?} mode ({} chars)",
             self.ctx.log_prefix(),
             self.mode,
             message.len()
         );
-        // Phase 3: PlanIntake → append to message history + call LLM.
-        // Phase 6: Monitoring → transition to UserIntervention and translate intent.
+        match self.mode {
+            DirectorMode::PlanIntake => self.planintake_turn(Some(message)).await,
+            DirectorMode::Monitoring => {
+                // Phase 6 implements UserIntervention. Phase 3 just records the transition
+                // for observability and emits a user-visible acknowledgement.
+                self.mode = DirectorMode::UserIntervention;
+                self.persist_mode();
+                self.emit_llm_text(&format!(
+                    "[Director accepted user message during Monitoring; UserIntervention handling lands in Phase 6. Message: {}]",
+                    message
+                ));
+                self.mode = DirectorMode::Monitoring;
+                self.persist_mode();
+                Ok(())
+            }
+            DirectorMode::Escalation | DirectorMode::UserIntervention => {
+                debug!(
+                    "{} director: user message ignored in {:?} mode",
+                    self.ctx.log_prefix(),
+                    self.mode
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Stream a text response to the TUI via `agent.llm_output` events. Uses the same
+    /// event shape that Chat and Implementer emit so the TUI doesn't need Director-specific
+    /// rendering.
+    fn emit_llm_text(&self, text: &str) {
+        let _ = self.ctx.event_tx.send(DaemonEvent::new(
+            "agent.llm_output",
+            serde_json::json!(AgentEvent::LlmOutput {
+                session_id: self.ctx.session.id.clone(),
+                chunk: text.to_string(),
+                is_final: false,
+            }),
+        ));
+        let _ = self.ctx.event_tx.send(DaemonEvent::new(
+            "agent.llm_output",
+            serde_json::json!(AgentEvent::LlmOutput {
+                session_id: self.ctx.session.id.clone(),
+                chunk: String::new(),
+                is_final: true,
+            }),
+        ));
+    }
+
+    /// Run one PlanIntake conversation turn.
+    ///
+    /// If `new_message` is `Some`, append it to the chat history as a user turn.
+    /// Build a messages slice from `ChatHistory.messages` and call `run_tool_loop`
+    /// with the Director's interview prompt. Persist the assistant response back
+    /// to the history.
+    ///
+    /// Phase 3 uses a minimal tool set (the default `ToolExecutor::standard`) and the
+    /// interview system prompt from `prompts::store().director`. Phase 3b refinements
+    /// (tailored tool lists, richer initial context, delegate subagents) land when the
+    /// TUI-side /plan flow is exercised end-to-end.
+    async fn planintake_turn(&mut self, new_message: Option<String>) -> Result<()> {
+        let Some(chat_session_id) = self.resolve_chat_session_id() else {
+            warn!(
+                "{} director: PlanIntake turn requested but no chat_session_id linked; skipping",
+                self.ctx.log_prefix()
+            );
+            return Ok(());
+        };
+
+        // Append the user message to ChatHistory (under lock) and clone the message list
+        // for the LLM call. Drop the lock before the await to keep from holding the sync
+        // RwLock across async points.
+        let mut messages = {
+            let mut chat_sessions = self
+                .ctx
+                .stores
+                .chat_sessions
+                .write()
+                .map_err(|_| eyre::eyre!("chat_sessions lock poisoned"))?;
+            let history = chat_sessions
+                .entry(chat_session_id.clone())
+                .or_insert_with(|| ChatHistory::new(chat_session_id.clone()));
+            if let Some(msg) = new_message {
+                history.messages.push(Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text { text: msg }],
+                });
+                history.updated_at = chrono::Utc::now().timestamp_millis();
+            }
+            history.messages.clone()
+        };
+        if messages.is_empty() {
+            // No user input yet - plant a minimal seed so the LLM has something to respond to.
+            // The interview prompt is responsible for asking the first clarifying question.
+            messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "(conversation seed: greet the user and ask what they're building)".to_string(),
+                }],
+            });
+        }
+
+        let system_prompt = crate::prompts::store().director.clone();
+        if system_prompt.is_empty() {
+            warn!(
+                "{} director: no interview prompt configured; emitting stub acknowledgement",
+                self.ctx.log_prefix()
+            );
+            self.emit_llm_text(
+                "[Director prompt not configured. Configure agents/director.pmt to enable plan intake.]",
+            );
+            return Ok(());
+        }
+
+        let llm = self.planintake_llm_client()?;
+        let executor = Arc::new(crate::tools::ToolExecutor::standard(
+            &self.ctx.stores.config.agents.tools,
+        ));
+        let tool_ctx = ToolContext::new(
+            self.ctx.stores.config.project.repo_path.clone(),
+            self.ctx.session.id.clone(),
+        )
+        .with_sandbox(false);
+
+        let checkpoint_stores = self.ctx.stores.clone();
+        let checkpoint_sid = chat_session_id.clone();
+        let checkpoint = move |msgs: &[Message]| {
+            if let Ok(mut sessions) = checkpoint_stores.chat_sessions.write()
+                && let Some(history) = sessions.get_mut(&checkpoint_sid)
+            {
+                history.messages = msgs.to_vec();
+                history.updated_at = chrono::Utc::now().timestamp_millis();
+            }
+        };
+
+        let max_iterations = self.config.max_iterations;
+        let result = run_tool_loop(
+            llm.as_ref(),
+            executor.as_ref(),
+            &tool_ctx,
+            &system_prompt,
+            messages,
+            max_iterations,
+            Some(&self.ctx.event_tx),
+            Some(&checkpoint),
+        )
+        .await;
+
+        match result {
+            Ok(agentic) => {
+                // Final persist - run_tool_loop already checkpointed per-iteration, but
+                // this closes the turn deterministically (in case the last iteration failed
+                // to run the checkpoint).
+                if let Ok(mut sessions) = self.ctx.stores.chat_sessions.write()
+                    && let Some(history) = sessions.get_mut(&chat_session_id)
+                {
+                    history.messages = agentic.messages;
+                    history.updated_at = chrono::Utc::now().timestamp_millis();
+                }
+                let _ = self.ctx.event_tx.send(DaemonEvent::new(
+                    "agent.llm_output",
+                    serde_json::json!(AgentEvent::LlmOutput {
+                        session_id: self.ctx.session.id.clone(),
+                        chunk: String::new(),
+                        is_final: true,
+                    }),
+                ));
+            }
+            Err(e) => {
+                warn!("{} director: PlanIntake LLM error: {}", self.ctx.log_prefix(), e);
+                self.emit_llm_text(&format!("[PlanIntake error: {}]", e));
+            }
+        }
         Ok(())
     }
 
