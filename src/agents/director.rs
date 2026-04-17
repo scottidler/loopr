@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, info, trace, warn};
 
+use crate::agents::director::actions::{execute_actions, parse_actions};
 use crate::agents::implementer::LlmClient;
 use crate::agents::lifeguard::Lifeguard;
 use crate::agents::llm_client::AgentLlmClient;
@@ -29,6 +30,8 @@ use crate::ipc::protocol::DaemonEvent;
 use crate::tools::agentic_loop::run_tool_loop;
 use crate::tools::context::ToolContext;
 use crate::tools::types::{ContentBlock, Message};
+
+pub mod actions;
 
 /// Heartbeat cadence for the Director run loop.
 ///
@@ -143,6 +146,11 @@ pub struct DirectorAgent<L: LlmClient> {
     last_stall_emit_at: Option<Instant>,
     /// Total events observed across the session (debug/trace only).
     event_count: u64,
+    /// When `check_thresholds` flips to Escalation mid-loop, it records the work_id
+    /// that triggered the flip here. The next iteration of `event_loop` notices the
+    /// Escalation mode, consumes this target, runs `enter_escalation`, then returns
+    /// to Monitoring. `None` when no escalation is pending.
+    pending_escalation_target: Option<String>,
     /// Lazily-initialized PlanIntake LLM client. Created on first conversation turn so we
     /// don't spin one up for Directors that never reach PlanIntake (supervision restarts
     /// into Monitoring, legacy Escalation). The Director's generic `llm: L` satisfies the
@@ -165,6 +173,7 @@ impl<L: LlmClient> DirectorAgent<L> {
             last_event_at: Instant::now(),
             last_stall_emit_at: None,
             event_count: 0,
+            pending_escalation_target: None,
             planintake_llm: None,
         }
     }
@@ -255,10 +264,10 @@ impl<L: LlmClient> DirectorAgent<L> {
                 failures,
                 rejections
             );
-            // Phase 4 flips the mode for observability; the event loop continues running
-            // and the Director will return to Monitoring on the next Phase 5 pass. The
-            // `run()` dispatcher keys off the initial mode, not mid-loop transitions, so
-            // we don't re-enter legacy_escalation here.
+            // Flip the mode and stash the target work_id; the event loop's post-handler
+            // hook consumes this on the next iteration to run `enter_escalation`, which
+            // flips the mode back to Monitoring when done.
+            self.pending_escalation_target = Some(work_id.to_string());
             self.set_mode(DirectorMode::Escalation);
         }
     }
@@ -662,39 +671,133 @@ impl<L: LlmClient> DirectorAgent<L> {
         Ok(())
     }
 
-    /// Legacy one-shot Escalation behavior, preserved from v1 while Phase 5 pending.
-    /// This is the path engine primitives take today when they call `spawn-agent` with
-    /// `role: director` and a non-plan `target_id`.
-    async fn legacy_escalation(&mut self) -> Result<()> {
+    /// Build a JSON context snapshot summarizing plan hierarchy state + recent failures
+    /// and rejections from the pattern tracker. This is handed to the LLM alongside the
+    /// escalation prompt; the LLM uses it to decide which actions to recommend.
+    fn build_escalation_context(&self, target_work_id: Option<&str>) -> serde_json::Value {
+        // Snapshot the pattern tracker under no-ops - everything is Cloneable through JSON.
+        let mut failures = serde_json::Map::new();
+        for (work_id, history) in &self.pattern_tracker.work_failure_history {
+            let sessions: Vec<serde_json::Value> = history
+                .iter()
+                .map(|(sid, err)| serde_json::json!({ "session_id": sid, "error": err }))
+                .collect();
+            failures.insert(work_id.clone(), serde_json::Value::Array(sessions));
+        }
+        let mut rejections = serde_json::Map::new();
+        for (work_id, reasons) in &self.pattern_tracker.rejection_history {
+            rejections.insert(
+                work_id.clone(),
+                serde_json::Value::Array(reasons.iter().map(|r| serde_json::Value::String(r.clone())).collect()),
+            );
+        }
+
+        // Summarize work hierarchy from Stores so the LLM knows what to target.
+        // The Director is scoped to one plan (max_pool=1) so we don't filter further here;
+        // Phase 7 will add spec/phase-level summaries if bubble-up needs richer context.
+        let works_summary = self
+            .ctx
+            .stores
+            .read_works()
+            .ok()
+            .map(|works| {
+                let filtered: Vec<serde_json::Value> = works
+                    .values()
+                    .map(|w| {
+                        serde_json::json!({
+                            "id": w.id,
+                            "title": w.title,
+                            "status": format!("{:?}", w.status()),
+                            "session_failure_count": w.session_failure_count,
+                            "attempt_count": w.attempt_count,
+                        })
+                    })
+                    .collect();
+                serde_json::Value::Array(filtered)
+            })
+            .unwrap_or(serde_json::Value::Null);
+
+        serde_json::json!({
+            "plan_id": self.plan_id,
+            "target_work_id": target_work_id,
+            "pattern_tracker": {
+                "work_failure_history": failures,
+                "rejection_history": rejections,
+                "spec_revision_count": self.pattern_tracker.spec_revision_count,
+            },
+            "works": works_summary,
+        })
+    }
+
+    /// Run one Escalation pass: build context, call the LLM for diagnosis, parse the
+    /// JSON action array, execute each action via the IPC bridge. After the pass
+    /// completes the caller flips back to Monitoring.
+    ///
+    /// Returns early (with the mode already flipped back) when the prompt is not
+    /// configured, when the LLM call fails, or when no actions were parsed. Action
+    /// execution failures are recorded in the emitted `director.action_taken` events
+    /// but do not halt the batch.
+    async fn enter_escalation(&mut self, target_work_id: Option<String>) -> Result<()> {
         info!(
-            "{} director: escalation mode for target {:?}",
+            "{} director: entering Escalation (target_work_id={:?})",
             self.ctx.log_prefix(),
-            self.ctx.session.target_id
+            target_work_id
         );
+
         let system_prompt = crate::prompts::store().director.clone();
         if system_prompt.is_empty() {
-            info!(
-                "{} director: no prompt configured, completing without LLM call",
+            warn!(
+                "{} director: no escalation prompt configured; skipping",
                 self.ctx.log_prefix()
             );
             return Ok(());
         }
+
+        let context = self.build_escalation_context(target_work_id.as_deref());
         let user_message = format!(
-            "Escalation: mechanical recovery failed for target {:?}. Diagnose and recommend action.",
-            self.ctx.session.target_id
+            "Escalation context (JSON):\n{}\n\nRecommend corrective actions as a JSON object with an 'actions' array. \
+             Each action must have a 'type' field with one of: revise-work, abandon-work, spawn-researcher, message-user.",
+            serde_json::to_string_pretty(&context).unwrap_or_default(),
         );
-        match self.llm.call(&system_prompt, &user_message).await {
-            Ok(response) => info!(
-                "{} director: escalation diagnosis complete ({}B)",
-                self.ctx.log_prefix(),
-                response.len()
-            ),
-            Err(e) => info!(
-                "{} director: LLM call failed (expected in test): {}",
-                self.ctx.log_prefix(),
-                e
-            ),
+
+        let response = match self.llm.call(&system_prompt, &user_message).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("{} director: escalation LLM call failed: {}", self.ctx.log_prefix(), e);
+                return Ok(());
+            }
+        };
+
+        let actions = match parse_actions(&response) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!(
+                    "{} director: escalation response parse failed: {} (response preview: {:.200})",
+                    self.ctx.log_prefix(),
+                    e,
+                    response
+                );
+                return Ok(());
+            }
+        };
+
+        if actions.is_empty() {
+            debug!(
+                "{} director: escalation produced no actions; returning to Monitoring",
+                self.ctx.log_prefix()
+            );
+            return Ok(());
         }
+
+        let report = execute_actions(&actions, &self.ctx.bridge, &self.ctx.event_tx, &self.ctx.session.id);
+        info!(
+            "{} director: escalation executed {} actions (ok={} failed={} skipped={})",
+            self.ctx.log_prefix(),
+            actions.len(),
+            report.ok,
+            report.failed,
+            report.skipped
+        );
         Ok(())
     }
 
@@ -754,6 +857,16 @@ impl<L: LlmClient> DirectorAgent<L> {
                 }
                 LoopTick::Heartbeat => self.heartbeat().await?,
             }
+
+            // Post-handler: if pattern detection flipped the mode to Escalation, run
+            // one escalation pass and flip back. Keeping this outside the select! branches
+            // keeps the dispatch uniform - any handler that sets Escalation triggers it.
+            if matches!(self.mode, DirectorMode::Escalation) {
+                let target = self.pending_escalation_target.take();
+                self.enter_escalation(target).await?;
+                // Return to Monitoring so the loop keeps watching for new patterns.
+                self.set_mode(DirectorMode::Monitoring);
+            }
         }
         Ok(())
     }
@@ -786,7 +899,13 @@ impl<L: LlmClient> Agent for DirectorAgent<L> {
         let _ = &self.lifeguard;
 
         match self.mode {
-            DirectorMode::Escalation => self.legacy_escalation().await,
+            // Legacy escalation spawns (non-pl-* target_id) run one escalation pass and exit.
+            // The event loop isn't engaged because these sessions have no plan context to
+            // monitor - they exist solely to diagnose a single failure and propose actions.
+            DirectorMode::Escalation => {
+                let target = self.ctx.session.target_id.clone();
+                self.enter_escalation(target).await
+            }
             DirectorMode::PlanIntake | DirectorMode::Monitoring | DirectorMode::UserIntervention => {
                 self.event_loop().await
             }
