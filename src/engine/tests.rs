@@ -1507,6 +1507,31 @@ fn all_strategy_params_pass_primitive_validation() {
     assert!(errors.is_empty(), "param validation errors:\n{}", errors.join("\n"));
 }
 
+/// Phase 5 sweep: load the full strategy catalog from resources/ and call the
+/// two new primitive-aware gates end-to-end. This is the permanent regression
+/// gate the design doc calls out: any strategy that trips either gate must be
+/// fixed before this test passes.
+#[test]
+fn strategy_catalog_passes_primitive_aware_gates() {
+    let strategies = schema::load_from_resources(None).expect("load strategy catalog");
+    let registry = full_primitive_registry();
+
+    let param_findings = schema::validate_primitive_params(&strategies, &registry);
+    let guard_findings = schema::validate_guard_required(&strategies, &registry);
+
+    let errors: Vec<&schema::ValidationResult> = param_findings
+        .iter()
+        .chain(guard_findings.iter())
+        .filter(|r| matches!(r.severity, schema::Severity::Error))
+        .collect();
+
+    assert!(
+        errors.is_empty(),
+        "strategy catalog trips primitive-aware gates:\n{}",
+        errors.iter().map(|r| r.message.clone()).collect::<Vec<_>>().join("\n")
+    );
+}
+
 /// Build a params Value suitable for validate_params() by replacing
 /// `$trigger.*` and `$context.*` references with placeholder strings.
 fn resolve_for_validation(params: &HashMap<String, serde_json::Value>) -> serde_json::Value {

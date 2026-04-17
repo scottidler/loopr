@@ -244,6 +244,11 @@ impl Primitive for TransitionRecord {
                 field_type: OutputType::String,
                 required: true,
             },
+            InputField {
+                name: "reason".to_string(),
+                field_type: OutputType::String,
+                required: false,
+            },
         ]
     }
 

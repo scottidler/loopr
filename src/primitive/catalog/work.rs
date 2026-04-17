@@ -296,7 +296,11 @@ impl Primitive for RetryWork {
     }
 
     fn idempotency(&self) -> Idempotency {
-        Idempotency::GuardRequired
+        // Phase 5: callers are one-shot event triggers (session-failure,
+        // reviewer-rejected). Re-invocation would double-increment attempt-count,
+        // which is the only observable side effect. The trigger semantics handle
+        // dedup at the strategy layer, making a strategy-side guard redundant.
+        Idempotency::Idempotent
     }
 }
 

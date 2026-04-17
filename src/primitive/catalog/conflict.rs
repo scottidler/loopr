@@ -101,6 +101,10 @@ impl Primitive for CombineConflictingWorks {
     }
 
     fn idempotency(&self) -> Idempotency {
-        Idempotency::GuardRequired
+        // Phase 5: fired only by the conflict-detected event trigger. Re-invoking
+        // on a second fire would try to combine the same works again; the work-
+        // layer transition will reject the second attempt (Superseded -> * fails),
+        // so the primitive is effectively idempotent once the first call lands.
+        Idempotency::Idempotent
     }
 }
