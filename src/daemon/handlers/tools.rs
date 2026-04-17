@@ -56,7 +56,7 @@ pub(super) fn handle_tools_register(
         // Optional worktree context for resolving relative paths.
         let context_dir = req
             .params
-            .get("context_dir")
+            .get("context-dir")
             .and_then(|v| v.as_str())
             .map(std::path::PathBuf::from);
 
@@ -110,7 +110,7 @@ pub(super) fn handle_tools_register(
             ));
         }
 
-        let timeout_secs = req.params.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(300);
+        let timeout_secs = req.params.get("timeout-secs").and_then(|v| v.as_u64()).unwrap_or(300);
 
         let worktree = req.params.get("worktree").and_then(|v| v.as_bool()).unwrap_or(true);
 
@@ -153,7 +153,7 @@ pub(super) fn handle_tools_register(
             json!({
                 "name": entry.name,
                 "command": entry.command,
-                "timeout_secs": entry.timeout_secs,
+                "timeout-secs": entry.timeout_secs,
                 "worktree": entry.worktree,
                 "source": "runtime",
             }),
@@ -187,7 +187,7 @@ mod tests {
             json!({
                 "name": "test",
                 "command": "echo hello",
-                "timeout_secs": 300,
+                "timeout-secs": 300,
                 "worktree": true
             }),
         );
@@ -312,7 +312,7 @@ mod tests {
             json!({
                 "name": "test",
                 "command": "./scripts/test.sh --verbose",
-                "context_dir": tmp.display().to_string(),
+                "context-dir": tmp.display().to_string(),
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -338,7 +338,7 @@ mod tests {
             json!({
                 "name": "test",
                 "command": "./scripts/test.sh",
-                "context_dir": tmp.display().to_string(),
+                "context-dir": tmp.display().to_string(),
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;

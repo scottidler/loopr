@@ -182,7 +182,7 @@ impl Primitive for TransitionRecord {
                 &method,
                 serde_json::json!({
                     "id": id,
-                    "target_status": target_status,
+                    "target-status": target_status,
                     "role": role,
                 }),
             );
@@ -361,7 +361,7 @@ impl Primitive for TransitionWork {
                 "work.transition",
                 serde_json::json!({
                     "id": work_id,
-                    "target_status": target_status,
+                    "target-status": target_status,
                     "role": role,
                 }),
             );
@@ -456,7 +456,7 @@ impl Primitive for OverrideWork {
                 "work.transition",
                 serde_json::json!({
                     "id": work_id,
-                    "target_status": target_status,
+                    "target-status": target_status,
                     "role": "Coordinator",
                     "override": true,
                     "reason": reason,

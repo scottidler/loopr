@@ -247,11 +247,11 @@ impl TriggerEvaluator {
         }
 
         // Extract scope_ids from event data. Prefer the scope-keyed field
-        // (e.g. `work_id` for scope "work") over the generic `id` field. This
+        // (e.g. `work-id` for scope "work") over the generic `id` field. This
         // prevents grabbing the wrong entity ID when an event payload contains
-        // both (e.g. `agent.status-changed` has session `id` AND `work_id`).
+        // both (e.g. `agent.status-changed` has session `id` AND `work-id`).
         let scope_ids: Vec<String> = if let Some(scope) = scope {
-            let scope_key = format!("{scope}_id");
+            let scope_key = format!("{scope}-id");
             matching
                 .iter()
                 .filter_map(|e| {

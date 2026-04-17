@@ -57,9 +57,9 @@ struct ChildRecord {
 // ─── Handler ────────────────────────────────────────────────────────────────
 
 #[instrument(skip_all, fields(
-    parent_id = ?req.params.get("parent_id"),
-    parent_collection = ?req.params.get("parent_collection"),
-    target_kind = ?req.params.get("target_kind"),
+    parent_id = ?req.params.get("parent-id"),
+    parent_collection = ?req.params.get("parent-collection"),
+    target_kind = ?req.params.get("target-kind"),
 ))]
 pub(super) async fn handle_decomposer_decompose(
     stores: &Arc<Stores>,
@@ -69,7 +69,7 @@ pub(super) async fn handle_decomposer_decompose(
     try_async_handler!(req.id, {
         let parent_id = req
             .params
-            .get("parent_id")
+            .get("parent-id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing parent_id"))?
             .to_string();
@@ -77,12 +77,12 @@ pub(super) async fn handle_decomposer_decompose(
         // (the match is on target_kind). Retained for future create_many integration.
         let _parent_collection = req
             .params
-            .get("parent_collection")
+            .get("parent-collection")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing parent_collection"))?;
         let target_kind_str = req
             .params
-            .get("target_kind")
+            .get("target-kind")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing target_kind"))?;
         let target_kind = match target_kind_str {
@@ -98,13 +98,13 @@ pub(super) async fn handle_decomposer_decompose(
         };
         let count_guidance = req
             .params
-            .get("count_guidance")
+            .get("count-guidance")
             .and_then(|v| v.as_str())
             .unwrap_or("1-5")
             .to_string();
         let dependency_pattern = req
             .params
-            .get("dependency_pattern")
+            .get("dependency-pattern")
             .and_then(|v| v.as_str())
             .unwrap_or("fan-out")
             .to_string();
@@ -546,7 +546,7 @@ fn decomposition_tool_schema() -> serde_json::Value {
                                 "items": {"type": "string"},
                                 "description": "Titles of sibling documents this document depends on"
                             },
-                            "acceptance_criteria": {
+                            "acceptance-criteria": {
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Acceptance criteria assertions for this document"
@@ -613,7 +613,7 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
     }
 
     let stop_reason = response
-        .get("stop_reason")
+        .get("stop-reason")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
     debug!(
@@ -746,12 +746,12 @@ fn extract_acceptance_criteria(content: &str) -> Vec<String> {
 /// `decomposer.ratify` - bottom-up semantic validation of parent-children relationships.
 /// Reads parent + children markdown from docs/loopr/, calls LLM for each parent-children group.
 /// Advisory: logs warnings on failure but does not abort.
-#[instrument(skip_all, fields(plan_id = ?req.params.get("plan_id")))]
+#[instrument(skip_all, fields(plan_id = ?req.params.get("plan-id")))]
 pub(super) async fn handle_decomposer_ratify(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_async_handler!(req.id, {
         let plan_id = req
             .params
-            .get("plan_id")
+            .get("plan-id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing plan_id"))?
             .to_string();
@@ -801,7 +801,7 @@ pub(super) async fn handle_decomposer_ratify(stores: &Arc<Stores>, req: DaemonRe
 
         Ok(DaemonResponse::ok(
             req.id,
-            serde_json::json!({ "plan_id": plan_id, "ratified": true }),
+            serde_json::json!({ "plan-id": plan_id, "ratified": true }),
         ))
     })
 }
@@ -810,7 +810,7 @@ pub(super) async fn handle_decomposer_ratify(stores: &Arc<Stores>, req: DaemonRe
 
 /// `decomposer.abandon_children` - transitions all non-terminal children of a parent to Abandoned,
 /// optionally preserving specific IDs.
-#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_decomposer_abandon_children(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -819,19 +819,19 @@ pub(super) fn handle_decomposer_abandon_children(
     try_handler!(req.id, {
         let parent_id = req
             .params
-            .get("parent_id")
+            .get("parent-id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing parent_id"))?
             .to_string();
         let parent_collection = req
             .params
-            .get("parent_collection")
+            .get("parent-collection")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing parent_collection"))?
             .to_string();
         let preserve_ids: Vec<String> = req
             .params
-            .get("preserve_ids")
+            .get("preserve-ids")
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
@@ -940,7 +940,7 @@ pub(super) fn handle_decomposer_abandon_children(
 
 /// `decomposer.re_decompose` - increments decomposition_attempts on the parent plan,
 /// abandons non-preserved children, then triggers a fresh decomposition.
-#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) async fn handle_decomposer_re_decompose(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -949,25 +949,25 @@ pub(super) async fn handle_decomposer_re_decompose(
     try_async_handler!(req.id, {
         let parent_id = req
             .params
-            .get("parent_id")
+            .get("parent-id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing parent_id"))?
             .to_string();
         let parent_collection = req
             .params
-            .get("parent_collection")
+            .get("parent-collection")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre!("missing parent_collection"))?
             .to_string();
         let target_kind = req
             .params
-            .get("target_kind")
+            .get("target-kind")
             .and_then(|v| v.as_str())
             .unwrap_or("spec")
             .to_string();
         let preserve_ids: Vec<String> = req
             .params
-            .get("preserve_ids")
+            .get("preserve-ids")
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
@@ -1028,9 +1028,9 @@ pub(super) async fn handle_decomposer_re_decompose(
             0,
             "decomposer.abandon_children",
             serde_json::json!({
-                "parent_id": parent_id,
-                "parent_collection": parent_collection,
-                "preserve_ids": preserve_ids,
+                "parent-id": parent_id,
+                "parent-collection": parent_collection,
+                "preserve-ids": preserve_ids,
             }),
         );
         let abandon_resp = handle_decomposer_abandon_children(stores, event_tx, abandon_req);
@@ -1045,11 +1045,11 @@ pub(super) async fn handle_decomposer_re_decompose(
             0,
             "decomposer.decompose",
             serde_json::json!({
-                "parent_id": parent_id,
-                "parent_collection": parent_collection,
-                "target_kind": target_kind,
-                "count_guidance": req.params.get("count_guidance").and_then(|v| v.as_str()).unwrap_or("1-5"),
-                "dependency_pattern": req.params.get("dependency_pattern").and_then(|v| v.as_str()).unwrap_or("fan-out"),
+                "parent-id": parent_id,
+                "parent-collection": parent_collection,
+                "target-kind": target_kind,
+                "count-guidance": req.params.get("count-guidance").and_then(|v| v.as_str()).unwrap_or("1-5"),
+                "dependency-pattern": req.params.get("dependency-pattern").and_then(|v| v.as_str()).unwrap_or("fan-out"),
             }),
         );
         let decompose_resp = handle_decomposer_decompose(stores, event_tx, decompose_req).await;
@@ -1078,12 +1078,12 @@ pub(super) async fn handle_decomposer_re_decompose(
 
 /// `decomposer.handle_failure` - wired to decomposition.failed event via strategy.
 /// Increments decomposition_attempts on the parent to eventually trigger the limit.
-#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_decomposer_failure(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         let parent_id = req
             .params
-            .get("parent_id")
+            .get("parent-id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();

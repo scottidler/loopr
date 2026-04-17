@@ -137,7 +137,7 @@ pub(super) fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, h
     // Check if we already hold a lock on this resource
     let check = bridge.request(
         "lock.list",
-        serde_json::json!({ "resource": resource, "holder_id": holder_id, "active_only": true }),
+        serde_json::json!({ "resource": resource, "holder-id": holder_id, "active-only": true }),
     );
     let already_held = check
         .result
@@ -152,7 +152,7 @@ pub(super) fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, h
     // Check if another agent already holds a lock (advisory warning)
     let existing = bridge.request(
         "lock.list",
-        serde_json::json!({ "resource": resource, "active_only": true }),
+        serde_json::json!({ "resource": resource, "active-only": true }),
     );
     if let Some(locks) = existing.result.as_ref().and_then(|v| v.as_array()) {
         for lock in locks {
@@ -174,8 +174,8 @@ pub(super) fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, h
         "lock.create",
         serde_json::json!({
             "resource": resource,
-            "holder_id": holder_id,
-            "granted_by": holder_id,
+            "holder-id": holder_id,
+            "granted-by": holder_id,
         }),
     );
     resp.result
@@ -189,7 +189,7 @@ pub(super) fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, h
 pub(super) fn release_agent_locks(bridge: &AgentIpcBridge, holder_id: &str, prefix: &str) {
     let resp = bridge.request(
         "lock.list",
-        serde_json::json!({ "holder_id": holder_id, "active_only": true }),
+        serde_json::json!({ "holder-id": holder_id, "active-only": true }),
     );
     if let Some(locks) = resp.result.as_ref().and_then(|v| v.as_array()) {
         for lock in locks {
@@ -422,16 +422,16 @@ mod tests {
         );
         bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/a.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
+            serde_json::json!({ "resource": "src/a.rs", "holder-id": "wi-rel", "granted-by": "wi-rel" }),
         );
         bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/b.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
+            serde_json::json!({ "resource": "src/b.rs", "holder-id": "wi-rel", "granted-by": "wi-rel" }),
         );
 
         let check = bridge.request(
             "lock.list",
-            serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
+            serde_json::json!({ "holder-id": "wi-rel", "active-only": true }),
         );
         assert_eq!(check.result.as_ref().unwrap().as_array().unwrap().len(), 2);
 
@@ -439,7 +439,7 @@ mod tests {
 
         let after = bridge.request(
             "lock.list",
-            serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
+            serde_json::json!({ "holder-id": "wi-rel", "active-only": true }),
         );
         let remaining = after.result.as_ref().unwrap().as_array().unwrap();
         assert!(

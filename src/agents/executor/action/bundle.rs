@@ -258,19 +258,19 @@ pub(super) async fn handle_propose_bundle(
     let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
 
     let mut params = serde_json::json!({
-        "work_id": wi_id,
-        "branch_name": branch_name,
+        "work-id": wi_id,
+        "branch-name": branch_name,
         "claims": claims,
         "description": description,
     });
     if let Some(ref sha) = head_commit {
-        params["head_commit"] = serde_json::Value::String(sha.clone());
+        params["head-commit"] = serde_json::Value::String(sha.clone());
     }
     if let Some(reason) = noop_reason {
-        params["noop_reason"] = serde_json::Value::String(reason.to_string());
+        params["noop-reason"] = serde_json::Value::String(reason.to_string());
     }
     if let Some(tick_id) = &base_tick_id {
-        params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
+        params["base-tick-id"] = serde_json::Value::String(tick_id.clone());
     }
     if !paths.is_empty() {
         params["paths"] = serde_json::json!(paths);
@@ -526,7 +526,7 @@ mod tests {
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
         ctx.bridge.request(
             "work.transition",
-            serde_json::json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+            serde_json::json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator"}),
         );
 
         let _ = tokio::process::Command::new("git")
@@ -630,8 +630,8 @@ mod tests {
         let resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "",
+                "work-id": wi_id,
+                "branch-name": "",
                 "description": "should fail",
             }),
         );
@@ -791,9 +791,9 @@ mod tests {
         let resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "",
-                "noop_reason": "already done by phase 1",
+                "work-id": wi_id,
+                "branch-name": "",
+                "noop-reason": "already done by phase 1",
                 "description": "noop bundle",
             }),
         );
@@ -912,9 +912,9 @@ mod tests {
         let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
-                "parent_id": "ph-placeholder",
+                "parent-id": "ph-placeholder",
                 "title": "Create setup.py package configuration",
-                "acceptance_criteria": ["setup.py must define package metadata"]
+                "acceptance-criteria": ["setup.py must define package metadata"]
             }),
         );
         // Use create_test_hierarchy work but modify stores directly

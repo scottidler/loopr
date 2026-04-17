@@ -111,7 +111,7 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         Command::Report { id } => ("validator.report".to_string(), json!({ "id": id })),
         Command::Reports { collection, target_id } => (
             "validator.reports".to_string(),
-            json!({ "collection": collection, "target_id": target_id }),
+            json!({ "collection": collection, "target-id": target_id }),
         ),
 
         // SetRole writes to local config, not IPC — handled in dispatch_command
@@ -185,7 +185,7 @@ async fn run_headless(
     let plan_id = resp
         .result
         .as_ref()
-        .and_then(|r| r.get("plan_id"))
+        .and_then(|r| r.get("plan-id"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
@@ -291,7 +291,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
                 "title": title,
             });
             if let Some(parent_id) = parent {
-                params["parent_id"] = json!(parent_id);
+                params["parent-id"] = json!(parent_id);
             }
             // Work-specific fields
             if collection == "work" {
@@ -299,7 +299,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
                     params["files"] = json!(files);
                 }
                 if !acceptance_criteria.is_empty() {
-                    params["acceptance_criteria"] = json!(acceptance_criteria);
+                    params["acceptance-criteria"] = json!(acceptance_criteria);
                 }
                 if !dependencies.is_empty() {
                     params["dependencies"] = json!(dependencies);
@@ -311,7 +311,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
         CrudCmd::List { parent } => {
             let mut params = json!({});
             if let Some(parent_id) = parent {
-                params["parent_id"] = json!(parent_id);
+                params["parent-id"] = json!(parent_id);
             }
             (format!("{collection}.list"), params)
         }
@@ -327,11 +327,11 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             };
             let mut params = json!({
                 "id": id,
-                "target_status": normalized_status,
+                "target-status": normalized_status,
                 "role": role.to_string(),
             });
             if *skip_validation {
-                params["skip_validation"] = json!(true);
+                params["skip-validation"] = json!(true);
             }
             (format!("{collection}.transition"), params)
         }
@@ -349,12 +349,12 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             paths,
         } => {
             let mut params = json!({
-                "work_id": work_id,
-                "branch_name": branch,
+                "work-id": work_id,
+                "branch-name": branch,
                 "description": description,
             });
             if let Some(tick_id) = base_tick_id {
-                params["base_tick_id"] = json!(tick_id);
+                params["base-tick-id"] = json!(tick_id);
             }
             if !claims.is_empty() {
                 params["claims"] = json!(claims);
@@ -368,7 +368,7 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
         BundleCmd::List { work_id } => {
             let mut params = json!({});
             if let Some(wi_id) = work_id {
-                params["work_id"] = json!(wi_id);
+                params["work-id"] = json!(wi_id);
             }
             ("bundle.list".to_string(), params)
         }
@@ -376,7 +376,7 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             "bundle.transition".to_string(),
             json!({
                 "id": id,
-                "target_status": status,
+                "target-status": status,
                 "role": role.to_string(),
             }),
         ),
@@ -398,12 +398,12 @@ fn tick_to_ipc(cmd: &TickCmd, role: Role) -> (String, serde_json::Value) {
             "tick.transition".to_string(),
             json!({
                 "id": id,
-                "target_status": status,
+                "target-status": status,
                 "role": role.to_string(),
             }),
         ),
-        TickCmd::Validate { id } => ("integrator.validate".to_string(), json!({ "tick_id": id })),
-        TickCmd::Publish { id } => ("integrator.publish".to_string(), json!({ "tick_id": id })),
+        TickCmd::Validate { id } => ("integrator.validate".to_string(), json!({ "tick-id": id })),
+        TickCmd::Publish { id } => ("integrator.publish".to_string(), json!({ "tick-id": id })),
     }
 }
 
@@ -411,13 +411,13 @@ fn worktree_to_ipc(cmd: &WorktreeCmd) -> (String, serde_json::Value) {
     match cmd {
         WorktreeCmd::Create { work_id, git_ref } => (
             "worktree.create".to_string(),
-            json!({ "work_id": work_id, "ref": git_ref }),
+            json!({ "work-id": work_id, "ref": git_ref }),
         ),
         WorktreeCmd::List => ("worktree.list".to_string(), json!(null)),
-        WorktreeCmd::Cleanup { work_id } => ("worktree.cleanup".to_string(), json!({ "work_id": work_id })),
+        WorktreeCmd::Cleanup { work_id } => ("worktree.cleanup".to_string(), json!({ "work-id": work_id })),
         WorktreeCmd::Refresh { work_id, git_ref } => (
             "worktree.refresh".to_string(),
-            json!({ "work_id": work_id, "ref": git_ref }),
+            json!({ "work-id": work_id, "ref": git_ref }),
         ),
     }
 }
@@ -430,7 +430,7 @@ fn learning_to_ipc(cmd: &LearningCmd) -> (String, serde_json::Value) {
             content,
         } => (
             "learning.create".to_string(),
-            json!({ "source_id": source_id, "scope": scope, "content": content }),
+            json!({ "source-id": source_id, "scope": scope, "content": content }),
         ),
         LearningCmd::Get { id } => ("learning.get".to_string(), json!({ "id": id })),
         LearningCmd::List => ("learning.list".to_string(), json!(null)),
@@ -460,23 +460,23 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
             }
             ("agent.start".to_string(), params)
         }
-        AgentCmd::Stop { session_id } => ("agent.stop".to_string(), json!({ "session_id": session_id })),
-        AgentCmd::Pause { session_id } => ("agent.pause".to_string(), json!({ "session_id": session_id })),
-        AgentCmd::Resume { session_id } => ("agent.resume".to_string(), json!({ "session_id": session_id })),
-        AgentCmd::Status { session_id } => ("agent.status".to_string(), json!({ "session_id": session_id })),
+        AgentCmd::Stop { session_id } => ("agent.stop".to_string(), json!({ "session-id": session_id })),
+        AgentCmd::Pause { session_id } => ("agent.pause".to_string(), json!({ "session-id": session_id })),
+        AgentCmd::Resume { session_id } => ("agent.resume".to_string(), json!({ "session-id": session_id })),
+        AgentCmd::Status { session_id } => ("agent.status".to_string(), json!({ "session-id": session_id })),
         AgentCmd::List { status, agent_type } => {
             let mut params = json!({});
             if let Some(s) = status {
                 params["status"] = json!(s);
             }
             if let Some(t) = agent_type {
-                params["agent_type"] = json!(t);
+                params["agent-type"] = json!(t);
             }
             ("agent.list".to_string(), params)
         }
         AgentCmd::Output { session_id, since } => (
             "agent.output".to_string(),
-            json!({ "session_id": session_id, "since": since }),
+            json!({ "session-id": session_id, "since": since }),
         ),
     }
 }
@@ -495,7 +495,7 @@ fn lock_to_ipc(cmd: &LockCmd) -> (String, serde_json::Value) {
             granted_by,
         } => (
             "lock.create".to_string(),
-            json!({ "resource": resource, "holder_id": holder_id, "granted_by": granted_by }),
+            json!({ "resource": resource, "holder-id": holder_id, "granted-by": granted_by }),
         ),
         LockCmd::Get { id } => ("lock.get".to_string(), json!({ "id": id })),
         LockCmd::List {
@@ -508,10 +508,10 @@ fn lock_to_ipc(cmd: &LockCmd) -> (String, serde_json::Value) {
                 params["resource"] = json!(r);
             }
             if let Some(h) = holder_id {
-                params["holder_id"] = json!(h);
+                params["holder-id"] = json!(h);
             }
             if *active_only {
-                params["active_only"] = json!(true);
+                params["active-only"] = json!(true);
             }
             ("lock.list".to_string(), params)
         }

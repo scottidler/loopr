@@ -28,7 +28,7 @@ pub(super) fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         let server_version = crate::version();
         let client_version = req
             .params
-            .get("client_version")
+            .get("client-version")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         let version_match = client_version == server_version;
@@ -44,10 +44,10 @@ pub(super) fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
             req.id,
             json!({
                 "server_version": server_version,
-                "client_version": client_version,
+                "client-version": client_version,
                 "version_match": version_match,
                 "protocol": "ndjson/1",
-                "session_id": stores.session_id,
+                "session-id": stores.session_id,
             }),
         ))
     })
@@ -211,7 +211,7 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
                 "taskstore": taskstore_stats,
                 "current_tick_sha": current_tick_sha,
                 "stale_works": stale_works,
-                "session_id": stores.session_dir.as_ref().and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string())),
+                "session-id": stores.session_dir.as_ref().and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string())),
                 "reconciliation": reconciliation,
             }),
         ))

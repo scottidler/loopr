@@ -79,7 +79,7 @@ pub(super) fn handle_integrator_validate(
 ) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_integrator_validate()");
-        let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
+        let tick_id = match req.params.get("tick-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -178,7 +178,7 @@ pub(super) fn handle_integrator_validate(
 
         if all_passed {
             let sha = tick_json
-                .get("integration_sha")
+                .get("integration-sha")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
             let _ = event_tx.send(DaemonEvent::tick_published(&tick_id, sha));
@@ -201,7 +201,7 @@ pub(super) fn handle_integrator_publish(
 ) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_integrator_publish()");
-        let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
+        let tick_id = match req.params.get("tick-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -257,7 +257,7 @@ pub(super) fn handle_integrator_publish(
         }
 
         // Now delegate to validate (tick is in Sealing state)
-        let validate_req = DaemonRequest::new(req.id, "integrator.validate", json!({ "tick_id": tick_id }));
+        let validate_req = DaemonRequest::new(req.id, "integrator.validate", json!({ "tick-id": tick_id }));
         Ok(handle_integrator_validate(
             stores,
             event_tx,
@@ -369,7 +369,7 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
 
 // --- Coverage Evaluator handler ---
 
-#[instrument(skip_all, fields(parent_collection = ?req.params.get("parent_collection"), parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_collection = ?req.params.get("parent-collection"), parent_id = ?req.params.get("parent-id")))]
 pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_async_handler!(req.id, {
         let evaluator = match &stores.evaluator {
@@ -382,7 +382,7 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
             }
         };
 
-        let parent_collection = match req.params.get("parent_collection").and_then(|v| v.as_str()) {
+        let parent_collection = match req.params.get("parent-collection").and_then(|v| v.as_str()) {
             Some(c) => c.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -392,7 +392,7 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
             }
         };
 
-        let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
+        let parent_id = match req.params.get("parent-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -545,7 +545,7 @@ pub(super) fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest)
         if let Some(store) = &stores.store {
             let mut filters = vec![];
 
-            if let Some(target_id) = req.params.get("target_id").and_then(|v| v.as_str()) {
+            if let Some(target_id) = req.params.get("target-id").and_then(|v| v.as_str()) {
                 filters.push(Filter {
                     field: "target_id".to_string(),
                     op: FilterOp::Eq,
@@ -553,7 +553,7 @@ pub(super) fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest)
                 });
             }
 
-            if let Some(target_collection) = req.params.get("target_collection").and_then(|v| v.as_str()) {
+            if let Some(target_collection) = req.params.get("target-collection").and_then(|v| v.as_str()) {
                 filters.push(Filter {
                     field: "target_collection".to_string(),
                     op: FilterOp::Eq,
@@ -589,7 +589,7 @@ pub(super) fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
                     json!({
                         "name": entry.name,
                         "command": entry.command,
-                        "timeout_secs": entry.timeout_secs,
+                        "timeout-secs": entry.timeout_secs,
                         "worktree": entry.worktree,
                         "source": "config",
                     })
@@ -639,7 +639,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "tick.transition",
-                json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+                json!({"id": tick_id, "target-status": "Sealing", "role": "integrator"}),
             ),
         )
         .await;
@@ -663,7 +663,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+            DaemonRequest::new(3, "integrator.validate", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(!resp.is_error(), "unexpected error: {:?}", resp.error);
@@ -689,7 +689,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+            DaemonRequest::new(3, "integrator.validate", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(!resp.is_error());
@@ -720,7 +720,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "integrator.validate", json!({"tick_id": tick_id})),
+            DaemonRequest::new(2, "integrator.validate", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(resp.is_error());
@@ -737,7 +737,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "integrator.validate", json!({"tick_id": "nonexistent"})),
+            DaemonRequest::new(1, "integrator.validate", json!({"tick-id": "nonexistent"})),
         )
         .await;
         assert!(resp.is_error());
@@ -779,7 +779,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+            DaemonRequest::new(3, "integrator.validate", json!({"tick-id": tick_id})),
         )
         .await;
         let event1 = rx.try_recv().unwrap();
@@ -818,7 +818,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(2, "integrator.publish", json!({"tick_id": tick_id})),
+            DaemonRequest::new(2, "integrator.publish", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(!resp.is_error());
@@ -842,7 +842,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(3, "integrator.publish", json!({"tick_id": tick_id})),
+            DaemonRequest::new(3, "integrator.publish", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(!resp.is_error());
@@ -864,7 +864,7 @@ mod tests {
             DaemonRequest::new(
                 3,
                 "tick.transition",
-                json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
+                json!({"id": tick_id, "target-status": "Validating", "role": "integrator"}),
             ),
         )
         .await;
@@ -874,7 +874,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(4, "integrator.publish", json!({"tick_id": tick_id})),
+            DaemonRequest::new(4, "integrator.publish", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(resp.is_error());
@@ -906,7 +906,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(2, "integrator.publish", json!({"tick_id": tick_id})),
+            DaemonRequest::new(2, "integrator.publish", json!({"tick-id": tick_id})),
         )
         .await;
         assert!(!resp.is_error());
@@ -958,7 +958,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+            DaemonRequest::new(3, "integrator.validate", json!({"tick-id": tick_id})),
         )
         .await;
         let result = resp.result.unwrap();
@@ -1238,7 +1238,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "validator.reports", json!({"target_id": "plan-1"})),
+            DaemonRequest::new(2, "validator.reports", json!({"target-id": "plan-1"})),
         )
         .await;
         assert!(!resp.is_error());
@@ -1249,7 +1249,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(3, "validator.reports", json!({"target_collection": "plans"})),
+            DaemonRequest::new(3, "validator.reports", json!({"target-collection": "plans"})),
         )
         .await;
         assert!(!resp.is_error());

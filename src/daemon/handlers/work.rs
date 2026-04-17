@@ -46,14 +46,14 @@ pub(super) fn detect_dependency_cycle(works: &HashMap<String, Work>, new_id: &st
     false
 }
 
-#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_work_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
+        let parent_id = match req.params.get("parent-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -143,7 +143,7 @@ pub(super) fn handle_work_create(
 
         let acceptance_criteria: crate::domain::criteria::AcceptanceCriteria = req
             .params
-            .get("acceptance_criteria")
+            .get("acceptance-criteria")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
@@ -276,7 +276,7 @@ pub(super) fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
 pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_work_list()");
-        let parent_id_filter = req.params.get("parent_id").and_then(|v| v.as_str());
+        let parent_id_filter = req.params.get("parent-id").and_then(|v| v.as_str());
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -399,7 +399,7 @@ pub(super) fn handle_work_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: WorkStatus = match parse_required_param(&req, "target_status") {
+        let target_status: WorkStatus = match parse_required_param(&req, "target-status") {
             Ok(v) => v,
             Err(resp) => return Ok(resp),
         };
@@ -561,7 +561,7 @@ pub(super) fn handle_work_transition(
             let _ = event_tx.send(DaemonEvent::new(
                 "work.need_help",
                 serde_json::json!({
-                    "work_id": id,
+                    "work-id": id,
                     "attempt_count": wi_clone.attempt_count,
                     "blocked_reason": wi_clone.blocked_reason.map(|r| format!("{:?}", r)),
                     "reason": "max attempts reached - coordinator must decide: Superseded (replace) or Abandoned (fatal)",
@@ -610,7 +610,7 @@ pub(super) fn handle_work_transition(
             let _ = event_tx.send(DaemonEvent::new(
                 "work.override_transition",
                 serde_json::json!({
-                    "work_id": id,
+                    "work-id": id,
                     "from": format!("{:?}", from),
                     "to": format!("{:?}", effective_status),
                     "reason": override_reason,
@@ -675,7 +675,7 @@ pub(super) fn handle_work_update(
         if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
             wi.assignee = Some(assignee.to_string());
         }
-        if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_array()) {
+        if let Some(criteria) = req.params.get("acceptance-criteria").and_then(|v| v.as_array()) {
             wi.acceptance_criteria = criteria
                 .iter()
                 .filter_map(|v| v.as_str().map(String::from))
@@ -753,7 +753,7 @@ mod tests {
             tx,
             wm,
             &test_integrator_config(),
-            DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(10, "spec.create", json!({"parent-id": plan_id, "title": "Parent Spec"})),
         )
         .await;
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -775,7 +775,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
+                json!({"parent-id": spec_id, "title": "Parent Phase", "order": 1}),
             ),
         )
         .await;
@@ -798,7 +798,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -816,11 +816,11 @@ mod tests {
         deps: &[&str],
     ) -> String {
         let mut params = json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": title,
 
             "files": ["src/"],
-            "acceptance_criteria": ["pass"],
+            "acceptance-criteria": ["pass"],
         });
         if !deps.is_empty() {
             params["dependencies"] = json!(deps);
@@ -855,7 +855,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "phase.transition",
-                json!({"id": phase_id, "target_status": "active", "role": "coordinator"}),
+                json!({"id": phase_id, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -867,7 +867,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "phase.transition",
-                json!({"id": phase_id, "target_status": "complete", "role": "coordinator"}),
+                json!({"id": phase_id, "target-status": "complete", "role": "coordinator"}),
             ),
         )
         .await;
@@ -875,7 +875,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "work.create",
-            json!({"parent_id": phase_id, "title": "Work Under Complete", "files": ["src/"]}),
+            json!({"parent-id": phase_id, "title": "Work Under Complete", "files": ["src/"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -898,7 +898,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "phase.transition",
-                json!({"id": phase_id, "target_status": "abandoned", "role": "coordinator"}),
+                json!({"id": phase_id, "target-status": "abandoned", "role": "coordinator"}),
             ),
         )
         .await;
@@ -906,7 +906,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "work.create",
-            json!({"parent_id": phase_id, "title": "Work Under Abandoned", "files": ["src/"]}),
+            json!({"parent-id": phase_id, "title": "Work Under Abandoned", "files": ["src/"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -926,9 +926,9 @@ mod tests {
             30,
             "work.create",
             json!({
-                "parent_id": phase_id,
+                "parent-id": phase_id,
                 "title": "Implement auth",
-            "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -949,7 +949,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "title": "Persisted WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "title": "Persisted WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -970,7 +970,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "work.create",
-            json!({"title": "WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -985,7 +985,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "work.create",
-            json!({"parent_id": "nonexistent", "title": "WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": "nonexistent", "title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -1001,7 +1001,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -1023,7 +1023,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "title": "WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         let event = rx.try_recv().unwrap();
@@ -1048,7 +1048,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "My WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "My WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1088,7 +1088,7 @@ mod tests {
         let create_req = DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "title": "TaskStore WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "title": "TaskStore WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         );
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req).await;
         assert!(!create_resp.is_error());
@@ -1133,7 +1133,7 @@ mod tests {
             DaemonRequest::new(
                 15,
                 "phase.transition",
-                json!({"id": phase_id_1, "target_status": "active", "role": "coordinator"}),
+                json!({"id": phase_id_1, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -1147,7 +1147,7 @@ mod tests {
             DaemonRequest::new(
                 21,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Phase 2", "order": 2}),
+                json!({"parent-id": spec_id, "title": "Phase 2", "order": 2}),
             ),
         )
         .await;
@@ -1162,7 +1162,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id_1, "title": "WI A", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id_1, "title": "WI A", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1174,7 +1174,7 @@ mod tests {
             DaemonRequest::new(
                 31,
                 "work.create",
-                json!({"parent_id": phase_id_2, "title": "WI B", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id_2, "title": "WI B", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1196,7 +1196,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(41, "work.list", json!({"parent_id": phase_id_1})),
+            DaemonRequest::new(41, "work.list", json!({"parent-id": phase_id_1})),
         )
         .await;
         let items = filtered_resp.result.unwrap();
@@ -1221,7 +1221,7 @@ mod tests {
             DaemonRequest::new(
                 15,
                 "phase.transition",
-                json!({"id": phase_id_1, "target_status": "active", "role": "coordinator"}),
+                json!({"id": phase_id_1, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -1235,7 +1235,7 @@ mod tests {
             DaemonRequest::new(
                 21,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Phase 2", "order": 2}),
+                json!({"parent-id": spec_id, "title": "Phase 2", "order": 2}),
             ),
         )
         .await;
@@ -1250,7 +1250,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id_1, "title": "WI A", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id_1, "title": "WI A", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1262,7 +1262,7 @@ mod tests {
             DaemonRequest::new(
                 31,
                 "work.create",
-                json!({"parent_id": phase_id_2, "title": "WI B", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id_2, "title": "WI B", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1283,7 +1283,7 @@ mod tests {
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
-        let filtered_req = DaemonRequest::new(41, "work.list", json!({"parent_id": phase_id_1}));
+        let filtered_req = DaemonRequest::new(41, "work.list", json!({"parent-id": phase_id_1}));
         let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req).await;
         assert!(!filtered_resp.is_error());
         let filtered_items = filtered_resp.result.unwrap();
@@ -1315,7 +1315,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1328,7 +1328,7 @@ mod tests {
             "work.transition",
             json!({
                 "id": wi_id,
-                "target_status": "InProgress",
+                "target-status": "InProgress",
                 "role": "coordinator",
                 "assignee": "agent-1"
             }),
@@ -1360,7 +1360,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1370,7 +1370,7 @@ mod tests {
         let req = DaemonRequest::new(
             31,
             "work.transition",
-            json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
+            json!({"id": wi_id, "target-status": "Done", "role": "coordinator"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(
@@ -1389,7 +1389,7 @@ mod tests {
             DaemonRequest::new(
                 32,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "WI2", "files": ["src/"]}),
+                json!({"parent-id": phase_id, "title": "WI2", "files": ["src/"]}),
             ),
         )
         .await;
@@ -1404,7 +1404,7 @@ mod tests {
         let req2 = DaemonRequest::new(
             33,
             "work.transition",
-            json!({"id": wi2_id, "target_status": "Done", "role": "coordinator"}),
+            json!({"id": wi2_id, "target-status": "Done", "role": "coordinator"}),
         );
         let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
         assert!(resp2.is_error(), "Draft->Done should still fail");
@@ -1425,7 +1425,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1437,7 +1437,7 @@ mod tests {
             "work.transition",
             json!({
                 "id": wi_id,
-                "target_status": "InProgress",
+                "target-status": "InProgress",
                 "role": "implementer"
             }),
         );
@@ -1456,7 +1456,7 @@ mod tests {
             "work.transition",
             json!({
                 "id": "nonexistent",
-                "target_status": "Ready"
+                "target-status": "Ready"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -1480,7 +1480,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Transition WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "Transition WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1493,7 +1493,7 @@ mod tests {
             "work.transition",
             json!({
                 "id": wi_id,
-                "target_status": "InProgress",
+                "target-status": "InProgress",
                 "role": "coordinator",
                 "assignee": "agent-1"
             }),
@@ -1533,7 +1533,7 @@ mod tests {
 
                     "assignee": "agent-1",
                     "files": ["src/lib.rs"],
-                    "acceptance_criteria": ["tests pass"],
+                    "acceptance-criteria": ["tests pass"],
                     "dependencies": ["dep-1"]
                 }),
             ),
@@ -1763,7 +1763,7 @@ mod tests {
                 "work.transition",
                 serde_json::json!({
                     "id": wi_id,
-                    "target_status": "ready",
+                    "target-status": "ready",
                     "role": "coordinator",
                     "override": true
                 }),
@@ -1812,7 +1812,7 @@ mod tests {
                 "work.transition",
                 serde_json::json!({
                     "id": wi_id,
-                    "target_status": "ready",
+                    "target-status": "ready",
                     "role": "coordinator",
                     "override": true
                 }),
@@ -1869,7 +1869,7 @@ mod tests {
                 "work.transition",
                 serde_json::json!({
                     "id": wi_id,
-                    "target_status": "ready",
+                    "target-status": "ready",
                     "role": "coordinator",
                     "override": true
                 }),
@@ -1928,7 +1928,7 @@ mod tests {
                 "work.transition",
                 serde_json::json!({
                     "id": wi_id,
-                    "target_status": "ready",
+                    "target-status": "ready",
                     "role": "coordinator",
                     "override": true,
                     "override_reason": "retry attempt"
@@ -1985,7 +1985,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "work.transition",
-                json!({"id": wk_a, "target_status": "done", "role": "coordinator"}),
+                json!({"id": wk_a, "target-status": "done", "role": "coordinator"}),
             ),
         )
         .await;
@@ -2027,7 +2027,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "work.transition",
-                json!({"id": wk_a, "target_status": "done", "role": "coordinator"}),
+                json!({"id": wk_a, "target-status": "done", "role": "coordinator"}),
             ),
         )
         .await;
@@ -2069,7 +2069,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "work.transition",
-                json!({"id": wk_b, "target_status": "done", "role": "coordinator"}),
+                json!({"id": wk_b, "target-status": "done", "role": "coordinator"}),
             ),
         )
         .await;

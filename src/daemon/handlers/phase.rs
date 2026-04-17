@@ -20,14 +20,14 @@ use crate::daemon::context::Stores;
 use super::common::check_validation_gate;
 use super::{parse_optional_param, parse_required_param};
 
-#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_phase_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
+        let parent_id = match req.params.get("parent-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -157,10 +157,10 @@ pub(super) fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
-#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let parent_id_filter = req.params.get("parent_id").and_then(|v| v.as_str());
+        let parent_id_filter = req.params.get("parent-id").and_then(|v| v.as_str());
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -216,7 +216,7 @@ pub(super) fn handle_phase_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: PhaseStatus = match parse_required_param(&req, "target_status") {
+        let target_status: PhaseStatus = match parse_required_param(&req, "target-status") {
             Ok(v) => v,
             Err(resp) => return Ok(resp),
         };
@@ -228,7 +228,7 @@ pub(super) fn handle_phase_transition(
 
         let skip_validation = req
             .params
-            .get("skip_validation")
+            .get("skip-validation")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -279,7 +279,7 @@ pub(super) fn handle_phase_transition(
         }
 
         // Validation gate: Draft → Active requires passing validation report
-        let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+        let skip_reason = req.params.get("skip-reason").and_then(|v| v.as_str());
         if let Some(err) = check_validation_gate(
             stores,
             event_tx,
@@ -420,7 +420,7 @@ mod tests {
             tx,
             wm,
             &test_integrator_config(),
-            DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(10, "spec.create", json!({"parent-id": plan_id, "title": "Parent Spec"})),
         )
         .await;
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -442,7 +442,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
+                json!({"parent-id": spec_id, "title": "Parent Phase", "order": 1}),
             ),
         )
         .await;
@@ -462,7 +462,7 @@ mod tests {
         let req1 = DaemonRequest::new(
             1,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Phase A", "order": 1}),
+            json!({"parent-id": spec_id, "title": "Phase A", "order": 1}),
         );
         let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1).await;
         assert!(!resp1.is_error());
@@ -471,7 +471,7 @@ mod tests {
         let req2 = DaemonRequest::new(
             2,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Phase B", "order": 2}),
+            json!({"parent-id": spec_id, "title": "Phase B", "order": 2}),
         );
         let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
         assert!(resp2.is_error());
@@ -494,7 +494,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "spec.transition",
-                json!({"id": spec_id, "target_status": "active", "role": "coordinator"}),
+                json!({"id": spec_id, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -506,7 +506,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "spec.transition",
-                json!({"id": spec_id, "target_status": "complete", "role": "coordinator"}),
+                json!({"id": spec_id, "target-status": "complete", "role": "coordinator"}),
             ),
         )
         .await;
@@ -514,7 +514,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Phase Under Complete", "order": 1}),
+            json!({"parent-id": spec_id, "title": "Phase Under Complete", "order": 1}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -537,7 +537,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "spec.transition",
-                json!({"id": spec_id, "target_status": "abandoned", "role": "coordinator"}),
+                json!({"id": spec_id, "target-status": "abandoned", "role": "coordinator"}),
             ),
         )
         .await;
@@ -545,7 +545,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Phase Under Abandoned", "order": 1}),
+            json!({"parent-id": spec_id, "title": "Phase Under Abandoned", "order": 1}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -563,7 +563,7 @@ mod tests {
             20,
             "phase.create",
             json!({
-                "parent_id": spec_id,
+                "parent-id": spec_id,
                 "title": "Test Phase",
 
                 "order": 1
@@ -595,7 +595,7 @@ mod tests {
         let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "phase.create", json!({"parent_id": "nonexistent", "title": "Phase"}));
+        let req = DaemonRequest::new(1, "phase.create", json!({"parent-id": "nonexistent", "title": "Phase"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -607,7 +607,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
-        let req = DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id}));
+        let req = DaemonRequest::new(20, "phase.create", json!({"parent-id": spec_id}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -624,7 +624,7 @@ mod tests {
         let _ = rx.try_recv();
         let _ = rx.try_recv();
 
-        let req = DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"}));
+        let req = DaemonRequest::new(20, "phase.create", json!({"parent-id": spec_id, "title": "Phase"}));
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
@@ -640,7 +640,7 @@ mod tests {
         let req = DaemonRequest::new(
             20,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Persisted Phase", "order": 1}),
+            json!({"parent-id": spec_id, "title": "Persisted Phase", "order": 1}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -670,7 +670,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "My Phase", "order": 3}),
+                json!({"parent-id": spec_id, "title": "My Phase", "order": 3}),
             ),
         )
         .await;
@@ -711,7 +711,7 @@ mod tests {
         let create_req = DaemonRequest::new(
             20,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "TaskStore Phase", "order": 1}),
+            json!({"parent-id": spec_id, "title": "TaskStore Phase", "order": 1}),
         );
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req).await;
         assert!(!create_resp.is_error());
@@ -756,7 +756,7 @@ mod tests {
             DaemonRequest::new(
                 10,
                 "spec.transition",
-                json!({"id": spec_id_1, "target_status": "active", "role": "coordinator"}),
+                json!({"id": spec_id_1, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -767,7 +767,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(11, "spec.create", json!({"parent_id": plan_id, "title": "Spec 2"})),
+            DaemonRequest::new(11, "spec.create", json!({"parent-id": plan_id, "title": "Spec 2"})),
         )
         .await;
         let spec_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -781,7 +781,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent_id": spec_id_1, "title": "Phase A", "order": 1}),
+                json!({"parent-id": spec_id_1, "title": "Phase A", "order": 1}),
             ),
         )
         .await;
@@ -793,7 +793,7 @@ mod tests {
             DaemonRequest::new(
                 21,
                 "phase.create",
-                json!({"parent_id": spec_id_2, "title": "Phase B", "order": 1}),
+                json!({"parent-id": spec_id_2, "title": "Phase B", "order": 1}),
             ),
         )
         .await;
@@ -815,7 +815,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(31, "phase.list", json!({"parent_id": spec_id_1})),
+            DaemonRequest::new(31, "phase.list", json!({"parent-id": spec_id_1})),
         )
         .await;
         let phases = filtered_resp.result.unwrap();
@@ -840,7 +840,7 @@ mod tests {
             DaemonRequest::new(
                 10,
                 "spec.transition",
-                json!({"id": spec_id_1, "target_status": "active", "role": "coordinator"}),
+                json!({"id": spec_id_1, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -851,7 +851,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(11, "spec.create", json!({"parent_id": plan_id, "title": "Spec 2"})),
+            DaemonRequest::new(11, "spec.create", json!({"parent-id": plan_id, "title": "Spec 2"})),
         )
         .await;
         let spec_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -865,7 +865,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent_id": spec_id_1, "title": "Phase A", "order": 1}),
+                json!({"parent-id": spec_id_1, "title": "Phase A", "order": 1}),
             ),
         )
         .await;
@@ -877,7 +877,7 @@ mod tests {
             DaemonRequest::new(
                 21,
                 "phase.create",
-                json!({"parent_id": spec_id_2, "title": "Phase B", "order": 1}),
+                json!({"parent-id": spec_id_2, "title": "Phase B", "order": 1}),
             ),
         )
         .await;
@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
-        let filtered_req = DaemonRequest::new(31, "phase.list", json!({"parent_id": spec_id_1}));
+        let filtered_req = DaemonRequest::new(31, "phase.list", json!({"parent-id": spec_id_1}));
         let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req).await;
         assert!(!filtered_resp.is_error());
         let filtered_phases = filtered_resp.result.unwrap();
@@ -925,7 +925,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"})),
+            DaemonRequest::new(20, "phase.create", json!({"parent-id": spec_id, "title": "Phase"})),
         )
         .await;
         let _ = rx.try_recv(); // consume phase create event
@@ -936,7 +936,7 @@ mod tests {
             "phase.transition",
             json!({
                 "id": phase_id,
-                "target_status": "active",
+                "target-status": "active",
                 "role": "coordinator"
             }),
         );
@@ -963,7 +963,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"})),
+            DaemonRequest::new(20, "phase.create", json!({"parent-id": spec_id, "title": "Phase"})),
         )
         .await;
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -973,7 +973,7 @@ mod tests {
             "phase.transition",
             json!({
                 "id": phase_id,
-                "target_status": "complete",
+                "target-status": "complete",
                 "role": "coordinator"
             }),
         );
@@ -994,7 +994,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"})),
+            DaemonRequest::new(20, "phase.create", json!({"parent-id": spec_id, "title": "Phase"})),
         )
         .await;
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -1004,7 +1004,7 @@ mod tests {
             "phase.transition",
             json!({
                 "id": phase_id,
-                "target_status": "active",
+                "target-status": "active",
                 "role": "implementer"
             }),
         );
@@ -1023,7 +1023,7 @@ mod tests {
             "phase.transition",
             json!({
                 "id": "nonexistent",
-                "target_status": "active"
+                "target-status": "active"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -1047,7 +1047,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Transition Phase"}),
+                json!({"parent-id": spec_id, "title": "Transition Phase"}),
             ),
         )
         .await;
@@ -1060,7 +1060,7 @@ mod tests {
             "phase.transition",
             json!({
                 "id": phase_id,
-                "target_status": "active",
+                "target-status": "active",
                 "role": "coordinator"
             }),
         );
@@ -1100,7 +1100,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent-id": plan_id, "title": "Parent Spec"})),
         )
         .await;
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -1114,7 +1114,7 @@ mod tests {
                 3,
                 "phase.create",
                 json!({
-                    "parent_id": spec_id, "title": "Gate Test Phase", "order": 1
+                    "parent-id": spec_id, "title": "Gate Test Phase", "order": 1
                 }),
             ),
         )
@@ -1132,7 +1132,7 @@ mod tests {
                 "phase.transition",
                 json!({
                     "id": phase_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -1163,7 +1163,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent-id": plan_id, "title": "Parent Spec"})),
         )
         .await;
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -1177,7 +1177,7 @@ mod tests {
                 3,
                 "phase.create",
                 json!({
-                    "parent_id": spec_id, "title": "Gate Test Phase", "order": 1
+                    "parent-id": spec_id, "title": "Gate Test Phase", "order": 1
                 }),
             ),
         )
@@ -1195,9 +1195,9 @@ mod tests {
                 "phase.transition",
                 json!({
                     "id": phase_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator",
-                    "skip_validation": true
+                    "skip-validation": true
                 }),
             ),
         )

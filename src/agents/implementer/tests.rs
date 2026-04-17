@@ -1035,7 +1035,7 @@ async fn test_force_propose_claims_content() {
     // Transition work to InProgress so bundle.create can succeed
     let work_resp = agent.ctx.bridge.request(
         "work.transition",
-        serde_json::json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+        serde_json::json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator"}),
     );
     // May fail if not in Ready state, that's OK -- the force-propose attempt is what we test
 

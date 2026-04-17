@@ -53,7 +53,7 @@ impl Primitive for RegisterValidationTools {
                     serde_json::json!({
                         "name": format!("validate-{}", registered),
                         "command": cmd,
-                        "phase_id": phase_id,
+                        "phase-id": phase_id,
                     }),
                 );
                 if resp.is_error() {

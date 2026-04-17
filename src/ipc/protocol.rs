@@ -219,8 +219,8 @@ impl DaemonEvent {
         Self::new(
             "bundle.merged",
             serde_json::json!({
-                "tick_id": tick_id,
-                "integration_sha": integration_sha,
+                "tick-id": tick_id,
+                "integration-sha": integration_sha,
                 "merged_bundle_ids": merged_bundle_ids,
             }),
         )
@@ -230,7 +230,7 @@ impl DaemonEvent {
         Self::new(
             "tick.published",
             serde_json::json!({
-                "tick_id": tick_id,
+                "tick-id": tick_id,
                 "sha": sha,
             }),
         )
@@ -240,7 +240,7 @@ impl DaemonEvent {
         Self::new(
             "tick.validation_failed",
             serde_json::json!({
-                "tick_id": tick_id,
+                "tick-id": tick_id,
                 "reason": reason,
             }),
         )
@@ -251,7 +251,7 @@ impl DaemonEvent {
             "bundle.rejected_stale",
             serde_json::json!({
                 "bundle_work_id": work_id,
-                "base_tick_id": base_tick_id,
+                "base-tick-id": base_tick_id,
                 "latest_tick_id": latest_tick_id,
             }),
         )
@@ -349,13 +349,13 @@ impl DaemonEvent {
     }
 
     pub fn validation_started(tick_id: &str) -> Self {
-        Self::new("validation.started", serde_json::json!({ "tick_id": tick_id }))
+        Self::new("validation.started", serde_json::json!({ "tick-id": tick_id }))
     }
 
     pub fn validation_completed(tick_id: &str, success: bool, log: &str) -> Self {
         Self::new(
             "validation.completed",
-            serde_json::json!({ "tick_id": tick_id, "success": success, "log": log }),
+            serde_json::json!({ "tick-id": tick_id, "success": success, "log": log }),
         )
     }
 
@@ -408,9 +408,9 @@ impl DaemonEvent {
         Self::new(
             "director.mode_changed",
             serde_json::json!({
-                "session_id": session_id,
+                "session-id": session_id,
                 "mode": mode,
-                "plan_id": plan_id,
+                "plan-id": plan_id,
             }),
         )
     }
@@ -421,8 +421,8 @@ impl DaemonEvent {
         Self::new(
             "director.stall_detected",
             serde_json::json!({
-                "session_id": session_id,
-                "plan_id": plan_id,
+                "session-id": session_id,
+                "plan-id": plan_id,
                 "idle_secs": idle_secs,
             }),
         )
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_event_serde_roundtrip() {
-        let event = DaemonEvent::new("tick.published", json!({"tick_id": "t1", "sha": "abc"}));
+        let event = DaemonEvent::new("tick.published", json!({"tick-id": "t1", "sha": "abc"}));
         let json = serde_json::to_string(&event).unwrap();
         let parsed: DaemonEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, parsed);
@@ -623,14 +623,14 @@ mod tests {
     fn test_event_validation_started() {
         let event = DaemonEvent::validation_started("t1");
         assert_eq!(event.event, "validation.started");
-        assert_eq!(event.data["tick_id"], "t1");
+        assert_eq!(event.data["tick-id"], "t1");
     }
 
     #[test]
     fn test_event_validation_completed() {
         let event = DaemonEvent::validation_completed("t1", true, "all passed");
         assert_eq!(event.event, "validation.completed");
-        assert_eq!(event.data["tick_id"], "t1");
+        assert_eq!(event.data["tick-id"], "t1");
         assert_eq!(event.data["success"], true);
         assert_eq!(event.data["log"], "all passed");
     }

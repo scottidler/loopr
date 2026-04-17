@@ -556,7 +556,7 @@ impl<L: LlmClient> DirectorAgent<L> {
 
         // spec.list(parent_id=plan_id) -> Vec<Spec>
         let specs: Vec<crate::domain::spec::Spec> =
-            self.bridge_list("spec.list", serde_json::json!({ "parent_id": plan_id }))?;
+            self.bridge_list("spec.list", serde_json::json!({ "parent-id": plan_id }))?;
 
         // Record spec revision counts (decomposition_attempts is the persistent proxy for
         // the design doc's revision_count).
@@ -570,7 +570,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         let mut phases: Vec<crate::domain::phase::Phase> = Vec::new();
         for s in &specs {
             let ph: Vec<crate::domain::phase::Phase> =
-                self.bridge_list("phase.list", serde_json::json!({ "parent_id": s.id }))?;
+                self.bridge_list("phase.list", serde_json::json!({ "parent-id": s.id }))?;
             phases.extend(ph);
         }
 
@@ -578,7 +578,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         let mut works: Vec<crate::domain::work::Work> = Vec::new();
         for p in &phases {
             let ws: Vec<crate::domain::work::Work> =
-                self.bridge_list("work.list", serde_json::json!({ "parent_id": p.id }))?;
+                self.bridge_list("work.list", serde_json::json!({ "parent-id": p.id }))?;
             works.extend(ws);
         }
 
@@ -627,7 +627,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         let mut rejection_count = 0usize;
         for w in &works {
             let bundles: Vec<crate::domain::bundle::Bundle> =
-                self.bridge_list("bundle.list", serde_json::json!({ "work_id": w.id }))?;
+                self.bridge_list("bundle.list", serde_json::json!({ "work-id": w.id }))?;
             for b in &bundles {
                 if matches!(b.status(), crate::domain::bundle::BundleStatus::Rejected) {
                     self.pattern_tracker
@@ -681,7 +681,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         match event.event.as_str() {
             // Plan acceptance completes the PlanIntake → Monitoring handoff.
             "doc.plan_accepted" => {
-                if let Some(pid) = event.data.get("plan_id").and_then(|v| v.as_str()) {
+                if let Some(pid) = event.data.get("plan-id").and_then(|v| v.as_str()) {
                     self.plan_id = Some(pid.to_string());
                 }
                 if matches!(self.mode, DirectorMode::PlanIntake) {
@@ -1158,7 +1158,7 @@ impl<L: LlmClient> DirectorAgent<L> {
         for (work_id, history) in &self.pattern_tracker.work_failure_history {
             let sessions: Vec<serde_json::Value> = history
                 .iter()
-                .map(|(sid, err)| serde_json::json!({ "session_id": sid, "error": err }))
+                .map(|(sid, err)| serde_json::json!({ "session-id": sid, "error": err }))
                 .collect();
             failures.insert(work_id.clone(), serde_json::Value::Array(sessions));
         }
@@ -1196,7 +1196,7 @@ impl<L: LlmClient> DirectorAgent<L> {
             .unwrap_or(serde_json::Value::Null);
 
         serde_json::json!({
-            "plan_id": self.plan_id,
+            "plan-id": self.plan_id,
             "target_work_id": target_work_id,
             "pattern_tracker": {
                 "work_failure_history": failures,

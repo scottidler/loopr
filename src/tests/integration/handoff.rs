@@ -406,7 +406,7 @@ async fn test_session_failure_count_blocks_work() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": work_id, "target_status": "Ready", "role": "coordinator"}),
+        json!({"id": work_id, "target-status": "Ready", "role": "coordinator"}),
     )
     .await;
 
@@ -566,7 +566,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": work_id, "target_status": "Ready", "role": "coordinator"}),
+        json!({"id": work_id, "target-status": "Ready", "role": "coordinator"}),
     )
     .await;
 
@@ -577,7 +577,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": work_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-test"}),
+        json!({"id": work_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-test"}),
     )
     .await;
 
@@ -589,11 +589,11 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &ic,
         "bundle.create",
         json!({
-            "work_id": work_id,
+            "work-id": work_id,
             "description": "Test bundle",
-            "files_changed": ["src/main.py"],
+            "files-changed": ["src/main.py"],
             "commit_sha": "abc123",
-            "branch_name": "agent/wk-test"
+            "branch-name": "agent/wk-test"
         }),
     )
     .await;
@@ -606,7 +606,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -615,7 +615,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "ok"}),
+        json!({"id": bundle_id, "target-status": "Reviewed", "role": "reviewer", "verification": "ok"}),
     )
     .await;
     dispatch_ok(
@@ -624,7 +624,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Accepted", "role": "coordinator"}),
     )
     .await;
 
@@ -636,7 +636,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": work_id, "target_status": "InReview", "role": "coordinator", "override": true}),
+        json!({"id": work_id, "target-status": "InReview", "role": "coordinator", "override": true}),
     )
     .await;
 
@@ -657,7 +657,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Rejected", "role": "integrator"}),
+        json!({"id": bundle_id, "target-status": "Rejected", "role": "integrator"}),
     )
     .await;
 
@@ -673,7 +673,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         "work.transition",
         json!({
             "id": work_id,
-            "target_status": "Ready",
+            "target-status": "Ready",
             "role": "coordinator",
             "override": true
         }),

@@ -18,7 +18,7 @@ pub(super) fn handle_propose_plan(
         serde_json::json!({
             "title": title,
             "description": description,
-            "acceptance_criteria": acceptance_criteria,
+            "acceptance-criteria": acceptance_criteria,
         }),
     );
     if resp.is_error() {
@@ -59,10 +59,10 @@ pub(super) fn handle_revise_parent(
         serde_json::json!({
             "collection": collection,
             "id": id,
-            "target_status": "draft",
+            "target-status": "draft",
             "role": "coordinator",
-            "skip_validation": true,
-            "skip_reason": "bubble-up revision: parent needs refinement"
+            "skip-validation": true,
+            "skip-reason": "bubble-up revision: parent needs refinement"
         }),
     );
     if transition_resp.is_error() {
@@ -93,7 +93,7 @@ pub(super) fn handle_revise_parent(
         serde_json::json!({
             "content": learning_content,
             "scope": scope,
-            "source_id": id,
+            "source-id": id,
         }),
     );
 
@@ -121,7 +121,7 @@ pub(super) fn handle_override_phase(
         "phase.transition",
         serde_json::json!({
             "id": phase_id,
-            "target_status": target_status,
+            "target-status": target_status,
             "role": "coordinator",
         }),
     );
@@ -139,8 +139,8 @@ pub(super) fn handle_override_phase(
         serde_json::json!({
             "content": format!("Override: Phase {} -> {} (reason: {})", phase_id, target_status, reason),
             "scope": "phase",
-            "source_id": phase_id,
-            "applicable_roles": ["coordinator"],
+            "source-id": phase_id,
+            "applicable-roles": ["coordinator"],
             "files": ["override", "audit"],
         }),
     );
@@ -169,7 +169,7 @@ pub(super) fn handle_override_spec(
         "spec.transition",
         serde_json::json!({
             "id": spec_id,
-            "target_status": target_status,
+            "target-status": target_status,
             "role": "coordinator",
         }),
     );
@@ -187,8 +187,8 @@ pub(super) fn handle_override_spec(
         serde_json::json!({
             "content": format!("Override: Spec {} -> {} (reason: {})", spec_id, target_status, reason),
             "scope": "spec",
-            "source_id": spec_id,
-            "applicable_roles": ["coordinator"],
+            "source-id": spec_id,
+            "applicable-roles": ["coordinator"],
             "files": ["override", "audit"],
         }),
     );

@@ -28,7 +28,7 @@ pub(super) async fn handle_write_file(
     if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
         let lock_resp = bridge.request(
             "lock.list",
-            serde_json::json!({ "resource": path, "active_only": true }),
+            serde_json::json!({ "resource": path, "active-only": true }),
         );
         if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array()) {
             let held_by_other = locks
@@ -82,7 +82,7 @@ pub(super) async fn handle_edit_file(
     if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
         let lock_resp = bridge.request(
             "lock.list",
-            serde_json::json!({ "resource": path, "active_only": true }),
+            serde_json::json!({ "resource": path, "active-only": true }),
         );
         if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array()) {
             let held_by_other = locks
@@ -323,7 +323,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+            serde_json::json!({ "resource": "src/main.rs", "holder-id": "agent-1", "granted-by": "agent-1" }),
         );
         assert!(!lock_resp.is_error());
 
@@ -357,7 +357,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-abc", "granted_by": "wi-abc" }),
+            serde_json::json!({ "resource": "src/main.rs", "holder-id": "wi-abc", "granted-by": "wi-abc" }),
         );
         assert!(!lock_resp.is_error());
 
@@ -382,7 +382,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+            serde_json::json!({ "resource": "src/main.rs", "holder-id": "agent-1", "granted-by": "agent-1" }),
         );
         assert!(!lock_resp.is_error());
 
@@ -743,7 +743,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.list",
-            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-100", "active_only": true }),
+            serde_json::json!({ "resource": "src/lib.rs", "holder-id": "wi-100", "active-only": true }),
         );
         let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
         assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock, got {}", locks.len());
@@ -768,7 +768,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.list",
-            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-200", "active_only": true }),
+            serde_json::json!({ "resource": "src/lib.rs", "holder-id": "wi-200", "active-only": true }),
         );
         let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
         assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock");
@@ -793,7 +793,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.list",
-            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-300", "active_only": true }),
+            serde_json::json!({ "resource": "src/lib.rs", "holder-id": "wi-300", "active-only": true }),
         );
         let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
         assert_eq!(locks.len(), 1, "expected 1 lock (reused), got {}", locks.len());
@@ -813,7 +813,7 @@ mod tests {
 
         let lock_resp = ctx.bridge.request(
             "lock.list",
-            serde_json::json!({ "resource": "src/lib.rs", "active_only": true }),
+            serde_json::json!({ "resource": "src/lib.rs", "active-only": true }),
         );
         let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
         assert!(locks.is_empty(), "expected no locks when work_id is None");
@@ -839,7 +839,7 @@ mod tests {
 
         ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-edit", "granted_by": "wi-edit" }),
+            serde_json::json!({ "resource": "src/main.rs", "holder-id": "wi-edit", "granted-by": "wi-edit" }),
         );
 
         let action = AgentAction::EditFile {
@@ -875,7 +875,7 @@ mod tests {
 
         ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+            serde_json::json!({ "resource": "src/main.rs", "holder-id": "agent-1", "granted-by": "agent-1" }),
         );
 
         let action = AgentAction::EditFile {

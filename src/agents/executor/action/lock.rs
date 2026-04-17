@@ -10,7 +10,7 @@ pub(super) fn handle_acquire_lock(ctx: &AgentContext, resource: &str, holder_id:
     // Check if there's already an active lock on this resource
     let check_resp = bridge.request(
         "lock.list",
-        serde_json::json!({ "resource": resource, "active_only": true }),
+        serde_json::json!({ "resource": resource, "active-only": true }),
     );
     if check_resp.is_error() {
         return Err(eyre!("lock.list failed: {:?}", check_resp.error));
@@ -39,8 +39,8 @@ pub(super) fn handle_acquire_lock(ctx: &AgentContext, resource: &str, holder_id:
         "lock.create",
         serde_json::json!({
             "resource": resource,
-            "holder_id": holder_id,
-            "granted_by": holder_id,
+            "holder-id": holder_id,
+            "granted-by": holder_id,
         }),
     );
     if resp.is_error() {
@@ -201,7 +201,7 @@ mod tests {
 
         ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "locked.txt", "holder_id": "agent-other", "granted_by": "agent-other" }),
+            serde_json::json!({ "resource": "locked.txt", "holder-id": "agent-other", "granted-by": "agent-other" }),
         );
 
         let action = AgentAction::WriteFile {
@@ -233,7 +233,7 @@ mod tests {
 
         ctx.bridge.request(
             "lock.create",
-            serde_json::json!({ "resource": "strict.txt", "holder_id": "agent-1", "granted_by": "agent-1" }),
+            serde_json::json!({ "resource": "strict.txt", "holder-id": "agent-1", "granted-by": "agent-1" }),
         );
 
         let action = AgentAction::WriteFile {

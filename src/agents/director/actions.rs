@@ -208,7 +208,7 @@ fn execute_one(
                     "work.transition",
                     serde_json::json!({
                         "id": work_id,
-                        "target_status": "Pending",
+                        "target-status": "Pending",
                         "role": "director",
                         "override": true,
                         "reason": "director-revise",
@@ -240,7 +240,7 @@ fn execute_one(
                 target_type.method(),
                 serde_json::json!({
                     "id": target_id,
-                    "target_status": "draft",
+                    "target-status": "draft",
                     "role": "director",
                     "override": true,
                     "reason": reason_str,
@@ -266,7 +266,7 @@ fn execute_one(
                 "work.transition",
                 serde_json::json!({
                     "id": work_id,
-                    "target_status": "Abandoned",
+                    "target-status": "Abandoned",
                     "role": "director",
                     "override": true,
                     "reason": reason.clone().unwrap_or_else(|| "director-abandon".into()),
@@ -319,7 +319,7 @@ fn execute_one(
             let _ = event_tx.send(DaemonEvent::new(
                 "director.diagnosis",
                 serde_json::json!({
-                    "session_id": director_session_id,
+                    "session-id": director_session_id,
                     "text": text,
                 }),
             ));
@@ -332,9 +332,9 @@ fn execute_one(
     let _ = event_tx.send(DaemonEvent::new(
         "director.action_taken",
         serde_json::json!({
-            "session_id": director_session_id,
+            "session-id": director_session_id,
             "action": kind,
-            "target_id": target_id,
+            "target-id": target_id,
             "result": outcome,
         }),
     ));

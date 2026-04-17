@@ -97,7 +97,7 @@ impl Primitive for ResetWork {
                 "work.transition",
                 serde_json::json!({
                     "id": work_id,
-                    "target_status": "Ready",
+                    "target-status": "Ready",
                     "role": "Coordinator",
                     "override": true,
                     "reason": reason,
@@ -238,7 +238,7 @@ impl Primitive for RetryWork {
                 "work.transition",
                 serde_json::json!({
                     "id": work_id,
-                    "target_status": "Ready",
+                    "target-status": "Ready",
                     "role": "Coordinator",
                     "override": true,
                     "reason": "retry after failure",
@@ -329,7 +329,7 @@ impl Primitive for AbandonWork {
                 "work.transition",
                 serde_json::json!({
                     "id": work_id,
-                    "target_status": "Abandoned",
+                    "target-status": "Abandoned",
                     "role": "Coordinator",
                     "override": true,
                     "reason": reason,

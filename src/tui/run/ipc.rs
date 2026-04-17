@@ -37,7 +37,7 @@ pub async fn try_connect(socket_path: &Path) -> Option<(IpcClient, String)> {
     let session_id = resp
         .result
         .as_ref()
-        .and_then(|r| r.get("session_id"))
+        .and_then(|r| r.get("session-id"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -49,15 +49,15 @@ pub async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
     let (method, params) = match action {
         IpcAction::PauseAgent(session_id) => (
             "agent.pause".to_string(),
-            serde_json::json!({ "session_id": session_id }),
+            serde_json::json!({ "session-id": session_id }),
         ),
         IpcAction::ResumeAgent(session_id) => (
             "agent.resume".to_string(),
-            serde_json::json!({ "session_id": session_id }),
+            serde_json::json!({ "session-id": session_id }),
         ),
         IpcAction::StopAgent(session_id) => (
             "agent.stop".to_string(),
-            serde_json::json!({ "session_id": session_id }),
+            serde_json::json!({ "session-id": session_id }),
         ),
         IpcAction::NewRecord { collection } => (
             format!("{collection}.create"),
@@ -65,12 +65,12 @@ pub async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
         ),
         IpcAction::TransitionRecord { collection, id } => (
             format!("{collection}.transition"),
-            serde_json::json!({ "id": id, "target_status": "Active" }),
+            serde_json::json!({ "id": id, "target-status": "Active" }),
         ),
         IpcAction::AcceptPlan(markdown) => ("doc.accept".to_string(), serde_json::json!({ "markdown": markdown })),
         IpcAction::StartPlanIntake { chat_session_id } => (
             "director.start_plan_intake".to_string(),
-            serde_json::json!({ "chat_session_id": chat_session_id }),
+            serde_json::json!({ "chat-session-id": chat_session_id }),
         ),
     };
     if let Err(e) = client.request(&method, params).await {
@@ -177,9 +177,9 @@ mod tests {
             serde_json::json!({
                 "protocol": "ndjson/1",
                 "server_version": client_version,
-                "client_version": client_version,
+                "client-version": client_version,
                 "version_match": true,
-                "session_id": "test-session",
+                "session-id": "test-session",
             }),
         )
     }
@@ -360,7 +360,7 @@ mod tests {
     fn test_event_collection_agent_llm_output() {
         let event = DaemonEvent::new(
             "agent.llm_output",
-            serde_json::json!({"session_id": "s1", "chunk": "hello", "is_final": false}),
+            serde_json::json!({"session-id": "s1", "chunk": "hello", "is_final": false}),
         );
         assert_eq!(event_collection(&event), Some("agent"));
     }
@@ -369,7 +369,7 @@ mod tests {
     fn test_event_collection_tick_validation_failed() {
         let event = DaemonEvent::new(
             "tick.validation_failed",
-            serde_json::json!({"tick_id": "t1", "reason": "test failed"}),
+            serde_json::json!({"tick-id": "t1", "reason": "test failed"}),
         );
         assert_eq!(event_collection(&event), Some("tick"));
     }
@@ -1022,7 +1022,7 @@ mod tests {
             let reqs = captured.lock().unwrap();
             assert_eq!(reqs.len(), 1);
             assert_eq!(reqs[0].0, "agent.pause");
-            assert_eq!(reqs[0].1["session_id"], "sess-1");
+            assert_eq!(reqs[0].1["session-id"], "sess-1");
         }
 
         drop(client);
@@ -1043,7 +1043,7 @@ mod tests {
             let reqs = captured.lock().unwrap();
             assert_eq!(reqs.len(), 1);
             assert_eq!(reqs[0].0, "agent.resume");
-            assert_eq!(reqs[0].1["session_id"], "sess-2");
+            assert_eq!(reqs[0].1["session-id"], "sess-2");
         }
 
         drop(client);
@@ -1064,7 +1064,7 @@ mod tests {
             let reqs = captured.lock().unwrap();
             assert_eq!(reqs.len(), 1);
             assert_eq!(reqs[0].0, "agent.stop");
-            assert_eq!(reqs[0].1["session_id"], "sess-3");
+            assert_eq!(reqs[0].1["session-id"], "sess-3");
         }
 
         drop(client);
@@ -1120,7 +1120,7 @@ mod tests {
             assert_eq!(reqs.len(), 1);
             assert_eq!(reqs[0].0, "bundle.transition");
             assert_eq!(reqs[0].1["id"], "b-123");
-            assert_eq!(reqs[0].1["target_status"], "Active");
+            assert_eq!(reqs[0].1["target-status"], "Active");
         }
 
         drop(client);

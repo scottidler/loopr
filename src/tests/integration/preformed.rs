@@ -268,7 +268,7 @@ async fn test_preformed_plan_work_can_transition_to_in_progress() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": work_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-impl-1"}),
+        json!({"id": work_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-impl-1"}),
     )
     .await;
     assert_eq!(result["status"], "InProgress");

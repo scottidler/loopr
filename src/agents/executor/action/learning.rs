@@ -29,7 +29,7 @@ pub(super) fn handle_create_learning(
     let mut params = serde_json::json!({
         "content": content,
         "scope": scope,
-        "source_id": effective_source_id,
+        "source-id": effective_source_id,
     });
     if let Some(roles) = applicable_roles {
         params["applicable_roles"] = serde_json::json!(roles);

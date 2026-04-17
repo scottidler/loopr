@@ -29,14 +29,14 @@ pub(super) fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
         .cloned()
 }
 
-#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
+#[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_bundle_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -72,13 +72,13 @@ pub(super) fn handle_bundle_create(
 
         let noop_reason = req
             .params
-            .get("noop_reason")
+            .get("noop-reason")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         let branch_name = req
             .params
-            .get("branch_name")
+            .get("branch-name")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -93,7 +93,7 @@ pub(super) fn handle_bundle_create(
 
         let base_tick_id = req
             .params
-            .get("base_tick_id")
+            .get("base-tick-id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -139,7 +139,7 @@ pub(super) fn handle_bundle_create(
 
         let head_commit = req
             .params
-            .get("head_commit")
+            .get("head-commit")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -149,13 +149,13 @@ pub(super) fn handle_bundle_create(
         bundle.head_commit = head_commit;
 
         // M8: Accept both "paths" and "files_changed" (normalize param name)
-        let paths_val = req.params.get("paths").or_else(|| req.params.get("files_changed"));
+        let paths_val = req.params.get("paths").or_else(|| req.params.get("files-changed"));
         if let Some(files) = paths_val.and_then(|v| v.as_array()) {
             bundle.paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
 
         // Parse loc_changed if provided
-        if let Some(loc) = req.params.get("loc_changed").and_then(|v| v.as_u64()) {
+        if let Some(loc) = req.params.get("loc-changed").and_then(|v| v.as_u64()) {
             bundle.loc_changed = Some(loc as u32);
         }
 
@@ -246,10 +246,10 @@ pub(super) fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
     })
 }
 
-#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
+#[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let wi_filter = req.params.get("work_id").and_then(|v| v.as_str());
+        let wi_filter = req.params.get("work-id").and_then(|v| v.as_str());
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -292,7 +292,7 @@ pub(super) fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> Da
     })
 }
 
-#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
+#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target-status")))]
 pub(super) fn handle_bundle_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -305,7 +305,7 @@ pub(super) fn handle_bundle_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: BundleStatus = match parse_required_param(&req, "target_status") {
+        let target_status: BundleStatus = match parse_required_param(&req, "target-status") {
             Ok(v) => v,
             Err(resp) => return Ok(resp),
         };
@@ -465,7 +465,7 @@ pub(super) fn handle_bundle_update(
             bundle.description = Some(desc.to_string());
         }
         // M8: Accept both "paths" and "files_changed" in update
-        let paths_val = req.params.get("paths").or_else(|| req.params.get("files_changed"));
+        let paths_val = req.params.get("paths").or_else(|| req.params.get("files-changed"));
         if let Some(paths) = paths_val.and_then(|v| v.as_array()) {
             // Gap #22: BundleSizePolicy enforcement on update
             let policy = &stores.config.strategy.bundle_size;
@@ -482,7 +482,7 @@ pub(super) fn handle_bundle_update(
             bundle.paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
         // Parse loc_changed if provided
-        if let Some(loc) = req.params.get("loc_changed").and_then(|v| v.as_u64()) {
+        if let Some(loc) = req.params.get("loc-changed").and_then(|v| v.as_u64()) {
             let policy = &stores.config.strategy.bundle_size;
             if loc as u32 > policy.max_loc_changed {
                 return Ok(DaemonResponse::err(
@@ -512,10 +512,10 @@ pub(super) fn handle_bundle_update(
         if let Some(verification) = req.params.get("verification").and_then(|v| v.as_str()) {
             bundle.verification = verification.to_string();
         }
-        if let Some(locks) = req.params.get("locks_used").and_then(|v| v.as_array()) {
+        if let Some(locks) = req.params.get("locks-used").and_then(|v| v.as_array()) {
             bundle.locks_used = locks.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
-        if let Some(base_tick_id) = req.params.get("base_tick_id").and_then(|v| v.as_str()) {
+        if let Some(base_tick_id) = req.params.get("base-tick-id").and_then(|v| v.as_str()) {
             bundle.base_tick_id = Some(base_tick_id.to_string());
         }
         bundle.updated_at = crate::id::now_millis();

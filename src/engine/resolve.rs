@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn resolve_trigger_event_field() {
-        let payload = serde_json::json!({"work_id": "wi-456", "status": "failed"});
+        let payload = serde_json::json!({"work-id": "wi-456", "status": "failed"});
         let params: HashMap<String, Value> =
             [("id".to_owned(), Value::String("$trigger.event.work-id".to_owned()))].into();
         let resolved = resolve_params(&params, "s-1", Some(&payload), &HashMap::new()).unwrap();

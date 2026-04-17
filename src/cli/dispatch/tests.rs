@@ -33,7 +33,7 @@ fn test_spec_create_mapping_with_parent() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "spec.create");
-    assert_eq!(params["parent_id"], "plan-1");
+    assert_eq!(params["parent-id"], "plan-1");
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn test_phase_create_mapping_with_parent() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "phase.create");
-    assert_eq!(params["parent_id"], "spec-1");
+    assert_eq!(params["parent-id"], "spec-1");
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn test_work_transition_mapping() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "work.transition");
     assert_eq!(params["id"], "wi-1");
-    assert_eq!(params["target_status"], "Ready");
+    assert_eq!(params["target-status"], "Ready");
     assert_eq!(params["role"], "coordinator");
 }
 
@@ -82,9 +82,9 @@ fn test_bundle_create_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "bundle.create");
-    assert_eq!(params["work_id"], "wi-1");
-    assert_eq!(params["branch_name"], "feature/foo");
-    assert_eq!(params["base_tick_id"], "tick-1");
+    assert_eq!(params["work-id"], "wi-1");
+    assert_eq!(params["branch-name"], "feature/foo");
+    assert_eq!(params["base-tick-id"], "tick-1");
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn test_tick_validate_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Integrator);
     assert_eq!(method, "integrator.validate");
-    assert_eq!(params["tick_id"], "t-1");
+    assert_eq!(params["tick-id"], "t-1");
 }
 
 #[test]
@@ -104,7 +104,7 @@ fn test_tick_publish_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Integrator);
     assert_eq!(method, "integrator.publish");
-    assert_eq!(params["tick_id"], "t-1");
+    assert_eq!(params["tick-id"], "t-1");
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn test_worktree_create_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "worktree.create");
-    assert_eq!(params["work_id"], "wi-1");
+    assert_eq!(params["work-id"], "wi-1");
     assert_eq!(params["ref"], "main");
 }
 
@@ -150,7 +150,7 @@ fn test_lock_list_with_filters() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "lock.list");
     assert_eq!(params["resource"], "src/main.rs");
-    assert_eq!(params["active_only"], true);
+    assert_eq!(params["active-only"], true);
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn test_plan_transition_normalizes_status_to_lowercase() {
         };
         let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(
-            params["target_status"], "active",
+            params["target-status"], "active",
             "input '{}' should normalize to 'active'",
             input
         );
@@ -235,7 +235,7 @@ fn test_spec_transition_normalizes_status_to_lowercase() {
         },
     };
     let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(params["target_status"], "active");
+    assert_eq!(params["target-status"], "active");
 }
 
 #[test]
@@ -248,7 +248,7 @@ fn test_phase_transition_normalizes_status_to_lowercase() {
         },
     };
     let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(params["target_status"], "complete");
+    assert_eq!(params["target-status"], "complete");
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn test_work_transition_preserves_status_casing() {
         },
     };
     let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(params["target_status"], "InProgress");
+    assert_eq!(params["target-status"], "InProgress");
 }
 
 #[test]
@@ -336,7 +336,7 @@ fn test_reports_mapping() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "validator.reports");
     assert_eq!(params["collection"], "plans");
-    assert_eq!(params["target_id"], "plan-1");
+    assert_eq!(params["target-id"], "plan-1");
 }
 
 #[test]
@@ -374,7 +374,7 @@ fn test_agent_stop_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.stop");
-    assert_eq!(params["session_id"], "sess-1");
+    assert_eq!(params["session-id"], "sess-1");
 }
 
 #[test]
@@ -386,7 +386,7 @@ fn test_agent_pause_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.pause");
-    assert_eq!(params["session_id"], "sess-1");
+    assert_eq!(params["session-id"], "sess-1");
 }
 
 #[test]
@@ -398,7 +398,7 @@ fn test_agent_resume_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.resume");
-    assert_eq!(params["session_id"], "sess-1");
+    assert_eq!(params["session-id"], "sess-1");
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn test_agent_status_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.status");
-    assert_eq!(params["session_id"], "sess-1");
+    assert_eq!(params["session-id"], "sess-1");
 }
 
 #[test]
@@ -437,7 +437,7 @@ fn test_agent_list_with_filters_mapping() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.list");
     assert_eq!(params["status"], "running");
-    assert_eq!(params["agent_type"], "implementer");
+    assert_eq!(params["agent-type"], "implementer");
 }
 
 #[test]
@@ -500,7 +500,7 @@ fn test_crud_spec_with_parent() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "spec.create");
     assert_eq!(params["title"], "Auth Spec");
-    assert_eq!(params["parent_id"], "plan-42");
+    assert_eq!(params["parent-id"], "plan-42");
 }
 
 #[test]
@@ -528,8 +528,8 @@ fn test_lock_list_multiple_filters() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "lock.list");
     assert_eq!(params["resource"], "src/lib.rs");
-    assert_eq!(params["holder_id"], "wi-7");
-    assert_eq!(params["active_only"], true);
+    assert_eq!(params["holder-id"], "wi-7");
+    assert_eq!(params["active-only"], true);
 }
 
 #[test]
@@ -547,10 +547,10 @@ fn test_bundle_create_with_base_tick_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "bundle.create");
-    assert_eq!(params["work_id"], "wi-5");
-    assert_eq!(params["branch_name"], "feat/bar");
+    assert_eq!(params["work-id"], "wi-5");
+    assert_eq!(params["branch-name"], "feat/bar");
     assert_eq!(params["description"], "No tick");
-    assert!(params.get("base_tick_id").is_none() || params["base_tick_id"].is_null());
+    assert!(params.get("base-tick-id").is_none() || params["base-tick-id"].is_null());
 }
 
 #[test]
@@ -562,7 +562,7 @@ fn test_worktree_cleanup_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "worktree.cleanup");
-    assert_eq!(params["work_id"], "wi-cleanup");
+    assert_eq!(params["work-id"], "wi-cleanup");
 }
 
 #[test]
@@ -575,7 +575,7 @@ fn test_worktree_refresh_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "worktree.refresh");
-    assert_eq!(params["work_id"], "wi-refresh");
+    assert_eq!(params["work-id"], "wi-refresh");
     assert_eq!(params["ref"], "main");
 }
 
@@ -619,9 +619,9 @@ fn test_work_create_with_parent_uses_parent_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "work.create");
-    assert_eq!(params["parent_id"], "phase-1");
+    assert_eq!(params["parent-id"], "phase-1");
     assert_eq!(params["files"], json!(["src/"]));
-    assert_eq!(params["acceptance_criteria"], json!(["tests pass"]));
+    assert_eq!(params["acceptance-criteria"], json!(["tests pass"]));
 }
 
 #[test]
@@ -670,7 +670,7 @@ fn test_spec_list_with_parent_uses_parent_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "spec.list");
-    assert_eq!(params["parent_id"], "plan-1");
+    assert_eq!(params["parent-id"], "plan-1");
 }
 
 #[test]
@@ -682,7 +682,7 @@ fn test_phase_list_with_parent_uses_parent_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "phase.list");
-    assert_eq!(params["parent_id"], "spec-1");
+    assert_eq!(params["parent-id"], "spec-1");
 }
 
 #[test]
@@ -694,7 +694,7 @@ fn test_work_list_with_parent_uses_parent_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "work.list");
-    assert_eq!(params["parent_id"], "phase-1");
+    assert_eq!(params["parent-id"], "phase-1");
 }
 
 #[test]
@@ -707,7 +707,7 @@ fn test_transition_skip_validation_flag() {
         },
     };
     let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(params["skip_validation"], true);
+    assert_eq!(params["skip-validation"], true);
 }
 
 #[test]
@@ -729,7 +729,7 @@ fn test_bundle_list_with_work_filter() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "bundle.list");
-    assert_eq!(params["work_id"], "wi-1");
+    assert_eq!(params["work-id"], "wi-1");
 }
 
 #[test]
@@ -773,7 +773,7 @@ fn test_learning_create_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "learning.create");
-    assert_eq!(params["source_id"], "wi-1");
+    assert_eq!(params["source-id"], "wi-1");
     assert_eq!(params["scope"], "global");
     assert_eq!(params["content"], "Always use snake_case");
 }
@@ -837,8 +837,8 @@ fn test_lock_create_mapping() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "lock.create");
     assert_eq!(params["resource"], "src/main.rs");
-    assert_eq!(params["holder_id"], "wi-1");
-    assert_eq!(params["granted_by"], "coordinator");
+    assert_eq!(params["holder-id"], "wi-1");
+    assert_eq!(params["granted-by"], "coordinator");
 }
 
 #[test]
@@ -892,9 +892,9 @@ fn test_lock_list_holder_id_only() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "lock.list");
-    assert_eq!(params["holder_id"], "wi-3");
+    assert_eq!(params["holder-id"], "wi-3");
     assert!(params.get("resource").is_none() || params["resource"].is_null());
-    assert!(params.get("active_only").is_none() || params["active_only"].is_null());
+    assert!(params.get("active-only").is_none() || params["active-only"].is_null());
 }
 
 #[test]
@@ -907,7 +907,7 @@ fn test_agent_output_mapping() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.output");
-    assert_eq!(params["session_id"], "sess-42");
+    assert_eq!(params["session-id"], "sess-42");
     assert_eq!(params["since"], 5);
 }
 
@@ -921,7 +921,7 @@ fn test_agent_output_default_since() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "agent.output");
-    assert_eq!(params["session_id"], "sess-1");
+    assert_eq!(params["session-id"], "sess-1");
     assert_eq!(params["since"], 0);
 }
 

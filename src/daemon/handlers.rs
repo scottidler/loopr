@@ -474,7 +474,7 @@ pub(crate) mod tests {
         let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "system.handshake", json!({"client_version": "0.1.0"}));
+        let req = DaemonRequest::new(1, "system.handshake", json!({"client-version": "0.1.0"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["protocol"], "ndjson/1");
@@ -666,7 +666,7 @@ pub(crate) mod tests {
             &wm,
             &ic,
             &fsm,
-            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Test Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent-id": plan_id, "title": "Test Spec"})),
         )
         .await;
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -681,7 +681,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 3,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Test Phase", "number": 1}),
+                json!({"parent-id": spec_id, "title": "Test Phase", "number": 1}),
             ),
         )
         .await;
@@ -697,7 +697,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 4,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Test Work", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "Test Work", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -738,7 +738,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 10,
                 "bundle.create",
-                json!({"work_id": work_id, "branch_name": "agent/test", "claims": ["test claim"]}),
+                json!({"work-id": work_id, "branch-name": "agent/test", "claims": ["test claim"]}),
             ),
         )
         .await;
@@ -781,7 +781,7 @@ pub(crate) mod tests {
             &wm,
             &ic,
             &fsm,
-            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent-id": plan_id, "title": "Spec"})),
         )
         .await;
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -794,7 +794,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 3,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Phase", "number": 1}),
+                json!({"parent-id": spec_id, "title": "Phase", "number": 1}),
             ),
         )
         .await;
@@ -808,7 +808,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 4,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Work", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "Work", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -824,7 +824,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 10,
                 "bundle.create",
-                json!({"work_id": work_id, "branch_name": "agent/test", "claims": ["claim"]}),
+                json!({"work-id": work_id, "branch-name": "agent/test", "claims": ["claim"]}),
             ),
         )
         .await;

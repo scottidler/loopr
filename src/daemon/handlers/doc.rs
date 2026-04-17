@@ -35,7 +35,7 @@ use crate::worktree::manager::WorktreeManager;
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
-#[instrument(skip_all, fields(skip_decompose = ?req.params.get("skip_decompose"), markdown_len = req.params.get("markdown").and_then(|v| v.as_str()).map(|s| s.len())))]
+#[instrument(skip_all, fields(skip_decompose = ?req.params.get("skip-decompose"), markdown_len = req.params.get("markdown").and_then(|v| v.as_str()).map(|s| s.len())))]
 pub(super) async fn handle_doc_accept(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -57,7 +57,7 @@ pub(super) async fn handle_doc_accept(
 
         let skip_decompose = req
             .params
-            .get("skip_decompose")
+            .get("skip-decompose")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -112,7 +112,7 @@ pub(super) async fn handle_doc_inject(
 
         let skip_decompose = req
             .params
-            .get("skip_decompose")
+            .get("skip-decompose")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -203,13 +203,13 @@ pub(super) async fn accept_plan_markdown(
     // Engine takes over from here: plan-is-active trigger fires decomposition,
     // reconciliation promotes hierarchy, agent-lifecycle strategies spawn implementers.
     // No coordinator agent needed - the engine IS the coordinator now.
-    let _ = event_tx.send(DaemonEvent::new("doc.plan_accepted", json!({ "plan_id": &plan_id })));
+    let _ = event_tx.send(DaemonEvent::new("doc.plan_accepted", json!({ "plan-id": &plan_id })));
 
     Ok(DaemonResponse::ok(
         req_id,
         json!({
             "child_count": child_count_for_response,
-            "plan_id": &plan_id,
+            "plan-id": &plan_id,
         }),
     ))
 }
@@ -329,13 +329,13 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let markdown = "# Auth Refactor Plan\n\n## Summary\n\nRefactor the auth module.";
-        let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": markdown, "skip_decompose": true }));
+        let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": markdown, "skip-decompose": true }));
         let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
 
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["child_count"], 0);
-        assert!(result["plan_id"].as_str().is_some(), "plan_id must be present");
+        assert!(result["plan-id"].as_str().is_some(), "plan_id must be present");
 
         // No Doc records - Doc intermediary is gone
         let docs = stores.read_docs().unwrap();
@@ -359,7 +359,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "doc.accept",
-            json!({ "markdown": "# Test Plan\n\n## Summary\n\nDo a thing.", "skip_decompose": true }),
+            json!({ "markdown": "# Test Plan\n\n## Summary\n\nDo a thing.", "skip-decompose": true }),
         );
         let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
@@ -382,7 +382,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "doc.accept",
-            json!({ "markdown": "# Plan\n\n## Summary\n\nThing.", "skip_decompose": true }),
+            json!({ "markdown": "# Plan\n\n## Summary\n\nThing.", "skip-decompose": true }),
         );
         let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
@@ -469,7 +469,7 @@ mod tests {
             "doc.inject",
             json!({
                 "path": plan_path.to_string_lossy(),
-                "skip_decompose": true
+                "skip-decompose": true
             }),
         );
         let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
@@ -477,7 +477,7 @@ mod tests {
 
         let result = resp.result.unwrap();
         assert_eq!(result["child_count"], 0);
-        assert!(result["plan_id"].as_str().is_some(), "plan_id must be present");
+        assert!(result["plan-id"].as_str().is_some(), "plan_id must be present");
 
         // No Doc records - Doc intermediary is gone
         let docs = stores.read_docs().unwrap();
@@ -503,14 +503,14 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let md = "# Plan A\n\n## Summary\n\nFirst plan.";
-        let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": md, "skip_decompose": true }));
+        let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": md, "skip-decompose": true }));
         let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error(), "accept should succeed");
         let result = resp.result.unwrap();
 
         // Response should NOT contain coordinator fields
-        assert!(result.get("coordinator_session_id").is_none());
-        assert!(result.get("coordinator_already_running").is_none());
+        assert!(result.get("coordinator-session-id").is_none());
+        assert!(result.get("coordinator-already-running").is_none());
 
         // No coordinator sessions should exist
         let sessions = stores.read_agent_sessions().unwrap();

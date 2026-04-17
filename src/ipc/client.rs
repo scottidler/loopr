@@ -111,7 +111,7 @@ impl IpcClient {
         let (resp, _events) = self
             .request(
                 "system.handshake",
-                serde_json::json!({ "client_version": client_version }),
+                serde_json::json!({ "client-version": client_version }),
             )
             .await?;
         Ok(resp)

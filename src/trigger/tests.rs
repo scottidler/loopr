@@ -1230,7 +1230,7 @@ fn event_fires_on_matching_event() {
     let stores = make_stores();
     let events = vec![DaemonEvent::new(
         "agent.status-changed",
-        serde_json::json!({"status": "failed", "work_id": "wk-123"}),
+        serde_json::json!({"status": "failed", "work-id": "wk-123"}),
     )];
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
@@ -1731,7 +1731,7 @@ fn throttle_suppresses_event_refire() {
     // First event at t=1000: should fire
     let events = vec![DaemonEvent::new(
         "agent.status-changed",
-        serde_json::json!({"status": "failed", "work_id": "wk-1"}),
+        serde_json::json!({"status": "failed", "work-id": "wk-1"}),
     )];
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let results = eval.evaluate_push(&ctx);
@@ -1873,7 +1873,7 @@ fn evaluate_push_skips_disabled_trigger() {
     let stores = make_stores();
     let events = vec![DaemonEvent::new(
         "agent.status-changed",
-        serde_json::json!({"status": "failed", "work_id": "wk-1"}),
+        serde_json::json!({"status": "failed", "work-id": "wk-1"}),
     )];
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {
@@ -1987,7 +1987,7 @@ fn v3_session_failure_event_fires() {
     let stores = make_stores();
     let events = vec![DaemonEvent::new(
         "agent.status-changed",
-        serde_json::json!({"status": "failed", "work_id": "wk-99"}),
+        serde_json::json!({"status": "failed", "work-id": "wk-99"}),
     )];
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
@@ -2080,7 +2080,7 @@ fn event_prefers_scope_keyed_id_over_generic_id() {
     let stores = make_stores();
     let events = vec![DaemonEvent::new(
         "agent.status-changed",
-        serde_json::json!({"status": "failed", "id": "sess-999", "work_id": "wk-42"}),
+        serde_json::json!({"status": "failed", "id": "sess-999", "work-id": "wk-42"}),
     )];
     let ctx = ObservationCtx::new(&stores, &events, 1000);
     let def = TriggerDefinition {

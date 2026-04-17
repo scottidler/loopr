@@ -127,7 +127,7 @@ impl Primitive for StopAgent {
 
             let resp = ctx
                 .bridge
-                .request("agent.stop", serde_json::json!({"session_id": session_id}));
+                .request("agent.stop", serde_json::json!({"session-id": session_id}));
             if let Some(err) = &resp.error {
                 eyre::bail!("stop-agent failed: {}", err.message);
             }
@@ -178,7 +178,7 @@ impl Primitive for PauseAgent {
 
             let resp = ctx
                 .bridge
-                .request("agent.pause", serde_json::json!({"session_id": session_id}));
+                .request("agent.pause", serde_json::json!({"session-id": session_id}));
             if let Some(err) = &resp.error {
                 eyre::bail!("pause-agent failed: {}", err.message);
             }
@@ -229,7 +229,7 @@ impl Primitive for ResumeAgent {
 
             let resp = ctx
                 .bridge
-                .request("agent.resume", serde_json::json!({"session_id": session_id}));
+                .request("agent.resume", serde_json::json!({"session-id": session_id}));
             if let Some(err) = &resp.error {
                 eyre::bail!("resume-agent failed: {}", err.message);
             }

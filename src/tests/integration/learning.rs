@@ -19,7 +19,7 @@ async fn test_learning_auto_promotion_via_dispatch() {
         &ic,
         "learning.create",
         json!({
-            "source_id": "wi-123",
+            "source-id": "wi-123",
             "scope": "work",
             "content": "Always check null pointers"
         }),
@@ -58,7 +58,7 @@ async fn test_learning_contradiction_blocks_promotion() {
         &wm,
         &ic,
         "learning.create",
-        json!({"source_id": "wi-1", "scope": "global", "content": "Use tabs not spaces"}),
+        json!({"source-id": "wi-1", "scope": "global", "content": "Use tabs not spaces"}),
     )
     .await;
     let id = learning["id"].as_str().unwrap().to_string();
@@ -94,7 +94,7 @@ async fn test_learning_confidence_computation() {
         &wm,
         &ic,
         "learning.create",
-        json!({"source_id": "wi-1", "scope": "global", "content": "Test"}),
+        json!({"source-id": "wi-1", "scope": "global", "content": "Test"}),
     )
     .await;
     let id = learning["id"].as_str().unwrap().to_string();
@@ -133,11 +133,11 @@ async fn test_failure_learning_creation() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "Add error handling",
             "description": "Implement error types",
             "files": ["src/error.rs"],
-            "acceptance_criteria": ["Error types defined"]
+            "acceptance-criteria": ["Error types defined"]
         }),
     )
     .await;
@@ -151,7 +151,7 @@ async fn test_failure_learning_creation() {
         &ic,
         "learning.create",
         json!({
-            "source_id": wi_id,
+            "source-id": wi_id,
             "scope": "work",
             "content": "thiserror derive requires Display impl on inner types; use #[from] for auto-conversion"
         }),

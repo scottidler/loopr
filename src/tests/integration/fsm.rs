@@ -23,7 +23,7 @@ async fn test_work_fsm_enforcement_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Task", "description": "desc", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Task", "description": "desc", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -34,7 +34,7 @@ async fn test_work_fsm_enforcement_via_dispatch() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
+        json!({"id": wi_id, "target-status": "Done", "role": "coordinator"}),
     )
     .await;
 

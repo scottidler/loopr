@@ -122,7 +122,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "plan.create",
-        json!({"title": "Test Plan", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"title": "Test Plan", "description": "desc", "acceptance-criteria": "pass"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -132,7 +132,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
     let spec = dispatch_ok(
@@ -141,7 +141,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "Test Spec", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"parent-id": plan_id, "title": "Test Spec", "description": "desc", "acceptance-criteria": "pass"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -151,7 +151,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
     let phase = dispatch_ok(
@@ -160,7 +160,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Test Phase", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"parent-id": spec_id, "title": "Test Phase", "description": "desc", "acceptance-criteria": "pass"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -170,7 +170,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
     (plan_id, spec_id, phase_id)
@@ -215,7 +215,7 @@ pub(super) async fn inject_preformed_plan(
         json!({
             "title": input.title,
             "description": input.desc,
-            "acceptance_criteria": input.criteria,
+            "acceptance-criteria": input.criteria,
         }),
     )
     .await;
@@ -227,7 +227,7 @@ pub(super) async fn inject_preformed_plan(
         ic,
         "plan.transition",
         json!({
-            "id": plan_id, "target_status": "active"
+            "id": plan_id, "target-status": "active"
         }),
     )
     .await;
@@ -241,10 +241,10 @@ pub(super) async fn inject_preformed_plan(
             ic,
             "spec.create",
             json!({
-                "parent_id": plan_id,
+                "parent-id": plan_id,
                 "title": spec_title,
                 "description": spec_desc,
-                "acceptance_criteria": "all tests pass",
+                "acceptance-criteria": "all tests pass",
             }),
         )
         .await;
@@ -256,7 +256,7 @@ pub(super) async fn inject_preformed_plan(
             ic,
             "spec.transition",
             json!({
-                "id": spec_id, "target_status": "active"
+                "id": spec_id, "target-status": "active"
             }),
         )
         .await;
@@ -270,7 +270,7 @@ pub(super) async fn inject_preformed_plan(
                 ic,
                 "phase.create",
                 json!({
-                    "parent_id": spec_id,
+                    "parent-id": spec_id,
                     "title": phase_title,
                     "description": phase_desc,
                     "order": order,
@@ -285,7 +285,7 @@ pub(super) async fn inject_preformed_plan(
                 ic,
                 "phase.transition",
                 json!({
-                    "id": phase_id, "target_status": "active"
+                    "id": phase_id, "target-status": "active"
                 }),
             )
             .await;
@@ -299,11 +299,11 @@ pub(super) async fn inject_preformed_plan(
                     ic,
                     "work.create",
                     json!({
-                        "parent_id": phase_id,
+                        "parent-id": phase_id,
                         "title": work_title,
                         "description": work_desc,
                         "files": files,
-                        "acceptance_criteria": ["tests pass"],
+                        "acceptance-criteria": ["tests pass"],
                     }),
                 )
                 .await;

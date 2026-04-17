@@ -11,7 +11,7 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-#[instrument(skip_all, fields(resource = ?req.params.get("resource"), holder_id = ?req.params.get("holder_id")))]
+#[instrument(skip_all, fields(resource = ?req.params.get("resource"), holder_id = ?req.params.get("holder-id")))]
 pub(super) fn handle_lock_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -26,13 +26,13 @@ pub(super) fn handle_lock_create(
             .to_string();
         let holder_id = req
             .params
-            .get("holder_id")
+            .get("holder-id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
         let granted_by = req
             .params
-            .get("granted_by")
+            .get("granted-by")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -46,20 +46,20 @@ pub(super) fn handle_lock_create(
         if holder_id.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::invalid_params("holder_id is required"),
+                RpcError::invalid_params("holder-id is required"),
             ));
         }
         if granted_by.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::invalid_params("granted_by is required"),
+                RpcError::invalid_params("granted-by is required"),
             ));
         }
 
         let mut lock = Lock::new(resource, holder_id, granted_by);
 
         // #11: Accept optional ttl_secs param; compute expires_at
-        if let Some(ttl_secs) = req.params.get("ttl_secs").and_then(|v| v.as_u64()) {
+        if let Some(ttl_secs) = req.params.get("ttl-secs").and_then(|v| v.as_u64()) {
             lock.expires_at = Some(crate::id::now_millis() + (ttl_secs as i64 * 1000));
         }
 
@@ -160,12 +160,12 @@ pub(super) fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         // Optionally filter by holder_id
         let holder_filter = req
             .params
-            .get("holder_id")
+            .get("holder-id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         // Optionally filter by active-only
-        let active_only = req.params.get("active_only").and_then(|v| v.as_bool()).unwrap_or(false);
+        let active_only = req.params.get("active-only").and_then(|v| v.as_bool()).unwrap_or(false);
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -352,7 +352,7 @@ mod tests {
             DaemonRequest::new(
                 id,
                 "lock.create",
-                json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1"}),
+                json!({"resource": "src/main.rs", "holder-id": "wi-1", "granted-by": "coord-1"}),
             ),
         )
         .await;
@@ -371,8 +371,8 @@ mod tests {
             "lock.create",
             json!({
                 "resource": "src/main.rs",
-                "holder_id": "wi-1",
-                "granted_by": "coord-1"
+                "holder-id": "wi-1",
+                "granted-by": "coord-1"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -402,7 +402,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "lock.create",
-                json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1"}),
+                json!({"resource": "src/main.rs", "holder-id": "wi-1", "granted-by": "coord-1"}),
             ),
         )
         .await;
@@ -424,7 +424,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "lock.create", json!({"holder_id": "wi-1", "granted_by": "coord-1"})),
+            DaemonRequest::new(1, "lock.create", json!({"holder-id": "wi-1", "granted-by": "coord-1"})),
         )
         .await;
         assert!(resp.is_error());
@@ -443,7 +443,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "lock.create",
-                json!({"resource": "file.rs", "granted_by": "coord-1"}),
+                json!({"resource": "file.rs", "granted-by": "coord-1"}),
             ),
         )
         .await;
@@ -546,7 +546,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(4, "lock.list", json!({"active_only": true})),
+            DaemonRequest::new(4, "lock.list", json!({"active-only": true})),
         )
         .await;
         assert!(!resp.is_error());
@@ -570,7 +570,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "lock.create",
-                json!({"resource": "src/lib.rs", "holder_id": "wi-2", "granted_by": "coord-1"}),
+                json!({"resource": "src/lib.rs", "holder-id": "wi-2", "granted-by": "coord-1"}),
             ),
         )
         .await;
@@ -596,7 +596,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(11, "lock.list", json!({"active_only": true})),
+            DaemonRequest::new(11, "lock.list", json!({"active-only": true})),
         )
         .await;
         assert!(!active_resp.is_error());
@@ -715,8 +715,8 @@ mod tests {
             "lock.create",
             json!({
                 "resource": "src/main.rs",
-                "holder_id": "wi-1",
-                "granted_by": "coord-1"
+                "holder-id": "wi-1",
+                "granted-by": "coord-1"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -750,8 +750,8 @@ mod tests {
             "lock.create",
             json!({
                 "resource": "src/main.rs",
-                "holder_id": "wi-1",
-                "granted_by": "coord-1"
+                "holder-id": "wi-1",
+                "granted-by": "coord-1"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -822,7 +822,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "lock.create",
-                json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1", "ttl_secs": 300}),
+                json!({"resource": "src/main.rs", "holder-id": "wi-1", "granted-by": "coord-1", "ttl-secs": 300}),
             ),
         )
         .await;
@@ -846,7 +846,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "lock.create",
-                json!({"resource": "src/lib.rs", "holder_id": "wi-2", "granted_by": "coord-1"}),
+                json!({"resource": "src/lib.rs", "holder-id": "wi-2", "granted-by": "coord-1"}),
             ),
         )
         .await;
@@ -870,7 +870,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "lock.create",
-                json!({"resource": "src/mod.rs", "holder_id": "wi-3", "granted_by": "coord-1", "renewable": true}),
+                json!({"resource": "src/mod.rs", "holder-id": "wi-3", "granted-by": "coord-1", "renewable": true}),
             ),
         )
         .await;

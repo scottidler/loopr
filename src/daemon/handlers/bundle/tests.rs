@@ -34,7 +34,7 @@ async fn create_test_phase(
         tx,
         wm,
         &test_integrator_config(),
-        DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
+        DaemonRequest::new(10, "spec.create", json!({"parent-id": plan_id, "title": "Parent Spec"})),
     )
     .await;
     let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -46,7 +46,7 @@ async fn create_test_phase(
         DaemonRequest::new(
             20,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
+            json!({"parent-id": spec_id, "title": "Parent Phase", "order": 1}),
         ),
     )
     .await;
@@ -69,7 +69,7 @@ async fn create_test_work(
         DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         ),
     )
     .await;
@@ -92,7 +92,7 @@ async fn create_test_bundle(
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id, "branch_name": "feature/test", "base_tick_id": null, "claims": "Initial claims"}),
+            json!({"work-id": wi_id, "branch-name": "feature/test", "base-tick-id": null, "claims": "Initial claims"}),
         ),
     )
     .await;
@@ -130,7 +130,7 @@ async fn test_bundle_create_rejects_done_work() {
     let req = DaemonRequest::new(
         2,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feature/late"}),
+        json!({"work-id": wi_id, "branch-name": "feature/late"}),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
@@ -153,7 +153,7 @@ async fn test_bundle_create_rejects_abandoned_work() {
         DaemonRequest::new(
             1,
             "work.transition",
-            json!({"id": wi_id, "target_status": "Abandoned", "role": "coordinator"}),
+            json!({"id": wi_id, "target-status": "Abandoned", "role": "coordinator"}),
         ),
     )
     .await;
@@ -161,7 +161,7 @@ async fn test_bundle_create_rejects_abandoned_work() {
     let req = DaemonRequest::new(
         2,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feature/abandoned"}),
+        json!({"work-id": wi_id, "branch-name": "feature/abandoned"}),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
@@ -181,9 +181,9 @@ async fn test_bundle_create_persists_to_taskstore() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/persist",
-            "base_tick_id": "tick-001",
+            "work-id": wi_id,
+            "branch-name": "feature/persist",
+            "base-tick-id": "tick-001",
             "claims": "Persisted bundle"
         }),
     );
@@ -209,9 +209,9 @@ async fn test_bundle_create_success() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/auth",
-            "base_tick_id": "tick-001",
+            "work-id": wi_id,
+            "branch-name": "feature/auth",
+            "base-tick-id": "tick-001",
             "claims": "Add JWT signing"
         }),
     );
@@ -237,8 +237,8 @@ async fn test_bundle_create_no_base_tick() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/init"
+            "work-id": wi_id,
+            "branch-name": "feature/init"
         }),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -252,7 +252,7 @@ async fn test_bundle_create_missing_work_id() {
     let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let req = DaemonRequest::new(1, "bundle.create", json!({"branch_name": "feature/x"}));
+    let req = DaemonRequest::new(1, "bundle.create", json!({"branch-name": "feature/x"}));
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains("work_id"));
@@ -266,7 +266,7 @@ async fn test_bundle_create_work_not_found() {
     let req = DaemonRequest::new(
         1,
         "bundle.create",
-        json!({"work_id": "nonexistent", "branch_name": "feature/x"}),
+        json!({"work-id": "nonexistent", "branch-name": "feature/x"}),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
@@ -279,7 +279,7 @@ async fn test_bundle_create_missing_branch_name() {
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
-    let req = DaemonRequest::new(40, "bundle.create", json!({"work_id": wi_id, "claims": "stuff"}));
+    let req = DaemonRequest::new(40, "bundle.create", json!({"work-id": wi_id, "claims": "stuff"}));
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains("branch_name"));
@@ -301,7 +301,7 @@ async fn test_bundle_create_broadcasts_event() {
     let req = DaemonRequest::new(
         40,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feature/x"}),
+        json!({"work-id": wi_id, "branch-name": "feature/x"}),
     );
     dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     let event = rx.try_recv().unwrap();
@@ -324,7 +324,7 @@ async fn test_bundle_get_success() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id, "branch_name": "feature/auth"}),
+            json!({"work-id": wi_id, "branch-name": "feature/auth"}),
         ),
     )
     .await;
@@ -369,7 +369,7 @@ async fn test_bundle_get_reads_from_taskstore() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id, "branch_name": "feature/ts-read"}),
+            json!({"work-id": wi_id, "branch-name": "feature/ts-read"}),
         ),
     )
     .await;
@@ -413,7 +413,7 @@ async fn test_bundle_list_filtered_by_work_id() {
         DaemonRequest::new(
             31,
             "work.create",
-            json!({"parent_id": phase_id, "title": "WI 2", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "title": "WI 2", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         ),
     )
     .await;
@@ -428,7 +428,7 @@ async fn test_bundle_list_filtered_by_work_id() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id_1, "branch_name": "feature/a"}),
+            json!({"work-id": wi_id_1, "branch-name": "feature/a"}),
         ),
     )
     .await;
@@ -440,7 +440,7 @@ async fn test_bundle_list_filtered_by_work_id() {
         DaemonRequest::new(
             41,
             "bundle.create",
-            json!({"work_id": wi_id_2, "branch_name": "feature/b"}),
+            json!({"work-id": wi_id_2, "branch-name": "feature/b"}),
         ),
     )
     .await;
@@ -462,7 +462,7 @@ async fn test_bundle_list_filtered_by_work_id() {
         &tx,
         &wm,
         &test_integrator_config(),
-        DaemonRequest::new(51, "bundle.list", json!({"work_id": wi_id_1})),
+        DaemonRequest::new(51, "bundle.list", json!({"work-id": wi_id_1})),
     )
     .await;
     let bundles = filtered_resp.result.unwrap();
@@ -487,7 +487,7 @@ async fn test_bundle_list_reads_from_taskstore() {
         DaemonRequest::new(
             31,
             "work.create",
-            json!({"parent_id": phase_id, "title": "WI 2", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent-id": phase_id, "title": "WI 2", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
         ),
     )
     .await;
@@ -502,7 +502,7 @@ async fn test_bundle_list_reads_from_taskstore() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id_1, "branch_name": "feature/a"}),
+            json!({"work-id": wi_id_1, "branch-name": "feature/a"}),
         ),
     )
     .await;
@@ -514,7 +514,7 @@ async fn test_bundle_list_reads_from_taskstore() {
         DaemonRequest::new(
             41,
             "bundle.create",
-            json!({"work_id": wi_id_2, "branch_name": "feature/b"}),
+            json!({"work-id": wi_id_2, "branch-name": "feature/b"}),
         ),
     )
     .await;
@@ -535,7 +535,7 @@ async fn test_bundle_list_reads_from_taskstore() {
     assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
     // Test filtered list also works from TaskStore
-    let filtered_req = DaemonRequest::new(51, "bundle.list", json!({"work_id": wi_id_1}));
+    let filtered_req = DaemonRequest::new(51, "bundle.list", json!({"work-id": wi_id_1}));
     let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req).await;
     assert!(!filtered_resp.is_error());
     let filtered_items = filtered_resp.result.unwrap();
@@ -565,7 +565,7 @@ async fn test_bundle_transition_proposed_to_triaged() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id, "branch_name": "feature/x"}),
+            json!({"work-id": wi_id, "branch-name": "feature/x"}),
         ),
     )
     .await;
@@ -577,7 +577,7 @@ async fn test_bundle_transition_proposed_to_triaged() {
         "bundle.transition",
         json!({
             "id": bundle_id,
-            "target_status": "Triaged",
+            "target-status": "Triaged",
             "role": "coordinator"
         }),
     );
@@ -607,7 +607,7 @@ async fn test_bundle_transition_invalid_skip_state() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id, "branch_name": "feature/x"}),
+            json!({"work-id": wi_id, "branch-name": "feature/x"}),
         ),
     )
     .await;
@@ -619,7 +619,7 @@ async fn test_bundle_transition_invalid_skip_state() {
         "bundle.transition",
         json!({
             "id": bundle_id,
-            "target_status": "Accepted",
+            "target-status": "Accepted",
             "role": "coordinator"
         }),
     );
@@ -643,7 +643,7 @@ async fn test_bundle_transition_wrong_role() {
         DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_id": wi_id, "branch_name": "feature/x"}),
+            json!({"work-id": wi_id, "branch-name": "feature/x"}),
         ),
     )
     .await;
@@ -655,7 +655,7 @@ async fn test_bundle_transition_wrong_role() {
         "bundle.transition",
         json!({
             "id": bundle_id,
-            "target_status": "Triaged",
+            "target-status": "Triaged",
             "role": "implementer"
         }),
     );
@@ -674,7 +674,7 @@ async fn test_bundle_transition_not_found() {
         "bundle.transition",
         json!({
             "id": "nonexistent",
-            "target_status": "Triaged"
+            "target-status": "Triaged"
         }),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -696,8 +696,8 @@ async fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/auth"
+            "work-id": wi_id,
+            "branch-name": "feature/auth"
         }),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -720,9 +720,9 @@ async fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/auth",
-            "base_tick_id": "old-stale-tick-id"
+            "work-id": wi_id,
+            "branch-name": "feature/auth",
+            "base-tick-id": "old-stale-tick-id"
         }),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -745,9 +745,9 @@ async fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/auth",
-            "base_tick_id": tick_id,
+            "work-id": wi_id,
+            "branch-name": "feature/auth",
+            "base-tick-id": tick_id,
             "claims": "Add auth"
         }),
     );
@@ -772,9 +772,9 @@ async fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/auth",
-            "base_tick_id": tick1_id,
+            "work-id": wi_id,
+            "branch-name": "feature/auth",
+            "base-tick-id": tick1_id,
             "claims": "Add auth"
         }),
     );
@@ -799,16 +799,16 @@ async fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/auth",
-            "base_tick_id": "stale-id"
+            "work-id": wi_id,
+            "branch-name": "feature/auth",
+            "base-tick-id": "stale-id"
         }),
     );
     dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     let event = rx.try_recv().unwrap();
     assert_eq!(event.event, "bundle.rejected_stale");
     assert_eq!(event.data["bundle_work_id"], wi_id.as_str());
-    assert_eq!(event.data["base_tick_id"], "stale-id");
+    assert_eq!(event.data["base-tick-id"], "stale-id");
 }
 
 #[tokio::test]
@@ -823,8 +823,8 @@ async fn test_bundle_create_bootstrap_no_published_tick_no_base() {
         40,
         "bundle.create",
         json!({
-            "work_id": wi_id,
-            "branch_name": "feature/init"
+            "work-id": wi_id,
+            "branch-name": "feature/init"
         }),
     );
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -852,8 +852,8 @@ async fn test_handle_bundle_update_success() {
                 "id": bundle_id,
                 "description": "Updated desc",
                 "verification": "tests pass",
-                "locks_used": ["lock-1"],
-                "base_tick_id": "tick-002"
+                "locks-used": ["lock-1"],
+                "base-tick-id": "tick-002"
             }),
         ),
     )
@@ -994,10 +994,10 @@ async fn test_handle_bundle_create_rejects_too_many_loc() {
             1,
             "bundle.create",
             json!({
-                "work_id": wi_id,
-                "branch_name": "feat/test",
+                "work-id": wi_id,
+                "branch-name": "feat/test",
                 "claims": ["test claim"],
-                "loc_changed": 301
+                "loc-changed": 301
             }),
         ),
     )
@@ -1020,10 +1020,10 @@ async fn test_handle_bundle_create_accepts_loc_within_limit() {
             1,
             "bundle.create",
             json!({
-                "work_id": wi_id,
-                "branch_name": "feat/test",
+                "work-id": wi_id,
+                "branch-name": "feat/test",
                 "claims": ["test claim"],
-                "loc_changed": 300
+                "loc-changed": 300
             }),
         ),
     )
@@ -1048,7 +1048,7 @@ async fn test_handle_bundle_update_rejects_too_many_loc() {
             "bundle.update",
             json!({
                 "id": bundle_id,
-                "loc_changed": 301
+                "loc-changed": 301
             }),
         ),
     )

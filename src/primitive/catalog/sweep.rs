@@ -94,7 +94,7 @@ impl Primitive for CompleteRecord {
 
             let resp = ctx.bridge.request(
                 &format!("{}.transition", collection),
-                serde_json::json!({"id": id, "target_status": "Complete", "role": "Coordinator"}),
+                serde_json::json!({"id": id, "target-status": "Complete", "role": "Coordinator"}),
             );
             let completed = resp.error.is_none();
 
@@ -157,7 +157,7 @@ impl Primitive for SweepToDone {
 
             let resp = ctx
                 .bridge
-                .request("coordinator.sweep_to_done", serde_json::json!({"plan_id": plan_id}));
+                .request("coordinator.sweep_to_done", serde_json::json!({"plan-id": plan_id}));
             if let Some(err) = &resp.error {
                 eyre::bail!("sweep-to-done failed: {}", err.message);
             }
@@ -216,7 +216,7 @@ impl Primitive for SweepStuckInreview {
 
             let resp = ctx.bridge.request(
                 "coordinator.sweep_stuck_inreview",
-                serde_json::json!({"plan_id": plan_id}),
+                serde_json::json!({"plan-id": plan_id}),
             );
             if let Some(err) = &resp.error {
                 eyre::bail!("sweep-stuck-inreview failed: {}", err.message);

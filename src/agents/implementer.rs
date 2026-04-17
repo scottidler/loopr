@@ -466,12 +466,12 @@ fn drain_events(event_rx: &mut broadcast::Receiver<DaemonEvent>, prefix: &str) -
         match event_rx.try_recv() {
             Ok(event) => match event.event.as_str() {
                 "tick.published" => {
-                    if let Some(tid) = event.data.get("tick_id").and_then(|v| v.as_str()) {
+                    if let Some(tid) = event.data.get("tick-id").and_then(|v| v.as_str()) {
                         result.latest_tick_id = Some(tid.to_string());
                     }
                 }
                 "bundle.merged" => {
-                    if let Some(sha) = event.data.get("integration_sha").and_then(|v| v.as_str()) {
+                    if let Some(sha) = event.data.get("integration-sha").and_then(|v| v.as_str()) {
                         result.latest_integration_sha = Some(sha.to_string());
                     }
                 }

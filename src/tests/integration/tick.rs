@@ -58,7 +58,7 @@ async fn test_worktree_base_uses_published_tick() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick1_id, "target_status": "Sealing"}),
+        json!({"id": tick1_id, "target-status": "Sealing"}),
     )
     .await;
     dispatch_ok(
@@ -67,7 +67,7 @@ async fn test_worktree_base_uses_published_tick() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick1_id, "target_status": "Validating"}),
+        json!({"id": tick1_id, "target-status": "Validating"}),
     )
     .await;
     dispatch_ok(
@@ -76,7 +76,7 @@ async fn test_worktree_base_uses_published_tick() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick1_id, "target_status": "Published"}),
+        json!({"id": tick1_id, "target-status": "Published"}),
     )
     .await;
 
@@ -103,7 +103,7 @@ async fn test_worktree_base_uses_published_tick() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick2_id, "target_status": "Sealing"}),
+        json!({"id": tick2_id, "target-status": "Sealing"}),
     )
     .await;
     dispatch_ok(
@@ -112,7 +112,7 @@ async fn test_worktree_base_uses_published_tick() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick2_id, "target_status": "Validating"}),
+        json!({"id": tick2_id, "target-status": "Validating"}),
     )
     .await;
     dispatch_ok(
@@ -121,7 +121,7 @@ async fn test_worktree_base_uses_published_tick() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick2_id, "target_status": "Published"}),
+        json!({"id": tick2_id, "target-status": "Published"}),
     )
     .await;
 

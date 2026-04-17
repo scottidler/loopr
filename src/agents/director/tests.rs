@@ -320,7 +320,7 @@ async fn plan_accepted_event_transitions_to_monitoring() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = event_tx_for_driver.send(DaemonEvent::new(
             "doc.plan_accepted",
-            serde_json::json!({ "plan_id": plan_id_for_driver }),
+            serde_json::json!({ "plan-id": plan_id_for_driver }),
         ));
         tokio::time::sleep(Duration::from_millis(100)).await;
         let mut sessions = stores_for_driver.agent_sessions.write().unwrap();
@@ -410,7 +410,7 @@ async fn mode_change_emits_director_mode_changed_event() {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let _ = driver_tx.send(DaemonEvent::new(
             "doc.plan_accepted",
-            serde_json::json!({ "plan_id": driver_pid }),
+            serde_json::json!({ "plan-id": driver_pid }),
         ));
         tokio::time::sleep(Duration::from_millis(100)).await;
         let mut sessions = driver_stores.agent_sessions.write().unwrap();
@@ -428,7 +428,7 @@ async fn mode_change_emits_director_mode_changed_event() {
     while let Ok(ev) = rx.try_recv() {
         if ev.event == "director.mode_changed"
             && ev.data.get("mode").and_then(|v| v.as_str()) == Some("monitoring")
-            && ev.data.get("session_id").and_then(|v| v.as_str()) == Some(session_id.as_str())
+            && ev.data.get("session-id").and_then(|v| v.as_str()) == Some(session_id.as_str())
         {
             saw_mode_changed = true;
             break;

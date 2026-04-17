@@ -44,11 +44,11 @@ impl<'a> DecomposerAgent<'a> {
 
         // Step 4: Call decomposer.decompose via the IPC bridge.
         let params = serde_json::json!({
-            "parent_id": self.target_id,
-            "parent_collection": parent_collection,
-            "target_kind": rule.target_kind,
-            "count_guidance": rule.count_guidance,
-            "dependency_pattern": rule.dependency_pattern,
+            "parent-id": self.target_id,
+            "parent-collection": parent_collection,
+            "target-kind": rule.target_kind,
+            "count-guidance": rule.count_guidance,
+            "dependency-pattern": rule.dependency_pattern,
         });
 
         let resp = self.bridge.request("decomposer.decompose", params);
@@ -74,7 +74,7 @@ impl<'a> DecomposerAgent<'a> {
                 &format!("{}.transition", parent_collection),
                 serde_json::json!({
                     "id": self.target_id,
-                    "target_status": "Complete",
+                    "target-status": "Complete",
                     "role": "decomposer",
                     "reason": "no-children-generated",
                 }),
@@ -192,9 +192,9 @@ impl<'a> DecomposerAgent<'a> {
             serde_json::json!({
                 "event": "decomposition.completed",
                 "data": {
-                    "parent_id": self.target_id,
+                    "parent-id": self.target_id,
                     "child_count": child_count,
-                    "session_id": self.ctx.session.id,
+                    "session-id": self.ctx.session.id,
                 }
             }),
         );
@@ -206,7 +206,7 @@ impl<'a> DecomposerAgent<'a> {
         let _ = self.bridge.request(
             "decomposer.handle_failure",
             serde_json::json!({
-                "parent_id": self.target_id,
+                "parent-id": self.target_id,
                 "reason": reason,
             }),
         );
@@ -215,9 +215,9 @@ impl<'a> DecomposerAgent<'a> {
             serde_json::json!({
                 "event": "decomposition.failed",
                 "data": {
-                    "parent_id": self.target_id,
+                    "parent-id": self.target_id,
                     "reason": reason,
-                    "session_id": self.ctx.session.id,
+                    "session-id": self.ctx.session.id,
                 }
             }),
         );

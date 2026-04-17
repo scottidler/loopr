@@ -33,9 +33,9 @@ pub(super) fn handle_register_tool(
     let params = serde_json::json!({
         "name": name,
         "command": command,
-        "timeout_secs": timeout_secs,
+        "timeout-secs": timeout_secs,
         "worktree": worktree,
-        "context_dir": worktree_path.to_string_lossy(),
+        "context-dir": worktree_path.to_string_lossy(),
     });
     let resp = bridge.request("tools.register", params);
     if resp.is_error() {

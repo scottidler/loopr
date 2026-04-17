@@ -25,7 +25,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "User Auth", "description": "Auth system", "acceptance_criteria": "Tests pass"}),
+        json!({"title": "User Auth", "description": "Auth system", "acceptance-criteria": "Tests pass"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -35,7 +35,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -45,7 +45,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance_criteria": "OK"}),
+        json!({"parent-id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance-criteria": "OK"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -55,7 +55,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
@@ -65,7 +65,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Token", "description": "Token gen", "acceptance_criteria": "OK"}),
+        json!({"parent-id": spec_id, "title": "Token", "description": "Token gen", "acceptance-criteria": "OK"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -75,7 +75,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
 
@@ -85,7 +85,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "sign()", "description": "Sign JWT", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "sign()", "description": "Sign JWT", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -96,7 +96,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
 
@@ -106,7 +106,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feat/sign", "claims": "Added sign()"}),
+        json!({"work-id": wi_id, "branch-name": "feat/sign", "claims": "Added sign()"}),
     )
     .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
@@ -118,7 +118,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -127,7 +127,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": bundle_id, "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
 
@@ -138,7 +138,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Accepted", "role": "coordinator"}),
     )
     .await;
 
@@ -151,7 +151,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+        json!({"id": tick_id, "target-status": "Sealing", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -160,7 +160,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
+        json!({"id": tick_id, "target-status": "Validating", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -169,7 +169,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
+        json!({"id": tick_id, "target-status": "Published", "role": "integrator"}),
     )
     .await;
 
@@ -180,7 +180,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
+        json!({"id": wi_id, "target-status": "InReview", "role": "implementer"}),
     )
     .await;
     dispatch_ok(
@@ -189,7 +189,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
+        json!({"id": wi_id, "target-status": "Integrated", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -198,7 +198,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
+        json!({"id": wi_id, "target-status": "Done", "role": "coordinator"}),
     )
     .await;
 
@@ -236,7 +236,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Website Plan", "description": "Build a static site", "acceptance_criteria": "Site loads"}),
+        json!({"title": "Website Plan", "description": "Build a static site", "acceptance-criteria": "Site loads"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -246,7 +246,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -257,7 +257,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
+        json!({"parent-id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -267,7 +267,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
@@ -278,7 +278,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
+        json!({"parent-id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -288,7 +288,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
 
@@ -299,7 +299,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Create index.html", "description": "Write the homepage", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -310,7 +310,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
 
@@ -322,11 +322,11 @@ async fn test_full_mvp4_pipeline() {
         &ic,
         "bundle.create",
         json!({
-            "work_id": wi_id,
+            "work-id": wi_id,
             "description": "Created index.html with basic structure",
-            "files_changed": ["index.html"],
+            "files-changed": ["index.html"],
             "commit_sha": "def456",
-            "branch_name": "feature-index"
+            "branch-name": "feature-index"
         }),
     )
     .await;
@@ -339,7 +339,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
 
@@ -350,7 +350,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": bundle_id, "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
 
@@ -361,7 +361,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Accepted", "role": "coordinator"}),
     )
     .await;
 
@@ -430,7 +430,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -440,7 +440,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "Pages", "description": "HTML pages"}),
+        json!({"parent-id": plan_id, "title": "Pages", "description": "HTML pages"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -450,7 +450,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
@@ -460,7 +460,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
+        json!({"parent-id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -470,7 +470,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
 
@@ -481,7 +481,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Homepage", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Create index.html", "description": "Homepage", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
@@ -491,7 +491,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Create about.html", "description": "About page", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Create about.html", "description": "About page", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi2_id = wi2["id"].as_str().unwrap().to_string();
 
@@ -502,7 +502,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "lock.create",
-        json!({"resource": "index.html", "holder_id": wi1_id, "granted_by": "coordinator"}),
+        json!({"resource": "index.html", "holder-id": wi1_id, "granted-by": "coordinator"}),
     )
     .await;
     let lock_id = lock["id"].as_str().unwrap().to_string();
@@ -523,7 +523,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi1_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
     // Create a bundle before InReview (required by #15 invariant)
@@ -533,7 +533,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi1_id, "branch_name": "feature/index"}),
+        json!({"work-id": wi1_id, "branch-name": "feature/index"}),
     )
     .await;
     dispatch_ok(
@@ -542,7 +542,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi1_id, "target_status": "InReview", "role": "implementer"}),
+        json!({"id": wi1_id, "target-status": "InReview", "role": "implementer"}),
     )
     .await;
     dispatch_ok(
@@ -551,7 +551,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi1_id, "target_status": "Integrated", "role": "integrator"}),
+        json!({"id": wi1_id, "target-status": "Integrated", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -560,7 +560,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi1_id, "target_status": "Done", "role": "coordinator"}),
+        json!({"id": wi1_id, "target-status": "Done", "role": "coordinator"}),
     )
     .await;
     {
@@ -576,7 +576,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi2_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
 
@@ -586,7 +586,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi2_id, "description": "About page", "branch_name": "feature/about"}),
+        json!({"work-id": wi2_id, "description": "About page", "branch-name": "feature/about"}),
     )
     .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
@@ -598,7 +598,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -607,7 +607,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": bundle_id, "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
     dispatch_ok(
@@ -616,7 +616,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Accepted", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -625,7 +625,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Integrating", "role": "integrator"}),
+        json!({"id": bundle_id, "target-status": "Integrating", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -634,7 +634,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Merged", "role": "integrator"}),
+        json!({"id": bundle_id, "target-status": "Merged", "role": "integrator"}),
     )
     .await;
     {
@@ -652,7 +652,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi2_id, "description": "Bad bundle", "branch_name": "feature/bad"}),
+        json!({"work-id": wi2_id, "description": "Bad bundle", "branch-name": "feature/bad"}),
     )
     .await;
     let bundle2_id = bundle2["id"].as_str().unwrap().to_string();
@@ -662,7 +662,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle2_id, "target_status": "Rejected", "role": "reviewer"}),
+        json!({"id": bundle2_id, "target-status": "Rejected", "role": "reviewer"}),
     )
     .await;
     {
@@ -680,7 +680,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi2_id, "description": "Reviewed then rejected", "branch_name": "feature/rev-reject"}),
+        json!({"work-id": wi2_id, "description": "Reviewed then rejected", "branch-name": "feature/rev-reject"}),
     )
     .await;
     let bundle3_id = bundle3["id"].as_str().unwrap().to_string();
@@ -690,7 +690,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle3_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bundle3_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -699,7 +699,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle3_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": bundle3_id, "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
     dispatch_ok(
@@ -708,7 +708,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle3_id, "target_status": "Rejected", "role": "reviewer"}),
+        json!({"id": bundle3_id, "target-status": "Rejected", "role": "reviewer"}),
     )
     .await;
     {
@@ -730,7 +730,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "integrator.publish",
-        json!({"tick_id": tick_id}),
+        json!({"tick-id": tick_id}),
     )
     .await;
     assert_eq!(published["status"], "Published");

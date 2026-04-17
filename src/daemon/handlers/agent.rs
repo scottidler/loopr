@@ -234,19 +234,19 @@ pub(super) fn handle_agent_start(
     })
 }
 
-#[instrument(skip_all, fields(session_id = ?req.params.get("session_id")))]
+#[instrument(skip_all, fields(session_id = ?req.params.get("session-id")))]
 pub(super) fn handle_agent_stop(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("session_id is required"),
+                    RpcError::invalid_params("session-id is required"),
                 ));
             }
         };
@@ -275,7 +275,7 @@ pub(super) fn handle_agent_stop(
                 ));
                 return Ok(DaemonResponse::ok(
                     req.id,
-                    serde_json::json!({ "session_id": session_id, "status": "Idle" }),
+                    serde_json::json!({ "session-id": session_id, "status": "Idle" }),
                 ));
             }
         }
@@ -331,12 +331,12 @@ pub(super) fn handle_agent_pause(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("session_id is required"),
+                    RpcError::invalid_params("session-id is required"),
                 ));
             }
         };
@@ -391,12 +391,12 @@ pub(super) fn handle_agent_resume(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("session_id is required"),
+                    RpcError::invalid_params("session-id is required"),
                 ));
             }
         };
@@ -440,12 +440,12 @@ pub(super) fn handle_agent_resume(
 pub(super) fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_agent_status()");
-        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("session_id is required"),
+                    RpcError::invalid_params("session-id is required"),
                 ));
             }
         };
@@ -493,7 +493,7 @@ pub(super) fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
             .and_then(|v| serde_json::from_value(v.clone()).ok());
         let type_filter: Option<AgentKind> = req
             .params
-            .get("agent_type")
+            .get("agent-type")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
 
         if let Some(store) = &stores.store {
@@ -548,12 +548,12 @@ pub(super) fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
 pub(super) fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_agent_output()");
-        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("session_id is required"),
+                    RpcError::invalid_params("session-id is required"),
                 ));
             }
         };
@@ -635,7 +635,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
+            DaemonRequest::new(1, "agent.pause", json!({"session-id": sid})),
         )
         .await;
         assert!(!resp.is_error(), "agent.pause failed: {:?}", resp.error);
@@ -653,7 +653,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.pause", json!({"session_id": "nonexistent"})),
+            DaemonRequest::new(1, "agent.pause", json!({"session-id": "nonexistent"})),
         )
         .await;
         assert!(resp.is_error());
@@ -676,7 +676,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
+            DaemonRequest::new(1, "agent.pause", json!({"session-id": sid})),
         )
         .await;
         assert!(resp.is_error(), "should reject pause on terminal agent");
@@ -699,7 +699,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.resume", json!({"session_id": sid})),
+            DaemonRequest::new(1, "agent.resume", json!({"session-id": sid})),
         )
         .await;
         assert!(!resp.is_error(), "agent.resume failed: {:?}", resp.error);
@@ -717,7 +717,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.resume", json!({"session_id": "nonexistent"})),
+            DaemonRequest::new(1, "agent.resume", json!({"session-id": "nonexistent"})),
         )
         .await;
         assert!(resp.is_error());
@@ -734,7 +734,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.output", json!({"session_id": "sess-1"})),
+            DaemonRequest::new(1, "agent.output", json!({"session-id": "sess-1"})),
         )
         .await;
         assert!(!resp.is_error());
@@ -755,7 +755,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "agent.output", json!({"session_id": "sess-1", "since": 0})),
+            DaemonRequest::new(2, "agent.output", json!({"session-id": "sess-1", "since": 0})),
         )
         .await;
         assert!(!resp.is_error());
@@ -924,7 +924,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
+            DaemonRequest::new(1, "agent.status", json!({"session-id": session_id})),
         )
         .await;
         assert!(!resp.is_error(), "agent.status failed: {:?}", resp.error);
@@ -950,7 +950,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
+            DaemonRequest::new(1, "agent.status", json!({"session-id": session_id})),
         )
         .await;
         assert!(!resp.is_error(), "agent.status fallback failed: {:?}", resp.error);

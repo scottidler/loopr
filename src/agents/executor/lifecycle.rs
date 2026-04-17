@@ -180,7 +180,7 @@ pub async fn run_agent_task(
         if let Some(target_status) = determine_work_handback(&stores, wi_id, &session_id, result.is_ok()) {
             let resp = bridge.request(
                 "work.transition",
-                serde_json::json!({ "id": wi_id, "target_status": target_status, "role": "implementer" }),
+                serde_json::json!({ "id": wi_id, "target-status": target_status, "role": "implementer" }),
             );
             if resp.is_error() {
                 warn!(
@@ -328,7 +328,7 @@ pub async fn run_agent_task(
                 "work.transition",
                 serde_json::json!({
                     "id": wi_id,
-                    "target_status": "Blocked",
+                    "target-status": "Blocked",
                     "role": "coordinator",
                     "override": true,
                 }),

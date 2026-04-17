@@ -132,7 +132,7 @@ mod tests {
             serde_json::json!({
                 "title": "Bridge Test Plan",
                 "description": "Test description",
-                "acceptance_criteria": "Test criteria"
+                "acceptance-criteria": "Test criteria"
             }),
         );
         assert!(!resp.is_error());

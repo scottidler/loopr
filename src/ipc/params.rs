@@ -10,6 +10,7 @@ use crate::domain::role::Role;
 
 /// Params for `bundle.create` IPC method.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct BundleCreateParams {
     pub work_id: String,
     pub branch_name: String,
@@ -24,6 +25,7 @@ pub struct BundleCreateParams {
 
 /// Params for `learning.create` IPC method.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct LearningCreateParams {
     pub content: String,
     pub scope: LearningScope,
@@ -36,6 +38,7 @@ pub struct LearningCreateParams {
 
 /// Params for `worktree.refresh` IPC method.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct WorktreeRefreshParams {
     pub work_id: String,
     #[serde(default = "default_base_ref")]
@@ -71,8 +74,8 @@ mod tests {
     #[test]
     fn test_bundle_create_params_defaults() {
         let json = serde_json::json!({
-            "work_id": "wi-1",
-            "branch_name": "feature/x",
+            "work-id": "wi-1",
+            "branch-name": "feature/x",
             "claims": ["c1"]
         });
         let params: BundleCreateParams = serde_json::from_value(json).unwrap();
@@ -102,7 +105,7 @@ mod tests {
         let json = serde_json::json!({
             "content": "test",
             "scope": "phase",
-            "source_id": "wi-1"
+            "source-id": "wi-1"
         });
         let params: LearningCreateParams = serde_json::from_value(json).unwrap();
         assert!(params.applicable_roles.is_none());
@@ -124,7 +127,7 @@ mod tests {
     #[test]
     fn test_worktree_refresh_params_default_base_ref() {
         let json = serde_json::json!({
-            "work_id": "wi-1"
+            "work-id": "wi-1"
         });
         let params: WorktreeRefreshParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.new_base_ref, "HEAD");

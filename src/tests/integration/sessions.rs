@@ -67,7 +67,7 @@ async fn test_agent_pause_resume_lifecycle() {
     }
 
     // Pause
-    let paused = dispatch_ok(&stores, &tx, &wm, &ic, "agent.pause", json!({"session_id": session_id})).await;
+    let paused = dispatch_ok(&stores, &tx, &wm, &ic, "agent.pause", json!({"session-id": session_id})).await;
     assert_eq!(paused["status"], "paused");
 
     // Resume
@@ -77,13 +77,13 @@ async fn test_agent_pause_resume_lifecycle() {
         &wm,
         &ic,
         "agent.resume",
-        json!({"session_id": session_id}),
+        json!({"session-id": session_id}),
     )
     .await;
     assert_eq!(resumed["status"], "running");
 
     // Stop
-    let stopped = dispatch_ok(&stores, &tx, &wm, &ic, "agent.stop", json!({"session_id": session_id})).await;
+    let stopped = dispatch_ok(&stores, &tx, &wm, &ic, "agent.stop", json!({"session-id": session_id})).await;
     assert_eq!(stopped["status"], "cancelled");
 }
 
@@ -106,7 +106,7 @@ async fn test_tick_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+        json!({"id": tick_id, "target-status": "Sealing", "role": "integrator"}),
     )
     .await;
 
@@ -117,7 +117,7 @@ async fn test_tick_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
+        json!({"id": tick_id, "target-status": "Validating", "role": "integrator"}),
     )
     .await;
 
@@ -128,7 +128,7 @@ async fn test_tick_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "tick.transition",
-        json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
+        json!({"id": tick_id, "target-status": "Published", "role": "integrator"}),
     )
     .await;
 

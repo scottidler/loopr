@@ -18,7 +18,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Auth System", "description": "Add authentication", "acceptance_criteria": "All tests pass"}),
+        json!({"title": "Auth System", "description": "Add authentication", "acceptance-criteria": "All tests pass"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -31,7 +31,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
     assert_eq!(plan_active["status"], "active");
@@ -43,7 +43,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance_criteria": "JWT tokens work"}),
+        json!({"parent-id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance-criteria": "JWT tokens work"}),
     ).await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     assert_eq!(spec["status"], "draft");
@@ -55,7 +55,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
@@ -66,7 +66,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance_criteria": "Tokens are signed"}),
+        json!({"parent-id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance-criteria": "Tokens are signed"}),
     ).await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
 
@@ -77,7 +77,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
 
@@ -88,7 +88,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
     assert_eq!(wi["status"], "Ready");
@@ -100,7 +100,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
 
@@ -111,7 +111,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feat/jwt-sign", "claims": "Added sign() function"}),
+        json!({"work-id": wi_id, "branch-name": "feat/jwt-sign", "claims": "Added sign() function"}),
     )
     .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
@@ -152,7 +152,7 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Task", "description": "desc", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Task", "description": "desc", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -163,7 +163,7 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feat/task", "claims": "Did it"}),
+        json!({"work-id": wi_id, "branch-name": "feat/task", "claims": "Did it"}),
     )
     .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
@@ -175,7 +175,7 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
 
@@ -186,7 +186,7 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": bundle_id, "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
 
@@ -197,7 +197,7 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        json!({"id": bundle_id, "target-status": "Accepted", "role": "coordinator"}),
     )
     .await;
 

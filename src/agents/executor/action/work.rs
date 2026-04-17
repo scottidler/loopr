@@ -18,11 +18,11 @@ pub(super) fn handle_create_work(
     let resp = bridge.request(
         "work.create",
         serde_json::json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": title,
             "description": description,
             "files": files,
-            "acceptance_criteria": acceptance_criteria,
+            "acceptance-criteria": acceptance_criteria,
             "dependencies": dependencies,
         }),
     );
@@ -91,7 +91,7 @@ pub(super) fn handle_transition(
     let effective_role = role
         .map(|r| r.to_string())
         .unwrap_or_else(|| agent_type.default_role().to_string());
-    let params = serde_json::json!({ "id": id, "target_status": target_status, "role": effective_role });
+    let params = serde_json::json!({ "id": id, "target-status": target_status, "role": effective_role });
     let method = format!("{}.transition", super::super::util::normalize_collection(collection));
     let resp = bridge.request(&method, params);
     if resp.is_error() {
@@ -147,7 +147,7 @@ pub(super) fn handle_override_work(
         drop(sessions);
 
         for sid in &active_sessions {
-            let stop_resp = bridge.request("agent.stop", serde_json::json!({ "session_id": sid }));
+            let stop_resp = bridge.request("agent.stop", serde_json::json!({ "session-id": sid }));
             if stop_resp.is_error() {
                 ctx.warn(&format!(
                     "OverrideWork: failed to stop session {}: {:?}",
@@ -164,7 +164,7 @@ pub(super) fn handle_override_work(
         "work.transition",
         serde_json::json!({
             "id": work_id,
-            "target_status": target_status,
+            "target-status": target_status,
             "role": "coordinator",
             "override": true,
             "reason": reason,
@@ -212,8 +212,8 @@ pub(super) fn handle_override_work(
         serde_json::json!({
             "content": format!("Override: Work {} -> {} (reason: {})", work_id, target_status, reason),
             "scope": "work",
-            "source_id": work_id,
-            "applicable_roles": ["coordinator"],
+            "source-id": work_id,
+            "applicable-roles": ["coordinator"],
             "files": ["override", "audit"],
         }),
     );
@@ -276,7 +276,7 @@ mod tests {
         ctx.bridge.request(
             "work.transition",
             serde_json::json!({
-                "id": wi_id, "target_status": "Ready", "role": "coordinator"
+                "id": wi_id, "target-status": "Ready", "role": "coordinator"
             }),
         );
 
@@ -547,7 +547,7 @@ mod tests {
             "work.transition",
             serde_json::json!({
                 "id": wi_id,
-                "target_status": "InProgress",
+                "target-status": "InProgress",
                 "role": "coordinator",
                 "assignee": "test-impl",
             }),
@@ -556,8 +556,8 @@ mod tests {
         let bundle_resp = bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/guard-test",
+                "work-id": wi_id,
+                "branch-name": "feature/guard-test",
                 "description": "guard test bundle",
             }),
         );
@@ -567,7 +567,7 @@ mod tests {
             "work.transition",
             serde_json::json!({
                 "id": wi_id,
-                "target_status": "InReview",
+                "target-status": "InReview",
                 "role": "implementer",
             }),
         );
@@ -601,7 +601,7 @@ mod tests {
         for (status, role) in chain {
             let mut params = serde_json::json!({
                 "id": bundle_id,
-                "target_status": status,
+                "target-status": status,
                 "role": role,
             });
             if status == "Reviewed" {
@@ -752,8 +752,8 @@ mod tests {
         let bundle2_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/guard-test-2",
+                "work-id": wi_id,
+                "branch-name": "feature/guard-test-2",
                 "description": "second bundle",
             }),
         );

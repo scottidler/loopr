@@ -34,7 +34,7 @@ pub(super) fn handle_plan_create(
             .to_string();
         let acceptance_criteria: AcceptanceCriteria = req
             .params
-            .get("acceptance_criteria")
+            .get("acceptance-criteria")
             .map(|v| {
                 // Accept either a JSON array or a plain string from older callers
                 if let Some(s) = v.as_str() {
@@ -174,7 +174,7 @@ pub(super) fn handle_plan_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: PlanStatus = match parse_required_param(&req, "target_status") {
+        let target_status: PlanStatus = match parse_required_param(&req, "target-status") {
             Ok(v) => v,
             Err(resp) => return Ok(resp),
         };
@@ -186,7 +186,7 @@ pub(super) fn handle_plan_transition(
 
         let skip_validation = req
             .params
-            .get("skip_validation")
+            .get("skip-validation")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -225,7 +225,7 @@ pub(super) fn handle_plan_transition(
         }
 
         // Validation gate: Draft → Active requires passing validation report
-        let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+        let skip_reason = req.params.get("skip-reason").and_then(|v| v.as_str());
         if let Some(err) = check_validation_gate(
             stores,
             event_tx,
@@ -299,7 +299,7 @@ pub(super) fn handle_plan_update(
         if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
             plan.title = title.to_string();
         }
-        if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_str()) {
+        if let Some(criteria) = req.params.get("acceptance-criteria").and_then(|v| v.as_str()) {
             plan.acceptance_criteria = AcceptanceCriteria::from(criteria);
         }
         plan.updated_at = crate::id::now_millis();
@@ -349,7 +349,7 @@ mod tests {
             json!({
                 "title": "Test Plan",
 
-                "acceptance_criteria": "It works"
+                "acceptance-criteria": "It works"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -520,7 +520,7 @@ mod tests {
             DaemonRequest::new(
                 10,
                 "plan.transition",
-                json!({"id": plan_a_id, "target_status": "abandoned", "role": "coordinator"}),
+                json!({"id": plan_a_id, "target-status": "abandoned", "role": "coordinator"}),
             ),
         )
         .await;
@@ -564,7 +564,7 @@ mod tests {
             DaemonRequest::new(
                 10,
                 "plan.transition",
-                json!({"id": plan_a_id, "target_status": "abandoned", "role": "coordinator"}),
+                json!({"id": plan_a_id, "target-status": "abandoned", "role": "coordinator"}),
             ),
         )
         .await;
@@ -615,7 +615,7 @@ mod tests {
             "plan.transition",
             json!({
                 "id": plan_id,
-                "target_status": "active",
+                "target-status": "active",
                 "role": "coordinator"
             }),
         );
@@ -652,7 +652,7 @@ mod tests {
             "plan.transition",
             json!({
                 "id": plan_id,
-                "target_status": "complete",
+                "target-status": "complete",
                 "role": "coordinator"
             }),
         );
@@ -683,7 +683,7 @@ mod tests {
             "plan.transition",
             json!({
                 "id": plan_id,
-                "target_status": "active",
+                "target-status": "active",
                 "role": "implementer"
             }),
         );
@@ -702,7 +702,7 @@ mod tests {
             "plan.transition",
             json!({
                 "id": "nonexistent",
-                "target_status": "active"
+                "target-status": "active"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -716,7 +716,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Missing id
-        let req = DaemonRequest::new(1, "plan.transition", json!({"target_status": "active"}));
+        let req = DaemonRequest::new(1, "plan.transition", json!({"target-status": "active"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
 
@@ -748,7 +748,7 @@ mod tests {
             "plan.transition",
             json!({
                 "id": plan_id,
-                "target_status": "active"
+                "target-status": "active"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -780,7 +780,7 @@ mod tests {
             "plan.transition",
             json!({
                 "id": plan_id,
-                "target_status": "active",
+                "target-status": "active",
                 "role": "coordinator"
             }),
         );
@@ -826,7 +826,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -875,7 +875,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -924,7 +924,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -972,7 +972,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -1009,9 +1009,9 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator",
-                    "skip_validation": true
+                    "skip-validation": true
                 }),
             ),
         )
@@ -1048,7 +1048,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -1087,7 +1087,7 @@ mod tests {
                     "id": plan_id,
                     "title": "Updated Plan",
 
-                    "acceptance_criteria": "New criteria"
+                    "acceptance-criteria": "New criteria"
                 }),
             ),
         )

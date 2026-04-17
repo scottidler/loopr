@@ -20,8 +20,8 @@ async fn test_lock_lifecycle_via_dispatch() {
         "lock.create",
         json!({
             "resource": "src/main.rs",
-            "holder_id": "wi-1",
-            "granted_by": "coordinator"
+            "holder-id": "wi-1",
+            "granted-by": "coordinator"
         }),
     )
     .await;

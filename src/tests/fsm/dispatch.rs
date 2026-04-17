@@ -89,7 +89,7 @@ async fn plan_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": id, "target_status": "active"}),
+        json!({"id": id, "target-status": "active"}),
     )
     .await;
     let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.get", json!({"id": id})).await;
@@ -103,7 +103,7 @@ async fn plan_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": id, "target_status": "complete"}),
+        json!({"id": id, "target-status": "complete"}),
     )
     .await;
     let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.get", json!({"id": id})).await;
@@ -117,7 +117,7 @@ async fn plan_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": id, "target_status": "active"}),
+        json!({"id": id, "target-status": "active"}),
     )
     .await;
     assert_eq!(code, -32000); // transition_rejected
@@ -145,7 +145,7 @@ async fn plan_abandon_from_draft_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": id, "target_status": "abandoned"}),
+        json!({"id": id, "target-status": "abandoned"}),
     )
     .await;
     let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.get", json!({"id": id})).await;
@@ -159,7 +159,7 @@ async fn plan_abandon_from_draft_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": id, "target_status": "active"}),
+        json!({"id": id, "target-status": "active"}),
     )
     .await;
     assert_eq!(code, -32000);
@@ -190,7 +190,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -201,7 +201,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent-id": plan_id, "title": "S", "description": "D"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap();
@@ -212,7 +212,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
@@ -223,7 +223,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent-id": spec_id, "title": "Ph", "description": "D"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap();
@@ -234,7 +234,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
 
@@ -245,7 +245,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "WI", "description": "D", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -259,7 +259,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
 
@@ -271,7 +271,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feature/test"}),
+        json!({"work-id": wi_id, "branch-name": "feature/test"}),
     )
     .await;
 
@@ -282,7 +282,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
+        json!({"id": wi_id, "target-status": "InReview", "role": "implementer"}),
     )
     .await;
     dispatch_ok(
@@ -292,7 +292,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
+        json!({"id": wi_id, "target-status": "Integrated", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -302,7 +302,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
+        json!({"id": wi_id, "target-status": "Done", "role": "coordinator"}),
     )
     .await;
 
@@ -317,7 +317,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
+        json!({"id": wi_id, "target-status": "Ready", "role": "coordinator"}),
     )
     .await;
     assert_eq!(code, -32000);
@@ -348,7 +348,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
     let spec = dispatch_ok(
@@ -358,7 +358,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent-id": plan_id, "title": "S", "description": "D"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap();
@@ -369,7 +369,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
     let phase = dispatch_ok(
@@ -379,7 +379,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent-id": spec_id, "title": "Ph", "description": "D"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap();
@@ -390,7 +390,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
     let wi = dispatch_ok(
@@ -400,7 +400,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
+        json!({"parent-id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap();
@@ -412,7 +412,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "feature/test"}),
+        json!({"work-id": wi_id, "branch-name": "feature/test"}),
     )
     .await;
     let bid = bundle["id"].as_str().unwrap().to_string();
@@ -426,7 +426,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": bid, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": bid, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -436,7 +436,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": bid, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": bid, "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
     dispatch_ok(
@@ -446,7 +446,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": bid, "target_status": "Accepted", "role": "coordinator"}),
+        json!({"id": bid, "target-status": "Accepted", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -456,7 +456,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": bid, "target_status": "Integrating", "role": "integrator"}),
+        json!({"id": bid, "target-status": "Integrating", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -466,7 +466,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": bid, "target_status": "Merged", "role": "integrator"}),
+        json!({"id": bid, "target-status": "Merged", "role": "integrator"}),
     )
     .await;
 
@@ -481,7 +481,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": bid, "target_status": "Proposed", "role": "coordinator"}),
+        json!({"id": bid, "target-status": "Proposed", "role": "coordinator"}),
     )
     .await;
     assert_eq!(code, -32000);
@@ -510,7 +510,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
     let spec = dispatch_ok(
@@ -520,7 +520,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent-id": plan_id, "title": "S", "description": "D"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap();
@@ -531,7 +531,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
     let phase = dispatch_ok(
@@ -541,7 +541,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent-id": spec_id, "title": "Ph", "description": "D"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap();
@@ -552,7 +552,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "phase.transition",
-        json!({"id": phase_id, "target_status": "active"}),
+        json!({"id": phase_id, "target-status": "active"}),
     )
     .await;
     let wi = dispatch_ok(
@@ -562,7 +562,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
+        json!({"parent-id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap();
@@ -575,7 +575,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "f/1"}),
+        json!({"work-id": wi_id, "branch-name": "f/1"}),
     )
     .await;
     dispatch_ok(
@@ -585,7 +585,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": b1["id"].as_str().unwrap(), "target_status": "Rejected", "role": "reviewer"}),
+        json!({"id": b1["id"].as_str().unwrap(), "target-status": "Rejected", "role": "reviewer"}),
     )
     .await;
 
@@ -597,7 +597,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "f/2"}),
+        json!({"work-id": wi_id, "branch-name": "f/2"}),
     )
     .await;
     dispatch_ok(
@@ -607,7 +607,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": b2["id"].as_str().unwrap(), "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": b2["id"].as_str().unwrap(), "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -617,7 +617,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": b2["id"].as_str().unwrap(), "target_status": "Rejected", "role": "coordinator"}),
+        json!({"id": b2["id"].as_str().unwrap(), "target-status": "Rejected", "role": "coordinator"}),
     )
     .await;
 
@@ -629,7 +629,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "f/3"}),
+        json!({"work-id": wi_id, "branch-name": "f/3"}),
     )
     .await;
     dispatch_ok(
@@ -639,7 +639,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": b3["id"].as_str().unwrap(), "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": b3["id"].as_str().unwrap(), "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     dispatch_ok(
@@ -649,7 +649,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": b3["id"].as_str().unwrap(), "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        json!({"id": b3["id"].as_str().unwrap(), "target-status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
     .await;
     dispatch_ok(
@@ -659,7 +659,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "bundle.transition",
-        json!({"id": b3["id"].as_str().unwrap(), "target_status": "Rejected", "role": "reviewer"}),
+        json!({"id": b3["id"].as_str().unwrap(), "target-status": "Rejected", "role": "reviewer"}),
     )
     .await;
 }
@@ -681,7 +681,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Sealing", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Sealing", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -691,7 +691,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Validating", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Validating", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -701,7 +701,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Published", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Published", "role": "integrator"}),
     )
     .await;
 
@@ -716,7 +716,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Open", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Open", "role": "integrator"}),
     )
     .await;
     assert_eq!(code, -32000);
@@ -736,7 +736,7 @@ async fn tick_failure_path_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Sealing", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Sealing", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -746,7 +746,7 @@ async fn tick_failure_path_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Validating", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Validating", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -756,7 +756,7 @@ async fn tick_failure_path_through_dispatch() {
         &ic,
         &fsm,
         "tick.transition",
-        json!({"id": tid, "target_status": "Failed", "role": "integrator"}),
+        json!({"id": tid, "target-status": "Failed", "role": "integrator"}),
     )
     .await;
 
@@ -790,7 +790,7 @@ async fn wrong_role_rejected_through_dispatch() {
         &ic,
         &fsm,
         "plan.transition",
-        json!({"id": id, "target_status": "active", "role": "implementer"}),
+        json!({"id": id, "target-status": "active", "role": "implementer"}),
     )
     .await;
     assert_eq!(code, -32000);
@@ -809,7 +809,7 @@ async fn lock_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "lock.create",
-        json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord"}),
+        json!({"resource": "src/main.rs", "holder-id": "wi-1", "granted-by": "coord"}),
     )
     .await;
     let lid = lock["id"].as_str().unwrap().to_string();
@@ -831,7 +831,7 @@ async fn lock_expire_through_dispatch() {
         &ic,
         &fsm,
         "lock.create",
-        json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord"}),
+        json!({"resource": "src/main.rs", "holder-id": "wi-1", "granted-by": "coord"}),
     )
     .await;
     let lid = lock["id"].as_str().unwrap().to_string();
@@ -866,7 +866,7 @@ async fn learning_reinforce_contradict_promote_demote() {
         &ic,
         &fsm,
         "learning.create",
-        json!({"content": "Always run tests", "scope": "global", "source_id": "plan-1"}),
+        json!({"content": "Always run tests", "scope": "global", "source-id": "plan-1"}),
     )
     .await;
     let lid = learning["id"].as_str().unwrap().to_string();

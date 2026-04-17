@@ -187,9 +187,9 @@ pub fn format_orchestration_event(event: &DaemonEvent) -> Option<String> {
             }
         }
         "agent.status_changed" => {
-            let agent_type = data.get("agent_type").and_then(|v| v.as_str()).unwrap_or("");
+            let agent_type = data.get("agent-type").and_then(|v| v.as_str()).unwrap_or("");
             let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
-            let session_id = data.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let session_id = data.get("session-id").and_then(|v| v.as_str()).unwrap_or("?");
             if status == "Running" {
                 match agent_type {
                     "implementer" => Some(format!("Implementer started: {session_id}")),
@@ -265,10 +265,10 @@ pub async fn event_loop(
                 tracing::debug!("[chat] user: {}", submit_text);
 
                 let params = serde_json::json!({
-                    "session_id": CHAT_SESSION_ID,
+                    "session-id": CHAT_SESSION_ID,
                     "message": message,
-                    "funnel_state": app.funnel_state,
-                    "is_draft_request": is_draft_request,
+                    "funnel-state": app.funnel_state,
+                    "is-draft-request": is_draft_request,
                 });
 
                 match c.send("chat.submit", params).await {
@@ -669,7 +669,7 @@ mod tests {
     fn test_orch_event_agent_running() {
         let event = DaemonEvent::new(
             "agent.status_changed",
-            serde_json::json!({"agent_type": "implementer", "status": "Running", "session_id": "sess-1"}),
+            serde_json::json!({"agent-type": "implementer", "status": "Running", "session-id": "sess-1"}),
         );
         assert_eq!(
             format_orchestration_event(&event),
@@ -681,7 +681,7 @@ mod tests {
     fn test_orch_event_agent_completed() {
         let event = DaemonEvent::new(
             "agent.status_changed",
-            serde_json::json!({"agent_type": "reviewer", "status": "Completed", "session_id": "sess-2"}),
+            serde_json::json!({"agent-type": "reviewer", "status": "Completed", "session-id": "sess-2"}),
         );
         assert_eq!(
             format_orchestration_event(&event),
@@ -693,14 +693,14 @@ mod tests {
     fn test_orch_event_coordinator_status_ignored() {
         let event = DaemonEvent::new(
             "agent.status_changed",
-            serde_json::json!({"agent_type": "coordinator", "status": "Running", "session_id": "sess-c"}),
+            serde_json::json!({"agent-type": "coordinator", "status": "Running", "session-id": "sess-c"}),
         );
         assert_eq!(format_orchestration_event(&event), None);
     }
 
     #[test]
     fn test_orch_event_plan_accepted() {
-        let event = DaemonEvent::new("coordinator.plan_accepted", serde_json::json!({"plan_id": "pl-1"}));
+        let event = DaemonEvent::new("coordinator.plan_accepted", serde_json::json!({"plan-id": "pl-1"}));
         assert_eq!(
             format_orchestration_event(&event),
             Some("Engine starting decomposition.".to_string())

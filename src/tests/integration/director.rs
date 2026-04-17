@@ -56,9 +56,9 @@ async fn test_director_pipeline_chat_to_director_handoff_routes_messages() {
         &ic,
         "chat.submit",
         json!({
-            "session_id": chat_session_id,
+            "session-id": chat_session_id,
             "message": "I want to refactor the logger",
-            "funnel_state": "chat",
+            "funnel-state": "chat",
         }),
     )
     .await;
@@ -96,9 +96,9 @@ async fn test_director_pipeline_chat_to_director_handoff_routes_messages() {
         &ic,
         "chat.submit",
         json!({
-            "session_id": chat_session_id,
+            "session-id": chat_session_id,
             "message": "please re-decompose phase 2",
-            "funnel_state": "executing",
+            "funnel-state": "executing",
         }),
     )
     .await;
@@ -226,7 +226,7 @@ async fn test_director_user_intervention_delivers_via_dispatch() {
         &ic,
         "director.user_message",
         json!({
-            "session_id": dir_sid,
+            "session-id": dir_sid,
             "message": "prioritize work wk-99 and abandon wk-100",
         }),
     )
@@ -239,7 +239,7 @@ async fn test_director_user_intervention_delivers_via_dispatch() {
     let mut saw_event = false;
     while let Ok(ev) = bcast_rx.try_recv() {
         if ev.event == "director.user_message"
-            && ev.data.get("session_id").and_then(|v| v.as_str()) == Some(dir_sid.as_str())
+            && ev.data.get("session-id").and_then(|v| v.as_str()) == Some(dir_sid.as_str())
         {
             saw_event = true;
         }

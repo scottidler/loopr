@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_parse_sse_text_delta_message_delta() {
-        let line = r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}}"#;
+        let line = r#"data: {"type":"message_delta","delta":{"stop-reason":"end_turn","stop_sequence":null}}"#;
         let result = parse_sse_text_delta(line);
         assert_eq!(result, None);
     }
@@ -798,7 +798,7 @@ mod tests {
             r#"data: {"type":"content_block_stop","index":0}"#,
             "",
             r#"event: message_delta"#,
-            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop-reason":"end_turn","stop_sequence":null}}"#,
             "",
             r#"event: message_stop"#,
             r#"data: {"type":"message_stop"}"#,

@@ -11,7 +11,7 @@ use crate::worktree::manager::WorktreeManager;
 use crate::daemon::context::Stores;
 use crate::domain::work::Work;
 
-#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
+#[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_worktree_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -19,7 +19,7 @@ pub(super) fn handle_worktree_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -31,7 +31,7 @@ pub(super) fn handle_worktree_create(
 
         let base_ref = req
             .params
-            .get("base_ref")
+            .get("base-ref")
             .and_then(|v| v.as_str())
             .unwrap_or("HEAD")
             .to_string();
@@ -68,11 +68,11 @@ pub(super) fn handle_worktree_create(
             Ok(path) => {
                 let _ = event_tx.send(DaemonEvent::new(
                     "worktree.created",
-                    json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+                    json!({ "work-id": work_id, "path": path.to_string_lossy() }),
                 ));
                 Ok(DaemonResponse::ok(
                     req.id,
-                    json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+                    json!({ "work-id": work_id, "path": path.to_string_lossy() }),
                 ))
             }
             Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -93,7 +93,7 @@ pub(super) fn handle_worktree_list(worktree_mgr: &WorktreeManager, req: DaemonRe
     })
 }
 
-#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
+#[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_worktree_cleanup(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -101,7 +101,7 @@ pub(super) fn handle_worktree_cleanup(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -136,11 +136,11 @@ pub(super) fn handle_worktree_cleanup(
             Ok(()) => {
                 let _ = event_tx.send(DaemonEvent::new(
                     "worktree.cleaned",
-                    json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+                    json!({ "work-id": work_id, "path": path.to_string_lossy() }),
                 ));
                 Ok(DaemonResponse::ok(
                     req.id,
-                    json!({ "work_id": work_id, "path": path.to_string_lossy(), "status": "cleaned" }),
+                    json!({ "work-id": work_id, "path": path.to_string_lossy(), "status": "cleaned" }),
                 ))
             }
             Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -148,10 +148,10 @@ pub(super) fn handle_worktree_cleanup(
     })
 }
 
-#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
+#[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -163,7 +163,7 @@ pub(super) fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: Daemo
 
         let new_base_ref = req
             .params
-            .get("new_base_ref")
+            .get("new-base-ref")
             .and_then(|v| v.as_str())
             .unwrap_or("HEAD")
             .to_string();
@@ -171,7 +171,7 @@ pub(super) fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: Daemo
         match worktree_mgr.refresh(&work_id, &new_base_ref) {
             Ok(()) => Ok(DaemonResponse::ok(
                 req.id,
-                json!({ "work_id": work_id, "status": "refreshed" }),
+                json!({ "work-id": work_id, "status": "refreshed" }),
             )),
             Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         }
@@ -219,7 +219,7 @@ mod tests {
             tx,
             wm,
             &test_integrator_config(),
-            DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(10, "spec.create", json!({"parent-id": plan_id, "title": "Parent Spec"})),
         )
         .await;
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -240,7 +240,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
+                json!({"parent-id": spec_id, "title": "Parent Phase", "order": 1}),
             ),
         )
         .await;
@@ -262,7 +262,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent-id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -297,7 +297,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "worktree.create", json!({"work_id": "nonexistent"})),
+            DaemonRequest::new(1, "worktree.create", json!({"work-id": "nonexistent"})),
         )
         .await;
         assert!(resp.is_error());
@@ -318,7 +318,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "worktree.create", json!({"work_id": wi_id})),
+            DaemonRequest::new(2, "worktree.create", json!({"work-id": wi_id})),
         )
         .await;
         // The error should be from git, not from "not found"
@@ -376,7 +376,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "worktree.cleanup", json!({"work_id": "nonexistent"})),
+            DaemonRequest::new(1, "worktree.cleanup", json!({"work-id": "nonexistent"})),
         )
         .await;
         assert!(resp.is_error());
@@ -410,7 +410,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "worktree.refresh", json!({"work_id": "nonexistent"})),
+            DaemonRequest::new(1, "worktree.refresh", json!({"work-id": "nonexistent"})),
         )
         .await;
         // Will error since worktree path doesn't exist

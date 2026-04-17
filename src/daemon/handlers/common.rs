@@ -128,9 +128,9 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator",
-                    "skip_validation": true
+                    "skip-validation": true
                 }),
             ),
         )
@@ -146,7 +146,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "complete",
+                    "target-status": "complete",
                     "role": "coordinator"
                 }),
             ),
@@ -218,7 +218,7 @@ mod tests {
                 "plan.transition",
                 json!({
                     "id": plan_id,
-                    "target_status": "active",
+                    "target-status": "active",
                     "role": "coordinator"
                 }),
             ),
@@ -256,7 +256,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "plan.transition",
-                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+                json!({"id": plan_id, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -294,7 +294,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "plan.transition",
-                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+                json!({"id": plan_id, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;
@@ -323,7 +323,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "plan.transition",
-                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+                json!({"id": plan_id, "target-status": "active", "role": "coordinator"}),
             ),
         )
         .await;

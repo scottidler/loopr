@@ -48,7 +48,7 @@ impl Primitive for CombineConflictingWorks {
             let resp = ctx.bridge.request(
                 "work.combine_conflicting",
                 serde_json::json!({
-                    "work_ids": work_ids,
+                    "work-ids": work_ids,
                     "conflicting_files": conflicting_files,
                 }),
             );

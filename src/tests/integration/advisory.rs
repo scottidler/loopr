@@ -28,7 +28,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Advisory Test", "description": "Test advisory review", "acceptance_criteria": "tests pass"}),
+        json!({"title": "Advisory Test", "description": "Test advisory review", "acceptance-criteria": "tests pass"}),
     )
     .await;
     let plan_id = plan_resp["id"].as_str().unwrap();
@@ -38,7 +38,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "Spec", "description": "spec"}),
+        json!({"parent-id": plan_id, "title": "Spec", "description": "spec"}),
     )
     .await;
     let spec_id = spec_resp["id"].as_str().unwrap();
@@ -48,7 +48,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
+        json!({"parent-id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
     )
     .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
@@ -58,7 +58,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Work", "description": "work", "files": ["src/main.rs"]}),
+        json!({"parent-id": phase_id, "title": "Work", "description": "work", "files": ["src/main.rs"]}),
     )
     .await;
     let work_id = work_resp["id"].as_str().unwrap();
@@ -85,7 +85,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": &bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
     assert_eq!(
@@ -100,7 +100,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct accept"}),
+        json!({"id": &bundle_id, "target-status": "Accepted", "role": "coordinator", "verification": "Coordinator direct accept"}),
     )
     .await;
     assert_eq!(
@@ -147,7 +147,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "T", "description": "d", "acceptance_criteria": "c"}),
+        json!({"title": "T", "description": "d", "acceptance-criteria": "c"}),
     )
     .await;
     let plan_id = plan_resp["id"].as_str().unwrap();
@@ -157,7 +157,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "S", "description": "d"}),
+        json!({"parent-id": plan_id, "title": "S", "description": "d"}),
     )
     .await;
     let spec_id = spec_resp["id"].as_str().unwrap();
@@ -167,7 +167,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "P", "description": "d", "order": 1}),
+        json!({"parent-id": spec_id, "title": "P", "description": "d", "order": 1}),
     )
     .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
@@ -177,7 +177,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "W", "description": "d", "files": ["src/x.rs"]}),
+        json!({"parent-id": phase_id, "title": "W", "description": "d", "files": ["src/x.rs"]}),
     )
     .await;
     let work_id = work_resp["id"].as_str().unwrap();
@@ -196,7 +196,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        json!({"id": &bundle_id, "target-status": "Triaged", "role": "coordinator"}),
     )
     .await;
 
@@ -206,7 +206,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
     let req = DaemonRequest::new(
         1,
         "bundle.transition",
-        json!({"id": &bundle_id, "target_status": "Accepted", "role": "reviewer", "verification": "v"}),
+        json!({"id": &bundle_id, "target-status": "Accepted", "role": "reviewer", "verification": "v"}),
     );
     let resp = dispatch(&stores, &tx, &wm, &ic, &fsm, req).await;
     assert!(resp.is_error(), "Reviewer should not be able to use Triaged->Accepted");
@@ -215,7 +215,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
     let req = DaemonRequest::new(
         2,
         "bundle.transition",
-        json!({"id": &bundle_id, "target_status": "Accepted", "role": "implementer", "verification": "v"}),
+        json!({"id": &bundle_id, "target-status": "Accepted", "role": "implementer", "verification": "v"}),
     );
     let resp = dispatch(&stores, &tx, &wm, &ic, &fsm, req).await;
     assert!(
@@ -230,7 +230,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "bundle.transition",
-        json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct"}),
+        json!({"id": &bundle_id, "target-status": "Accepted", "role": "coordinator", "verification": "Coordinator direct"}),
     )
     .await;
     assert_eq!(

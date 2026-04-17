@@ -173,7 +173,7 @@ pub(super) fn handle_tick_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: TickStatus = match parse_required_param(&req, "target_status") {
+        let target_status: TickStatus = match parse_required_param(&req, "target-status") {
             Ok(v) => v,
             Err(resp) => return Ok(resp),
         };
@@ -286,13 +286,13 @@ pub(super) fn handle_tick_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("ticks", &id))),
         };
 
-        if let Some(log) = req.params.get("validation_log").and_then(|v| v.as_str()) {
+        if let Some(log) = req.params.get("validation-log").and_then(|v| v.as_str()) {
             tick.validation_log = log.to_string();
         }
-        if let Some(bids) = req.params.get("bundle_ids").and_then(|v| v.as_array()) {
+        if let Some(bids) = req.params.get("bundle-ids").and_then(|v| v.as_array()) {
             tick.bundle_ids = bids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
-        if let Some(abids) = req.params.get("attempted_bundle_ids").and_then(|v| v.as_array()) {
+        if let Some(abids) = req.params.get("attempted-bundle-ids").and_then(|v| v.as_array()) {
             tick.attempted_bundle_ids = abids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
         tick.updated_at = crate::id::now_millis();
@@ -471,7 +471,7 @@ mod tests {
             DaemonRequest::new(
                 51,
                 "tick.transition",
-                json!({"id": t1_id, "target_status": "Sealing", "role": "integrator"}),
+                json!({"id": t1_id, "target-status": "Sealing", "role": "integrator"}),
             ),
         )
         .await;
@@ -483,7 +483,7 @@ mod tests {
             DaemonRequest::new(
                 52,
                 "tick.transition",
-                json!({"id": t1_id, "target_status": "Validating", "role": "integrator"}),
+                json!({"id": t1_id, "target-status": "Validating", "role": "integrator"}),
             ),
         )
         .await;
@@ -495,7 +495,7 @@ mod tests {
             DaemonRequest::new(
                 53,
                 "tick.transition",
-                json!({"id": t1_id, "target_status": "Published", "role": "integrator"}),
+                json!({"id": t1_id, "target-status": "Published", "role": "integrator"}),
             ),
         )
         .await;
@@ -617,7 +617,7 @@ mod tests {
             DaemonRequest::new(
                 52,
                 "tick.transition",
-                json!({"id": tick1_id, "target_status": "Sealing", "role": "integrator"}),
+                json!({"id": tick1_id, "target-status": "Sealing", "role": "integrator"}),
             ),
         )
         .await;
@@ -629,7 +629,7 @@ mod tests {
             DaemonRequest::new(
                 53,
                 "tick.transition",
-                json!({"id": tick1_id, "target_status": "Validating", "role": "integrator"}),
+                json!({"id": tick1_id, "target-status": "Validating", "role": "integrator"}),
             ),
         )
         .await;
@@ -641,7 +641,7 @@ mod tests {
             DaemonRequest::new(
                 54,
                 "tick.transition",
-                json!({"id": tick1_id, "target_status": "Published", "role": "integrator"}),
+                json!({"id": tick1_id, "target-status": "Published", "role": "integrator"}),
             ),
         )
         .await;
@@ -666,7 +666,7 @@ mod tests {
             DaemonRequest::new(
                 56,
                 "tick.transition",
-                json!({"id": tick2_id, "target_status": "Sealing", "role": "integrator"}),
+                json!({"id": tick2_id, "target-status": "Sealing", "role": "integrator"}),
             ),
         )
         .await;
@@ -715,7 +715,7 @@ mod tests {
             DaemonRequest::new(
                 52,
                 "tick.transition",
-                json!({"id": t1_id, "target_status": "Sealing", "role": "integrator"}),
+                json!({"id": t1_id, "target-status": "Sealing", "role": "integrator"}),
             ),
         )
         .await;
@@ -727,7 +727,7 @@ mod tests {
             DaemonRequest::new(
                 53,
                 "tick.transition",
-                json!({"id": t1_id, "target_status": "Validating", "role": "integrator"}),
+                json!({"id": t1_id, "target-status": "Validating", "role": "integrator"}),
             ),
         )
         .await;
@@ -739,7 +739,7 @@ mod tests {
             DaemonRequest::new(
                 54,
                 "tick.transition",
-                json!({"id": t1_id, "target_status": "Published", "role": "integrator"}),
+                json!({"id": t1_id, "target-status": "Published", "role": "integrator"}),
             ),
         )
         .await;
@@ -798,7 +798,7 @@ mod tests {
         let req = DaemonRequest::new(
             51,
             "tick.transition",
-            json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+            json!({"id": tick_id, "target-status": "Sealing", "role": "integrator"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -831,7 +831,7 @@ mod tests {
         let req = DaemonRequest::new(
             51,
             "tick.transition",
-            json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
+            json!({"id": tick_id, "target-status": "Published", "role": "integrator"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -858,7 +858,7 @@ mod tests {
         let req = DaemonRequest::new(
             51,
             "tick.transition",
-            json!({"id": tick_id, "target_status": "Sealing", "role": "coordinator"}),
+            json!({"id": tick_id, "target-status": "Sealing", "role": "coordinator"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -873,7 +873,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "tick.transition",
-            json!({"id": "nonexistent", "target_status": "Sealing"}),
+            json!({"id": "nonexistent", "target-status": "Sealing"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -900,7 +900,7 @@ mod tests {
         let req = DaemonRequest::new(
             51,
             "tick.transition",
-            json!({"id": tick_id, "target_status": "Sealing"}),
+            json!({"id": tick_id, "target-status": "Sealing"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -926,9 +926,9 @@ mod tests {
                 "tick.update",
                 json!({
                     "id": tick_id,
-                    "validation_log": "All tests passed",
-                    "bundle_ids": ["b-1", "b-2"],
-                    "attempted_bundle_ids": ["b-1", "b-2", "b-3"]
+                    "validation-log": "All tests passed",
+                    "bundle-ids": ["b-1", "b-2"],
+                    "attempted-bundle-ids": ["b-1", "b-2", "b-3"]
                 }),
             ),
         )
@@ -950,7 +950,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "tick.update", json!({"id": "nonexistent", "validation_log": "x"})),
+            DaemonRequest::new(1, "tick.update", json!({"id": "nonexistent", "validation-log": "x"})),
         )
         .await;
         assert!(resp.is_error());
@@ -966,7 +966,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "tick.update", json!({"validation_log": "x"})),
+            DaemonRequest::new(1, "tick.update", json!({"validation-log": "x"})),
         )
         .await;
         assert!(resp.is_error());

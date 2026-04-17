@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_request_roundtrip() {
-        let req = DaemonRequest::new(42, "bundle.propose", json!({"work_id": "wi1"}));
+        let req = DaemonRequest::new(42, "bundle.propose", json!({"work-id": "wi1"}));
         let line = encode_request(&req).unwrap();
         let decoded = decode_request(&line).unwrap();
         assert_eq!(req, decoded);

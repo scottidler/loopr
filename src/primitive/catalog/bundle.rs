@@ -37,7 +37,7 @@ impl Primitive for RejectBundle {
                 "bundle.transition",
                 serde_json::json!({
                     "id": bundle_id,
-                    "target_status": "Rejected",
+                    "target-status": "Rejected",
                     "role": "Coordinator",
                     "reason": reason,
                 }),
@@ -56,7 +56,7 @@ impl Primitive for RejectBundle {
                     "work.transition",
                     serde_json::json!({
                         "id": work_id,
-                        "target_status": "Ready",
+                        "target-status": "Ready",
                         "role": "Coordinator",
                         "override": true,
                         "reason": format!("bundle {} rejected: {}", bundle_id, reason),
@@ -137,7 +137,7 @@ impl Primitive for SupersedeBundles {
                     "bundle.transition",
                     serde_json::json!({
                         "id": bid,
-                        "target_status": "Superseded",
+                        "target-status": "Superseded",
                         "role": "Coordinator",
                     }),
                 );

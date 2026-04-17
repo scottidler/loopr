@@ -24,11 +24,11 @@ async fn test_dependency_chain_execution() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "Create base types",
             "description": "Foundation types and traits",
             "files": ["src/types.rs"],
-            "acceptance_criteria": ["Types compile"]
+            "acceptance-criteria": ["Types compile"]
         }),
     )
     .await;
@@ -42,11 +42,11 @@ async fn test_dependency_chain_execution() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "Implement logic",
             "description": "Business logic using base types",
             "files": ["src/logic.rs"],
-            "acceptance_criteria": ["Logic tests pass"],
+            "acceptance-criteria": ["Logic tests pass"],
             "dependencies": [wi_a_id]
         }),
     )
@@ -61,11 +61,11 @@ async fn test_dependency_chain_execution() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "Add integration tests",
             "description": "Integration tests for logic",
             "files": ["src/tests.rs"],
-            "acceptance_criteria": ["Integration tests pass"],
+            "acceptance-criteria": ["Integration tests pass"],
             "dependencies": [wi_b_id]
         }),
     )
@@ -108,11 +108,11 @@ async fn test_duplicate_work_rejection() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "Implement auth",
             "description": "Add JWT auth",
             "files": ["src/auth.rs"],
-            "acceptance_criteria": ["Auth works"]
+            "acceptance-criteria": ["Auth works"]
         }),
     )
     .await;
@@ -125,11 +125,11 @@ async fn test_duplicate_work_rejection() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "implement auth",
             "description": "Different description",
             "files": ["src/auth.rs"],
-            "acceptance_criteria": ["Auth works"]
+            "acceptance-criteria": ["Auth works"]
         }),
     )
     .await;
@@ -145,11 +145,11 @@ async fn test_duplicate_work_rejection() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase_id,
+            "parent-id": phase_id,
             "title": "Implement authorization",
             "description": "Add RBAC",
             "files": ["src/authz.rs"],
-            "acceptance_criteria": ["RBAC works"]
+            "acceptance-criteria": ["RBAC works"]
         }),
     )
     .await;
@@ -171,7 +171,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Multi-phase Plan", "description": "desc", "acceptance_criteria": "all phases done"}),
+        json!({"title": "Multi-phase Plan", "description": "desc", "acceptance-criteria": "all phases done"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -181,7 +181,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -191,7 +191,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent_id": plan_id, "title": "Multi-phase Spec", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"parent-id": plan_id, "title": "Multi-phase Spec", "description": "desc", "acceptance-criteria": "pass"}),
     ).await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -200,7 +200,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
@@ -210,7 +210,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Phase 1: Foundation", "description": "base types", "acceptance_criteria": "types exist"}),
+        json!({"parent-id": spec_id, "title": "Phase 1: Foundation", "description": "base types", "acceptance-criteria": "types exist"}),
     ).await;
     let phase1_id = phase1["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -219,7 +219,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.transition",
-        json!({"id": phase1_id, "target_status": "active"}),
+        json!({"id": phase1_id, "target-status": "active"}),
     )
     .await;
 
@@ -229,7 +229,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent_id": spec_id, "title": "Phase 2: Logic", "description": "business logic", "acceptance_criteria": "logic works"}),
+        json!({"parent-id": spec_id, "title": "Phase 2: Logic", "description": "business logic", "acceptance-criteria": "logic works"}),
     ).await;
     let phase2_id = phase2["id"].as_str().unwrap().to_string();
 
@@ -241,11 +241,11 @@ async fn test_phase_gate_advances_to_next_phase() {
         &ic,
         "work.create",
         json!({
-            "parent_id": phase1_id,
+            "parent-id": phase1_id,
             "title": "Create base types",
             "description": "Foundation types",
             "files": ["src/types.rs"],
-            "acceptance_criteria": ["Types compile"]
+            "acceptance-criteria": ["Types compile"]
         }),
     )
     .await;
@@ -258,7 +258,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        json!({"id": wi_id, "target-status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
     .await;
 
@@ -269,7 +269,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "bundle.create",
-        json!({"work_id": wi_id, "branch_name": "agent/test-wi", "claims": "implemented types"}),
+        json!({"work-id": wi_id, "branch-name": "agent/test-wi", "claims": "implemented types"}),
     )
     .await;
 
@@ -279,7 +279,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
+        json!({"id": wi_id, "target-status": "InReview", "role": "implementer"}),
     )
     .await;
     dispatch_ok(
@@ -288,7 +288,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
+        json!({"id": wi_id, "target-status": "Integrated", "role": "integrator"}),
     )
     .await;
     dispatch_ok(
@@ -297,7 +297,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "work.transition",
-        json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
+        json!({"id": wi_id, "target-status": "Done", "role": "coordinator"}),
     )
     .await;
 
@@ -312,7 +312,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.transition",
-        json!({"id": phase2_id, "target_status": "active"}),
+        json!({"id": phase2_id, "target-status": "active"}),
     )
     .await;
 

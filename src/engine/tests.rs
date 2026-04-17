@@ -939,7 +939,7 @@ async fn tick_event_trigger_fires_strategy() {
     // Event on the bus
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-123"}),
+        data: serde_json::json!({"work-id": "wi-123"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);
@@ -1007,7 +1007,7 @@ async fn tick_priority_ordering() {
 
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-1"}),
+        data: serde_json::json!({"work-id": "wi-1"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);
@@ -1068,7 +1068,7 @@ async fn tick_on_failure_wiring_fires_when_action_fails() {
 
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-99"}),
+        data: serde_json::json!({"work-id": "wi-99"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);
@@ -1118,7 +1118,7 @@ async fn tick_disabled_strategy_is_skipped() {
 
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-1"}),
+        data: serde_json::json!({"work-id": "wi-1"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);
@@ -1171,11 +1171,11 @@ async fn tick_scope_id_explosion() {
     let events = vec![
         crate::ipc::protocol::DaemonEvent {
             event: "multi.fired".to_owned(),
-            data: serde_json::json!({"work_id": "wi-1"}),
+            data: serde_json::json!({"work-id": "wi-1"}),
         },
         crate::ipc::protocol::DaemonEvent {
             event: "multi.fired".to_owned(),
-            data: serde_json::json!({"work_id": "wi-2"}),
+            data: serde_json::json!({"work-id": "wi-2"}),
         },
     ];
 
@@ -1236,7 +1236,7 @@ async fn tick_context_passes_between_steps() {
 
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-42"}),
+        data: serde_json::json!({"work-id": "wi-42"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);
@@ -1633,7 +1633,7 @@ async fn tick_context_passes_from_action_to_on_success() {
 
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-77"}),
+        data: serde_json::json!({"work-id": "wi-77"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);
@@ -1695,7 +1695,7 @@ async fn tick_guard_skips_step_but_strategy_succeeds() {
 
     let events = vec![crate::ipc::protocol::DaemonEvent {
         event: "test.fired".to_owned(),
-        data: serde_json::json!({"work_id": "wi-guard"}),
+        data: serde_json::json!({"work-id": "wi-guard"}),
     }];
 
     let te = test_trigger_evaluator(vec![trigger]);

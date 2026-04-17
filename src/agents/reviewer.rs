@@ -182,7 +182,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
             serde_json::json!({
                 "content": learning_content,
                 "scope": "work",
-                "source_id": work_title,
+                "source-id": work_title,
             }),
         );
         if learning_resp.is_error() {
@@ -197,7 +197,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
             serde_json::json!({
                 "content": format!("Review feedback ({}): {}", review.verdict, review.summary),
                 "scope": "work",
-                "source_id": work_title,
+                "source-id": work_title,
                 "files": [feedback_tag],
             }),
         );
@@ -214,7 +214,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                     "bundle.transition",
                     serde_json::json!({
                         "id": self.bundle_id,
-                        "target_status": "Reviewed",
+                        "target-status": "Reviewed",
                         "role": "reviewer",
                         "verification": format!("Reviewer approved: {}", review.summary),
                     }),
@@ -249,7 +249,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                     "bundle.transition",
                     serde_json::json!({
                         "id": self.bundle_id,
-                        "target_status": "Rejected",
+                        "target-status": "Rejected",
                         "role": "reviewer",
                     }),
                 );
@@ -280,7 +280,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                     "bundle.transition",
                     serde_json::json!({
                         "id": self.bundle_id,
-                        "target_status": "Rejected",
+                        "target-status": "Rejected",
                         "role": "reviewer",
                     }),
                 );

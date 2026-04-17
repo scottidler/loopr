@@ -36,7 +36,7 @@ const DIRECTOR_USER_MESSAGE_BUFFER: usize = 16;
 /// Response:
 /// - `session_id`: String. The new Director `AgentSession.id`.
 /// - `status`: String. "Starting" - the Director transitions to Running inside run_agent_task.
-#[instrument(skip_all, fields(chat_session_id = ?req.params.get("chat_session_id")))]
+#[instrument(skip_all, fields(chat_session_id = ?req.params.get("chat-session-id")))]
 pub(super) fn handle_director_start_plan_intake(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -44,7 +44,7 @@ pub(super) fn handle_director_start_plan_intake(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let chat_session_id = match req.params.get("chat_session_id").and_then(|v| v.as_str()) {
+        let chat_session_id = match req.params.get("chat-session-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -159,9 +159,9 @@ pub(super) fn handle_director_start_plan_intake(
         Ok(DaemonResponse::ok(
             req.id,
             serde_json::json!({
-                "session_id": session_id,
+                "session-id": session_id,
                 "status": "Starting",
-                "chat_session_id": chat_session_id,
+                "chat-session-id": chat_session_id,
                 "session": session_json,
             }),
         ))
@@ -175,14 +175,14 @@ pub(super) fn handle_director_start_plan_intake(
 /// returns a precondition-failed error. The mpsc `send` is async internally; we use
 /// `try_send` to avoid blocking the IPC request when the buffer is full (returns a
 /// transient error in that case so the caller can retry or fall back to `chat.submit`).
-#[instrument(skip_all, fields(session_id = ?req.params.get("session_id")))]
+#[instrument(skip_all, fields(session_id = ?req.params.get("session-id")))]
 pub(super) fn handle_director_user_message(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
@@ -230,13 +230,13 @@ pub(super) fn handle_director_user_message(
                 let _ = event_tx.send(DaemonEvent::new(
                     "director.user_message",
                     serde_json::json!({
-                        "session_id": session_id,
+                        "session-id": session_id,
                         "message": message,
                     }),
                 ));
                 Ok(DaemonResponse::ok(
                     req.id,
-                    serde_json::json!({ "status": "Received", "session_id": session_id }),
+                    serde_json::json!({ "status": "Received", "session-id": session_id }),
                 ))
             }
             Err(mpsc::error::TrySendError::Full(_)) => Ok(DaemonResponse::err(
@@ -283,13 +283,13 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "director.start_plan_intake",
-            json!({ "chat_session_id": "default-chat" }),
+            json!({ "chat-session-id": "default-chat" }),
         );
         let resp = handle_director_start_plan_intake(&stores, &tx, &wm, req);
         assert!(!resp.is_error(), "start_plan_intake should succeed: {:?}", resp.error);
 
         let result = resp.result.unwrap();
-        let session_id = result["session_id"].as_str().unwrap().to_string();
+        let session_id = result["session-id"].as_str().unwrap().to_string();
         assert_eq!(result["status"], "Starting");
 
         // Director session must exist in stores
@@ -353,7 +353,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "director.start_plan_intake",
-            json!({ "chat_session_id": "default-chat" }),
+            json!({ "chat-session-id": "default-chat" }),
         );
         let resp = handle_director_start_plan_intake(&stores, &tx, &wm, req);
         assert!(resp.is_error());
@@ -369,7 +369,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "director.user_message",
-            json!({ "session_id": "ag-ghost", "message": "hello" }),
+            json!({ "session-id": "ag-ghost", "message": "hello" }),
         );
         let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
@@ -389,7 +389,7 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "director.user_message",
-            json!({ "session_id": "ag-test", "message": "hello" }),
+            json!({ "session-id": "ag-test", "message": "hello" }),
         );
         let resp = handle_director_user_message(&stores, &bcast, req);
         assert!(!resp.is_error());
@@ -403,7 +403,7 @@ mod tests {
             .expect("director.user_message event should be emitted");
         assert_eq!(ev.event, "director.user_message");
         assert_eq!(ev.data.get("message").and_then(|v| v.as_str()), Some("hello"));
-        assert_eq!(ev.data.get("session_id").and_then(|v| v.as_str()), Some("ag-test"));
+        assert_eq!(ev.data.get("session-id").and_then(|v| v.as_str()), Some("ag-test"));
     }
 
     #[test]
@@ -416,7 +416,7 @@ mod tests {
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("session_id"));
 
-        let req = DaemonRequest::new(2, "director.user_message", json!({ "session_id": "ag-x" }));
+        let req = DaemonRequest::new(2, "director.user_message", json!({ "session-id": "ag-x" }));
         let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("message"));

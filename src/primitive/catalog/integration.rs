@@ -146,7 +146,7 @@ impl Primitive for IntegrateTick {
                             "bundle.transition",
                             json!({
                                 "id": bundle_id,
-                                "target_status": "Merged",
+                                "target-status": "Merged",
                                 "role": "integrator",
                             }),
                         );
@@ -162,9 +162,9 @@ impl Primitive for IntegrateTick {
                         let _ = ctx.event_tx.send(crate::ipc::protocol::DaemonEvent::new(
                             "bundle.merged",
                             json!({
-                                "bundle_id": bundle_id,
-                                "work_id": work_id,
-                                "plan_id": plan_id,
+                                "bundle-id": bundle_id,
+                                "work-id": work_id,
+                                "plan-id": plan_id,
                                 "branch": branch_name,
                             }),
                         ));
@@ -184,9 +184,9 @@ impl Primitive for IntegrateTick {
                         let _ = ctx.event_tx.send(crate::ipc::protocol::DaemonEvent::new(
                             "integration.conflict-detected",
                             json!({
-                                "bundle_id": bundle_id,
-                                "work_id": work_id,
-                                "plan_id": plan_id,
+                                "bundle-id": bundle_id,
+                                "work-id": work_id,
+                                "plan-id": plan_id,
                             }),
                         ));
                     }
@@ -219,8 +219,8 @@ impl Primitive for IntegrateTick {
             let tick_resp = ctx.bridge.request(
                 "tick.create",
                 json!({
-                    "plan_id": plan_id,
-                    "bundle_ids": bundle_ids,
+                    "plan-id": plan_id,
+                    "bundle-ids": bundle_ids,
                 }),
             );
 
@@ -244,9 +244,9 @@ impl Primitive for IntegrateTick {
             let _ = ctx.event_tx.send(crate::ipc::protocol::DaemonEvent::new(
                 "tick.created",
                 json!({
-                    "tick_id": tick_id,
-                    "plan_id": plan_id,
-                    "bundle_ids": bundle_ids,
+                    "tick-id": tick_id,
+                    "plan-id": plan_id,
+                    "bundle-ids": bundle_ids,
                     "merged_work_ids": merged_bundle_ids.iter().map(|(_, wid)| wid.clone()).collect::<Vec<_>>(),
                 }),
             ));
@@ -257,7 +257,7 @@ impl Primitive for IntegrateTick {
                     "bundle.transition",
                     json!({
                         "id": failed_bundle_id,
-                        "target_status": "Rejected",
+                        "target-status": "Rejected",
                         "role": "integrator",
                     }),
                 );
@@ -356,7 +356,7 @@ impl Primitive for ValidateAndPublishTick {
             debug!("validate-and-publish-tick: tick_id={}", tick_id);
 
             // Validate and publish via the existing handler (runs validation commands)
-            let publish_resp = ctx.bridge.request("integrator.publish", json!({ "tick_id": tick_id }));
+            let publish_resp = ctx.bridge.request("integrator.publish", json!({ "tick-id": tick_id }));
 
             let passed = !publish_resp.is_error();
 
@@ -374,7 +374,7 @@ impl Primitive for ValidateAndPublishTick {
                         "work.transition",
                         json!({
                             "id": work_id,
-                            "target_status": "Integrated",
+                            "target-status": "Integrated",
                             "role": "integrator",
                         }),
                     );

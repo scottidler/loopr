@@ -76,7 +76,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
 
 /// Handle chat.submit - send a user message and start/resume the Chat agentic loop.
 /// Spawns a daemon-side Tokio task running run_tool_loop with per-iteration checkpointing.
-#[instrument(skip_all, fields(session_id = ?req.params.get("session_id"), funnel_state = ?req.params.get("funnel_state"), message_len = req.params.get("message").and_then(|v| v.as_str()).map(|s| s.len())))]
+#[instrument(skip_all, fields(session_id = ?req.params.get("session-id"), funnel_state = ?req.params.get("funnel-state"), message_len = req.params.get("message").and_then(|v| v.as_str()).map(|s| s.len())))]
 pub(super) fn handle_chat_submit(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -85,7 +85,7 @@ pub(super) fn handle_chat_submit(
     try_handler!(req.id, {
         let session_id = req
             .params
-            .get("session_id")
+            .get("session-id")
             .and_then(|v| v.as_str())
             .unwrap_or("default-chat")
             .to_string();
@@ -100,12 +100,12 @@ pub(super) fn handle_chat_submit(
         };
         let funnel_state: crate::domain::chat::FunnelState = req
             .params
-            .get("funnel_state")
+            .get("funnel-state")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or(crate::domain::chat::FunnelState::Chat);
         let is_draft_request = req
             .params
-            .get("is_draft_request")
+            .get("is-draft-request")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -131,7 +131,7 @@ pub(super) fn handle_chat_submit(
                         Ok(()) => DaemonResponse::ok(
                             req.id,
                             serde_json::json!({
-                                "session_id": session_id,
+                                "session-id": session_id,
                                 "routed_to": "director",
                                 "director_session_id": dsid,
                             }),
@@ -311,7 +311,7 @@ pub(super) fn handle_chat_submit(
         Ok(DaemonResponse::ok(
             req.id,
             serde_json::json!({
-                "session_id": session_id,
+                "session-id": session_id,
                 "status": "Running"
             }),
         ))
@@ -325,7 +325,7 @@ pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> Da
     try_handler!(req.id, {
         let session_id = req
             .params
-            .get("session_id")
+            .get("session-id")
             .and_then(|v| v.as_str())
             .unwrap_or("default-chat")
             .to_string();
@@ -342,9 +342,9 @@ pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> Da
         Ok(DaemonResponse::ok(
             req.id,
             serde_json::json!({
-                "session_id": history.session_id,
+                "session-id": history.session_id,
                 "status": "Idle",
-                "funnel_state": history.funnel_state,
+                "funnel-state": history.funnel_state,
                 "messages": history.messages,
                 "streaming": false
             }),
@@ -358,7 +358,7 @@ pub(super) fn handle_chat_history(stores: &Arc<Stores>, req: DaemonRequest) -> D
     try_handler!(req.id, {
         let session_id = req
             .params
-            .get("session_id")
+            .get("session-id")
             .and_then(|v| v.as_str())
             .unwrap_or("default-chat")
             .to_string();
@@ -372,16 +372,16 @@ pub(super) fn handle_chat_history(stores: &Arc<Stores>, req: DaemonRequest) -> D
             Some(history) => Ok(DaemonResponse::ok(
                 req.id,
                 serde_json::json!({
-                    "session_id": history.session_id,
-                    "funnel_state": history.funnel_state,
+                    "session-id": history.session_id,
+                    "funnel-state": history.funnel_state,
                     "messages": history.messages,
                 }),
             )),
             None => Ok(DaemonResponse::ok(
                 req.id,
                 serde_json::json!({
-                    "session_id": session_id,
-                    "funnel_state": "chat",
+                    "session-id": session_id,
+                    "funnel-state": "chat",
                     "messages": [],
                 }),
             )),

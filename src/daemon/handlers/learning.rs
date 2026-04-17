@@ -12,7 +12,7 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-#[instrument(skip_all, fields(source_id = ?req.params.get("source_id"), scope = ?req.params.get("scope")))]
+#[instrument(skip_all, fields(source_id = ?req.params.get("source-id"), scope = ?req.params.get("scope")))]
 pub(super) fn handle_learning_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -21,7 +21,7 @@ pub(super) fn handle_learning_create(
     try_handler!(req.id, {
         let source_id = req
             .params
-            .get("source_id")
+            .get("source-id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -65,7 +65,7 @@ pub(super) fn handle_learning_create(
         let mut learning = Learning::new(source_id, scope, content);
 
         // M3: Parse applicable_roles
-        if let Some(roles_val) = req.params.get("applicable_roles")
+        if let Some(roles_val) = req.params.get("applicable-roles")
             && let Ok(roles) = serde_json::from_value::<Vec<Role>>(roles_val.clone())
         {
             learning.applicable_roles = Some(roles);
@@ -153,7 +153,7 @@ pub(super) fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> 
         // Optionally filter by source_id
         let source_id_filter = req
             .params
-            .get("source_id")
+            .get("source-id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -397,7 +397,7 @@ pub(super) fn handle_learning_update(
         if let Some(content) = req.params.get("content").and_then(|v| v.as_str()) {
             learning.content = content.to_string();
         }
-        if let Some(roles) = req.params.get("applicable_roles").and_then(|v| v.as_array()) {
+        if let Some(roles) = req.params.get("applicable-roles").and_then(|v| v.as_array()) {
             let parsed: Vec<Role> = roles
                 .iter()
                 .filter_map(|v| serde_json::from_value(v.clone()).ok())
@@ -457,7 +457,7 @@ mod tests {
                 id,
                 "learning.create",
                 json!({
-                    "source_id": "wi-123",
+                    "source-id": "wi-123",
                     "scope": "work",
                     "content": "Always run tests"
                 }),
@@ -480,7 +480,7 @@ mod tests {
             50,
             "learning.create",
             json!({
-                "source_id": "wi-123",
+                "source-id": "wi-123",
                 "scope": "work",
                 "content": "Always run tests"
             }),
@@ -512,7 +512,7 @@ mod tests {
                 1,
                 "learning.create",
                 json!({
-                    "source_id": "wi-123",
+                    "source-id": "wi-123",
                     "scope": "work",
                     "content": "Always run tests before committing"
                 }),
@@ -556,7 +556,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "learning.create", json!({"source_id": "wi-1", "scope": "global"})),
+            DaemonRequest::new(1, "learning.create", json!({"source-id": "wi-1", "scope": "global"})),
         )
         .await;
         assert!(resp.is_error());
@@ -576,7 +576,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "learning.create",
-                json!({"source_id": "wi-1", "scope": "invalid", "content": "test"}),
+                json!({"source-id": "wi-1", "scope": "invalid", "content": "test"}),
             ),
         )
         .await;
@@ -598,7 +598,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "learning.create",
-                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+                json!({"source-id": "wi-1", "scope": "global", "content": "test"}),
             ),
         )
         .await;
@@ -699,7 +699,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "learning.create",
-                json!({"source_id": "global", "scope": "global", "content": "global insight"}),
+                json!({"source-id": "global", "scope": "global", "content": "global insight"}),
             ),
         )
         .await;
@@ -736,7 +736,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "learning.create",
-                json!({"source_id": "global-src", "scope": "global", "content": "global insight"}),
+                json!({"source-id": "global-src", "scope": "global", "content": "global insight"}),
             ),
         )
         .await;
@@ -1019,7 +1019,7 @@ mod tests {
                 json!({
                     "id": learning_id,
                     "content": "Updated content",
-                    "applicable_roles": ["Implementer", "Reviewer"],
+                    "applicable-roles": ["Implementer", "Reviewer"],
                     "files": ["src/main.rs", "src/lib.rs"]
                 }),
             ),
@@ -1078,7 +1078,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "learning.create",
-                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+                json!({"source-id": "wi-1", "scope": "global", "content": "test"}),
             ),
         )
         .await;
@@ -1112,7 +1112,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "learning.create",
-                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+                json!({"source-id": "wi-1", "scope": "global", "content": "test"}),
             ),
         )
         .await;
@@ -1145,7 +1145,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "learning.create",
-                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+                json!({"source-id": "wi-1", "scope": "global", "content": "test"}),
             ),
         )
         .await;
@@ -1178,7 +1178,7 @@ mod tests {
             DaemonRequest::new(
                 1,
                 "learning.create",
-                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+                json!({"source-id": "wi-1", "scope": "global", "content": "test"}),
             ),
         )
         .await;

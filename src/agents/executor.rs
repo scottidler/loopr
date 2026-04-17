@@ -71,7 +71,7 @@ pub async fn run_single_work(
             "work.transition",
             serde_json::json!({
                 "id": work_id,
-                "target_status": "Done",
+                "target-status": "Done",
                 "role": "coordinator",
             }),
         );

@@ -41,7 +41,7 @@ async fn test_full_decomposition_via_engine() {
         json!({
             "title": "E2E Full Decomposition",
             "description": "Test full Plan -> Spec -> Phase -> Work",
-            "acceptance_criteria": "All hierarchy levels created"
+            "acceptance-criteria": "All hierarchy levels created"
         }),
     )
     .await;
@@ -53,7 +53,7 @@ async fn test_full_decomposition_via_engine() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -107,7 +107,7 @@ async fn test_brief_decomposition_via_engine() {
         json!({
             "title": "E2E Brief Decomposition",
             "description": "Test brief Plan -> Work",
-            "acceptance_criteria": "Works created directly under plan"
+            "acceptance-criteria": "Works created directly under plan"
         }),
     )
     .await;
@@ -123,7 +123,7 @@ async fn test_brief_decomposition_via_engine() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -165,7 +165,7 @@ async fn test_crash_resume_decomposition() {
         json!({
             "title": "Crash Resume Test",
             "description": "Test crash recovery",
-            "acceptance_criteria": "Phases created after restart"
+            "acceptance-criteria": "Phases created after restart"
         }),
     )
     .await;
@@ -177,7 +177,7 @@ async fn test_crash_resume_decomposition() {
         &wm,
         &ic,
         "plan.transition",
-        json!({"id": plan_id, "target_status": "active"}),
+        json!({"id": plan_id, "target-status": "active"}),
     )
     .await;
 
@@ -189,10 +189,10 @@ async fn test_crash_resume_decomposition() {
         &ic,
         "spec.create",
         json!({
-            "parent_id": plan_id,
+            "parent-id": plan_id,
             "title": "Auth Spec",
             "description": "Auth specification",
-            "acceptance_criteria": "Auth works"
+            "acceptance-criteria": "Auth works"
         }),
     )
     .await;
@@ -204,7 +204,7 @@ async fn test_crash_resume_decomposition() {
         &wm,
         &ic,
         "spec.transition",
-        json!({"id": spec_id, "target_status": "active"}),
+        json!({"id": spec_id, "target-status": "active"}),
     )
     .await;
 
