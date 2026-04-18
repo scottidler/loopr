@@ -386,13 +386,8 @@ async fn test_session_failure_count_blocks_work() {
         &ic,
         PlanInput {
             title: "Test Plan",
-            desc: "desc",
             criteria: "pass",
-            specs: vec![(
-                "Spec",
-                "desc",
-                vec![("Phase", "desc", 1, vec![("Work A", "desc", vec![])])],
-            )],
+            specs: vec![("Spec", vec![("Phase", 1, vec![("Work A", vec![])])])],
         },
     )
     .await;
@@ -546,13 +541,8 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
         &ic,
         PlanInput {
             title: "Rejection Test Plan",
-            desc: "desc",
             criteria: "pass",
-            specs: vec![(
-                "Spec",
-                "desc",
-                vec![("Phase", "desc", 1, vec![("Work A", "desc", vec![])])],
-            )],
+            specs: vec![("Spec", vec![("Phase", 1, vec![("Work A", vec![])])])],
         },
     )
     .await;

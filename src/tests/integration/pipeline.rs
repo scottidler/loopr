@@ -25,7 +25,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "User Auth", "description": "Auth system", "acceptance-criteria": "Tests pass"}),
+        json!({"title": "User Auth", "acceptance-criteria": "Tests pass"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -45,7 +45,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance-criteria": "OK"}),
+        json!({"parent-id": plan_id, "title": "JWT", "acceptance-criteria": "OK"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -65,7 +65,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Token", "description": "Token gen", "acceptance-criteria": "OK"}),
+        json!({"parent-id": spec_id, "title": "Token", "acceptance-criteria": "OK"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -85,8 +85,9 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "sign()", "description": "Sign JWT", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
-    ).await;
+        json!({"parent-id": phase_id, "title": "sign()", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+    )
+    .await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // 3. Coordinator assigns, implementer works on it (already Ready via auto-promotion)
@@ -236,7 +237,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Website Plan", "description": "Build a static site", "acceptance-criteria": "Site loads"}),
+        json!({"title": "Website Plan", "acceptance-criteria": "Site loads"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -257,7 +258,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
+        json!({"parent-id": plan_id, "title": "HTML Structure"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -278,7 +279,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
+        json!({"parent-id": spec_id, "title": "Phase 1: Index"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -299,7 +300,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "Create index.html", "description": "Write the homepage", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Create index.html", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -414,15 +415,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     seed_goal(&stores, "Build portfolio site");
 
     // --- 2. Create full hierarchy ---
-    let plan = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "plan.create",
-        json!({"title": "Portfolio", "description": "Build a portfolio website"}),
-    )
-    .await;
+    let plan = dispatch_ok(&stores, &tx, &wm, &ic, "plan.create", json!({"title": "Portfolio"})).await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -440,7 +433,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "Pages", "description": "HTML pages"}),
+        json!({"parent-id": plan_id, "title": "Pages"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -460,7 +453,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
+        json!({"parent-id": spec_id, "title": "Phase 1", "order": 1}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -481,7 +474,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "Create index.html", "description": "Homepage", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Create index.html", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
@@ -491,7 +484,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "Create about.html", "description": "About page", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Create about.html", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi2_id = wi2["id"].as_str().unwrap().to_string();
 

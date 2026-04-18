@@ -28,7 +28,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Advisory Test", "description": "Test advisory review", "acceptance-criteria": "tests pass"}),
+        json!({"title": "Advisory Test", "acceptance-criteria": "tests pass"}),
     )
     .await;
     let plan_id = plan_resp["id"].as_str().unwrap();
@@ -38,7 +38,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "Spec", "description": "spec"}),
+        json!({"parent-id": plan_id, "title": "Spec"}),
     )
     .await;
     let spec_id = spec_resp["id"].as_str().unwrap();
@@ -48,7 +48,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
+        json!({"parent-id": spec_id, "title": "Phase", "order": 1}),
     )
     .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
@@ -58,7 +58,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "Work", "description": "work", "files": ["src/main.rs"]}),
+        json!({"parent-id": phase_id, "title": "Work", "files": ["src/main.rs"]}),
     )
     .await;
     let work_id = work_resp["id"].as_str().unwrap();
@@ -147,7 +147,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "T", "description": "d", "acceptance-criteria": "c"}),
+        json!({"title": "T", "acceptance-criteria": "c"}),
     )
     .await;
     let plan_id = plan_resp["id"].as_str().unwrap();
@@ -157,7 +157,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "S", "description": "d"}),
+        json!({"parent-id": plan_id, "title": "S"}),
     )
     .await;
     let spec_id = spec_resp["id"].as_str().unwrap();
@@ -167,7 +167,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "P", "description": "d", "order": 1}),
+        json!({"parent-id": spec_id, "title": "P", "order": 1}),
     )
     .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
@@ -177,7 +177,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "W", "description": "d", "files": ["src/x.rs"]}),
+        json!({"parent-id": phase_id, "title": "W", "files": ["src/x.rs"]}),
     )
     .await;
     let work_id = work_resp["id"].as_str().unwrap();

@@ -69,16 +69,7 @@ async fn dispatch_err(
 #[tokio::test]
 async fn plan_full_lifecycle_through_dispatch() {
     let (s, tx, wm, ic, fsm) = setup();
-    let plan = dispatch_ok(
-        &s,
-        &tx,
-        &wm,
-        &ic,
-        &fsm,
-        "plan.create",
-        json!({"title": "P", "description": "D"}),
-    )
-    .await;
+    let plan = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.create", json!({"title": "P"})).await;
     let id = plan["id"].as_str().unwrap().to_string();
 
     // Draft -> Active
@@ -126,16 +117,7 @@ async fn plan_full_lifecycle_through_dispatch() {
 #[tokio::test]
 async fn plan_abandon_from_draft_through_dispatch() {
     let (s, tx, wm, ic, fsm) = setup();
-    let plan = dispatch_ok(
-        &s,
-        &tx,
-        &wm,
-        &ic,
-        &fsm,
-        "plan.create",
-        json!({"title": "P", "description": "D"}),
-    )
-    .await;
+    let plan = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.create", json!({"title": "P"})).await;
     let id = plan["id"].as_str().unwrap().to_string();
 
     dispatch_ok(
@@ -172,16 +154,7 @@ async fn work_full_lifecycle_through_dispatch() {
     let (s, tx, wm, ic, fsm) = setup();
 
     // Create hierarchy
-    let plan = dispatch_ok(
-        &s,
-        &tx,
-        &wm,
-        &ic,
-        &fsm,
-        "plan.create",
-        json!({"title": "P", "description": "D"}),
-    )
-    .await;
+    let plan = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.create", json!({"title": "P"})).await;
     let plan_id = plan["id"].as_str().unwrap();
     dispatch_ok(
         &s,
@@ -201,7 +174,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent-id": plan_id, "title": "S"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap();
@@ -223,7 +196,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent-id": spec_id, "title": "Ph"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap();
@@ -245,7 +218,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.create",
-        json!({"parent-id": phase_id, "title": "WI", "description": "D", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -330,16 +303,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
     let (s, tx, wm, ic, fsm) = setup();
 
     // Create hierarchy + work item
-    let plan = dispatch_ok(
-        &s,
-        &tx,
-        &wm,
-        &ic,
-        &fsm,
-        "plan.create",
-        json!({"title": "P", "description": "D"}),
-    )
-    .await;
+    let plan = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.create", json!({"title": "P"})).await;
     let plan_id = plan["id"].as_str().unwrap();
     dispatch_ok(
         &s,
@@ -358,7 +322,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent-id": plan_id, "title": "S"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap();
@@ -379,7 +343,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent-id": spec_id, "title": "Ph"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap();
@@ -400,7 +364,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &ic,
         &fsm,
         "work.create",
-        json!({"parent-id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
+        json!({"parent-id": phase_id, "title": "WI", "files": ["src/"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap();
@@ -492,16 +456,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
 #[tokio::test]
 async fn bundle_rejection_at_every_stage() {
     let (s, tx, wm, ic, fsm) = setup();
-    let plan = dispatch_ok(
-        &s,
-        &tx,
-        &wm,
-        &ic,
-        &fsm,
-        "plan.create",
-        json!({"title": "P", "description": "D"}),
-    )
-    .await;
+    let plan = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.create", json!({"title": "P"})).await;
     let plan_id = plan["id"].as_str().unwrap();
     dispatch_ok(
         &s,
@@ -520,7 +475,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent-id": plan_id, "title": "S"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap();
@@ -541,7 +496,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent-id": spec_id, "title": "Ph"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap();
@@ -562,7 +517,7 @@ async fn bundle_rejection_at_every_stage() {
         &ic,
         &fsm,
         "work.create",
-        json!({"parent-id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
+        json!({"parent-id": phase_id, "title": "WI", "files": ["src/"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap();
@@ -770,16 +725,7 @@ async fn tick_failure_path_through_dispatch() {
 async fn wrong_role_rejected_through_dispatch() {
     let (s, tx, wm, ic, fsm) = setup();
 
-    let plan = dispatch_ok(
-        &s,
-        &tx,
-        &wm,
-        &ic,
-        &fsm,
-        "plan.create",
-        json!({"title": "P", "description": "D"}),
-    )
-    .await;
+    let plan = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.create", json!({"title": "P"})).await;
     let id = plan["id"].as_str().unwrap();
 
     // Implementer cannot transition plans

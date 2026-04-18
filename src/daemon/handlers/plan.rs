@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
@@ -15,9 +16,44 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError}
 
 use crate::daemon::context::Stores;
 
-use super::{parse_optional_param, parse_required_param};
-
 use super::common::check_validation_gate;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct PlanCreateParams {
+    title: String,
+    #[serde(default)]
+    acceptance_criteria: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct PlanIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct PlanTransitionParams {
+    id: String,
+    target_status: PlanStatus,
+    #[serde(default)]
+    role: Option<Role>,
+    #[serde(default)]
+    skip_validation: Option<bool>,
+    #[serde(default)]
+    skip_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct PlanUpdateParams {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    acceptance_criteria: Option<String>,
+}
 
 #[instrument(skip_all, fields(title = ?req.params.get("title")))]
 pub(super) fn handle_plan_create(
@@ -26,21 +62,18 @@ pub(super) fn handle_plan_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let title = req
-            .params
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let acceptance_criteria: AcceptanceCriteria = req
-            .params
-            .get("acceptance-criteria")
+        let parsed: PlanCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let title = parsed.title;
+        let acceptance_criteria: AcceptanceCriteria = parsed
+            .acceptance_criteria
             .map(|v| {
-                // Accept either a JSON array or a plain string from older callers
                 if let Some(s) = v.as_str() {
                     AcceptanceCriteria::from(s)
                 } else {
-                    serde_json::from_value(v.clone()).unwrap_or_default()
+                    serde_json::from_value(v).unwrap_or_default()
                 }
             })
             .unwrap_or_default();
@@ -94,10 +127,11 @@ pub(super) fn handle_plan_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: PlanIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -169,26 +203,14 @@ pub(super) fn handle_plan_transition(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: PlanTransitionParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let target_status: PlanStatus = match parse_required_param(&req, "target-status") {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let role: Role = match parse_optional_param(&req, "role", Role::Coordinator) {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let skip_validation = req
-            .params
-            .get("skip-validation")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let id = parsed.id;
+        let target_status = parsed.target_status;
+        let role = parsed.role.unwrap_or(Role::Coordinator);
+        let skip_validation = parsed.skip_validation.unwrap_or(false);
 
         let mut plans = stores.write_plans()?;
         let plan = match plans.get_mut(&id) {
@@ -225,7 +247,7 @@ pub(super) fn handle_plan_transition(
         }
 
         // Validation gate: Draft → Active requires passing validation report
-        let skip_reason = req.params.get("skip-reason").and_then(|v| v.as_str());
+        let skip_reason = parsed.skip_reason.as_deref();
         if let Some(err) = check_validation_gate(
             stores,
             event_tx,
@@ -285,10 +307,11 @@ pub(super) fn handle_plan_update(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: PlanUpdateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut plans = stores.write_plans()?;
         let plan = match plans.get_mut(&id) {
@@ -296,11 +319,11 @@ pub(super) fn handle_plan_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plans", &id))),
         };
 
-        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-            plan.title = title.to_string();
+        if let Some(title) = parsed.title {
+            plan.title = title;
         }
-        if let Some(criteria) = req.params.get("acceptance-criteria").and_then(|v| v.as_str()) {
-            plan.acceptance_criteria = AcceptanceCriteria::from(criteria);
+        if let Some(criteria) = parsed.acceptance_criteria {
+            plan.acceptance_criteria = AcceptanceCriteria::from(criteria.as_str());
         }
         plan.updated_at = crate::id::now_millis();
 

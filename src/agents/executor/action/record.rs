@@ -4,12 +4,7 @@ use crate::agents::AgentContext;
 use crate::agents::executor::result::ActionResult;
 
 /// Handle ProposePlan action.
-pub(super) fn handle_propose_plan(
-    ctx: &AgentContext,
-    title: &str,
-    description: &str,
-    acceptance_criteria: &str,
-) -> Result<ActionResult> {
+pub(super) fn handle_propose_plan(ctx: &AgentContext, title: &str, acceptance_criteria: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
 
     // Create Plan as Draft via bridge
@@ -17,7 +12,6 @@ pub(super) fn handle_propose_plan(
         "plan.create",
         serde_json::json!({
             "title": title,
-            "description": description,
             "acceptance-criteria": acceptance_criteria,
         }),
     );
@@ -297,7 +291,6 @@ mod tests {
 
         let action = AgentAction::ProposePlan {
             title: "Draft Plan".to_string(),
-            description: "A proposed plan".to_string(),
             acceptance_criteria: "All tests pass".to_string(),
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();

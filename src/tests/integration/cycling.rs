@@ -26,7 +26,6 @@ async fn test_dependency_chain_execution() {
         json!({
             "parent-id": phase_id,
             "title": "Create base types",
-            "description": "Foundation types and traits",
             "files": ["src/types.rs"],
             "acceptance-criteria": ["Types compile"]
         }),
@@ -44,7 +43,6 @@ async fn test_dependency_chain_execution() {
         json!({
             "parent-id": phase_id,
             "title": "Implement logic",
-            "description": "Business logic using base types",
             "files": ["src/logic.rs"],
             "acceptance-criteria": ["Logic tests pass"],
             "dependencies": [wi_a_id]
@@ -63,7 +61,6 @@ async fn test_dependency_chain_execution() {
         json!({
             "parent-id": phase_id,
             "title": "Add integration tests",
-            "description": "Integration tests for logic",
             "files": ["src/tests.rs"],
             "acceptance-criteria": ["Integration tests pass"],
             "dependencies": [wi_b_id]
@@ -110,7 +107,6 @@ async fn test_duplicate_work_rejection() {
         json!({
             "parent-id": phase_id,
             "title": "Implement auth",
-            "description": "Add JWT auth",
             "files": ["src/auth.rs"],
             "acceptance-criteria": ["Auth works"]
         }),
@@ -127,7 +123,6 @@ async fn test_duplicate_work_rejection() {
         json!({
             "parent-id": phase_id,
             "title": "implement auth",
-            "description": "Different description",
             "files": ["src/auth.rs"],
             "acceptance-criteria": ["Auth works"]
         }),
@@ -147,7 +142,6 @@ async fn test_duplicate_work_rejection() {
         json!({
             "parent-id": phase_id,
             "title": "Implement authorization",
-            "description": "Add RBAC",
             "files": ["src/authz.rs"],
             "acceptance-criteria": ["RBAC works"]
         }),
@@ -171,7 +165,7 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Multi-phase Plan", "description": "desc", "acceptance-criteria": "all phases done"}),
+        json!({"title": "Multi-phase Plan", "acceptance-criteria": "all phases done"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -191,8 +185,9 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "Multi-phase Spec", "description": "desc", "acceptance-criteria": "pass"}),
-    ).await;
+        json!({"parent-id": plan_id, "title": "Multi-phase Spec", "acceptance-criteria": "pass"}),
+    )
+    .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -210,8 +205,9 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase 1: Foundation", "description": "base types", "acceptance-criteria": "types exist"}),
-    ).await;
+        json!({"parent-id": spec_id, "title": "Phase 1: Foundation", "acceptance-criteria": "types exist"}),
+    )
+    .await;
     let phase1_id = phase1["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -229,8 +225,9 @@ async fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase 2: Logic", "description": "business logic", "acceptance-criteria": "logic works"}),
-    ).await;
+        json!({"parent-id": spec_id, "title": "Phase 2: Logic", "acceptance-criteria": "logic works"}),
+    )
+    .await;
     let phase2_id = phase2["id"].as_str().unwrap().to_string();
 
     // Create a WI in Phase 1
@@ -243,7 +240,6 @@ async fn test_phase_gate_advances_to_next_phase() {
         json!({
             "parent-id": phase1_id,
             "title": "Create base types",
-            "description": "Foundation types",
             "files": ["src/types.rs"],
             "acceptance-criteria": ["Types compile"]
         }),

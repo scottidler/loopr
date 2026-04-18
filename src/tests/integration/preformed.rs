@@ -18,69 +18,41 @@ async fn test_preformed_todo_app_plan() {
         &ic,
         PlanInput {
             title: "CLI Todo App",
-            desc: "Build a command-line todo application with add, list, done, delete, and filter commands. Persist todos to a JSON file.",
             criteria: "1. CRUD operations work\n2. Persistence to JSON\n3. Filter by status\n4. All tests pass",
             specs: vec![(
                 "Todo App Technical Spec",
-                "Full technical specification for the CLI todo app",
                 vec![
                     (
                         "Phase 1: Data Model & Storage",
-                        "Implement Todo struct and JSON file persistence",
                         1,
                         vec![
-                            (
-                                "Todo struct",
-                                "Define Todo with id, title, done, created_at fields",
-                                vec!["src/model.rs"],
-                            ),
-                            (
-                                "JSON storage",
-                                "Read/write todos to a JSON file on disk",
-                                vec!["src/storage.rs"],
-                            ),
+                            ("Todo struct", vec!["src/model.rs"]),
+                            ("JSON storage", vec!["src/storage.rs"]),
                         ],
                     ),
                     (
                         "Phase 2: CRUD Operations",
-                        "Implement add, list, done, delete commands",
                         2,
                         vec![
-                            ("Add command", "Add a new todo with a title", vec!["src/commands.rs"]),
-                            (
-                                "List command",
-                                "List all todos with status indicators",
-                                vec!["src/commands.rs"],
-                            ),
-                            (
-                                "Done command",
-                                "Mark a todo as completed by ID",
-                                vec!["src/commands.rs"],
-                            ),
-                            ("Delete command", "Remove a todo by ID", vec!["src/commands.rs"]),
+                            ("Add command", vec!["src/commands.rs"]),
+                            ("List command", vec!["src/commands.rs"]),
+                            ("Done command", vec!["src/commands.rs"]),
+                            ("Delete command", vec!["src/commands.rs"]),
                         ],
                     ),
                     (
                         "Phase 3: Filtering & CLI",
-                        "Add filter support and wire up CLI arg parsing",
                         3,
                         vec![
-                            (
-                                "Filter by status",
-                                "Filter todos by all/active/done",
-                                vec!["src/commands.rs"],
-                            ),
-                            (
-                                "CLI entry point",
-                                "Parse args and dispatch to commands",
-                                vec!["src/main.rs"],
-                            ),
+                            ("Filter by status", vec!["src/commands.rs"]),
+                            ("CLI entry point", vec!["src/main.rs"]),
                         ],
                     ),
                 ],
             )],
         },
-    ).await;
+    )
+    .await;
 
     // Verify hierarchy counts
     assert_eq!(stores.plans.read().unwrap().len(), 1);
@@ -139,62 +111,33 @@ async fn test_preformed_calculator_app_plan() {
         &ic,
         PlanInput {
             title: "Calculator CLI",
-            desc: "Build a command-line calculator supporting basic arithmetic, expression parsing, and a REPL mode.",
             criteria: "1. Basic arithmetic (+, -, *, /)\n2. Expression parsing with operator precedence\n3. REPL mode\n4. Error handling for division by zero\n5. All tests pass",
             specs: vec![(
                 "Calculator Technical Spec",
-                "Technical specification for the CLI calculator",
                 vec![
                     (
                         "Phase 1: Arithmetic Engine",
-                        "Implement core arithmetic operations with error handling",
                         1,
                         vec![
-                            (
-                                "Arithmetic ops",
-                                "Implement add, subtract, multiply, divide with f64",
-                                vec!["src/engine.rs"],
-                            ),
-                            (
-                                "Error handling",
-                                "Handle division by zero and overflow gracefully",
-                                vec!["src/engine.rs"],
-                            ),
+                            ("Arithmetic ops", vec!["src/engine.rs"]),
+                            ("Error handling", vec!["src/engine.rs"]),
                         ],
                     ),
                     (
                         "Phase 2: Expression Parser",
-                        "Parse and evaluate mathematical expressions",
                         2,
                         vec![
-                            (
-                                "Tokenizer",
-                                "Tokenize input string into numbers and operators",
-                                vec!["src/parser.rs"],
-                            ),
-                            (
-                                "Parser",
-                                "Recursive descent parser with operator precedence",
-                                vec!["src/parser.rs"],
-                            ),
-                            (
-                                "Evaluator",
-                                "Evaluate parsed AST to produce a result",
-                                vec!["src/parser.rs"],
-                            ),
+                            ("Tokenizer", vec!["src/parser.rs"]),
+                            ("Parser", vec!["src/parser.rs"]),
+                            ("Evaluator", vec!["src/parser.rs"]),
                         ],
                     ),
                     (
                         "Phase 3: REPL & CLI",
-                        "Interactive REPL mode and CLI entry point",
                         3,
                         vec![
-                            ("REPL loop", "Read-eval-print loop with history", vec!["src/repl.rs"]),
-                            (
-                                "CLI entry point",
-                                "Parse args: expression mode vs REPL mode",
-                                vec!["src/main.rs"],
-                            ),
+                            ("REPL loop", vec!["src/repl.rs"]),
+                            ("CLI entry point", vec!["src/main.rs"]),
                         ],
                     ),
                 ],
@@ -243,17 +186,10 @@ async fn test_preformed_plan_work_can_transition_to_in_progress() {
         &ic,
         PlanInput {
             title: "Tiny App",
-            desc: "A minimal app for testing work transitions",
             criteria: "It works",
             specs: vec![(
                 "Spec",
-                "The spec",
-                vec![(
-                    "Phase 1",
-                    "The only phase",
-                    1,
-                    vec![("Implement main", "Write main.rs", vec!["src/main.rs"])],
-                )],
+                vec![("Phase 1", 1, vec![("Implement main", vec!["src/main.rs"])])],
             )],
         },
     )

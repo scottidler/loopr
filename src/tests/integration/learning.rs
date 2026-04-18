@@ -135,7 +135,6 @@ async fn test_failure_learning_creation() {
         json!({
             "parent-id": phase_id,
             "title": "Add error handling",
-            "description": "Implement error types",
             "files": ["src/error.rs"],
             "acceptance-criteria": ["Error types defined"]
         }),

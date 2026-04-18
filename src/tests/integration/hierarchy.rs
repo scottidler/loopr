@@ -18,7 +18,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "plan.create",
-        json!({"title": "Auth System", "description": "Add authentication", "acceptance-criteria": "All tests pass"}),
+        json!({"title": "Auth System", "acceptance-criteria": "All tests pass"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -43,8 +43,9 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance-criteria": "JWT tokens work"}),
-    ).await;
+        json!({"parent-id": plan_id, "title": "JWT Auth", "acceptance-criteria": "JWT tokens work"}),
+    )
+    .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     assert_eq!(spec["status"], "draft");
 
@@ -66,8 +67,9 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance-criteria": "Tokens are signed"}),
-    ).await;
+        json!({"parent-id": spec_id, "title": "Token Generation", "acceptance-criteria": "Tokens are signed"}),
+    )
+    .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
 
     // Transition Phase: Draft -> Active
@@ -88,7 +90,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+        json!({"parent-id": phase_id, "title": "Implement sign()", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
     assert_eq!(wi["status"], "Ready");
@@ -152,8 +154,9 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent-id": phase_id, "title": "Task", "description": "desc", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
-    ).await;
+        json!({"parent-id": phase_id, "title": "Task", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+    )
+    .await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // Create Bundle

@@ -131,7 +131,6 @@ mod tests {
             "plan.create",
             serde_json::json!({
                 "title": "Bridge Test Plan",
-                "description": "Test description",
                 "acceptance-criteria": "Test criteria"
             }),
         );

@@ -115,9 +115,8 @@ pub async fn execute_action(
         AgentAction::InterviewQuestion { questions } => record::handle_interview_question(ctx, questions),
         AgentAction::ProposePlan {
             title,
-            description,
             acceptance_criteria,
-        } => record::handle_propose_plan(ctx, title, description, acceptance_criteria),
+        } => record::handle_propose_plan(ctx, title, acceptance_criteria),
         AgentAction::ReviseParent {
             collection,
             id,

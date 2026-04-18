@@ -15,15 +15,14 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
 use crate::worktree::manager::WorktreeManager;
 
 // Type aliases for inject_preformed_plan
-pub(super) type WorkInput<'a> = (&'a str, &'a str, Vec<&'a str>);
-pub(super) type PhaseInput<'a> = (&'a str, &'a str, u32, Vec<WorkInput<'a>>);
-pub(super) type SpecInput<'a> = (&'a str, &'a str, Vec<PhaseInput<'a>>);
+pub(super) type WorkInput<'a> = (&'a str, Vec<&'a str>);
+pub(super) type PhaseInput<'a> = (&'a str, u32, Vec<WorkInput<'a>>);
+pub(super) type SpecInput<'a> = (&'a str, Vec<PhaseInput<'a>>);
 pub(super) type PhaseResult = (String, Vec<String>);
 pub(super) type SpecResult = (String, Vec<PhaseResult>);
 
 pub(super) struct PlanInput<'a> {
     pub title: &'a str,
-    pub desc: &'a str,
     pub criteria: &'a str,
     pub specs: Vec<SpecInput<'a>>,
 }
@@ -122,7 +121,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "plan.create",
-        json!({"title": "Test Plan", "description": "desc", "acceptance-criteria": "pass"}),
+        json!({"title": "Test Plan", "acceptance-criteria": "pass"}),
     )
     .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
@@ -141,7 +140,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "spec.create",
-        json!({"parent-id": plan_id, "title": "Test Spec", "description": "desc", "acceptance-criteria": "pass"}),
+        json!({"parent-id": plan_id, "title": "Test Spec", "acceptance-criteria": "pass"}),
     )
     .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
@@ -160,7 +159,7 @@ pub(super) async fn create_test_hierarchy(
         wm,
         ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Test Phase", "description": "desc", "acceptance-criteria": "pass"}),
+        json!({"parent-id": spec_id, "title": "Test Phase", "acceptance-criteria": "pass"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
@@ -214,7 +213,6 @@ pub(super) async fn inject_preformed_plan(
         "plan.create",
         json!({
             "title": input.title,
-            "description": input.desc,
             "acceptance-criteria": input.criteria,
         }),
     )
@@ -233,7 +231,7 @@ pub(super) async fn inject_preformed_plan(
     .await;
 
     let mut spec_results = Vec::new();
-    for (spec_title, spec_desc, phases) in input.specs {
+    for (spec_title, phases) in input.specs {
         let spec = dispatch_ok(
             stores,
             tx,
@@ -243,7 +241,6 @@ pub(super) async fn inject_preformed_plan(
             json!({
                 "parent-id": plan_id,
                 "title": spec_title,
-                "description": spec_desc,
                 "acceptance-criteria": "all tests pass",
             }),
         )
@@ -262,7 +259,7 @@ pub(super) async fn inject_preformed_plan(
         .await;
 
         let mut phase_results = Vec::new();
-        for (phase_title, phase_desc, order, works) in &phases {
+        for (phase_title, order, works) in &phases {
             let phase = dispatch_ok(
                 stores,
                 tx,
@@ -272,7 +269,6 @@ pub(super) async fn inject_preformed_plan(
                 json!({
                     "parent-id": spec_id,
                     "title": phase_title,
-                    "description": phase_desc,
                     "order": order,
                 }),
             )
@@ -291,7 +287,7 @@ pub(super) async fn inject_preformed_plan(
             .await;
 
             let mut work_ids = Vec::new();
-            for (work_title, work_desc, files) in works {
+            for (work_title, files) in works {
                 let work = dispatch_ok(
                     stores,
                     tx,
@@ -301,7 +297,6 @@ pub(super) async fn inject_preformed_plan(
                     json!({
                         "parent-id": phase_id,
                         "title": work_title,
-                        "description": work_desc,
                         "files": files,
                         "acceptance-criteria": ["tests pass"],
                     }),

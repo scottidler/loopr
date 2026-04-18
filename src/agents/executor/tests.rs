@@ -121,7 +121,7 @@ pub(crate) fn test_agent_context_with_config(
 pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String, String, String) {
     let plan_resp = bridge.request(
         "plan.create",
-        serde_json::json!({"title": "Test Plan", "description": "desc", "acceptance-criteria": "pass"}),
+        serde_json::json!({"title": "Test Plan", "acceptance-criteria": "pass"}),
     );
     let plan_id = plan_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     bridge.request(
@@ -130,7 +130,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let spec_resp = bridge.request(
         "spec.create",
-        serde_json::json!({"parent-id": plan_id, "title": "Test Spec", "description": "desc"}),
+        serde_json::json!({"parent-id": plan_id, "title": "Test Spec"}),
     );
     let spec_id = spec_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     bridge.request(
@@ -139,7 +139,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let phase_resp = bridge.request(
         "phase.create",
-        serde_json::json!({"parent-id": spec_id, "title": "Test Phase", "description": "desc", "order": 1}),
+        serde_json::json!({"parent-id": spec_id, "title": "Test Phase", "order": 1}),
     );
     let phase_id = phase_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     bridge.request(
@@ -148,7 +148,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let wi_resp = bridge.request(
         "work.create",
-        serde_json::json!({"parent-id": phase_id, "title": "Test WI", "description": "desc", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
+        serde_json::json!({"parent-id": phase_id, "title": "Test WI", "files": ["src/"], "acceptance-criteria": ["tests pass"]}),
     );
     let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     (plan_id, spec_id, phase_id, wi_id)

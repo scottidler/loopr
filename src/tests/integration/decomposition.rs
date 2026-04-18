@@ -40,7 +40,6 @@ async fn test_full_decomposition_via_engine() {
         "plan.create",
         json!({
             "title": "E2E Full Decomposition",
-            "description": "Test full Plan -> Spec -> Phase -> Work",
             "acceptance-criteria": "All hierarchy levels created"
         }),
     )
@@ -106,7 +105,6 @@ async fn test_brief_decomposition_via_engine() {
         "plan.create",
         json!({
             "title": "E2E Brief Decomposition",
-            "description": "Test brief Plan -> Work",
             "acceptance-criteria": "Works created directly under plan"
         }),
     )
@@ -164,7 +162,6 @@ async fn test_crash_resume_decomposition() {
         "plan.create",
         json!({
             "title": "Crash Resume Test",
-            "description": "Test crash recovery",
             "acceptance-criteria": "Phases created after restart"
         }),
     )
@@ -191,7 +188,6 @@ async fn test_crash_resume_decomposition() {
         json!({
             "parent-id": plan_id,
             "title": "Auth Spec",
-            "description": "Auth specification",
             "acceptance-criteria": "Auth works"
         }),
     )
