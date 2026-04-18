@@ -1,0 +1,27 @@
+otto:
+  api: 1
+  tasks: [ci]
+
+tasks:
+  lint:
+    help: "Whitespace lint"
+    bash: |
+      whitespace -r
+
+  check:
+    help: "Compile, clippy, format for this crate"
+    bash: |
+      cargo check -p runtime --all-targets
+      cargo clippy -p runtime --all-targets -- -D warnings
+      cargo fmt -p runtime -- --check
+
+  test:
+    help: "Run tests for this crate"
+    bash: |
+      cargo test -p runtime
+
+  ci:
+    help: "Scoped CI (lint + check + test) for runtime"
+    before: [lint, check, test]
+    bash: |
+      echo "runtime CI passed"

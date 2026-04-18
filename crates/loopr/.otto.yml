@@ -1,0 +1,33 @@
+otto:
+  api: 1
+  tasks: [ci]
+
+tasks:
+  lint:
+    help: "Whitespace lint"
+    bash: |
+      whitespace -r
+
+  check:
+    help: "Compile, clippy, format for this crate"
+    bash: |
+      cargo check -p loopr --all-targets
+      cargo clippy -p loopr --all-targets -- -D warnings
+      cargo fmt -p loopr -- --check
+
+  test:
+    help: "Run tests for this crate"
+    bash: |
+      cargo test -p loopr
+
+  ci:
+    help: "Scoped CI (lint + check + test) for loopr"
+    before: [lint, check, test]
+    bash: |
+      echo "loopr CI passed"
+
+  install:
+    help: "Install the loopr binary locally"
+    bash: |
+      cargo install --path .
+      echo "loopr installed to ~/.cargo/bin"

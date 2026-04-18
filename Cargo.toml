@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2024"
+authors = ["Scott A. Idler <scott.a.idler@gmail.com>"]
+repository = "ssh://git@github.com/scottidler/loopr"
+license = "MIT"
+
+[workspace.dependencies]

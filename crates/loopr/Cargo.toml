@@ -1,0 +1,17 @@
+[package]
+name = "loopr"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "loopr"
+path = "src/main.rs"
+
+[lib]
+name = "loopr"
+path = "src/lib.rs"
+
+[dependencies]

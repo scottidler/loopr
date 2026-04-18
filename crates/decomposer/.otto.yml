@@ -1,0 +1,27 @@
+otto:
+  api: 1
+  tasks: [ci]
+
+tasks:
+  lint:
+    help: "Whitespace lint"
+    bash: |
+      whitespace -r
+
+  check:
+    help: "Compile, clippy, format for this crate"
+    bash: |
+      cargo check -p decomposer --all-targets
+      cargo clippy -p decomposer --all-targets -- -D warnings
+      cargo fmt -p decomposer -- --check
+
+  test:
+    help: "Run tests for this crate"
+    bash: |
+      cargo test -p decomposer
+
+  ci:
+    help: "Scoped CI (lint + check + test) for decomposer"
+    before: [lint, check, test]
+    bash: |
+      echo "decomposer CI passed"
