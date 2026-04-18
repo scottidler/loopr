@@ -173,6 +173,31 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
             review.summary
         ));
 
+        // Emit the enriched reviewer-verdict event so trigger strategies can
+        // route bundle- and work-scoped follow-ups off a single event that
+        // carries both ids. Looked up from the bundle record; we already know
+        // the bundle exists because the agent context was initialised with it.
+        let work_id_opt = self
+            .ctx
+            .stores
+            .bundles
+            .read()
+            .ok()
+            .and_then(|bundles| bundles.get(&self.bundle_id).map(|b| b.work_id.clone()));
+        if let Some(work_id) = work_id_opt {
+            let _ = self.ctx.event_tx.send(DaemonEvent::reviewer_verdict(
+                &self.ctx.session.id,
+                &self.bundle_id,
+                &work_id,
+                review.verdict,
+            ));
+        } else {
+            self.ctx.warn(&format!(
+                "reviewer-verdict event skipped: bundle {} not found in stores",
+                self.bundle_id
+            ));
+        }
+
         let learning_content = format!(
             "Review of bundle {}: verdict={}, summary={}",
             self.bundle_id, review.verdict, review.summary

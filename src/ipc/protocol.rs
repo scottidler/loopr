@@ -327,6 +327,27 @@ impl DaemonEvent {
         )
     }
 
+    /// Reviewer session reached a terminal verdict. Carries bundle and work ids
+    /// so the trigger layer can dispatch bundle-scoped and work-scoped strategies
+    /// off the same event.
+    pub fn reviewer_verdict(
+        session_id: &str,
+        bundle_id: &str,
+        work_id: &str,
+        verdict: crate::agents::reviewer::ReviewVerdict,
+    ) -> Self {
+        let event = AgentEvent::ReviewerVerdict {
+            session_id: session_id.to_string(),
+            bundle_id: bundle_id.to_string(),
+            work_id: work_id.to_string(),
+            verdict,
+        };
+        Self::new(
+            "agent.reviewer-verdict",
+            serde_json::to_value(event).unwrap_or_default(),
+        )
+    }
+
     pub fn record_deleted(collection: &str, id: &str) -> Self {
         Self::new(
             "record.deleted",

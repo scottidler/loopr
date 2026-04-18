@@ -58,9 +58,11 @@ accept-approved-bundle:
         target-status: accepted
         role: reviewer
 
-# When a reviewer rejects a bundle, reject it and retry the work.
-handle-rejected-bundle:
-  description: Reject bundles that reviewers have rejected and retry the work
+# When a reviewer rejects a bundle, transition the bundle to Rejected. Split
+# from the retry step below so each strategy's scope matches its mutation
+# target, making the (scope-id) substitution unambiguous.
+reject-bundle-on-reviewer-rejection:
+  description: Mark a bundle as Rejected when the reviewer rejects it
   trigger: reviewer-rejected
   scope: bundle
   priority: 820
@@ -71,6 +73,15 @@ handle-rejected-bundle:
         id: $trigger.scope-id
         target-status: rejected
         role: reviewer
+
+# Retry the Work tied to a rejected bundle. Uses the work-scoped view of the
+# same reviewer-verdict event so $trigger.scope-id resolves to the work id.
+retry-work-on-bundle-rejection:
+  description: Retry the work when its bundle is rejected by the reviewer
+  trigger: reviewer-rejected-work
+  scope: work
+  priority: 810
+  action:
     - primitive: retry-work
       params:
-        work-id: $trigger.event.work-id
+        work-id: $trigger.scope-id

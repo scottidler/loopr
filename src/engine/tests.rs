@@ -101,8 +101,8 @@ fn loaded_strategies_cover_all_v3_behaviors() {
     // without review; the length assert makes drift fail CI loudly.
     assert_eq!(
         names.len(),
-        28,
-        "strategy loader should expose exactly 28 strategies; got {:?}",
+        29,
+        "strategy loader should expose exactly 29 strategies; got {:?}",
         names
     );
 
@@ -159,7 +159,9 @@ fn loaded_strategies_cover_all_v3_behaviors() {
         "missing restart-director-on-state"
     );
 
-    // Agent lifecycle (5 strategies - v4 cutover)
+    // Agent lifecycle (6 strategies - v4 cutover; handle-rejected-bundle was
+    // split into reject-bundle-on-reviewer-rejection + retry-work-on-bundle-
+    // rejection so each strategy's scope aligns with its mutation target)
     assert!(
         names.contains(&"spawn-implementer-for-ready-work"),
         "missing spawn-implementer-for-ready-work"
@@ -177,8 +179,12 @@ fn loaded_strategies_cover_all_v3_behaviors() {
         "missing accept-approved-bundle"
     );
     assert!(
-        names.contains(&"handle-rejected-bundle"),
-        "missing handle-rejected-bundle"
+        names.contains(&"reject-bundle-on-reviewer-rejection"),
+        "missing reject-bundle-on-reviewer-rejection"
+    );
+    assert!(
+        names.contains(&"retry-work-on-bundle-rejection"),
+        "missing retry-work-on-bundle-rejection"
     );
 
     // Completion (1 strategy - v4 cutover)

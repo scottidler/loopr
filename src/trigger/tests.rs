@@ -88,7 +88,7 @@ fn load_from_resources_passes_validation() {
 }
 
 #[test]
-fn loaded_triggers_cover_all_58_definitions() {
+fn loaded_triggers_cover_all_59_definitions() {
     let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
 
@@ -103,6 +103,7 @@ fn loaded_triggers_cover_all_58_definitions() {
         "bundle-triaged",
         "reviewer-approved",
         "reviewer-rejected",
+        "reviewer-rejected-work",
         "session-failure",
         "transition-completed",
         "record-created",
@@ -168,15 +169,15 @@ fn loaded_triggers_cover_all_58_definitions() {
 
     assert_eq!(
         names.len(),
-        58,
-        "trigger loader should expose exactly 58 triggers; got {} ({:?})",
+        59,
+        "trigger loader should expose exactly 59 triggers; got {} ({:?})",
         names.len(),
         names
     );
     assert_eq!(
         required.len(),
-        58,
-        "required-names list should have exactly 58 entries (got {})",
+        59,
+        "required-names list should have exactly 59 entries (got {})",
         required.len()
     );
 
@@ -2599,6 +2600,84 @@ fn plan_decomposable_composite_fires_for_childless_active_plan() {
     } else {
         panic!("expected Fired, got {:?}", hit);
     }
+}
+
+#[test]
+fn reviewer_verdict_event_fires_bundle_and_work_scoped_triggers() {
+    use crate::agents::reviewer::ReviewVerdict;
+    let stores = make_stores();
+    let events = vec![DaemonEvent::reviewer_verdict(
+        "rev-session",
+        "bd-42",
+        "wk-42",
+        ReviewVerdict::Reject,
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let mut eval = make_evaluator(defs);
+    let results = eval.evaluate_push(&ctx);
+
+    // reviewer-rejected extracts bundle-id -> bd-42
+    let rejected = results
+        .iter()
+        .find(|(n, _)| n == "reviewer-rejected")
+        .expect("reviewer-rejected must fire on reject verdict");
+    if let TriggerResult::Fired { scope_ids, .. } = &rejected.1 {
+        assert_eq!(scope_ids, &vec!["bd-42".to_string()]);
+    } else {
+        panic!("reviewer-rejected should be Fired, got {:?}", rejected.1);
+    }
+
+    // reviewer-rejected-work extracts work-id -> wk-42
+    let rejected_work = results
+        .iter()
+        .find(|(n, _)| n == "reviewer-rejected-work")
+        .expect("reviewer-rejected-work must fire on reject verdict");
+    if let TriggerResult::Fired { scope_ids, .. } = &rejected_work.1 {
+        assert_eq!(scope_ids, &vec!["wk-42".to_string()]);
+    } else {
+        panic!("reviewer-rejected-work should be Fired, got {:?}", rejected_work.1);
+    }
+
+    // reviewer-approved must stay idle on a reject verdict
+    assert!(
+        !results.iter().any(|(n, _)| n == "reviewer-approved"),
+        "reviewer-approved must not fire on reject verdict"
+    );
+}
+
+#[test]
+fn reviewer_verdict_approve_fires_only_reviewer_approved() {
+    use crate::agents::reviewer::ReviewVerdict;
+    let stores = make_stores();
+    let events = vec![DaemonEvent::reviewer_verdict(
+        "rev-session",
+        "bd-1",
+        "wk-1",
+        ReviewVerdict::Approve,
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let mut eval = make_evaluator(defs);
+    let results = eval.evaluate_push(&ctx);
+
+    let approved = results
+        .iter()
+        .find(|(n, _)| n == "reviewer-approved")
+        .expect("reviewer-approved must fire on approve verdict");
+    if let TriggerResult::Fired { scope_ids, .. } = &approved.1 {
+        assert_eq!(scope_ids, &vec!["bd-1".to_string()]);
+    } else {
+        panic!("reviewer-approved should be Fired");
+    }
+    assert!(
+        !results.iter().any(|(n, _)| n == "reviewer-rejected"),
+        "reviewer-rejected must not fire on approve verdict"
+    );
+    assert!(
+        !results.iter().any(|(n, _)| n == "reviewer-rejected-work"),
+        "reviewer-rejected-work must not fire on approve verdict"
+    );
 }
 
 #[test]

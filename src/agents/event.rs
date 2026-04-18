@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::agents::reviewer::ReviewVerdict;
 use crate::agents::status::AgentStatus;
 
 /// Events emitted by agents, broadcast through the daemon event system.
@@ -11,6 +12,16 @@ pub enum AgentEvent {
         status: AgentStatus,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+    },
+    /// A reviewer session reached a final verdict on its bundle. Carries both
+    /// the bundle and its parent work so event-trigger scope extraction can
+    /// route `reviewer-approved`/`reviewer-rejected` (bundle-scoped) and
+    /// `reviewer-rejected-work` (work-scoped) off the same event.
+    ReviewerVerdict {
+        session_id: String,
+        bundle_id: String,
+        work_id: String,
+        verdict: ReviewVerdict,
     },
     LlmOutput {
         session_id: String,
@@ -166,6 +177,36 @@ mod tests {
             assert_eq!(new_tick_id, "tick-42");
         } else {
             panic!("expected StalenessDetected");
+        }
+    }
+
+    #[test]
+    fn reviewer_verdict_serde_uses_kebab_case_keys() {
+        let event = AgentEvent::ReviewerVerdict {
+            session_id: "rev-session".to_string(),
+            bundle_id: "bd-1".to_string(),
+            work_id: "wk-1".to_string(),
+            verdict: ReviewVerdict::Reject,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"bundle-id\""), "expected kebab bundle-id in {json}");
+        assert!(json.contains("\"work-id\""), "expected kebab work-id in {json}");
+        assert!(json.contains("\"session-id\""), "expected kebab session-id in {json}");
+        assert!(json.contains("\"reject\""), "expected verdict=reject in {json}");
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AgentEvent::ReviewerVerdict {
+                session_id,
+                bundle_id,
+                work_id,
+                verdict,
+            } => {
+                assert_eq!(session_id, "rev-session");
+                assert_eq!(bundle_id, "bd-1");
+                assert_eq!(work_id, "wk-1");
+                assert_eq!(verdict, ReviewVerdict::Reject);
+            }
+            other => panic!("expected ReviewerVerdict, got {other:?}"),
         }
     }
 }

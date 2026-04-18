@@ -26,22 +26,31 @@ bundle-triaged:
     field: status
     value: Triaged
 
-# Fires when a reviewer session completes with Approve verdict.
+# Fires when a reviewer session emits an approve verdict. The bundle scope
+# lens is used by accept-approved-bundle to promote the bundle to Accepted.
 reviewer-approved:
   type: event
-  event: agent.status-changed
+  event: agent.reviewer-verdict
+  scope: bundle
   match:
-    status: completed
-    agent-type: reviewer
     verdict: approve
 
-# Fires when a reviewer session completes with Reject or RequestChanges verdict.
+# Fires when a reviewer session emits a reject verdict. The bundle scope lens
+# is used by reject-bundle-on-reviewer-rejection to transition the bundle.
 reviewer-rejected:
   type: event
-  event: agent.status-changed
+  event: agent.reviewer-verdict
+  scope: bundle
   match:
-    status: completed
-    agent-type: reviewer
+    verdict: reject
+
+# Fires on the same reviewer-verdict event as reviewer-rejected, but extracted
+# at work scope so retry-work-on-bundle-rejection can target the Work record.
+reviewer-rejected-work:
+  type: event
+  event: agent.reviewer-verdict
+  scope: work
+  match:
     verdict: reject
 
 # Fires when a plan transitions to Abandoned.
