@@ -2,6 +2,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
@@ -15,6 +16,41 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError}
 use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TickIdParams {
+    tick_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct CollectionIdParams {
+    collection: String,
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct CoverageEvaluateParams {
+    parent_collection: String,
+    parent_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct IdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct ValidatorReportsParams {
+    #[serde(default)]
+    target_id: Option<String>,
+    #[serde(default)]
+    target_collection: Option<String>,
+}
 
 /// Build the effective list of validation commands by combining global commands
 /// with any phase-scoped commands from the bundles in this tick.
@@ -79,15 +115,11 @@ pub(super) fn handle_integrator_validate(
 ) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_integrator_validate()");
-        let tick_id = match req.params.get("tick-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("tick_id is required"),
-                ));
-            }
+        let parsed: TickIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let tick_id = parsed.tick_id;
 
         // Verify tick exists and is in Sealing state; capture bundle_ids for phase validation
         let bundle_ids = {
@@ -201,15 +233,11 @@ pub(super) fn handle_integrator_publish(
 ) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_integrator_publish()");
-        let tick_id = match req.params.get("tick-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("tick_id is required"),
-                ));
-            }
+        let parsed: TickIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let tick_id = parsed.tick_id;
 
         // Verify tick exists and determine current state
         let current_status = {
@@ -282,22 +310,12 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
             }
         };
 
-        let collection = match req.params.get("collection").and_then(|v| v.as_str()) {
-            Some(c) => c.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("collection is required"),
-                ));
-            }
+        let parsed: CollectionIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let target_id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required")));
-            }
-        };
+        let collection = parsed.collection;
+        let target_id = parsed.id;
 
         let report = match collection.as_str() {
             "plan" | "plans" => {
@@ -382,25 +400,12 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
             }
         };
 
-        let parent_collection = match req.params.get("parent-collection").and_then(|v| v.as_str()) {
-            Some(c) => c.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("parent_collection is required"),
-                ));
-            }
+        let parsed: CoverageEvaluateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let parent_id = match req.params.get("parent-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("parent_id is required"),
-                ));
-            }
-        };
+        let parent_collection = parsed.parent_collection;
+        let parent_id = parsed.parent_id;
 
         let report = match parent_collection.as_str() {
             "plan" | "plans" => {
@@ -503,12 +508,11 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
 pub(super) fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_validator_report()");
-        let report_id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required")));
-            }
+        let parsed: IdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let report_id = parsed.id;
 
         // Read from TaskStore
         if let Some(store) = &stores.store {
@@ -542,22 +546,26 @@ pub(super) fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) 
 pub(super) fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_validator_reports()");
+        let parsed: ValidatorReportsParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
         if let Some(store) = &stores.store {
             let mut filters = vec![];
 
-            if let Some(target_id) = req.params.get("target-id").and_then(|v| v.as_str()) {
+            if let Some(target_id) = parsed.target_id {
                 filters.push(Filter {
                     field: "target_id".to_string(),
                     op: FilterOp::Eq,
-                    value: IndexValue::String(target_id.to_string()),
+                    value: IndexValue::String(target_id),
                 });
             }
 
-            if let Some(target_collection) = req.params.get("target-collection").and_then(|v| v.as_str()) {
+            if let Some(target_collection) = parsed.target_collection {
                 filters.push(Filter {
                     field: "target_collection".to_string(),
                     op: FilterOp::Eq,
-                    value: IndexValue::String(target_collection.to_string()),
+                    value: IndexValue::String(target_collection),
                 });
             }
 
@@ -758,7 +766,7 @@ mod tests {
         )
         .await;
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("tick_id"));
+        assert!(resp.error.unwrap().message.contains("tick-id"));
     }
 
     #[tokio::test]
