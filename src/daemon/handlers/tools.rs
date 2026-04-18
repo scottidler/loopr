@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::{info, instrument, warn};
@@ -10,6 +11,19 @@ use crate::tools::ToolRunner;
 
 use crate::daemon::context::Stores;
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct ToolsRegisterParams {
+    name: String,
+    command: String,
+    #[serde(default)]
+    context_dir: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    worktree: Option<bool>,
+}
+
 /// Register a runtime tool discovered by an agent. This is Layer 2 in the resolution stack.
 /// Runtime tools are session-scoped and not persisted.
 #[instrument(skip_all, fields(name = ?req.params.get("name")))]
@@ -19,12 +33,11 @@ pub(super) fn handle_tools_register(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let name = req
-            .params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("name is required"))?
-            .to_string();
+        let parsed: ToolsRegisterParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let name = parsed.name;
 
         if name.is_empty() {
             return Ok(DaemonResponse::err(
@@ -33,12 +46,7 @@ pub(super) fn handle_tools_register(
             ));
         }
 
-        let command = req
-            .params
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("command is required"))?
-            .to_string();
+        let command = parsed.command;
 
         if command.is_empty() {
             return Ok(DaemonResponse::err(
@@ -54,11 +62,7 @@ pub(super) fn handle_tools_register(
         let executable = command.split_whitespace().next().unwrap_or(&command);
 
         // Optional worktree context for resolving relative paths.
-        let context_dir = req
-            .params
-            .get("context-dir")
-            .and_then(|v| v.as_str())
-            .map(std::path::PathBuf::from);
+        let context_dir = parsed.context_dir.map(std::path::PathBuf::from);
 
         // Three-branch validation based on executable form.
         let exe_valid = if executable.starts_with('/') {
@@ -110,9 +114,9 @@ pub(super) fn handle_tools_register(
             ));
         }
 
-        let timeout_secs = req.params.get("timeout-secs").and_then(|v| v.as_u64()).unwrap_or(300);
+        let timeout_secs = parsed.timeout_secs.unwrap_or(300);
 
-        let worktree = req.params.get("worktree").and_then(|v| v.as_bool()).unwrap_or(true);
+        let worktree = parsed.worktree.unwrap_or(true);
 
         let entry = ToolEntry {
             name: name.clone(),
