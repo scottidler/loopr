@@ -469,9 +469,36 @@ extending state-query triggers in the same YAML surface.
 **Part 2 (Bug D) — ghost integration trigger.**
 
 - Implement a new state-query function `has-accepted-bundles` in
-  `src/trigger/observe.rs::StateQueryRegistry::with_builtins`. It
-  takes the plan scope_id and counts Bundles where `plan_id ==
-  scope_id AND status == Accepted`. Returns true when count > 0.
+  `src/trigger/observe.rs::StateQueryRegistry::with_builtins`.
+
+  **Backend (per Architect Round 3):** `Bundle` records do NOT have
+  a `plan_id` field. They reference `Work` via `work_id`, and `Work`
+  reaches `Plan` through `parent_id` hierarchy. Use the existing
+  helper:
+
+  ```rust
+  // in src/trigger/observe.rs
+  r.register(
+      "has-accepted-bundles",
+      Box::new(|ctx, _collection, plan_id, _params| {
+          let works = crate::agents::generation::collect_goal_works(
+              ctx.stores, plan_id
+          );
+          let work_ids: std::collections::HashSet<&str> =
+              works.iter().map(|w| w.id.as_str()).collect();
+          ctx.stores.bundles.read().ok()
+              .map(|bundles| bundles.values().any(|b| {
+                  work_ids.contains(b.work_id.as_str())
+                      && matches!(b.status(), BundleStatus::Accepted)
+              }))
+              .unwrap_or(false)
+      }),
+  );
+  ```
+
+  `collect_goal_works` handles both full and brief decomposition
+  modes; don't replicate the walk manually.
+
 - Rewrite `bundles-ready-for-integration` in
   `resources/engine/triggers/engine.yml` to use the new
   `has-accepted-bundles` state query instead of `field-equals`:
@@ -622,25 +649,38 @@ struct DirectorEscalateParams {
     reason: String,
     #[serde(default)]
     scope_id: Option<String>,
-    // Additional diagnostic fields forwarded from the primitive
-    // call site; captured as a catch-all context map only when
-    // deny_unknown_fields can't be applied (decision: keep strict
-    // for now, revisit if real diagnostic payloads need it).
 }
 ```
 
-The handler's job is to notify the Director to enter its Escalation
-mode. Options for the notification mechanism — confirm during
-implementation review:
+**Notification mechanism (per Architect Round 3):** The handler runs
+in a separate thread and CANNOT directly call `set_mode` on the
+`DirectorAgent` instance. Instead, emit a broadcast event:
 
-- **Option 1:** set `DirectorMode::Escalation` on the active
-  Director session for the plan (if one exists), persist, emit
-  `director.mode-changed` event.
-- **Option 2:** spawn a new Director session if none active, set
-  mode to Escalation at creation.
+```rust
+event_tx.send(DaemonEvent::new(
+    "director.escalation-requested",
+    serde_json::json!({
+        "plan-id": parsed.scope_id,
+        "reason": parsed.reason,
+    }),
+));
+```
 
-Either way, the handler MUST be idempotent — multiple escalate
-calls for the same plan within a short window should coalesce.
+The running `DirectorAgent` catches this event in its `process_event`
+match block at `src/agents/director.rs:687`. Add a new arm:
+
+```rust
+"director.escalation-requested" => {
+    if let Some(reason) = event.data.get("reason").and_then(|v| v.as_str()) {
+        self.set_mode(DirectorMode::Escalation);
+        // Optionally record reason on the session for observability
+    }
+}
+```
+
+Idempotency: the `set_mode` call is inherently idempotent (setting
+Escalation when already in Escalation is a no-op). Multiple escalate
+calls coalesce naturally through the event stream + mode check.
 
 **Step 2 — rename the IPC call.** Update
 `src/primitive/catalog/sweep.rs:278` from
@@ -649,12 +689,15 @@ calls for the same plan within a short window should coalesce.
 
 **Step 3 — register the handler in dispatch.** Wire
 `"director.escalate"` in the daemon's request dispatcher to the new
-handler.
+handler. Also add `"director.escalation-requested"` to
+`src/trigger/schema.rs::VALID_EVENTS` so trigger validation passes
+if any strategy ever matches on it.
 
 **Tests:**
 - Unit: handler validates params and returns a structured response.
-- Integration: emit an `escalate` primitive call; observe the
-  Director session transitions to Escalation mode.
+- Integration: emit an `escalate` primitive call from a test
+  strategy; observe `director.escalation-requested` event on the
+  bus; observe the running `DirectorAgent` flips to Escalation mode.
 - Regression: the `abandon-ratio-escalation` strategy
   (recovery.yml:45) fires end-to-end when its ratio trigger
   matches, and the escalate call does not bail.
@@ -677,20 +720,18 @@ than N times per plan").
 
 ```rust
 "session" => {
-    // Parameters: id = role name (literal, e.g., "director")
-    // field = "restart-count" (aggregate: count of failed sessions
-    //         of this role attached to the scope_id)
-    // scope_id comes from the strategy's scope binding
-    // (restart-director-on-state runs scope: plan, scope_id: plan_id)
+    // id = role literal ("director"); field = "restart-count".
+    // Aggregate count: failed Director sessions attached to the
+    // strategy's scope_id (plan_id in this case).
     match (id, field) {
         ("director", "restart-count") => {
+            let plan_id = ctx.scope_id.as_deref().unwrap_or_default();
             let sessions = ctx.stores.agent_sessions.read()?;
             let count = sessions.values()
                 .filter(|s| {
                     s.agent_type == AgentKind::Director
                         && matches!(s.status(), AgentStatus::Failed)
-                        // filter by plan scope - requires plumbing
-                        // scope_id down into this function, see note
+                        && s.target_id.as_deref() == Some(plan_id)
                 })
                 .count() as u32;
             Ok(count)
@@ -700,21 +741,45 @@ than N times per plan").
 }
 ```
 
-**Note on scope plumbing:** `read_numeric_field` currently takes
-`(ctx, collection, id, field)`. The primitive resolves `id` and
-`field` from the strategy params but does not receive the
-strategy's scope_id. For `collection: session`, the aggregate query
-needs the plan scope_id to filter sessions. Two options:
+**Scope plumbing (LOCKED: Option A, per Architect Round 3):**
+`read_numeric_field` currently takes `(ctx, collection, id, field)`.
+It does not receive the strategy's scope_id, so session filtering
+by plan is impossible. Extend `PrimitiveContext` to carry the
+strategy's scope_id:
 
-- **Option A:** extend `check-threshold` to pass a 5th argument
-  `strategy_scope_id` (from the primitive's context). This requires
-  threading scope_id into `PrimitiveContext`.
-- **Option B:** filter-by-session-role-only (no plan scoping); relies
-  on the fact that only one plan is active in v4's current single-plan
-  invariant.
+```rust
+// src/primitive/types.rs
+pub struct PrimitiveContext<'a> {
+    pub stores: &'a Arc<Stores>,
+    pub bridge: &'a PrimitiveBridge,
+    pub event_tx: &'a broadcast::Sender<DaemonEvent>,
+    pub strategy_ctx: &'a mut HashMap<String, serde_json::Value>,
+    pub scope_id: Option<String>,      // NEW
+}
+```
 
-**Pick Option A** for correctness even though v4 is single-plan
-today; the scope-aware version future-proofs multi-plan.
+Populate it from `execute_step` in `src/engine/tick.rs:341` where
+`PrimitiveContext` is instantiated — two-line change, scope_id is
+already in scope there. The `Option` keeps the field harmless for
+primitives that don't need it.
+
+The aggregate query then filters by plan:
+
+```rust
+// in read_numeric_field, collection = "session"
+let plan_id = ctx.scope_id.as_deref().unwrap_or_default();
+let sessions = ctx.stores.agent_sessions.read()?;
+let count = sessions.values()
+    .filter(|s| {
+        s.agent_type == AgentKind::Director
+            && matches!(s.status(), AgentStatus::Failed)
+            && s.target_id.as_deref() == Some(plan_id)
+    })
+    .count() as u32;
+```
+
+(Director sessions attach to the plan via `target_id`; confirm
+during implementation.)
 
 **Step 2 — verify the strategy works.** With `check-threshold`
 supporting session, `restart-director-on-state` now evaluates
