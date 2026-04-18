@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use eyre::eyre;
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::instrument;
@@ -22,15 +23,32 @@ use taskstore::Record;
 
 use crate::daemon::context::Stores;
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct HandshakeParams {
+    #[serde(default = "unknown_client")]
+    client_version: String,
+}
+
+fn unknown_client() -> String {
+    "unknown".to_string()
+}
+
 #[instrument(skip_all)]
 pub(super) fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         let server_version = crate::version();
-        let client_version = req
-            .params
-            .get("client-version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let parsed: HandshakeParams = if req.params.is_null() {
+            HandshakeParams {
+                client_version: unknown_client(),
+            }
+        } else {
+            match serde_json::from_value(req.params.clone()) {
+                Ok(p) => p,
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+            }
+        };
+        let client_version = parsed.client_version;
         let version_match = client_version == server_version;
         if !version_match {
             tracing::warn!(

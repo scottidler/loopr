@@ -111,7 +111,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bridge_handshake() {
         let (_dir, bridge) = test_bridge();
-        let resp = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
+        let resp = bridge.request("system.handshake", serde_json::json!({"client-version": "0.1.0"}));
         assert!(!resp.is_error());
         assert!(resp.result.unwrap()["protocol"].is_string());
     }
