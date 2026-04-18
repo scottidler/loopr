@@ -369,6 +369,31 @@ impl StateQueryRegistry {
             }),
         );
 
+        // has-accepted-bundles: at least one Bundle in Accepted status exists for a Work
+        // descended from the scoped plan. Handles both brief-mode (Work parented to Plan)
+        // and full-mode (Work parented to Phase -> Spec -> Plan) decomposition.
+        r.register(
+            "has-accepted-bundles",
+            Box::new(|ctx, _collection, plan_id, _params| {
+                let works = crate::agents::generation::collect_goal_works(ctx.stores, plan_id);
+                if works.is_empty() {
+                    return false;
+                }
+                let work_ids: std::collections::HashSet<&str> = works.iter().map(|w| w.id.as_str()).collect();
+                ctx.stores
+                    .bundles
+                    .read()
+                    .ok()
+                    .map(|bundles| {
+                        bundles.values().any(|b| {
+                            work_ids.contains(b.work_id.as_str())
+                                && matches!(b.status(), crate::domain::bundle::BundleStatus::Accepted)
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
         // field-is-true: a boolean field on the record is true.
         r.register(
             "field-is-true",

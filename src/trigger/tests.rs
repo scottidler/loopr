@@ -88,7 +88,7 @@ fn load_from_resources_passes_validation() {
 }
 
 #[test]
-fn loaded_triggers_cover_all_57_definitions() {
+fn loaded_triggers_cover_all_58_definitions() {
     let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
     let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
 
@@ -134,6 +134,7 @@ fn loaded_triggers_cover_all_57_definitions() {
         "spec-children-all-abandoned",
         // reconciliation.yml
         "plan-approved",
+        "plan-active-no-works",
         "plan-decomposable",
         "spec-decomposable",
         "phase-decomposable",
@@ -167,15 +168,15 @@ fn loaded_triggers_cover_all_57_definitions() {
 
     assert_eq!(
         names.len(),
-        57,
-        "trigger loader should expose exactly 57 triggers; got {} ({:?})",
+        58,
+        "trigger loader should expose exactly 58 triggers; got {} ({:?})",
         names.len(),
         names
     );
     assert_eq!(
         required.len(),
-        57,
-        "required-names list should have exactly 57 entries (got {})",
+        58,
+        "required-names list should have exactly 58 entries (got {})",
         required.len()
     );
 
@@ -697,13 +698,13 @@ fn children_returns_empty_when_no_match() {
 // --- StateQueryRegistry ---
 
 #[test]
-fn state_query_registry_has_all_11_builtins() {
+fn state_query_registry_has_all_12_builtins() {
     let reg = StateQueryRegistry::with_builtins();
     let names = reg.names();
     assert_eq!(
         names.len(),
-        11,
-        "state query registry should have exactly 11 built-ins; update this test when adding or removing one (got {:?})",
+        12,
+        "state query registry should have exactly 12 built-ins; update this test when adding or removing one (got {:?})",
         names
     );
     for required in &[
@@ -718,6 +719,7 @@ fn state_query_registry_has_all_11_builtins() {
         "field-equals",
         "field-is-true",
         "has-active-plan",
+        "has-accepted-bundles",
     ] {
         assert!(names.contains(required), "missing built-in query: {}", required);
     }
@@ -816,7 +818,15 @@ fn decomposition_composite_triggers_are_loaded() {
 #[test]
 fn decomposable_composites_are_and_operators() {
     let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
-    for name in &["plan-decomposable", "spec-decomposable", "phase-decomposable"] {
+    // plan-decomposable ANDs three clauses (plan-is-active + both no-children
+    // mirrors) so brief-mode plans stop firing once the first decomposer
+    // produces Works. spec- and phase- decomposables still AND two clauses.
+    let expected_counts: &[(&str, usize)] = &[
+        ("plan-decomposable", 3),
+        ("spec-decomposable", 2),
+        ("phase-decomposable", 2),
+    ];
+    for (name, want_len) in expected_counts {
         let def = defs
             .iter()
             .find(|d| &d.name == name)
@@ -824,7 +834,13 @@ fn decomposable_composites_are_and_operators() {
         match &def.kind {
             TriggerKind::Composite { operator, triggers } => {
                 assert_eq!(operator, &CompositeOperator::And, "{} should be AND", name);
-                assert_eq!(triggers.len(), 2, "{} should have exactly 2 sub-triggers", name);
+                assert_eq!(
+                    triggers.len(),
+                    *want_len,
+                    "{} should have exactly {} sub-triggers",
+                    name,
+                    want_len
+                );
             }
             other => panic!("{}: expected Composite, got {:?}", name, other),
         }
@@ -2472,5 +2488,139 @@ fn work_yml_guards_have_expected_conditions() {
     assert!(
         def.guards.values().any(|g| g.condition == "no-active-sessions"),
         "work.yml should have a no-active-sessions guard"
+    );
+}
+
+// ─── Phase 1: has-accepted-bundles + plan-decomposable composite ─────────────
+
+fn insert_bundle_for_work(stores: &Stores, work_id: &str, status: crate::domain::bundle::BundleStatus) -> String {
+    use crate::domain::bundle::Bundle;
+    let mut bundle = Bundle::new(work_id.to_owned(), None, format!("br-{work_id}"), Vec::new());
+    bundle.force_status(status);
+    let id = bundle.id.clone();
+    stores.write_bundles().unwrap().insert(id.clone(), bundle);
+    id
+}
+
+#[test]
+fn has_accepted_bundles_true_when_brief_mode_plan_has_accepted_bundle() {
+    use crate::domain::bundle::BundleStatus;
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    // Brief-mode: work parented directly to plan.
+    let work = insert_work(&stores, &plan.id, "task");
+    insert_bundle_for_work(&stores, &work.id, BundleStatus::Accepted);
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(reg.evaluate("has-accepted-bundles", &ctx, "plan", &plan.id, &HashMap::new()));
+}
+
+#[test]
+fn has_accepted_bundles_false_when_no_bundles() {
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    insert_work(&stores, &plan.id, "task");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(!reg.evaluate("has-accepted-bundles", &ctx, "plan", &plan.id, &HashMap::new()));
+}
+
+#[test]
+fn has_accepted_bundles_false_when_bundle_not_accepted() {
+    use crate::domain::bundle::BundleStatus;
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    let work = insert_work(&stores, &plan.id, "task");
+    insert_bundle_for_work(&stores, &work.id, BundleStatus::Proposed);
+    insert_bundle_for_work(&stores, &work.id, BundleStatus::Reviewed);
+    insert_bundle_for_work(&stores, &work.id, BundleStatus::Rejected);
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(!reg.evaluate("has-accepted-bundles", &ctx, "plan", &plan.id, &HashMap::new()));
+}
+
+#[test]
+fn has_accepted_bundles_false_when_plan_has_no_works() {
+    use crate::domain::bundle::BundleStatus;
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    // Accepted bundle attached to a work on a DIFFERENT plan - must not leak.
+    let other_plan = insert_plan(&stores, "other-goal");
+    let other_work = insert_work(&stores, &other_plan.id, "other-task");
+    insert_bundle_for_work(&stores, &other_work.id, BundleStatus::Accepted);
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(!reg.evaluate("has-accepted-bundles", &ctx, "plan", &plan.id, &HashMap::new()));
+}
+
+#[test]
+fn has_accepted_bundles_true_when_full_mode_plan_has_accepted_bundle() {
+    use crate::domain::bundle::BundleStatus;
+    use crate::domain::spec::Spec;
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    // Full-mode: plan -> spec -> phase -> work.
+    let spec = Spec::new(plan.id.clone(), "spec".to_owned());
+    stores.write_specs().unwrap().insert(spec.id.clone(), spec.clone());
+    let phase = insert_phase(&stores, &spec.id, "phase");
+    let work = insert_work(&stores, &phase.id, "task");
+    insert_bundle_for_work(&stores, &work.id, BundleStatus::Accepted);
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(reg.evaluate("has-accepted-bundles", &ctx, "plan", &plan.id, &HashMap::new()));
+}
+
+#[test]
+fn plan_decomposable_composite_fires_for_childless_active_plan() {
+    // End-to-end: evaluator loads the composite and all its sub-triggers, observes
+    // zero spec/work children, active plan -> Fired.
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    stores
+        .write_plans()
+        .unwrap()
+        .get_mut(&plan.id)
+        .unwrap()
+        .force_status(crate::domain::plan::HierarchyStatus::Active);
+    let ctx = make_ctx(&stores);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let mut eval = make_evaluator(defs);
+    let results = eval.evaluate_pull(&ctx);
+    let hit = results.iter().find(|(n, _)| n == "plan-decomposable");
+    assert!(
+        hit.is_some(),
+        "plan-decomposable should fire for a childless active plan"
+    );
+    if let Some((_, TriggerResult::Fired { scope_ids, .. })) = hit {
+        assert!(
+            scope_ids.contains(&plan.id),
+            "plan-decomposable scope_ids must contain the plan id"
+        );
+    } else {
+        panic!("expected Fired, got {:?}", hit);
+    }
+}
+
+#[test]
+fn plan_decomposable_composite_silent_when_plan_has_work_child() {
+    // Brief-mode termination: after a single decomposer produces a Work, the
+    // composite must stop firing via the new plan-active-no-works clause.
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "goal");
+    stores
+        .write_plans()
+        .unwrap()
+        .get_mut(&plan.id)
+        .unwrap()
+        .force_status(crate::domain::plan::HierarchyStatus::Active);
+    insert_work(&stores, &plan.id, "first-task");
+    let ctx = make_ctx(&stores);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let mut eval = make_evaluator(defs);
+    let results = eval.evaluate_pull(&ctx);
+    let fired = results.iter().any(|(n, _)| n == "plan-decomposable");
+    assert!(
+        !fired,
+        "plan-decomposable must not fire once the plan has at least one Work child"
     );
 }

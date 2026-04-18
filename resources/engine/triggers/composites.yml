@@ -21,13 +21,19 @@ work-promotable:
 # the expected next level. Pair of checks prevents re-spawning a decomposer
 # once children exist.
 
-# Fires for plans ready to decompose: plan is Active AND has no spec children yet
+# Fires for plans ready to decompose: plan is Active AND has zero children at
+# either the spec or the work level. The extra plan-active-no-works clause
+# makes the composite terminate for brief-mode plans, which produce Works
+# directly and never gain Specs (plan-active-no-specs stays true forever in
+# that mode). Under full-mode plans, plan-active-no-specs flips false after
+# the first decomposer produces Specs.
 plan-decomposable:
   type: composite
   operator: and
   triggers:
     - plan-is-active
     - plan-active-no-specs
+    - plan-active-no-works
 
 # Fires for specs ready to decompose: spec is Active AND has no phase children yet
 spec-decomposable:

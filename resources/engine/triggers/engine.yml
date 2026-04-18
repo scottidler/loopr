@@ -6,16 +6,13 @@ tick-published:
   event: tick.published
   scope: plan
 
-# Fires when a plan has accepted bundles ready for integration.
-# Note: uses field-equals as a placeholder; a dedicated has-accepted-bundles
-# state query will replace this in Phase 3 when bundle-scoped queries exist.
+# Fires when a plan has at least one Bundle in Accepted status attached to any
+# Work descended from the plan (brief-mode direct children or full-mode via
+# Spec -> Phase -> Work). Drives the integrate-accepted-bundles strategy.
 bundles-ready-for-integration:
   type: state-query
   scope: plan
-  query: field-equals
-  params:
-    field: has-accepted-bundles
-    value: true
+  query: has-accepted-bundles
 
 # Fires when a tick is created after integration - triggers async validation.
 tick-created:

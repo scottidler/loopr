@@ -140,6 +140,18 @@ phase-active-no-works:
   params:
     child-collection: work
 
+# Fires when a plan has no direct work children. Used alongside
+# plan-active-no-specs in the plan-decomposable composite so that brief-mode
+# plans (which produce Works directly without Specs) stop firing the composite
+# after the first decomposer completes. Full-mode plans terminate via the
+# plan-active-no-specs branch.
+plan-active-no-works:
+  type: state-query
+  scope: plan
+  query: has-no-children
+  params:
+    child-collection: work
+
 # ─── Re-decomposition safety cap ──────────────────────────────────────────────
 # Caps re-decomposition iterations to prevent infinite cycling when
 # coverage-incomplete persists. Defined here per Doc 6 (Decomposer as Strategy).
