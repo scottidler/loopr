@@ -256,6 +256,59 @@ pub(super) fn handle_director_user_message(
     })
 }
 
+/// Params for `director.escalate`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct DirectorEscalateParams {
+    reason: String,
+    #[serde(default)]
+    scope_id: Option<String>,
+}
+
+/// Handle `director.escalate`.
+///
+/// Broadcasts a `director.escalation-requested` event on the daemon event bus.
+/// The running `DirectorAgent` catches this in its `process_event` loop and
+/// transitions to `DirectorMode::Escalation`. Using the event bus rather than
+/// calling `set_mode` directly means the handler works without holding a reference
+/// to the live `DirectorAgent` instance.
+///
+/// Params:
+/// - `reason` (required): Human-readable escalation reason.
+/// - `scope-id` (optional): Plan ID that the escalation concerns.
+///
+/// Response:
+/// - `status`: `"acknowledged"` (the event was emitted; the Director may not have
+///   transitioned yet when this response returns).
+#[instrument(skip_all, fields(reason = ?req.params.get("reason")))]
+pub(super) fn handle_director_escalate(
+    _stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    try_handler!(req.id, {
+        let parsed: DirectorEscalateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+
+        debug!("director.escalate: reason={}", parsed.reason);
+
+        let _ = event_tx.send(DaemonEvent::new(
+            "director.escalation-requested",
+            serde_json::json!({
+                "plan-id": parsed.scope_id,
+                "reason": parsed.reason,
+            }),
+        ));
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({ "status": "acknowledged", "reason": parsed.reason }),
+        ))
+    })
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -420,5 +473,58 @@ mod tests {
         let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("message"));
+    }
+
+    #[test]
+    fn escalate_emits_broadcast_event_and_returns_acknowledged() {
+        let (_dir, stores) = test_stores();
+        let bcast = test_event_tx();
+        let mut rx = bcast.subscribe();
+
+        let req = DaemonRequest::new(
+            1,
+            "director.escalate",
+            json!({ "reason": "abandon ratio exceeded threshold" }),
+        );
+        let resp = handle_director_escalate(&stores, &bcast, req);
+        assert!(!resp.is_error(), "escalate should succeed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "acknowledged");
+
+        let ev = rx
+            .try_recv()
+            .expect("director.escalation-requested event must be emitted");
+        assert_eq!(ev.event, "director.escalation-requested");
+        assert_eq!(
+            ev.data.get("reason").and_then(|v| v.as_str()),
+            Some("abandon ratio exceeded threshold")
+        );
+    }
+
+    #[test]
+    fn escalate_with_scope_id_includes_plan_id_in_event() {
+        let (_dir, stores) = test_stores();
+        let bcast = test_event_tx();
+        let mut rx = bcast.subscribe();
+
+        let req = DaemonRequest::new(
+            1,
+            "director.escalate",
+            json!({ "reason": "ratio", "scope-id": "plan-abc" }),
+        );
+        let resp = handle_director_escalate(&stores, &bcast, req);
+        assert!(!resp.is_error());
+        let ev = rx.try_recv().unwrap();
+        assert_eq!(ev.data.get("plan-id").and_then(|v| v.as_str()), Some("plan-abc"));
+    }
+
+    #[test]
+    fn escalate_requires_reason() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+
+        let req = DaemonRequest::new(1, "director.escalate", json!({ "scope-id": "plan-x" }));
+        let resp = handle_director_escalate(&stores, &tx, req);
+        assert!(resp.is_error(), "escalate without reason must fail");
     }
 }

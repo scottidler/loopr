@@ -765,6 +765,18 @@ impl<L: LlmClient> DirectorAgent<L> {
                     }
                 }
             }
+            // External escalation request from the escalate primitive. Transitions the
+            // Director to Escalation mode so it surfaces the condition to the user.
+            "director.escalation-requested" => {
+                let reason = event
+                    .data
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no reason)")
+                    .to_string();
+                info!("{} director: escalation requested - {}", self.ctx.log_prefix(), reason);
+                self.set_mode(DirectorMode::Escalation);
+            }
             _ => {
                 trace!("{} director: observed event {}", self.ctx.log_prefix(), event.event);
             }

@@ -275,7 +275,7 @@ impl Primitive for Escalate {
 
             debug!("escalate: reason={}", reason);
 
-            let resp = ctx.bridge.request("coordinator.escalate", params);
+            let resp = ctx.bridge.request("director.escalate", params);
             if let Some(err) = &resp.error {
                 eyre::bail!("escalate failed: {}", err.message);
             }

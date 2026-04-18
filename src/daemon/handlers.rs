@@ -258,6 +258,7 @@ pub async fn dispatch(
         // director.*
         DaemonMethod::DirectorStartPlanIntake => handle_director_start_plan_intake(stores, event_tx, worktree_mgr, req),
         DaemonMethod::DirectorUserMessage => handle_director_user_message(stores, event_tx, req),
+        DaemonMethod::DirectorEscalate => handle_director_escalate(stores, event_tx, req),
 
         // decomposer.*
         DaemonMethod::DecomposerDecompose => decomposer::handle_decomposer_decompose(stores, event_tx, req).await,

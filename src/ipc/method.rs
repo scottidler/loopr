@@ -211,6 +211,8 @@ pub enum DaemonMethod {
     DirectorStartPlanIntake,
     #[strum(serialize = "director.user_message")]
     DirectorUserMessage,
+    #[strum(serialize = "director.escalate")]
+    DirectorEscalate,
 
     // decomposer.*
     #[strum(serialize = "decomposer.decompose")]
@@ -261,6 +263,6 @@ mod tests {
         // Exact-count guard. Update this number whenever you add or remove a method
         // in DaemonMethod, and keep the dispatch match in src/daemon/handlers.rs in sync.
         let count = DaemonMethod::iter().count();
-        assert_eq!(count, 79, "DaemonMethod should have exactly 79 variants; got {}", count);
+        assert_eq!(count, 80, "DaemonMethod should have exactly 80 variants; got {}", count);
     }
 }

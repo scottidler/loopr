@@ -15,6 +15,7 @@ const VALID_EVENTS: &[&str] = &[
     "agent.status-changed",
     "agent.reviewer-verdict",
     "agent.created",
+    "director.escalation-requested",
     "tick.published",
     "decomposition.completed",
     "decomposition.failed",
