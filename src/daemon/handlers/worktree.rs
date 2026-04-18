@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::instrument;
@@ -11,6 +12,28 @@ use crate::worktree::manager::WorktreeManager;
 use crate::daemon::context::Stores;
 use crate::domain::work::Work;
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorktreeCreateParams {
+    work_id: String,
+    #[serde(default)]
+    base_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorktreeWorkIdParams {
+    work_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorktreeRefreshParams {
+    work_id: String,
+    #[serde(default)]
+    new_base_ref: Option<String>,
+}
+
 #[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_worktree_create(
     stores: &Arc<Stores>,
@@ -19,22 +42,12 @@ pub(super) fn handle_worktree_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("work_id is required"),
-                ));
-            }
+        let parsed: WorktreeCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let base_ref = req
-            .params
-            .get("base-ref")
-            .and_then(|v| v.as_str())
-            .unwrap_or("HEAD")
-            .to_string();
+        let work_id = parsed.work_id;
+        let base_ref = parsed.base_ref.unwrap_or_else(|| "HEAD".to_string());
 
         // Validate the work exists (TaskStore first, fallback to HashMap)
         {
@@ -101,15 +114,11 @@ pub(super) fn handle_worktree_cleanup(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("work_id is required"),
-                ));
-            }
+        let parsed: WorktreeWorkIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let work_id = parsed.work_id;
 
         // Validate the work exists (TaskStore first, fallback to HashMap)
         {
@@ -151,22 +160,12 @@ pub(super) fn handle_worktree_cleanup(
 #[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("work_id is required"),
-                ));
-            }
+        let parsed: WorktreeRefreshParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let new_base_ref = req
-            .params
-            .get("new-base-ref")
-            .and_then(|v| v.as_str())
-            .unwrap_or("HEAD")
-            .to_string();
+        let work_id = parsed.work_id;
+        let new_base_ref = parsed.new_base_ref.unwrap_or_else(|| "HEAD".to_string());
 
         match worktree_mgr.refresh(&work_id, &new_base_ref) {
             Ok(()) => Ok(DaemonResponse::ok(
@@ -284,7 +283,7 @@ mod tests {
         )
         .await;
         assert!(resp.is_error());
-        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
+        assert!(resp.error.as_ref().unwrap().message.contains("work-id"));
     }
 
     #[tokio::test]
@@ -363,7 +362,7 @@ mod tests {
         )
         .await;
         assert!(resp.is_error());
-        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
+        assert!(resp.error.as_ref().unwrap().message.contains("work-id"));
     }
 
     #[tokio::test]
@@ -397,7 +396,7 @@ mod tests {
         )
         .await;
         assert!(resp.is_error());
-        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
+        assert!(resp.error.as_ref().unwrap().message.contains("work-id"));
     }
 
     #[tokio::test]
