@@ -972,13 +972,13 @@ fn guard_has_active_plan_mirrors_state_query() {
 // --- GuardConditionRegistry ---
 
 #[test]
-fn guard_registry_has_all_9_builtins() {
+fn guard_registry_has_all_11_builtins() {
     let reg = GuardConditionRegistry::with_builtins();
     let names = reg.names();
     assert_eq!(
         names.len(),
-        9,
-        "guard registry should have exactly 9 built-ins; update this test when adding or removing one (got {:?})",
+        11,
+        "guard registry should have exactly 11 built-ins; update this test when adding or removing one (got {:?})",
         names
     );
     for required in &[
@@ -991,6 +991,8 @@ fn guard_registry_has_all_9_builtins() {
         "no-active-reviewer-for-bundle",
         "no-active-researcher-for-phase",
         "no-active-director",
+        "work-not-superseded",
+        "plan-has-no-active-integration",
     ] {
         assert!(names.contains(required), "missing built-in guard: {}", required);
     }
@@ -1021,6 +1023,57 @@ fn guard_unknown_condition_returns_false() {
     let ctx = make_ctx(&stores);
     let reg = GuardConditionRegistry::with_builtins();
     assert!(!reg.evaluate("ghost-condition", &ctx, "work", "any-id"));
+}
+
+#[test]
+fn guard_work_not_superseded_true_for_non_superseded_work() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(reg.evaluate("work-not-superseded", &ctx, "work", &work.id));
+}
+
+#[test]
+fn guard_work_not_superseded_false_for_superseded_work() {
+    use crate::domain::work::WorkStatus;
+    let stores = make_stores();
+    let mut work = insert_work(&stores, "p1", "task");
+    work.force_status(WorkStatus::Superseded);
+    stores.write_works().unwrap().insert(work.id.clone(), work.clone());
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(!reg.evaluate("work-not-superseded", &ctx, "work", &work.id));
+}
+
+#[test]
+fn guard_plan_has_no_active_integration_true_when_no_ticks() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(reg.evaluate("plan-has-no-active-integration", &ctx, "plan", "plan-1"));
+}
+
+#[test]
+fn guard_plan_has_no_active_integration_false_when_open_tick_exists() {
+    use crate::domain::tick::Tick;
+    let stores = make_stores();
+    let tick = Tick::for_plan(1, "plan-1");
+    stores.write_ticks().unwrap().insert(tick.id.clone(), tick);
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(!reg.evaluate("plan-has-no-active-integration", &ctx, "plan", "plan-1"));
+}
+
+#[test]
+fn guard_plan_has_no_active_integration_ignores_ticks_on_other_plans() {
+    use crate::domain::tick::Tick;
+    let stores = make_stores();
+    let tick = Tick::for_plan(1, "plan-other");
+    stores.write_ticks().unwrap().insert(tick.id.clone(), tick);
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(reg.evaluate("plan-has-no-active-integration", &ctx, "plan", "plan-1"));
 }
 
 // ─── Phase 3: Trigger Evaluator tests ───────────────────────────────────────

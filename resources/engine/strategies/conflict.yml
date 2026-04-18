@@ -8,6 +8,7 @@ resolve-structural-conflict:
   priority: 900
   action:
     - primitive: combine-conflicting-works
+      guard: work-not-superseded
       params:
         work-ids: $trigger.event.conflicting-work-ids
         conflicting-files: $trigger.event.conflicting-files

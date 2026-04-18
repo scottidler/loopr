@@ -20,6 +20,7 @@ work-retry-on-failure:
         max: 3
   on-success:
     - primitive: retry-work
+      guard: no-active-implementer-for-work
       params:
         work-id: $trigger.scope-id
   on-failure:

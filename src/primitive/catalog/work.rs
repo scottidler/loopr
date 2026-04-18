@@ -296,13 +296,11 @@ impl Primitive for RetryWork {
     }
 
     fn idempotency(&self) -> Idempotency {
-        // retry-work always increments attempt-count and resets status to Ready.
-        // A second invocation with the same work-id double-counts, so the primitive
-        // is genuinely non-idempotent. Callers must place retry-work last in the
-        // action sequence so a crash between the count and the reset cannot replay.
-        // Both current callers (work-retry-on-failure.on-success[0],
-        // handle-rejected-bundle.action[1]) satisfy that.
-        Idempotency::NonIdempotent
+        // Safe to re-invoke only when the no-active-implementer-for-work guard is
+        // checked first. Without the guard a second invocation double-counts
+        // attempt-count. All callers (work-retry-on-failure.on-success[0] and
+        // retry-work-on-bundle-rejection.action[0]) carry that guard.
+        Idempotency::GuardRequired
     }
 }
 

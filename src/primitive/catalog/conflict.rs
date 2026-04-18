@@ -101,12 +101,9 @@ impl Primitive for CombineConflictingWorks {
     }
 
     fn idempotency(&self) -> Idempotency {
-        // Combines N works into one superseding Work record. Re-invocation creates
-        // a second superseding Work; the Superseded -> * transitions on the first
-        // set would reject, but the primitive still mutates state unconditionally
-        // (new combined work, new event emission). Genuinely non-idempotent.
-        // Resolve-structural-conflict uses it as the only action step, so "must be
-        // last" is satisfied.
-        Idempotency::NonIdempotent
+        // Safe to re-invoke only when the work-not-superseded guard is checked first.
+        // Without the guard a second invocation creates a second superseding Work.
+        // resolve-structural-conflict.action[0] carries that guard.
+        Idempotency::GuardRequired
     }
 }

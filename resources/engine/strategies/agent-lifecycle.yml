@@ -83,5 +83,6 @@ retry-work-on-bundle-rejection:
   priority: 810
   action:
     - primitive: retry-work
+      guard: no-active-implementer-for-work
       params:
         work-id: $trigger.scope-id

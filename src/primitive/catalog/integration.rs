@@ -320,12 +320,11 @@ impl Primitive for IntegrateTick {
     }
 
     fn idempotency(&self) -> Idempotency {
-        // Creates a new Tick and merges branches. Re-invocation attempts to create
-        // another Tick and re-merge; bundle.transition would reject the second pass
-        // but the primitive still performs git work and allocates IDs. Genuinely
-        // non-idempotent. integrate-accepted-bundles uses it as the only action
-        // step, so "must be last" is satisfied.
-        Idempotency::NonIdempotent
+        // Safe to re-invoke only when the plan-has-no-active-integration guard is
+        // checked first. Without the guard a second invocation creates a second Tick
+        // while the first is still sealing. integrate-accepted-bundles.action[0]
+        // carries that guard.
+        Idempotency::GuardRequired
     }
 
     fn requires_git_lock(&self) -> bool {

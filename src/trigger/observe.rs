@@ -627,6 +627,47 @@ impl GuardConditionRegistry {
             }),
         );
 
+        // work-not-superseded: work exists and is not in Superseded state.
+        // Used as a guard on combine-conflicting-works so the primitive is not invoked
+        // twice when a conflict resolution work item has already been superseded.
+        r.register(
+            "work-not-superseded",
+            Box::new(|ctx, _collection, id| {
+                ctx.stores
+                    .works
+                    .read()
+                    .ok()
+                    .and_then(|works| works.get(id).map(|w| w.status()))
+                    .map(|s| !matches!(s, crate::domain::work::WorkStatus::Superseded))
+                    .unwrap_or(false)
+            }),
+        );
+
+        // plan-has-no-active-integration: no in-flight Tick (Open, Sealing, or Validating)
+        // exists for the given plan. Guards integrate-tick so a second integration run
+        // cannot start while the previous tick is still sealing or validating.
+        r.register(
+            "plan-has-no-active-integration",
+            Box::new(|ctx, _collection, id| {
+                ctx.stores
+                    .ticks
+                    .read()
+                    .ok()
+                    .map(|ticks| {
+                        !ticks.values().any(|t| {
+                            t.plan_id == id
+                                && matches!(
+                                    t.status(),
+                                    crate::domain::tick::TickStatus::Open
+                                        | crate::domain::tick::TickStatus::Sealing
+                                        | crate::domain::tick::TickStatus::Validating
+                                )
+                        })
+                    })
+                    .unwrap_or(false)
+            }),
+        );
+
         // no-active-director: no non-terminal director session exists (global singleton).
         r.register(
             "no-active-director",

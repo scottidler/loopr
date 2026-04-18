@@ -10,6 +10,7 @@ integrate-accepted-bundles:
   priority: 500
   action:
     - primitive: integrate-tick
+      guard: plan-has-no-active-integration
       params:
         plan-id: $trigger.scope-id
 
