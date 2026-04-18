@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::instrument;
 
@@ -11,6 +12,35 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LockCreateParams {
+    resource: String,
+    holder_id: String,
+    granted_by: String,
+    #[serde(default)]
+    ttl_secs: Option<u64>,
+    #[serde(default)]
+    renewable: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LockIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LockListParams {
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    holder_id: Option<String>,
+    #[serde(default)]
+    active_only: Option<bool>,
+}
+
 #[instrument(skip_all, fields(resource = ?req.params.get("resource"), holder_id = ?req.params.get("holder-id")))]
 pub(super) fn handle_lock_create(
     stores: &Arc<Stores>,
@@ -18,48 +48,34 @@ pub(super) fn handle_lock_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let resource = req
-            .params
-            .get("resource")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let holder_id = req
-            .params
-            .get("holder-id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let granted_by = req
-            .params
-            .get("granted-by")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let parsed: LockCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
 
-        if resource.is_empty() {
+        if parsed.resource.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
                 RpcError::invalid_params("resource is required"),
             ));
         }
-        if holder_id.is_empty() {
+        if parsed.holder_id.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
                 RpcError::invalid_params("holder-id is required"),
             ));
         }
-        if granted_by.is_empty() {
+        if parsed.granted_by.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
                 RpcError::invalid_params("granted-by is required"),
             ));
         }
 
-        let mut lock = Lock::new(resource, holder_id, granted_by);
+        let mut lock = Lock::new(parsed.resource, parsed.holder_id, parsed.granted_by);
 
         // #11: Accept optional ttl_secs param; compute expires_at
-        if let Some(ttl_secs) = req.params.get("ttl-secs").and_then(|v| v.as_u64()) {
+        if let Some(ttl_secs) = parsed.ttl_secs {
             lock.expires_at = Some(crate::id::now_millis() + (ttl_secs as i64 * 1000));
         }
 
@@ -70,7 +86,7 @@ pub(super) fn handle_lock_create(
                 lock.expires_at = Some(crate::id::now_millis() + (ttl_minutes as i64 * 60 * 1000));
             }
         }
-        if let Some(renewable) = req.params.get("renewable").and_then(|v| v.as_bool()) {
+        if let Some(renewable) = parsed.renewable {
             lock.renewable = renewable;
         }
 
@@ -111,10 +127,11 @@ pub(super) fn handle_lock_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LockIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -150,22 +167,21 @@ pub(super) fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
 #[instrument(skip_all)]
 pub(super) fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        // Optionally filter by resource
-        let resource_filter = req
-            .params
-            .get("resource")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        // Optionally filter by holder_id
-        let holder_filter = req
-            .params
-            .get("holder-id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        // Optionally filter by active-only
-        let active_only = req.params.get("active-only").and_then(|v| v.as_bool()).unwrap_or(false);
+        let parsed: LockListParams = if req.params.is_null() {
+            LockListParams {
+                resource: None,
+                holder_id: None,
+                active_only: None,
+            }
+        } else {
+            match serde_json::from_value(req.params.clone()) {
+                Ok(p) => p,
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+            }
+        };
+        let resource_filter = parsed.resource;
+        let holder_filter = parsed.holder_id;
+        let active_only = parsed.active_only.unwrap_or(false);
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -230,10 +246,11 @@ pub(super) fn handle_lock_release(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LockIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut locks = stores.write_locks()?;
         let lock = match locks.get_mut(&id) {
@@ -279,10 +296,11 @@ pub(super) fn handle_lock_expire(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LockIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut locks = stores.write_locks()?;
         let lock = match locks.get_mut(&id) {
