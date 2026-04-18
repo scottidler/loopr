@@ -354,6 +354,7 @@ impl CompositionEngine {
             repo_path: ctx.repo_path,
             worktree_mgr: ctx.worktree_mgr,
             strategy_ctx: &mut HashMap::new(),
+            scope_id: Some(scope_id.to_owned()),
         };
 
         // Acquire git lock for primitives that mutate git state (merge, branch, checkout).

@@ -307,6 +307,26 @@ fn read_numeric_field(ctx: &PrimitiveContext<'_>, collection: &str, id: &str, fi
                 other => eyre::bail!("unknown numeric field '{}' on work", other),
             }
         }
+        // Aggregate failed Director sessions for the plan currently in scope.
+        // `id` is the agent role literal ("director"); `field` is the counter name.
+        // The plan-id comes from ctx.scope_id (populated by execute_step for
+        // plan-scoped strategies such as restart-director-on-state).
+        "session" => match (id, field) {
+            ("director", "restart-count") => {
+                let plan_id = ctx.scope_id.as_deref().unwrap_or_default();
+                let sessions = ctx.stores.read_agent_sessions()?;
+                let count = sessions
+                    .values()
+                    .filter(|s| {
+                        s.agent_type == crate::agents::AgentKind::Director
+                            && matches!(s.status(), crate::agents::AgentStatus::Failed)
+                            && s.target_id.as_deref() == Some(plan_id)
+                    })
+                    .count() as u32;
+                Ok(count)
+            }
+            _ => eyre::bail!("unknown session query: id={} field={}", id, field),
+        },
         other => eyre::bail!("check-threshold not supported for collection '{}'", other),
     }
 }

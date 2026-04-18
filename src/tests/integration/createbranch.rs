@@ -89,6 +89,7 @@ async fn invoke_create_integration_branch(stores: &Arc<Stores>, plan_id: &str) -
         repo_path: &repo_path,
         worktree_mgr: &worktree_mgr,
         strategy_ctx: &mut strategy_ctx,
+        scope_id: None,
     };
     prim.execute(&mut ctx, json!({ "plan-id": plan_id })).await.map(|_| ())
 }

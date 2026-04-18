@@ -68,6 +68,11 @@ pub struct PrimitiveContext<'a> {
     pub worktree_mgr: &'a WorktreeManager,
     /// Strategy-scoped scratchpad for inter-primitive communication.
     pub strategy_ctx: &'a mut HashMap<String, serde_json::Value>,
+    /// The scope_id from the strategy's firing trigger (e.g. plan_id for a plan-scoped
+    /// strategy). Populated by execute_step; None only in test harnesses that construct
+    /// PrimitiveContext directly. Primitives that need cross-scope aggregation (like
+    /// check-threshold with collection: session) use this to filter by the plan in scope.
+    pub scope_id: Option<String>,
 }
 
 /// Idempotency guarantee for a primitive.

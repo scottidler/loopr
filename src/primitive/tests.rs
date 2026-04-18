@@ -319,3 +319,154 @@ fn primitive_catalog_has_all_64_builtins() {
         "Primitive registry should have exactly 64 built-ins; update this test when adding or removing one"
     );
 }
+
+// ─── check-threshold with collection:session ──────────────────────────────────
+
+#[allow(clippy::unwrap_used)]
+mod check_threshold_session {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use serde_json::json;
+    use tokio::sync::broadcast;
+
+    use crate::agents::bridge::AgentIpcBridge;
+    use crate::agents::session::AgentSession;
+    use crate::agents::{AgentKind, AgentStatus};
+    use crate::daemon::context::Stores;
+    use crate::fsm::runtime::FsmInterpreter;
+    use crate::ipc::protocol::DaemonEvent;
+    use crate::primitive::catalog::reconcile::CheckThreshold;
+    use crate::primitive::types::{Primitive, PrimitiveContext};
+    use crate::worktree::manager::WorktreeManager;
+
+    fn make_bridge_parts(stores: Arc<Stores>) -> (broadcast::Sender<DaemonEvent>, WorktreeManager, AgentIpcBridge) {
+        let (tx, _) = broadcast::channel::<DaemonEvent>(8);
+        let wm = WorktreeManager::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/.worktrees"));
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            tx.clone(),
+            wm.clone(),
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
+        (tx, wm, bridge)
+    }
+
+    fn failed_director_session(plan_id: &str) -> AgentSession {
+        let mut s = AgentSession::new(AgentKind::Director, "test".into());
+        s.target_id = Some(plan_id.to_owned());
+        s.force_status(AgentStatus::Failed);
+        s
+    }
+
+    #[tokio::test]
+    async fn session_restart_count_returns_zero_when_no_sessions() {
+        let mut stores = Stores::new();
+        stores.fsm = Arc::new(FsmInterpreter::embedded().unwrap());
+        let stores = Arc::new(stores);
+        let mut strategy_ctx = HashMap::new();
+        let (tx, wm, bridge) = make_bridge_parts(stores.clone());
+        let repo_path = PathBuf::from("/tmp");
+
+        let mut ctx = PrimitiveContext {
+            stores: &stores,
+            bridge: &bridge,
+            event_tx: &tx,
+            repo_path: &repo_path,
+            worktree_mgr: &wm,
+            strategy_ctx: &mut strategy_ctx,
+            scope_id: Some("plan-x".to_owned()),
+        };
+
+        let result = CheckThreshold
+            .execute(
+                &mut ctx,
+                json!({"collection": "session", "id": "director", "field": "restart-count", "max": 5}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.values["current"], json!(0u32));
+        assert_eq!(result.values["exceeded"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn session_restart_count_aggregates_failed_director_sessions_for_plan() {
+        let mut stores = Stores::new();
+        stores.fsm = Arc::new(FsmInterpreter::embedded().unwrap());
+        // Three failed Director sessions attached to plan-abc
+        for _ in 0..3 {
+            let s = failed_director_session("plan-abc");
+            stores.agent_sessions.write().unwrap().insert(s.id.clone(), s);
+        }
+        // One failed Director session attached to a different plan (must not be counted)
+        let other = failed_director_session("plan-other");
+        stores.agent_sessions.write().unwrap().insert(other.id.clone(), other);
+        let stores = Arc::new(stores);
+        let mut strategy_ctx = HashMap::new();
+        let (tx, wm, bridge) = make_bridge_parts(stores.clone());
+        let repo_path = PathBuf::from("/tmp");
+
+        let mut ctx = PrimitiveContext {
+            stores: &stores,
+            bridge: &bridge,
+            event_tx: &tx,
+            repo_path: &repo_path,
+            worktree_mgr: &wm,
+            strategy_ctx: &mut strategy_ctx,
+            scope_id: Some("plan-abc".to_owned()),
+        };
+
+        let result = CheckThreshold
+            .execute(
+                &mut ctx,
+                json!({"collection": "session", "id": "director", "field": "restart-count", "max": 5}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.values["current"],
+            json!(3u32),
+            "should count only sessions for plan-abc"
+        );
+        assert_eq!(result.values["exceeded"], json!(false), "3 <= 5");
+    }
+
+    #[tokio::test]
+    async fn session_restart_count_reports_exceeded_when_over_max() {
+        let mut stores = Stores::new();
+        stores.fsm = Arc::new(FsmInterpreter::embedded().unwrap());
+        for _ in 0..6 {
+            let s = failed_director_session("plan-z");
+            stores.agent_sessions.write().unwrap().insert(s.id.clone(), s);
+        }
+        let stores = Arc::new(stores);
+        let mut strategy_ctx = HashMap::new();
+        let (tx, wm, bridge) = make_bridge_parts(stores.clone());
+        let repo_path = PathBuf::from("/tmp");
+
+        let mut ctx = PrimitiveContext {
+            stores: &stores,
+            bridge: &bridge,
+            event_tx: &tx,
+            repo_path: &repo_path,
+            worktree_mgr: &wm,
+            strategy_ctx: &mut strategy_ctx,
+            scope_id: Some("plan-z".to_owned()),
+        };
+
+        let result = CheckThreshold
+            .execute(
+                &mut ctx,
+                json!({"collection": "session", "id": "director", "field": "restart-count", "max": 5}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.values["current"], json!(6u32));
+        assert_eq!(result.values["exceeded"], json!(true), "6 > 5");
+    }
+}
