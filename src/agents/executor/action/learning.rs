@@ -32,7 +32,7 @@ pub(super) fn handle_create_learning(
         "source-id": effective_source_id,
     });
     if let Some(roles) = applicable_roles {
-        params["applicable_roles"] = serde_json::json!(roles);
+        params["applicable-roles"] = serde_json::json!(roles);
     }
     if let Some(tags) = files {
         params["files"] = serde_json::json!(tags);

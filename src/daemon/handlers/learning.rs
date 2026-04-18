@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::instrument;
 
@@ -12,6 +13,45 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LearningCreateParams {
+    source_id: String,
+    scope: LearningScope,
+    content: String,
+    #[serde(default)]
+    applicable_roles: Option<Vec<Role>>,
+    #[serde(default)]
+    files: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LearningIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LearningListParams {
+    #[serde(default)]
+    scope: Option<LearningScope>,
+    #[serde(default)]
+    source_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct LearningUpdateParams {
+    id: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    applicable_roles: Option<Vec<Role>>,
+    #[serde(default)]
+    files: Option<Vec<String>>,
+}
+
 #[instrument(skip_all, fields(source_id = ?req.params.get("source-id"), scope = ?req.params.get("scope")))]
 pub(super) fn handle_learning_create(
     stores: &Arc<Stores>,
@@ -19,63 +59,29 @@ pub(super) fn handle_learning_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let source_id = req
-            .params
-            .get("source-id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let scope: LearningScope = match req.params.get("scope") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(s) => s,
-                Err(_) => {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::invalid_params("invalid scope (work|phase|spec|plan|global)"),
-                    ));
-                }
-            },
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("scope is required"),
-                ));
-            }
+        let parsed: LearningCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-        let content = req
-            .params
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if source_id.is_empty() {
+        if parsed.source_id.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::invalid_params("source_id is required"),
+                RpcError::invalid_params("source-id is required"),
             ));
         }
-        if content.is_empty() {
+        if parsed.content.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
                 RpcError::invalid_params("content is required"),
             ));
         }
 
-        let mut learning = Learning::new(source_id, scope, content);
-
-        // M3: Parse applicable_roles
-        if let Some(roles_val) = req.params.get("applicable-roles")
-            && let Ok(roles) = serde_json::from_value::<Vec<Role>>(roles_val.clone())
-        {
+        let mut learning = Learning::new(parsed.source_id, parsed.scope, parsed.content);
+        if let Some(roles) = parsed.applicable_roles {
             learning.applicable_roles = Some(roles);
         }
-
-        // M4: Parse files
-        if let Some(tags_val) = req.params.get("files")
-            && let Ok(tags) = serde_json::from_value::<Vec<String>>(tags_val.clone())
-        {
-            learning.files = tags;
+        if let Some(files) = parsed.files {
+            learning.files = files;
         }
 
         let learning_json = match serde_json::to_value(&learning) {
@@ -105,10 +111,11 @@ pub(super) fn handle_learning_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LearningIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -144,18 +151,13 @@ pub(super) fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> D
 #[instrument(skip_all)]
 pub(super) fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        // Optionally filter by scope
-        let scope_filter: Option<LearningScope> = req
-            .params
-            .get("scope")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-        // Optionally filter by source_id
-        let source_id_filter = req
-            .params
-            .get("source-id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let raw = if req.params.is_null() { serde_json::json!({}) } else { req.params.clone() };
+        let parsed: LearningListParams = match serde_json::from_value(raw) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let scope_filter = parsed.scope;
+        let source_id_filter = parsed.source_id;
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -212,10 +214,11 @@ pub(super) fn handle_learning_reinforce(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LearningIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut learnings = stores.write_learnings()?;
         let learning = match learnings.get_mut(&id) {
@@ -254,10 +257,11 @@ pub(super) fn handle_learning_contradict(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LearningIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut learnings = stores.write_learnings()?;
         let learning = match learnings.get_mut(&id) {
@@ -299,10 +303,11 @@ pub(super) fn handle_learning_promote(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LearningIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut learnings = stores.write_learnings()?;
         let learning = match learnings.get_mut(&id) {
@@ -341,10 +346,11 @@ pub(super) fn handle_learning_demote(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LearningIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut learnings = stores.write_learnings()?;
         let learning = match learnings.get_mut(&id) {
@@ -383,10 +389,11 @@ pub(super) fn handle_learning_update(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: LearningUpdateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut learnings = stores.write_learnings()?;
         let learning = match learnings.get_mut(&id) {
@@ -394,18 +401,14 @@ pub(super) fn handle_learning_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("learnings", &id))),
         };
 
-        if let Some(content) = req.params.get("content").and_then(|v| v.as_str()) {
-            learning.content = content.to_string();
+        if let Some(content) = parsed.content {
+            learning.content = content;
         }
-        if let Some(roles) = req.params.get("applicable-roles").and_then(|v| v.as_array()) {
-            let parsed: Vec<Role> = roles
-                .iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                .collect();
-            learning.applicable_roles = if parsed.is_empty() { None } else { Some(parsed) };
+        if let Some(roles) = parsed.applicable_roles {
+            learning.applicable_roles = if roles.is_empty() { None } else { Some(roles) };
         }
-        if let Some(tags) = req.params.get("files").and_then(|v| v.as_array()) {
-            learning.files = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if let Some(files) = parsed.files {
+            learning.files = files;
         }
         learning.updated_at = crate::id::now_millis();
 
@@ -543,7 +546,7 @@ mod tests {
         )
         .await;
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("source_id"));
+        assert!(resp.error.unwrap().message.contains("source-id"));
     }
 
     #[tokio::test]
@@ -581,7 +584,7 @@ mod tests {
         )
         .await;
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("scope"));
+        assert!(resp.error.unwrap().message.contains("variant"));
     }
 
     #[tokio::test]
@@ -1019,7 +1022,7 @@ mod tests {
                 json!({
                     "id": learning_id,
                     "content": "Updated content",
-                    "applicable-roles": ["Implementer", "Reviewer"],
+                    "applicable-roles": ["implementer", "reviewer"],
                     "files": ["src/main.rs", "src/lib.rs"]
                 }),
             ),
