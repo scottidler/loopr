@@ -326,7 +326,7 @@ async fn test_full_mvp4_pipeline() {
             "work-id": wi_id,
             "description": "Created index.html with basic structure",
             "files-changed": ["index.html"],
-            "commit_sha": "def456",
+            "head-commit": "def456",
             "branch-name": "feature-index"
         }),
     )

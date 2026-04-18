@@ -12,40 +12,6 @@ use crate::worktree::manager::WorktreeManager;
 
 use super::context::Stores;
 
-/// Parse a string-valued param from the request using `FromStr`.
-/// Returns the parsed value or an error DaemonResponse with a descriptive message.
-pub(super) fn parse_required_param<T: std::str::FromStr<Err = String>>(
-    req: &DaemonRequest,
-    param: &str,
-) -> Result<T, DaemonResponse> {
-    match req.params.get(param).and_then(|v| v.as_str()) {
-        Some(s) => s
-            .parse::<T>()
-            .map_err(|e| DaemonResponse::err(req.id, RpcError::invalid_params(&e))),
-        None => Err(DaemonResponse::err(
-            req.id,
-            RpcError::invalid_params(&format!("{} is required", param)),
-        )),
-    }
-}
-
-/// Parse an optional string-valued param with a default value.
-pub(super) fn parse_optional_param<T: std::str::FromStr<Err = String>>(
-    req: &DaemonRequest,
-    param: &str,
-    default: T,
-) -> Result<T, DaemonResponse> {
-    match req.params.get(param) {
-        Some(v) => match v.as_str() {
-            Some(s) => s
-                .parse::<T>()
-                .map_err(|e| DaemonResponse::err(req.id, RpcError::invalid_params(&e))),
-            None => Ok(default),
-        },
-        None => Ok(default),
-    }
-}
-
 /// Convert a handler body that returns Result<DaemonResponse> into a DaemonResponse,
 /// mapping any Err into an RPC internal error response.
 macro_rules! try_handler {

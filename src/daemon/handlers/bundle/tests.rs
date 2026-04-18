@@ -255,7 +255,7 @@ async fn test_bundle_create_missing_work_id() {
     let req = DaemonRequest::new(1, "bundle.create", json!({"branch-name": "feature/x"}));
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
-    assert!(resp.error.unwrap().message.contains("work_id"));
+    assert!(resp.error.unwrap().message.contains("work-id"));
 }
 
 #[tokio::test]
@@ -282,7 +282,7 @@ async fn test_bundle_create_missing_branch_name() {
     let req = DaemonRequest::new(40, "bundle.create", json!({"work-id": wi_id, "claims": "stuff"}));
     let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
-    assert!(resp.error.unwrap().message.contains("branch_name"));
+    assert!(resp.error.unwrap().message.contains("branch-name"));
 }
 
 #[tokio::test]

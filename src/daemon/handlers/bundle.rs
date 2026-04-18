@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
@@ -17,7 +18,77 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-use super::{parse_optional_param, parse_required_param};
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct BundleCreateParams {
+    work_id: String,
+    #[serde(default)]
+    branch_name: Option<String>,
+    #[serde(default)]
+    noop_reason: Option<String>,
+    #[serde(default)]
+    base_tick_id: Option<String>,
+    #[serde(default)]
+    claims: Option<serde_json::Value>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    head_commit: Option<String>,
+    /// Modern key for changed paths.
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    /// Backward-compatible alias for `paths`.
+    #[serde(default)]
+    files_changed: Option<Vec<String>>,
+    #[serde(default)]
+    loc_changed: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct BundleIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct BundleListParams {
+    #[serde(default)]
+    work_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct BundleTransitionParams {
+    id: String,
+    target_status: BundleStatus,
+    #[serde(default)]
+    role: Option<Role>,
+    #[serde(default)]
+    verification: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct BundleUpdateParams {
+    id: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    #[serde(default)]
+    files_changed: Option<Vec<String>>,
+    #[serde(default)]
+    loc_changed: Option<u64>,
+    #[serde(default)]
+    claims: Option<serde_json::Value>,
+    #[serde(default)]
+    verification: Option<String>,
+    #[serde(default)]
+    locks_used: Option<Vec<String>>,
+    #[serde(default)]
+    base_tick_id: Option<String>,
+}
 
 /// Find the latest Published Tick (by highest tick number).
 pub(super) fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
@@ -36,15 +107,11 @@ pub(super) fn handle_bundle_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let work_id = match req.params.get("work-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("work_id is required"),
-                ));
-            }
+        let parsed: BundleCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let work_id = parsed.work_id;
 
         // Verify parent work exists and is not in a terminal state
         {
@@ -70,32 +137,18 @@ pub(super) fn handle_bundle_create(
             }
         }
 
-        let noop_reason = req
-            .params
-            .get("noop-reason")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let branch_name = req
-            .params
-            .get("branch-name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let noop_reason = parsed.noop_reason;
+        let branch_name = parsed.branch_name.unwrap_or_default();
 
         // branch_name is required for normal bundles but optional for noop bundles
         if branch_name.is_empty() && noop_reason.is_none() {
             return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::invalid_params("branch_name is required"),
+                RpcError::invalid_params("branch-name is required"),
             ));
         }
 
-        let base_tick_id = req
-            .params
-            .get("base-tick-id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let base_tick_id = parsed.base_tick_id;
 
         // Staleness guard: reject if base_tick_id is behind the latest Published Tick
         let latest_published = find_latest_published_tick(stores);
@@ -119,43 +172,32 @@ pub(super) fn handle_bundle_create(
         }
 
         // M1: Parse claims as array (backward-compat: also accepts string)
-        let claims: Vec<String> = match req.params.get("claims") {
-            Some(serde_json::Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        let claims: Vec<String> = match parsed.claims {
+            Some(serde_json::Value::Array(arr)) => {
+                arr.into_iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            }
             Some(serde_json::Value::String(s)) => {
                 if s.is_empty() {
                     Vec::new()
                 } else {
-                    vec![s.clone()]
+                    vec![s]
                 }
             }
             _ => Vec::new(),
         };
 
-        let description = req
-            .params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let head_commit = req
-            .params
-            .get("head-commit")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
         let mut bundle = Bundle::new(work_id.clone(), base_tick_id, branch_name, claims);
-        bundle.description = description;
+        bundle.description = parsed.description;
         bundle.noop_reason = noop_reason;
-        bundle.head_commit = head_commit;
+        bundle.head_commit = parsed.head_commit;
 
-        // M8: Accept both "paths" and "files_changed" (normalize param name)
-        let paths_val = req.params.get("paths").or_else(|| req.params.get("files-changed"));
-        if let Some(files) = paths_val.and_then(|v| v.as_array()) {
-            bundle.paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        // M8: Accept both "paths" and "files-changed" (normalize param name)
+        if let Some(files) = parsed.paths.or(parsed.files_changed) {
+            bundle.paths = files;
         }
 
         // Parse loc_changed if provided
-        if let Some(loc) = req.params.get("loc-changed").and_then(|v| v.as_u64()) {
+        if let Some(loc) = parsed.loc_changed {
             bundle.loc_changed = Some(loc as u32);
         }
 
@@ -210,10 +252,11 @@ pub(super) fn handle_bundle_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: BundleIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -249,15 +292,20 @@ pub(super) fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
 #[instrument(skip_all, fields(work_id = ?req.params.get("work-id")))]
 pub(super) fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let wi_filter = req.params.get("work-id").and_then(|v| v.as_str());
+        let raw = if req.params.is_null() { serde_json::json!({}) } else { req.params.clone() };
+        let parsed: BundleListParams = match serde_json::from_value(raw) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let wi_filter = parsed.work_id;
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
-            let filters: Vec<Filter> = if let Some(wid) = wi_filter {
+            let filters: Vec<Filter> = if let Some(wid) = &wi_filter {
                 vec![Filter {
                     field: "work_id".to_string(),
                     op: FilterOp::Eq,
-                    value: IndexValue::String(wid.to_string()),
+                    value: IndexValue::String(wid.clone()),
                 }]
             } else {
                 vec![]
@@ -282,7 +330,7 @@ pub(super) fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> Da
         let bundles = stores.read_bundles()?;
         let bundle_list: Vec<&Bundle> = bundles
             .values()
-            .filter(|b| wi_filter.is_none() || Some(b.work_id.as_str()) == wi_filter)
+            .filter(|b| wi_filter.as_deref().is_none_or(|wid| b.work_id.as_str() == wid))
             .collect();
 
         match serde_json::to_value(&bundle_list) {
@@ -300,20 +348,13 @@ pub(super) fn handle_bundle_transition(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: BundleTransitionParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let target_status: BundleStatus = match parse_required_param(&req, "target-status") {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let role: Role = match parse_optional_param(&req, "role", Role::Coordinator) {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
+        let id = parsed.id;
+        let target_status = parsed.target_status;
+        let role = parsed.role.unwrap_or(Role::Coordinator);
 
         let mut bundles = stores.write_bundles()?;
 
@@ -324,8 +365,8 @@ pub(super) fn handle_bundle_transition(
         };
 
         // Allow setting verification during transition (e.g., Reviewer sets it when transitioning to Reviewed)
-        if let Some(v) = req.params.get("verification").and_then(|v| v.as_str()) {
-            verification = v.to_string();
+        if let Some(v) = parsed.verification {
+            verification = v;
         }
 
         let role_str = role.to_string();
@@ -450,10 +491,11 @@ pub(super) fn handle_bundle_update(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: BundleUpdateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut bundles = stores.write_bundles()?;
         let bundle = match bundles.get_mut(&id) {
@@ -461,12 +503,11 @@ pub(super) fn handle_bundle_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("bundles", &id))),
         };
 
-        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-            bundle.description = Some(desc.to_string());
+        if let Some(desc) = parsed.description {
+            bundle.description = Some(desc);
         }
-        // M8: Accept both "paths" and "files_changed" in update
-        let paths_val = req.params.get("paths").or_else(|| req.params.get("files-changed"));
-        if let Some(paths) = paths_val.and_then(|v| v.as_array()) {
+        // M8: Accept both "paths" and "files-changed" in update
+        if let Some(paths) = parsed.paths.or(parsed.files_changed) {
             // Gap #22: BundleSizePolicy enforcement on update
             let policy = &stores.config.strategy.bundle_size;
             if paths.len() as u32 > policy.max_files_touched {
@@ -479,10 +520,10 @@ pub(super) fn handle_bundle_update(
                     )),
                 ));
             }
-            bundle.paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            bundle.paths = paths;
         }
         // Parse loc_changed if provided
-        if let Some(loc) = req.params.get("loc-changed").and_then(|v| v.as_u64()) {
+        if let Some(loc) = parsed.loc_changed {
             let policy = &stores.config.strategy.bundle_size;
             if loc as u32 > policy.max_loc_changed {
                 return Ok(DaemonResponse::err(
@@ -496,27 +537,27 @@ pub(super) fn handle_bundle_update(
             bundle.loc_changed = Some(loc as u32);
         }
         // M1: Parse claims as array (backward-compat: also accepts string)
-        if let Some(claims_val) = req.params.get("claims") {
+        if let Some(claims_val) = parsed.claims {
             bundle.claims = match claims_val {
-                serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                serde_json::Value::Array(arr) => arr.into_iter().filter_map(|v| v.as_str().map(String::from)).collect(),
                 serde_json::Value::String(s) => {
                     if s.is_empty() {
                         Vec::new()
                     } else {
-                        vec![s.clone()]
+                        vec![s]
                     }
                 }
                 _ => Vec::new(),
             };
         }
-        if let Some(verification) = req.params.get("verification").and_then(|v| v.as_str()) {
-            bundle.verification = verification.to_string();
+        if let Some(verification) = parsed.verification {
+            bundle.verification = verification;
         }
-        if let Some(locks) = req.params.get("locks-used").and_then(|v| v.as_array()) {
-            bundle.locks_used = locks.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if let Some(locks) = parsed.locks_used {
+            bundle.locks_used = locks;
         }
-        if let Some(base_tick_id) = req.params.get("base-tick-id").and_then(|v| v.as_str()) {
-            bundle.base_tick_id = Some(base_tick_id.to_string());
+        if let Some(base_tick_id) = parsed.base_tick_id {
+            bundle.base_tick_id = Some(base_tick_id);
         }
         bundle.updated_at = crate::id::now_millis();
 

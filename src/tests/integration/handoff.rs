@@ -582,7 +582,7 @@ async fn test_bundle_rejection_work_reset_no_deadlock() {
             "work-id": work_id,
             "description": "Test bundle",
             "files-changed": ["src/main.py"],
-            "commit_sha": "abc123",
+            "head-commit": "abc123",
             "branch-name": "agent/wk-test"
         }),
     )

@@ -638,8 +638,8 @@ mod tests {
         assert!(resp.is_error(), "empty branch_name without noop_reason should fail");
         let err_msg = resp.error.as_ref().unwrap().message.clone();
         assert!(
-            err_msg.contains("branch_name"),
-            "error should mention branch_name: {}",
+            err_msg.contains("branch-name"),
+            "error should mention branch-name: {}",
             err_msg
         );
     }
