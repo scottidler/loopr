@@ -775,7 +775,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"parent-id": spec_id, "title": "Parent Phase", "order": 1}),
+                json!({"parent-id": spec_id, "title": "Parent Phase"}),
             ),
         )
         .await;
@@ -1144,11 +1144,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(
-                21,
-                "phase.create",
-                json!({"parent-id": spec_id, "title": "Phase 2", "order": 2}),
-            ),
+            DaemonRequest::new(21, "phase.create", json!({"parent-id": spec_id, "title": "Phase 2"})),
         )
         .await;
         let phase_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -1232,11 +1228,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(
-                21,
-                "phase.create",
-                json!({"parent-id": spec_id, "title": "Phase 2", "order": 2}),
-            ),
+            DaemonRequest::new(21, "phase.create", json!({"parent-id": spec_id, "title": "Phase 2"})),
         )
         .await;
         let phase_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();

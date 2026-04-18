@@ -24,7 +24,6 @@ async fn test_preformed_todo_app_plan() {
                 vec![
                     (
                         "Phase 1: Data Model & Storage",
-                        1,
                         vec![
                             ("Todo struct", vec!["src/model.rs"]),
                             ("JSON storage", vec!["src/storage.rs"]),
@@ -32,7 +31,6 @@ async fn test_preformed_todo_app_plan() {
                     ),
                     (
                         "Phase 2: CRUD Operations",
-                        2,
                         vec![
                             ("Add command", vec!["src/commands.rs"]),
                             ("List command", vec!["src/commands.rs"]),
@@ -42,7 +40,6 @@ async fn test_preformed_todo_app_plan() {
                     ),
                     (
                         "Phase 3: Filtering & CLI",
-                        3,
                         vec![
                             ("Filter by status", vec!["src/commands.rs"]),
                             ("CLI entry point", vec!["src/main.rs"]),
@@ -117,7 +114,6 @@ async fn test_preformed_calculator_app_plan() {
                 vec![
                     (
                         "Phase 1: Arithmetic Engine",
-                        1,
                         vec![
                             ("Arithmetic ops", vec!["src/engine.rs"]),
                             ("Error handling", vec!["src/engine.rs"]),
@@ -125,7 +121,6 @@ async fn test_preformed_calculator_app_plan() {
                     ),
                     (
                         "Phase 2: Expression Parser",
-                        2,
                         vec![
                             ("Tokenizer", vec!["src/parser.rs"]),
                             ("Parser", vec!["src/parser.rs"]),
@@ -134,7 +129,6 @@ async fn test_preformed_calculator_app_plan() {
                     ),
                     (
                         "Phase 3: REPL & CLI",
-                        3,
                         vec![
                             ("REPL loop", vec!["src/repl.rs"]),
                             ("CLI entry point", vec!["src/main.rs"]),
@@ -187,10 +181,7 @@ async fn test_preformed_plan_work_can_transition_to_in_progress() {
         PlanInput {
             title: "Tiny App",
             criteria: "It works",
-            specs: vec![(
-                "Spec",
-                vec![("Phase 1", 1, vec![("Implement main", vec!["src/main.rs"])])],
-            )],
+            specs: vec![("Spec", vec![("Phase 1", vec![("Implement main", vec!["src/main.rs"])])])],
         },
     )
     .await;

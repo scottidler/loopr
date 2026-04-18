@@ -48,7 +48,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase", "order": 1}),
+        json!({"parent-id": spec_id, "title": "Phase"}),
     )
     .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
@@ -167,7 +167,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "P", "order": 1}),
+        json!({"parent-id": spec_id, "title": "P"}),
     )
     .await;
     let phase_id = phase_resp["id"].as_str().unwrap();

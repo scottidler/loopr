@@ -453,7 +453,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "phase.create",
-        json!({"parent-id": spec_id, "title": "Phase 1", "order": 1}),
+        json!({"parent-id": spec_id, "title": "Phase 1"}),
     )
     .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();

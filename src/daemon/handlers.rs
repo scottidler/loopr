@@ -679,11 +679,7 @@ pub(crate) mod tests {
             &wm,
             &ic,
             &fsm,
-            DaemonRequest::new(
-                3,
-                "phase.create",
-                json!({"parent-id": spec_id, "title": "Test Phase", "number": 1}),
-            ),
+            DaemonRequest::new(3, "phase.create", json!({"parent-id": spec_id, "title": "Test Phase"})),
         )
         .await;
         let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -792,11 +788,7 @@ pub(crate) mod tests {
             &wm,
             &ic,
             &fsm,
-            DaemonRequest::new(
-                3,
-                "phase.create",
-                json!({"parent-id": spec_id, "title": "Phase", "number": 1}),
-            ),
+            DaemonRequest::new(3, "phase.create", json!({"parent-id": spec_id, "title": "Phase"})),
         )
         .await;
         let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();

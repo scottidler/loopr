@@ -139,7 +139,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let phase_resp = bridge.request(
         "phase.create",
-        serde_json::json!({"parent-id": spec_id, "title": "Test Phase", "order": 1}),
+        serde_json::json!({"parent-id": spec_id, "title": "Test Phase"}),
     );
     let phase_id = phase_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     bridge.request(

@@ -16,7 +16,7 @@ use crate::worktree::manager::WorktreeManager;
 
 // Type aliases for inject_preformed_plan
 pub(super) type WorkInput<'a> = (&'a str, Vec<&'a str>);
-pub(super) type PhaseInput<'a> = (&'a str, u32, Vec<WorkInput<'a>>);
+pub(super) type PhaseInput<'a> = (&'a str, Vec<WorkInput<'a>>);
 pub(super) type SpecInput<'a> = (&'a str, Vec<PhaseInput<'a>>);
 pub(super) type PhaseResult = (String, Vec<String>);
 pub(super) type SpecResult = (String, Vec<PhaseResult>);
@@ -259,7 +259,7 @@ pub(super) async fn inject_preformed_plan(
         .await;
 
         let mut phase_results = Vec::new();
-        for (phase_title, order, works) in &phases {
+        for (phase_title, works) in &phases {
             let phase = dispatch_ok(
                 stores,
                 tx,
@@ -269,7 +269,6 @@ pub(super) async fn inject_preformed_plan(
                 json!({
                     "parent-id": spec_id,
                     "title": phase_title,
-                    "order": order,
                 }),
             )
             .await;
