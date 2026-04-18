@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
@@ -15,7 +16,45 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-use super::{parse_optional_param, parse_required_param};
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TickCreateParams {
+    number: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TickIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TickListParams {
+    #[serde(default)]
+    status: Option<TickStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TickTransitionParams {
+    id: String,
+    target_status: TickStatus,
+    #[serde(default)]
+    role: Option<Role>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TickUpdateParams {
+    id: String,
+    #[serde(default)]
+    validation_log: Option<String>,
+    #[serde(default)]
+    bundle_ids: Option<Vec<String>>,
+    #[serde(default)]
+    attempted_bundle_ids: Option<Vec<String>>,
+}
 
 #[instrument(skip_all, fields(number = ?req.params.get("number")))]
 pub(super) fn handle_tick_create(
@@ -36,17 +75,12 @@ pub(super) fn handle_tick_create(
             }
         }
 
-        let number = match req.params.get("number").and_then(|v| v.as_u64()) {
-            Some(n) => n as u32,
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("number is required (positive integer)"),
-                ));
-            }
+        let parsed: TickCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
 
-        let tick = Tick::new(number);
+        let tick = Tick::new(parsed.number);
         let tick_json = match serde_json::to_value(&tick) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -74,10 +108,11 @@ pub(super) fn handle_tick_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: TickIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -113,11 +148,12 @@ pub(super) fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
 #[instrument(skip_all)]
 pub(super) fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        // Optionally filter by status
-        let status_filter: Option<TickStatus> = req
-            .params
-            .get("status")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let raw = if req.params.is_null() { serde_json::json!({}) } else { req.params.clone() };
+        let parsed: TickListParams = match serde_json::from_value(raw) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let status_filter = parsed.status;
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -168,20 +204,13 @@ pub(super) fn handle_tick_transition(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: TickTransitionParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let target_status: TickStatus = match parse_required_param(&req, "target-status") {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let role: Role = match parse_optional_param(&req, "role", Role::Integrator) {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
+        let id = parsed.id;
+        let target_status = parsed.target_status;
+        let role = parsed.role.unwrap_or(Role::Integrator);
 
         let mut ticks = stores.write_ticks()?;
 
@@ -275,10 +304,11 @@ pub(super) fn handle_tick_update(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: TickUpdateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut ticks = stores.write_ticks()?;
         let tick = match ticks.get_mut(&id) {
@@ -286,14 +316,14 @@ pub(super) fn handle_tick_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("ticks", &id))),
         };
 
-        if let Some(log) = req.params.get("validation-log").and_then(|v| v.as_str()) {
-            tick.validation_log = log.to_string();
+        if let Some(log) = parsed.validation_log {
+            tick.validation_log = log;
         }
-        if let Some(bids) = req.params.get("bundle-ids").and_then(|v| v.as_array()) {
-            tick.bundle_ids = bids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if let Some(bids) = parsed.bundle_ids {
+            tick.bundle_ids = bids;
         }
-        if let Some(abids) = req.params.get("attempted-bundle-ids").and_then(|v| v.as_array()) {
-            tick.attempted_bundle_ids = abids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if let Some(abids) = parsed.attempted_bundle_ids {
+            tick.attempted_bundle_ids = abids;
         }
         tick.updated_at = crate::id::now_millis();
 
