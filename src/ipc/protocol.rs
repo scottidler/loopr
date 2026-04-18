@@ -221,7 +221,7 @@ impl DaemonEvent {
             serde_json::json!({
                 "tick-id": tick_id,
                 "integration-sha": integration_sha,
-                "merged_bundle_ids": merged_bundle_ids,
+                "merged-bundle-ids": merged_bundle_ids,
             }),
         )
     }
@@ -238,7 +238,7 @@ impl DaemonEvent {
 
     pub fn tick_validation_failed(tick_id: &str, reason: &str) -> Self {
         Self::new(
-            "tick.validation_failed",
+            "tick.validation-failed",
             serde_json::json!({
                 "tick-id": tick_id,
                 "reason": reason,
@@ -248,11 +248,11 @@ impl DaemonEvent {
 
     pub fn bundle_rejected_stale(work_id: &str, base_tick_id: &str, latest_tick_id: &str) -> Self {
         Self::new(
-            "bundle.rejected_stale",
+            "bundle.rejected-stale",
             serde_json::json!({
-                "bundle_work_id": work_id,
+                "bundle-work-id": work_id,
                 "base-tick-id": base_tick_id,
-                "latest_tick_id": latest_tick_id,
+                "latest-tick-id": latest_tick_id,
             }),
         )
     }
@@ -391,8 +391,8 @@ impl DaemonEvent {
 
     pub fn learning_policy_contradicted(learning_id: &str) -> Self {
         Self::new(
-            "learning.policy_contradicted",
-            serde_json::json!({ "learning_id": learning_id }),
+            "learning.policy-contradicted",
+            serde_json::json!({ "learning-id": learning_id }),
         )
     }
 
@@ -427,7 +427,7 @@ impl DaemonEvent {
     /// Emitted whenever the Director flips between modes.
     pub fn director_mode_changed(session_id: &str, mode: &str, plan_id: Option<&str>) -> Self {
         Self::new(
-            "director.mode_changed",
+            "director.mode-changed",
             serde_json::json!({
                 "session-id": session_id,
                 "mode": mode,
@@ -440,11 +440,11 @@ impl DaemonEvent {
     /// during Monitoring for longer than the stall threshold.
     pub fn director_stall_detected(session_id: &str, plan_id: Option<&str>, idle_secs: u64) -> Self {
         Self::new(
-            "director.stall_detected",
+            "director.stall-detected",
             serde_json::json!({
                 "session-id": session_id,
                 "plan-id": plan_id,
-                "idle_secs": idle_secs,
+                "idle-secs": idle_secs,
             }),
         )
     }
@@ -659,8 +659,8 @@ mod tests {
     #[test]
     fn test_event_learning_policy_contradicted() {
         let event = DaemonEvent::learning_policy_contradicted("l1");
-        assert_eq!(event.event, "learning.policy_contradicted");
-        assert_eq!(event.data["learning_id"], "l1");
+        assert_eq!(event.event, "learning.policy-contradicted");
+        assert_eq!(event.data["learning-id"], "l1");
     }
 
     #[test]
@@ -726,5 +726,80 @@ mod tests {
         assert_eq!(REASON_SHA_UNREACHABLE, "ShaUnreachable");
         assert_eq!(REASON_SHA_MISSING, "ShaMissing");
         assert_eq!(REASON_MERGE_NOT_ANCESTOR, "MergeNotAncestor");
+    }
+
+    /// Catalog-consistency lint: every event name emitted by DaemonEvent constructors
+    /// must appear in trigger/schema.rs::VALID_EVENTS. Round 4 Finding 1 cleaned up
+    /// five mixed-casing names that had drifted out of sync with the trigger layer;
+    /// this test keeps future drift from slipping in.
+    ///
+    /// Scans the file for `Self::new(` invocations and extracts the first string
+    /// literal argument as the event name. Covers both inline and multi-line forms.
+    #[test]
+    fn emitted_event_names_are_registered_in_valid_events() {
+        let source = include_str!("protocol.rs");
+        let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Find every Self::new( occurrence and extract the first quoted literal
+        // in the argument list. Stop scanning when we hit the test module, so
+        // Self::new literals inside this test body don't become false positives.
+        let scan_end = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let source_impl = &source[..scan_end];
+        let mut search_start = 0;
+        while let Some(idx) = source_impl[search_start..].find("Self::new(") {
+            let abs = search_start + idx + "Self::new(".len();
+            let window_end = (abs + 300).min(source_impl.len());
+            let window = &source_impl[abs..window_end];
+            if let Some(open) = window.find('"') {
+                let rest = &window[open + 1..];
+                if let Some(close) = rest.find('"') {
+                    let literal = &rest[..close];
+                    // Filter to event-name shape: "scope.name" with lowercase + optional hyphens.
+                    if looks_like_event_name(literal) {
+                        emitted.insert(literal.to_owned());
+                    }
+                }
+            }
+            search_start = abs;
+        }
+
+        assert!(
+            !emitted.is_empty(),
+            "scan found zero Self::new event names; the scanner broke"
+        );
+
+        let trigger_relevant: std::collections::HashSet<&str> =
+            crate::trigger::schema::valid_event_names().iter().copied().collect();
+
+        // agent.* event names are validated via AgentEvent serde, not VALID_EVENTS.
+        let missing: Vec<&String> = emitted
+            .iter()
+            .filter(|name| !name.starts_with("agent.") && !trigger_relevant.contains(name.as_str()))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "emitted event names not in VALID_EVENTS (add to trigger/schema.rs::VALID_EVENTS): {:?}",
+            missing
+        );
+    }
+
+    /// Event names match `scope.name` or `scope.multi-word-name`, lowercase, no underscores.
+    fn looks_like_event_name(s: &str) -> bool {
+        if !s.contains('.') || s.contains(' ') || s.contains('_') || s.contains('/') {
+            return false;
+        }
+        let parts: Vec<&str> = s.splitn(2, '.').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let (scope, name) = (parts[0], parts[1]);
+        if scope.is_empty() || name.is_empty() {
+            return false;
+        }
+        if !scope.chars().all(|c| c.is_ascii_lowercase()) {
+            return false;
+        }
+        name.chars().all(|c| c.is_ascii_lowercase() || c == '-')
     }
 }

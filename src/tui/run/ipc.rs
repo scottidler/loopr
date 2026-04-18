@@ -144,8 +144,8 @@ pub async fn refresh_collection(state: &mut AppState, client: &mut IpcClient, co
 pub fn event_collection(event: &DaemonEvent) -> Option<&str> {
     match event.event.as_str() {
         "record.created" | "record.updated" | "transition.completed" => event.data["collection"].as_str(),
-        "tick.published" | "tick.validation_failed" => Some("tick"),
-        "bundle.rejected_stale" => Some("bundle"),
+        "tick.published" | "tick.validation-failed" => Some("tick"),
+        "bundle.rejected-stale" => Some("bundle"),
         e if e.starts_with("agent.") => Some("agent"),
         _ => None,
     }
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn test_event_collection_tick_validation_failed() {
         let event = DaemonEvent::new(
-            "tick.validation_failed",
+            "tick.validation-failed",
             serde_json::json!({"tick-id": "t1", "reason": "test failed"}),
         );
         assert_eq!(event_collection(&event), Some("tick"));

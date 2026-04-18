@@ -258,7 +258,7 @@ pub struct DirectorAgent<L: LlmClient> {
     lifeguard: Lifeguard,
     /// Monotonic clock reference used to detect stalls in Monitoring mode.
     last_event_at: Instant,
-    /// Last time a `director.stall_detected` event was emitted. Used to throttle
+    /// Last time a `director.stall-detected` event was emitted. Used to throttle
     /// repeat emissions when the stall persists across heartbeats.
     last_stall_emit_at: Option<Instant>,
     /// Total events observed across the session (debug/trace only).
@@ -340,7 +340,7 @@ impl<L: LlmClient> DirectorAgent<L> {
     }
 
     /// Transition to `new_mode`: update in-memory mode, persist to session store,
-    /// and broadcast `director.mode_changed` so the TUI and audit trail see the flip.
+    /// and broadcast `director.mode-changed` so the TUI and audit trail see the flip.
     /// No-op when the mode is unchanged, so callers don't need to pre-check.
     fn set_mode(&mut self, new_mode: DirectorMode) {
         if self.mode == new_mode {
@@ -720,12 +720,12 @@ impl<L: LlmClient> DirectorAgent<L> {
                 }
             }
             // Bundle rejections are the other primary signal for work-level failures.
-            "bundle.rejected_stale" | "bundle.rejected" => {
+            "bundle.rejected-stale" | "bundle.rejected" => {
                 if let Some(work_id) = event
                     .data
-                    .get("bundle_work_id")
+                    .get("bundle-work-id")
                     .and_then(|v| v.as_str())
-                    .or_else(|| event.data.get("work_id").and_then(|v| v.as_str()))
+                    .or_else(|| event.data.get("work-id").and_then(|v| v.as_str()))
                 {
                     let reason = event
                         .data

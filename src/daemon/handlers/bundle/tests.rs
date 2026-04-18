@@ -806,8 +806,8 @@ async fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
     );
     dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     let event = rx.try_recv().unwrap();
-    assert_eq!(event.event, "bundle.rejected_stale");
-    assert_eq!(event.data["bundle_work_id"], wi_id.as_str());
+    assert_eq!(event.event, "bundle.rejected-stale");
+    assert_eq!(event.data["bundle-work-id"], wi_id.as_str());
     assert_eq!(event.data["base-tick-id"], "stale-id");
 }
 

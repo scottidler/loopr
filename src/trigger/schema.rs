@@ -7,7 +7,16 @@ use tracing::info;
 /// Known valid collection names for scope and ratio queries.
 const VALID_SCOPES: &[&str] = &["work", "bundle", "plan", "spec", "phase", "session", "tick", "lock"];
 
-/// Known valid event types for event triggers.
+/// Accessor for the event-name catalog. Used by the protocol-layer
+/// catalog-consistency test to ensure every emitted event is also listed here.
+pub fn valid_event_names() -> &'static [&'static str] {
+    VALID_EVENTS
+}
+
+/// Known valid event types for event triggers. Names use the kebab-case
+/// `scope.event-name` convention. Round-4 normalization replaced the last
+/// snake_case subevent names (`director.mode_changed`, etc.) with kebab;
+/// see the catalog-consistency test in `src/ipc/protocol.rs` tests.
 const VALID_EVENTS: &[&str] = &[
     "transition.completed",
     "record.created",
@@ -15,14 +24,25 @@ const VALID_EVENTS: &[&str] = &[
     "agent.status-changed",
     "agent.reviewer-verdict",
     "agent.created",
+    "bundle.merged",
+    "bundle.rejected-stale",
     "director.escalation-requested",
+    "director.mode-changed",
+    "director.stall-detected",
+    "learning.policy-contradicted",
     "tick.published",
+    "tick.validation-failed",
     "decomposition.completed",
     "decomposition.failed",
     "escalation",
     "reconciliation.failed",
+    "reconciliation.fixed",
     "integration.conflict-detected",
     "tick.created",
+    "validation.started",
+    "validation.completed",
+    "transition.rejected",
+    "record.deleted",
 ];
 
 /// Comparison operators for threshold and ratio triggers.

@@ -423,10 +423,10 @@ async fn mode_change_emits_director_mode_changed_event() {
     assert!(result.is_ok());
     result.unwrap().unwrap();
 
-    // Drain the receiver and verify director.mode_changed was emitted with mode="monitoring".
+    // Drain the receiver and verify director.mode-changed was emitted with mode="monitoring".
     let mut saw_mode_changed = false;
     while let Ok(ev) = rx.try_recv() {
-        if ev.event == "director.mode_changed"
+        if ev.event == "director.mode-changed"
             && ev.data.get("mode").and_then(|v| v.as_str()) == Some("monitoring")
             && ev.data.get("session-id").and_then(|v| v.as_str()) == Some(session_id.as_str())
         {
@@ -436,7 +436,7 @@ async fn mode_change_emits_director_mode_changed_event() {
     }
     assert!(
         saw_mode_changed,
-        "director.mode_changed event must fire on PlanIntake → Monitoring"
+        "director.mode-changed event must fire on PlanIntake → Monitoring"
     );
 }
 
@@ -505,13 +505,13 @@ async fn failure_threshold_flips_mode_to_escalation() {
     // Threshold breach must have emitted mode_changed(escalation) at some point.
     let mut saw_escalation = false;
     while let Ok(ev) = rx.try_recv() {
-        if ev.event == "director.mode_changed" && ev.data.get("mode").and_then(|v| v.as_str()) == Some("escalation") {
+        if ev.event == "director.mode-changed" && ev.data.get("mode").and_then(|v| v.as_str()) == Some("escalation") {
             saw_escalation = true;
         }
     }
     assert!(
         saw_escalation,
-        "threshold breach must emit director.mode_changed with mode=escalation"
+        "threshold breach must emit director.mode-changed with mode=escalation"
     );
     // Final mode returns to Monitoring after the escalation pass.
     let sessions = stores.agent_sessions.read().unwrap();
@@ -554,7 +554,7 @@ async fn rejection_threshold_flips_mode_to_escalation() {
             let _ = driver_tx.send(DaemonEvent::new(
                 "bundle.rejected",
                 serde_json::json!({
-                    "bundle_work_id": "wk-rej",
+                    "bundle-work-id": "wk-rej",
                     "reason": reason,
                 }),
             ));
@@ -573,13 +573,13 @@ async fn rejection_threshold_flips_mode_to_escalation() {
 
     let mut saw_escalation = false;
     while let Ok(ev) = rx.try_recv() {
-        if ev.event == "director.mode_changed" && ev.data.get("mode").and_then(|v| v.as_str()) == Some("escalation") {
+        if ev.event == "director.mode-changed" && ev.data.get("mode").and_then(|v| v.as_str()) == Some("escalation") {
             saw_escalation = true;
         }
     }
     assert!(
         saw_escalation,
-        "three distinct bundle rejection themes must emit director.mode_changed mode=escalation"
+        "three distinct bundle rejection themes must emit director.mode-changed mode=escalation"
     );
     let sessions = stores.agent_sessions.read().unwrap();
     let sess = sessions.get(&session_id).unwrap();
@@ -989,7 +989,7 @@ async fn threshold_escalation_returns_to_monitoring() {
     // Order check: mode_changed(escalation) must precede mode_changed(monitoring-second-time).
     let mut mode_sequence: Vec<String> = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if ev.event == "director.mode_changed"
+        if ev.event == "director.mode-changed"
             && let Some(m) = ev.data.get("mode").and_then(|v| v.as_str())
         {
             mode_sequence.push(m.to_string());
@@ -1248,7 +1248,7 @@ async fn user_message_in_monitoring_enters_intervention_and_returns() {
     let mut modes: Vec<String> = Vec::new();
     let mut saw_diagnosis = false;
     while let Ok(ev) = rx.try_recv() {
-        if ev.event == "director.mode_changed"
+        if ev.event == "director.mode-changed"
             && let Some(m) = ev.data.get("mode").and_then(|v| v.as_str())
         {
             modes.push(m.to_string());

@@ -391,7 +391,7 @@ pub struct DirectorThresholds {
     /// Prevents a 2-work spec with 1 abandonment (50%) from escalating prematurely.
     pub spec_min_works_for_ratio: usize,
 
-    /// Seconds of broadcast silence in Monitoring mode before a `director.stall_detected`
+    /// Seconds of broadcast silence in Monitoring mode before a `director.stall-detected`
     /// event is emitted. Replaces the old hardcoded `STALL_THRESHOLD_SECS` const.
     pub stall_threshold_secs: u64,
 
