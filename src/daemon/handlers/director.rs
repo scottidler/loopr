@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, instrument};
 
@@ -21,6 +22,19 @@ use crate::worktree::manager::WorktreeManager;
 /// 16 is enough to absorb bursts of fast typing without backpressuring the TUI;
 /// if the Director is blocked in an LLM call, messages queue until it returns.
 const DIRECTOR_USER_MESSAGE_BUFFER: usize = 16;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct DirectorStartPlanIntakeParams {
+    chat_session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct DirectorUserMessageParams {
+    session_id: String,
+    message: String,
+}
 
 /// Handle `director.start_plan_intake`.
 ///
@@ -44,15 +58,11 @@ pub(super) fn handle_director_start_plan_intake(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let chat_session_id = match req.params.get("chat-session-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("chat_session_id is required"),
-                ));
-            }
+        let parsed: DirectorStartPlanIntakeParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let chat_session_id = parsed.chat_session_id;
 
         // Director pool cap is 1 (config.agents.director.max_pool). If a Director session
         // is already active, reject - the caller should route subsequent user messages via
@@ -182,24 +192,12 @@ pub(super) fn handle_director_user_message(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("session_id is required"),
-                ));
-            }
+        let parsed: DirectorUserMessageParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-        let message = match req.params.get("message").and_then(|v| v.as_str()) {
-            Some(m) => m.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("message is required"),
-                ));
-            }
-        };
+        let session_id = parsed.session_id;
+        let message = parsed.message;
 
         let tx = {
             let map = stores
@@ -467,7 +465,7 @@ mod tests {
         let req = DaemonRequest::new(1, "director.user_message", json!({ "message": "x" }));
         let resp = handle_director_user_message(&stores, &tx, req);
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("session_id"));
+        assert!(resp.error.unwrap().message.contains("session-id"));
 
         let req = DaemonRequest::new(2, "director.user_message", json!({ "session-id": "ag-x" }));
         let resp = handle_director_user_message(&stores, &tx, req);
