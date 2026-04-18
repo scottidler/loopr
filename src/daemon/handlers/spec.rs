@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
@@ -18,7 +19,55 @@ use taskstore::{Filter, FilterOp, IndexValue};
 use crate::daemon::context::Stores;
 
 use super::common::check_validation_gate;
-use super::{parse_optional_param, parse_required_param};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct SpecCreateParams {
+    parent_id: String,
+    title: String,
+    #[serde(default)]
+    acceptance_criteria: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct SpecIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct SpecListParams {
+    #[serde(default)]
+    parent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct SpecTransitionParams {
+    id: String,
+    target_status: SpecStatus,
+    #[serde(default)]
+    role: Option<Role>,
+    #[serde(default)]
+    skip_validation: Option<bool>,
+    #[serde(default, rename = "override")]
+    is_override: Option<bool>,
+    #[serde(default)]
+    skip_reason: Option<String>,
+    /// Optional audit reason supplied by Director-emitted overrides.
+    /// Logged for observability; not persisted on the Spec record yet.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct SpecUpdateParams {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+}
 
 #[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_spec_create(
@@ -27,15 +76,18 @@ pub(super) fn handle_spec_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let parent_id = match req.params.get("parent-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("parent_id is required"),
-                ));
-            }
+        let parsed: SpecCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let parent_id = parsed.parent_id;
+        let title = parsed.title;
+        if title.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("title is required"),
+            ));
+        }
 
         // Verify parent plan exists and is not in a terminal state
         {
@@ -61,20 +113,6 @@ pub(super) fn handle_spec_create(
             }
         }
 
-        let title = req
-            .params
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if title.is_empty() {
-            return Ok(DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params("title is required"),
-            ));
-        }
-
         // Reject if a Draft Spec already exists under this Plan
         {
             let specs = stores.read_specs()?;
@@ -91,7 +129,14 @@ pub(super) fn handle_spec_create(
             }
         }
 
-        let spec = Spec::new(parent_id, title);
+        let mut spec = Spec::new(parent_id, title);
+        if let Some(v) = parsed.acceptance_criteria {
+            spec.acceptance_criteria = if let Some(s) = v.as_str() {
+                crate::domain::criteria::AcceptanceCriteria::from(s)
+            } else {
+                serde_json::from_value(v).unwrap_or_default()
+            };
+        }
         let spec_json = match serde_json::to_value(&spec) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -122,10 +167,11 @@ pub(super) fn handle_spec_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: SpecIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -161,15 +207,20 @@ pub(super) fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
 #[instrument(skip_all, fields(parent_id = ?req.params.get("parent-id")))]
 pub(super) fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let parent_id_filter = req.params.get("parent-id").and_then(|v| v.as_str());
+        let raw = if req.params.is_null() { serde_json::json!({}) } else { req.params.clone() };
+        let parsed: SpecListParams = match serde_json::from_value(raw) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let parent_id_filter = parsed.parent_id;
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
-            let filters: Vec<Filter> = if let Some(pid) = parent_id_filter {
+            let filters: Vec<Filter> = if let Some(pid) = &parent_id_filter {
                 vec![Filter {
                     field: "parent_id".to_string(),
                     op: FilterOp::Eq,
-                    value: IndexValue::String(pid.to_string()),
+                    value: IndexValue::String(pid.clone()),
                 }]
             } else {
                 vec![]
@@ -194,7 +245,11 @@ pub(super) fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         let specs = stores.read_specs()?;
         let spec_list: Vec<&Spec> = specs
             .values()
-            .filter(|s| parent_id_filter.is_none() || Some(s.parent_id.as_str()) == parent_id_filter)
+            .filter(|s| {
+                parent_id_filter
+                    .as_deref()
+                    .is_none_or(|pid| s.parent_id.as_str() == pid)
+            })
             .collect();
 
         match serde_json::to_value(&spec_list) {
@@ -212,28 +267,21 @@ pub(super) fn handle_spec_transition(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: SpecTransitionParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let target_status: SpecStatus = match parse_required_param(&req, "target-status") {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let role: Role = match parse_optional_param(&req, "role", Role::Coordinator) {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let skip_validation = req
-            .params
-            .get("skip-validation")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
+        let id = parsed.id;
+        let target_status = parsed.target_status;
+        let role = parsed.role.unwrap_or(Role::Coordinator);
+        let skip_validation = parsed.skip_validation.unwrap_or(false);
+        let is_override = parsed.is_override.unwrap_or(false);
+        if let Some(reason) = &parsed.reason {
+            debug!(
+                "spec.transition reason: id={} target={:?} reason={}",
+                id, target_status, reason
+            );
+        }
 
         let mut specs = stores.write_specs()?;
         let spec = match specs.get_mut(&id) {
@@ -280,7 +328,7 @@ pub(super) fn handle_spec_transition(
         }
 
         // Validation gate: Draft → Active requires passing validation report
-        let skip_reason = req.params.get("skip-reason").and_then(|v| v.as_str());
+        let skip_reason = parsed.skip_reason.as_deref();
         if let Some(err) = check_validation_gate(
             stores,
             event_tx,
@@ -340,10 +388,11 @@ pub(super) fn handle_spec_update(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: SpecUpdateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         let mut specs = stores.write_specs()?;
         let spec = match specs.get_mut(&id) {
@@ -351,8 +400,8 @@ pub(super) fn handle_spec_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("specs", &id))),
         };
 
-        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-            spec.title = title.to_string();
+        if let Some(title) = parsed.title {
+            spec.title = title;
         }
         spec.updated_at = crate::id::now_millis();
 
@@ -463,7 +512,7 @@ mod tests {
         let req = DaemonRequest::new(1, "spec.create", json!({"title": "Spec"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("parent_id"));
+        assert!(resp.error.unwrap().message.contains("parent-id"));
     }
 
     #[tokio::test]
