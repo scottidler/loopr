@@ -313,7 +313,6 @@ mod tests {
         let action = AgentAction::CreateWork {
             parent_id: phase_id,
             title: "New Work".to_string(),
-            description: "Work desc".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],

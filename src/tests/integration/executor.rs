@@ -34,7 +34,6 @@ async fn test_director_creates_work_via_executor() {
         &AgentAction::CreateWork {
             parent_id: phase_id.clone(),
             title: "Add login".into(),
-            description: "Add login endpoint".into(),
             files: vec!["src/".into()],
             acceptance_criteria: vec!["tests pass".into()],
             dependencies: vec![],

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument, warn};
 
@@ -19,7 +20,64 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-use super::{parse_optional_param, parse_required_param};
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorkCreateParams {
+    parent_id: String,
+    title: String,
+    #[serde(default)]
+    acceptance_criteria: Option<serde_json::Value>,
+    #[serde(default)]
+    dependencies: Option<Vec<String>>,
+    #[serde(default)]
+    files: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorkIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorkListParams {
+    #[serde(default)]
+    parent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorkTransitionParams {
+    id: String,
+    /// Accepted as a string; parsed via WorkStatus::FromStr (case-insensitive
+    /// thanks to FlexibleEnum) so callers may send "Done" or "done".
+    target_status: String,
+    #[serde(default)]
+    role: Option<Role>,
+    #[serde(default, rename = "override")]
+    is_override: Option<bool>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    assignee: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct WorkUpdateParams {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    assignee: Option<String>,
+    #[serde(default)]
+    acceptance_criteria: Option<Vec<String>>,
+    #[serde(default)]
+    dependencies: Option<Vec<String>>,
+    #[serde(default)]
+    files: Option<Vec<String>>,
+}
 
 /// Maximum number of times a Work item can be reset to Ready before being Abandoned.
 /// Prevents infinite noop death loops when the root cause is unresolvable by workers.
@@ -53,15 +111,18 @@ pub(super) fn handle_work_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let parent_id = match req.params.get("parent-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("parent_id is required"),
-                ));
-            }
+        let parsed: WorkCreateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let parent_id = parsed.parent_id;
+        let title = parsed.title;
+        if title.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("title is required"),
+            ));
+        }
 
         // Verify parent exists and is not in a terminal state.
         // Parent can be a Phase (Full mode) or a Plan (Brief mode).
@@ -106,19 +167,6 @@ pub(super) fn handle_work_create(
             }
         }
 
-        let title = req
-            .params
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if title.is_empty() {
-            return Ok(DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params("title is required"),
-            ));
-        }
-
         // Duplicate detection: reject work with same title in same phase (unless Superseded/Abandoned)
         {
             let works = stores.read_works()?;
@@ -141,17 +189,12 @@ pub(super) fn handle_work_create(
             }
         }
 
-        let acceptance_criteria: crate::domain::criteria::AcceptanceCriteria = req
-            .params
-            .get("acceptance-criteria")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        let acceptance_criteria: crate::domain::criteria::AcceptanceCriteria = parsed
+            .acceptance_criteria
+            .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
 
-        let dependencies: Vec<String> = req
-            .params
-            .get("dependencies")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let dependencies: Vec<String> = parsed.dependencies.unwrap_or_default();
 
         // #16: Validate dependencies — skip unknown IDs with warning instead of rejecting
         let dependencies = if !dependencies.is_empty() {
@@ -175,11 +218,7 @@ pub(super) fn handle_work_create(
             dependencies
         };
 
-        let files: Vec<String> = req
-            .params
-            .get("files")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let files: Vec<String> = parsed.files.unwrap_or_default();
 
         let mut work = Work::new(parent_id, title);
         work.acceptance_criteria = acceptance_criteria.clone();
@@ -237,10 +276,11 @@ pub(super) fn handle_work_create(
 #[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: WorkIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -276,15 +316,20 @@ pub(super) fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
 pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_work_list()");
-        let parent_id_filter = req.params.get("parent-id").and_then(|v| v.as_str());
+        let raw = if req.params.is_null() { serde_json::json!({}) } else { req.params.clone() };
+        let parsed: WorkListParams = match serde_json::from_value(raw) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+        };
+        let parent_id_filter = parsed.parent_id;
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
-            let filters: Vec<Filter> = if let Some(pid) = parent_id_filter {
+            let filters: Vec<Filter> = if let Some(pid) = &parent_id_filter {
                 vec![Filter {
                     field: "parent_id".to_string(),
                     op: FilterOp::Eq,
-                    value: IndexValue::String(pid.to_string()),
+                    value: IndexValue::String(pid.clone()),
                 }]
             } else {
                 vec![]
@@ -309,7 +354,11 @@ pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         let works = stores.read_works()?;
         let wi_list: Vec<&Work> = works
             .values()
-            .filter(|wi| parent_id_filter.is_none() || Some(wi.parent_id.as_str()) == parent_id_filter)
+            .filter(|wi| {
+                parent_id_filter
+                    .as_deref()
+                    .is_none_or(|pid| wi.parent_id.as_str() == pid)
+            })
             .collect();
 
         match serde_json::to_value(&wi_list) {
@@ -394,28 +443,19 @@ pub(super) fn handle_work_transition(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: WorkTransitionParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let target_status: WorkStatus = match parse_required_param(&req, "target-status") {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
+        let id = parsed.id;
+        let target_status: WorkStatus = match parsed.target_status.parse() {
+            Ok(s) => s,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e))),
         };
-
-        let role: Role = match parse_optional_param(&req, "role", Role::Coordinator) {
-            Ok(v) => v,
-            Err(resp) => return Ok(resp),
-        };
-
-        let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
-        let override_reason = req
-            .params
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("no reason provided")
-            .to_string();
+        let role = parsed.role.unwrap_or(Role::Coordinator);
+        let is_override = parsed.is_override.unwrap_or(false);
+        let override_reason = parsed.reason.unwrap_or_else(|| "no reason provided".to_string());
+        let new_assignee = parsed.assignee;
 
         let mut works = stores.write_works()?;
         let wi = match works.get_mut(&id) {
@@ -454,8 +494,8 @@ pub(super) fn handle_work_transition(
         }
 
         // Allow setting assignee via transition params
-        if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
-            wi.assignee = Some(assignee.to_string());
+        if let Some(assignee) = new_assignee {
+            wi.assignee = Some(assignee);
         }
 
         // #13: Assignee required for InProgress/InReview
@@ -636,30 +676,30 @@ pub(super) fn handle_work_update(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let id = match req.params.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        let parsed: WorkUpdateParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let id = parsed.id;
 
         // Pre-validate dependency cycle before taking mutable borrow
-        if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
-            let new_deps: Vec<String> = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-            if !new_deps.is_empty() {
-                let works = stores.read_works()?;
-                // Exclude self to avoid false positives from stale edges
-                let check_works: HashMap<String, Work> = works
-                    .iter()
-                    .filter(|(k, _)| k.as_str() != id)
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                if detect_dependency_cycle(&check_works, &id, &new_deps) {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::precondition_failed(
-                            "Circular dependency detected: updating dependencies would create a cycle",
-                        ),
-                    ));
-                }
+        if let Some(new_deps) = &parsed.dependencies
+            && !new_deps.is_empty()
+        {
+            let works = stores.read_works()?;
+            // Exclude self to avoid false positives from stale edges
+            let check_works: HashMap<String, Work> = works
+                .iter()
+                .filter(|(k, _)| k.as_str() != id)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if detect_dependency_cycle(&check_works, &id, new_deps) {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(
+                        "Circular dependency detected: updating dependencies would create a cycle",
+                    ),
+                ));
             }
         }
 
@@ -669,20 +709,22 @@ pub(super) fn handle_work_update(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("works", &id))),
         };
 
-        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-            wi.title = title.to_string();
+        if let Some(title) = parsed.title {
+            wi.title = title;
         }
-        if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
-            wi.assignee = Some(assignee.to_string());
+        if let Some(assignee) = parsed.assignee {
+            wi.assignee = Some(assignee);
         }
-        if let Some(criteria) = req.params.get("acceptance-criteria").and_then(|v| v.as_array()) {
+        if let Some(criteria) = parsed.acceptance_criteria {
             wi.acceptance_criteria = criteria
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
+                .into_iter()
                 .collect::<crate::domain::criteria::AcceptanceCriteria>();
         }
-        if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
-            wi.dependencies = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if let Some(deps) = parsed.dependencies {
+            wi.dependencies = deps;
+        }
+        if let Some(files) = parsed.files {
+            wi.files = files;
         }
         wi.updated_at = crate::id::now_millis();
 
@@ -974,7 +1016,7 @@ mod tests {
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("parent_id"));
+        assert!(resp.error.unwrap().message.contains("parent-id"));
     }
 
     #[tokio::test]
@@ -1923,7 +1965,7 @@ mod tests {
                     "target-status": "ready",
                     "role": "coordinator",
                     "override": true,
-                    "override_reason": "retry attempt"
+                    "reason": "retry attempt"
                 }),
             ),
         )

@@ -8,7 +8,6 @@ pub(super) fn handle_create_work(
     ctx: &AgentContext,
     phase_id: &str,
     title: &str,
-    description: &str,
     files: &[String],
     acceptance_criteria: &[String],
     dependencies: &[String],
@@ -20,7 +19,6 @@ pub(super) fn handle_create_work(
         serde_json::json!({
             "parent-id": phase_id,
             "title": title,
-            "description": description,
             "files": files,
             "acceptance-criteria": acceptance_criteria,
             "dependencies": dependencies,
@@ -283,7 +281,6 @@ mod tests {
         let action = AgentAction::CreateWork {
             parent_id: phase_id,
             title: "New WI".to_string(),
-            description: "WI desc".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],
@@ -406,7 +403,6 @@ mod tests {
         let action = AgentAction::CreateWork {
             parent_id: "nonexistent-phase".to_string(),
             title: "New WI".to_string(),
-            description: "desc".to_string(),
             files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
@@ -450,7 +446,6 @@ mod tests {
         let action = AgentAction::CreateWork {
             parent_id: phase_id.clone(),
             title: "Dependent WI".to_string(),
-            description: "depends on first".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![wi_id.clone()],
@@ -476,7 +471,6 @@ mod tests {
         let action1 = AgentAction::CreateWork {
             parent_id: phase_id.clone(),
             title: "Unique WI".to_string(),
-            description: "desc".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
@@ -487,7 +481,6 @@ mod tests {
         let action2 = AgentAction::CreateWork {
             parent_id: phase_id.clone(),
             title: "Unique WI".to_string(),
-            description: "different desc".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
@@ -511,7 +504,6 @@ mod tests {
         let action1 = AgentAction::CreateWork {
             parent_id: phase_id.clone(),
             title: "Add Login".to_string(),
-            description: "desc".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
@@ -521,7 +513,6 @@ mod tests {
         let action2 = AgentAction::CreateWork {
             parent_id: phase_id.clone(),
             title: "add login".to_string(),
-            description: "desc".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],

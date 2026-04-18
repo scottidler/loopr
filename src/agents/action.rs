@@ -131,7 +131,6 @@ pub enum AgentAction {
     CreateWork {
         parent_id: String,
         title: String,
-        description: String,
         #[serde(default, deserialize_with = "string_or_vec")]
         files: Vec<String>,
         #[serde(default, deserialize_with = "string_or_vec")]
@@ -399,7 +398,6 @@ mod tests {
         let action = AgentAction::CreateWork {
             parent_id: "ph-1".to_string(),
             title: "Add login".to_string(),
-            description: "Add login endpoint".to_string(),
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec!["wi-0".to_string()],

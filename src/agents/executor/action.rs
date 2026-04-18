@@ -96,19 +96,10 @@ pub async fn execute_action(
         AgentAction::CreateWork {
             parent_id,
             title,
-            description,
             files,
             acceptance_criteria,
             dependencies,
-        } => work::handle_create_work(
-            ctx,
-            parent_id,
-            title,
-            description,
-            files,
-            acceptance_criteria,
-            dependencies,
-        ),
+        } => work::handle_create_work(ctx, parent_id, title, files, acceptance_criteria, dependencies),
 
         AgentAction::SpawnResearcher { query, scope_id } => work::handle_spawn_researcher(ctx, query, scope_id),
         // --- Director intake actions ---
