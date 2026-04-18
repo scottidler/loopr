@@ -1,11 +1,35 @@
 use std::sync::Arc;
 
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{info, instrument};
 
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 use crate::daemon::context::Stores;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct ChatSubmitParams {
+    #[serde(default = "default_chat_session_id")]
+    session_id: String,
+    message: String,
+    #[serde(default)]
+    funnel_state: Option<crate::domain::chat::FunnelState>,
+    #[serde(default)]
+    is_draft_request: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct ChatSessionIdParams {
+    #[serde(default = "default_chat_session_id")]
+    session_id: String,
+}
+
+fn default_chat_session_id() -> String {
+    "default-chat".to_string()
+}
 
 /// Build a compact orchestration status string for the Executing chat system prompt.
 /// Reads Works, Bundles, and agent sessions from Stores to produce a summary.
@@ -83,31 +107,14 @@ pub(super) fn handle_chat_submit(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = req
-            .params
-            .get("session-id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default-chat")
-            .to_string();
-        let message = match req.params.get("message").and_then(|v| v.as_str()) {
-            Some(m) => m.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("message is required"),
-                ));
-            }
+        let parsed: ChatSubmitParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-        let funnel_state: crate::domain::chat::FunnelState = req
-            .params
-            .get("funnel-state")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or(crate::domain::chat::FunnelState::Chat);
-        let is_draft_request = req
-            .params
-            .get("is-draft-request")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let session_id = parsed.session_id;
+        let message = parsed.message;
+        let funnel_state = parsed.funnel_state.unwrap_or(crate::domain::chat::FunnelState::Chat);
+        let is_draft_request = parsed.is_draft_request.unwrap_or(false);
 
         // If a Director is already handling this chat session, forward the message via the
         // Director's mpsc channel instead of spinning up a Chat agent. This is the
@@ -323,12 +330,17 @@ pub(super) fn handle_chat_submit(
 #[instrument(skip_all)]
 pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = req
-            .params
-            .get("session-id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default-chat")
-            .to_string();
+        let parsed: ChatSessionIdParams = if req.params.is_null() {
+            ChatSessionIdParams {
+                session_id: default_chat_session_id(),
+            }
+        } else {
+            match serde_json::from_value(req.params.clone()) {
+                Ok(p) => p,
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+            }
+        };
+        let session_id = parsed.session_id;
 
         // Lazy-create if needed
         let mut sessions = stores
@@ -356,12 +368,17 @@ pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> Da
 #[instrument(skip_all)]
 pub(super) fn handle_chat_history(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = req
-            .params
-            .get("session-id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default-chat")
-            .to_string();
+        let parsed: ChatSessionIdParams = if req.params.is_null() {
+            ChatSessionIdParams {
+                session_id: default_chat_session_id(),
+            }
+        } else {
+            match serde_json::from_value(req.params.clone()) {
+                Ok(p) => p,
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+            }
+        };
+        let session_id = parsed.session_id;
 
         let sessions = stores
             .chat_sessions
