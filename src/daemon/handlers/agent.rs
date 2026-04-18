@@ -33,6 +33,29 @@ struct AgentStartParams {
     query: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct SessionIdParams {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct AgentListParams {
+    #[serde(default)]
+    status: Option<AgentStatus>,
+    #[serde(default)]
+    agent_type: Option<AgentKind>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct AgentOutputParams {
+    session_id: String,
+    #[serde(default)]
+    since: Option<u64>,
+}
+
 #[instrument(skip_all, fields(agent_type = ?req.params.get("agent-type"), work_id = ?req.params.get("work-id"), bundle_id = ?req.params.get("bundle-id")))]
 pub(super) fn handle_agent_start(
     stores: &Arc<Stores>,
@@ -241,15 +264,11 @@ pub(super) fn handle_agent_stop(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("session-id is required"),
-                ));
-            }
+        let parsed: SessionIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let session_id = parsed.session_id.as_str();
 
         // Check if this is a Chat session (stored in chat_sessions, not agent_sessions)
         {
@@ -331,15 +350,11 @@ pub(super) fn handle_agent_pause(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("session-id is required"),
-                ));
-            }
+        let parsed: SessionIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let session_id = parsed.session_id.as_str();
 
         let mut sessions = stores.write_agent_sessions()?;
         let session = match sessions.get_mut(session_id) {
@@ -391,15 +406,11 @@ pub(super) fn handle_agent_resume(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("session-id is required"),
-                ));
-            }
+        let parsed: SessionIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let session_id = parsed.session_id.as_str();
 
         let mut sessions = stores.write_agent_sessions()?;
         let session = match sessions.get_mut(session_id) {
@@ -440,15 +451,11 @@ pub(super) fn handle_agent_resume(
 pub(super) fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_agent_status()");
-        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("session-id is required"),
-                ));
-            }
+        let parsed: SessionIdParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let session_id = parsed.session_id.as_str();
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
@@ -487,14 +494,19 @@ pub(super) fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> D
 pub(super) fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_agent_list()");
-        let status_filter: Option<AgentStatus> = req
-            .params
-            .get("status")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-        let type_filter: Option<AgentKind> = req
-            .params
-            .get("agent-type")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let parsed: AgentListParams = if req.params.is_null() {
+            AgentListParams {
+                status: None,
+                agent_type: None,
+            }
+        } else {
+            match serde_json::from_value(req.params.clone()) {
+                Ok(p) => p,
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
+            }
+        };
+        let status_filter = parsed.status;
+        let type_filter = parsed.agent_type;
 
         if let Some(store) = &stores.store {
             let mut filters: Vec<Filter> = vec![];
@@ -548,16 +560,12 @@ pub(super) fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
 pub(super) fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_agent_output()");
-        let session_id = match req.params.get("session-id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("session-id is required"),
-                ));
-            }
+        let parsed: AgentOutputParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-        let since = req.params.get("since").and_then(|v| v.as_u64()).unwrap_or(0);
+        let session_id = parsed.session_id;
+        let since = parsed.since.unwrap_or(0);
 
         let events = stores.read_agent_events()?;
         let output: Vec<_> = match events.get(&session_id) {
