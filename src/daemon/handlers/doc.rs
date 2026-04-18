@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
+use serde::Deserialize;
 use tracing::{info, instrument, warn};
 
 use serde_json::json;
@@ -27,6 +28,22 @@ use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::validator::client::LlmClient;
 use crate::worktree::manager::WorktreeManager;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct DocAcceptParams {
+    markdown: String,
+    #[serde(default)]
+    skip_decompose: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct DocInjectParams {
+    path: String,
+    #[serde(default)]
+    skip_decompose: Option<bool>,
+}
 
 /// Handle `doc.accept`: accept plan markdown as a string and run the full entry pipeline.
 ///
@@ -45,21 +62,18 @@ pub(super) async fn handle_doc_accept(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_async_handler!(req.id, {
-        let markdown = match req.params.get("markdown").and_then(|v| v.as_str()) {
-            Some(m) if !m.trim().is_empty() => m.to_string(),
-            _ => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("markdown is required and must be non-empty"),
-                ));
-            }
+        let parsed: DocAcceptParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
-
-        let skip_decompose = req
-            .params
-            .get("skip-decompose")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        if parsed.markdown.trim().is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("markdown is required and must be non-empty"),
+            ));
+        }
+        let markdown = parsed.markdown;
+        let skip_decompose = parsed.skip_decompose.unwrap_or(false);
 
         accept_plan_markdown(stores, event_tx, req.id, markdown, skip_decompose).await
     })
@@ -82,15 +96,11 @@ pub(super) async fn handle_doc_inject(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_async_handler!(req.id, {
-        let path_str = match req.params.get("path").and_then(|v| v.as_str()) {
-            Some(p) => p.to_string(),
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("path to plan .md file is required"),
-                ));
-            }
+        let parsed: DocInjectParams = match serde_json::from_value(req.params.clone()) {
+            Ok(p) => p,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params(&e.to_string()))),
         };
+        let path_str = parsed.path;
 
         let plan_path = std::path::PathBuf::from(&path_str);
         if !plan_path.exists() {
@@ -110,11 +120,7 @@ pub(super) async fn handle_doc_inject(
             ));
         }
 
-        let skip_decompose = req
-            .params
-            .get("skip-decompose")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let skip_decompose = parsed.skip_decompose.unwrap_or(false);
 
         accept_plan_markdown(stores, event_tx, req.id, markdown, skip_decompose).await
     })
