@@ -43,12 +43,13 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 | `tools` | `Tool` trait + built-in tool impls (`Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`) + lane classification (`Local`/`Net`/`Heavy`) + bwrap sandbox integration | `domain`, `telemetry` |
 | `worktree` | Sibling git worktree lifecycle + registry + daemon-startup crash recovery | `domain`, `telemetry` |
 | `ipc` | Typed daemon-client wire protocol (messages + framing, no transport) | `domain` |
-| `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `store`, `llm` |
-| `agents` | Ralph loops per role; **`ContextBuilder` lives here** (token-budgeted prompt assembly) | `domain`, `store`, `llm`, `tools`, `worktree` |
+| `context` | Prompt assembly (handlebars templates + partials + token budgeting); shared by decomposer and agents | `domain`, `store`, `tools`, `telemetry` |
+| `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `store`, `llm`, `context` |
+| `agents` | Ralph loops per role | `domain`, `store`, `llm`, `tools`, `worktree`, `context` |
 | `integrator` | Accepted Bundles to Tick (deterministic, non-LLM); the Cargo graph mechanically forbids an `llm` dep | `domain`, `store`, `worktree` |
 | `loopr` | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
 
-**Note on `taskstore` in `domain`:** `domain`'s use of `taskstore::Record` is a foundational dep, same category as `serde`. The current `taskstore` (v0.2.3) bundles the trait with `Store` (which pulls in `rusqlite`, `fs2`, `tracing-subscriber`, `chrono`). An upstream PR to `scottidler/taskstore` to extract `taskstore-traits` (just `Record`, `IndexValue`, `Filter` — all pure `serde` + `std`) is pending; after it lands, `domain` depends on `taskstore-traits` only and `store` depends on full `taskstore`. Not a v5 blocker; scheduled before Stage 5.
+**Note on `taskstore` in `domain`:** `domain`'s use of `taskstore::Record` is a foundational dep, same category as `serde`. The current `taskstore` (v0.2.3) bundles the trait with `Store` — which pulls in `rusqlite`, `fs2`, `tracing-subscriber`, `chrono`. Until the upstream `taskstore-traits` split lands, `domain` **transitively compiles** those I/O-heavy crates, so the "pure symbol layer" claim is aspirational at the source-code level (we don't `use` them) but not yet enforced at the transitive-dep level. An upstream PR to `scottidler/taskstore` to extract `taskstore-traits` (just `Record`, `IndexValue`, `Filter` — pure `serde` + `std`) is **in progress** alongside v5 Stage 1; requirements documented at `~/repos/scottidler/taskstore/docs/`. After the split lands, `domain` depends on `taskstore-traits` only and the purity claim becomes transitive-dep-enforced.
 
 Directory structure:
 
@@ -65,6 +66,7 @@ loopr-v5/
 │   ├── tools/
 │   ├── worktree/
 │   ├── ipc/
+│   ├── context/
 │   ├── decomposer/
 │   ├── agents/
 │   ├── integrator/
@@ -142,20 +144,29 @@ The middle-end. Plan production and decomposition.
 - `fn decompose(plan: &Plan, ctx: &mut Context) -> Result<WorkDag>` — Plan to Spec/Phase/Work DAG with typed deps.
 - Strategies (brief, full, custom) are `impl DecomposeStrategy` selected by config, not composed from YAML primitives.
 
+### context
+
+Prompt assembly. Shared by `decomposer` and `agents` (the two LLM-calling pipeline crates). Produces ready-to-send `Vec<Message>` from typed inputs; does not talk to the LLM itself.
+
+- `ContextBuilder` — token-budgeted prompt assembly. Renders `domain` records, persisted history from `store`, and `tools` schemas into a `Vec<Message>`. Uses handlebars-rust with partials for SSOT; templates loaded via the three-layer chain `.loopr/prompts/` → `~/.config/loopr/prompts/` → baked-in (via `include_dir!()`).
+- Typed per-role entry points: `build_for_plan(goal)`, `build_for_decompose(plan)`, `build_for_implementer(work, tools_snapshot)`, `build_for_reviewer(bundle)`, etc.
+- Emits `tracing` spans carrying rendered-token counts, template paths resolved, partials invoked.
+- Does NOT depend on `llm` — produces Messages; does not send them.
+
 ### agents
 
-The backend execute stages. Ralph loops per role. Also the home of `ContextBuilder`.
+The backend execute stages. Ralph loops per role.
 
-- `fn run_implementer(work: &Work, ctx: &Context) -> Result<Bundle>`
-- `fn run_reviewer(bundle: &Bundle, ctx: &Context) -> Result<Verdict>`
-- `fn run_researcher(query: &Query, ctx: &Context) -> Result<Finding>`
-- `fn run_director(event: &Event, ctx: &mut Context) -> Result<Action>`
-- `ContextBuilder` — token-budgeted prompt assembly. Renders `domain` records, persisted artifacts from `store`, and `tools` schemas into the `Message` vector handed to `llm::LlmClient`. Uses handlebars-rust with partials for SSOT; templates loaded from `.loopr/prompts/` with fallback chain target → XDG → baked-in.
-- Ralph loops are generic over their dependencies: `<L: LlmClient, T: ToolExecutor, W: WorktreeManager, S: Store>`. No `dyn` dispatch. Tests inject fakes per trait.
+- `fn run_implementer(work: &Work, deps: &Deps<...>) -> Result<Bundle>`
+- `fn run_reviewer(bundle: &Bundle, deps: &Deps<...>) -> Result<Verdict>`
+- `fn run_researcher(query: &Query, deps: &Deps<...>) -> Result<Finding>`
+- `fn run_director(event: &Event, deps: &Deps<...>) -> Result<Action>`
+- Prompt assembly happens in `context` (shared with `decomposer`); agents consume the assembled Messages and orchestrate the LLM/tool/worktree/store calls.
+- Dependency injection via the `Deps<L, T, W, S, C>` struct pattern (one generic param flows through signatures; concrete trait bounds live on the struct). Reserves the "no `dyn` dispatch" rule while avoiding contagious multi-generic boilerplate (Architect Round 3 ergonomic warning).
 
 Retry / escalation / advisor strategies are `impl RetryStrategy` / `impl EscalationStrategy` selected by config, not composed from YAML triggers.
 
-`agents` is the widest-scope crate in v5 (depends on five others). The testability strategy — DI via generics + per-trait fakes — is the antidote to the Architect's Round 2 warning about this crate becoming the new junk drawer.
+`agents` is the widest-scope crate in v5 (depends on six others including `context`). The testability strategy — `Deps<...>` + per-trait fakes — keeps the Architect's Round 2 junk-drawer concern bounded. If `src/` pushes 1500 lines, split per-role as module directories first; per-role sub-crates only if the module split proves insufficient.
 
 ### integrator
 
@@ -452,8 +463,10 @@ The target config sits above the XDG user config: repo-specific overrides trump 
 
 Naming transformation:
 - Config keys: `lowercase-separated-by-hyphens` in YAML.
-- Env vars: `ALL_CAPS` with `-` → `_`. **No tool-name prefix** (`log-level` → `LOG_LEVEL`, not `LOOPR_LOG_LEVEL`). User accepts namespace-collision risk; revisit if it bites.
+- Env vars: `LOOPR_` prefix + `ALL_CAPS` + `-` → `_` (`log-level` → `LOOPR_LOG_LEVEL`, `models.primary` → `LOOPR_MODELS_PRIMARY`).
 - CLI flags: same as the YAML key (`--log-level`).
+
+**Why the `LOOPR_` prefix** (reversing an earlier no-prefix decision after Architect Round 3): loopr spawns subprocesses via `tools` (cargo, npm, bash, ...). Any env var present in loopr's process is inherited by the child unless explicitly scrubbed. A bare `LOG_LEVEL=trace` intended for loopr would leak into every subprocess and affect build behavior non-reproducibly; `PORT` or similar generic names are worse. The `LOOPR_` prefix namespaces loopr's knobs away from the universe of env vars that spawned subprocesses might care about.
 
 API keys specifically: loopr honors standard SDK env vars (`ANTHROPIC_API_KEY`) in addition to the chain above. Config-file storage is allowed with a `# only safe on non-shared machines` warning in the template; keychain integration is deferred.
 
@@ -611,15 +624,18 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **Target-repo state:** `.taskstore/` (committed truth) + `.loopr/` (transient, excluded via `.git/info/exclude`).
 - **Prompts:** handlebars-rust, `.pmt` files, themed layout under `.loopr/prompts/` populated from `include_dir!()`, partials for SSOT, **three-layer override resolution** (target → XDG user → baked-in). See "Prompts" section.
 - **Error model:** closed typed `ToolError` enum; typed `FailureReason` + companion `error: String` on records; `catch_unwind` at every agent task; closed RPC enum serializing to JSON-RPC wire codes; dual user-surface (stderr for one-shot, `DaemonEvent::Error` stream for long-running). See "Error Model" section.
-- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: baked-in < XDG < `.loopr/config.yml` < env var < CLI flag; env vars are bare `ALL_CAPS` (no tool-name prefix). See "Models and Budgets" section.
+- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: baked-in < XDG < `.loopr/config.yml` < env var < CLI flag; env vars use a `LOOPR_` prefix + `ALL_CAPS` to avoid polluting spawned subprocess environments. See "Models and Budgets" section.
 - **Git posture:** user's git identity, user's signing config, rich `Loopr-*` trailers (no `Co-Authored-By: Claude`), never push, `loopr/plan-<id>` and `loopr/wk-<id>` branch prefixes. See "Git Posture" section.
 - **Security:** three-lane model (`Local`/`Net`/`Heavy`) verbatim from v4; base denylist of footguns + tighten-only target overrides; **sandbox posture as a `security.sandbox: required | preferred | off` knob**, defaulting to `required`, explicit downgrade required to run unsandboxed. See "Security" section.
-- **Crate restructure (Architect rounds 1+2):** `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree`. `domain` stripped to records+FSM only (no I/O). `integrator` dep graph enforces no-LLM rule at Cargo level. Workspace is 12 crates. See "Crate Layout".
-- **`ContextBuilder` placement:** lives in `agents`, not `llm`. Reason: `llm` cannot depend on `tools` without recoupling network/subprocess concerns, so it cannot render tool schemas; `agents` is the first crate that sees `domain` + `store` + `llm` + `tools` + `worktree` simultaneously. See "agents" ABI section.
+- **Crate restructure (Architect rounds 1+2+3):** `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree`. `domain` stripped to records+FSM only (source-level; transitive purity pending taskstore-traits). `integrator` dep graph enforces no-LLM rule at Cargo level. `context` extracted as a shared prompt-assembly crate (Round 3 fix: `decomposer` and `agents` both call LLMs; they share `context` instead of duplicating). `tools` stripped of `domain` dep (IDs flow via spans from `telemetry`, not via typed struct fields). Workspace is 13 crates. See "Crate Layout".
+- **`ContextBuilder` placement:** lives in the `context` crate, which is depended on by both `decomposer` and `agents`. Earlier placements (in `llm`, then in `agents`) were superseded. `context` sees `domain` + `store` + `tools` + `telemetry`; `llm` consumes the Messages it produces.
+- **`agents` dependency injection:** `Deps<L, T, W, S, C>` struct pattern (one generic parameter bundles all trait bounds) instead of spreading generics across every function signature. Mitigates the Architect Round 3 ergonomic concern while respecting `rules/rust.md`'s no-`dyn` rule.
+- **`LOOPR_` env var prefix (restored):** env vars are `LOOPR_<KEY>` (all caps, hyphens to underscores). Earlier bare-ALL_CAPS decision reversed after Architect Round 3 flagged subprocess env inheritance as a correctness hazard: `tools` spawns cargo/npm/bash, which inherit loopr's environment, so unprefixed `LOG_LEVEL` would pollute child processes.
 - **IPC framing:** NDJSON via `tokio_util::codec::LinesCodec` with 1 MiB max line; JSON-RPC-style envelope (`id`/`method`/`params`, `id`/`result`/`error`, unsolicited `event`/`data`); error codes `-32601`/`-32602`/`-32603` standard + `-32000`–`-32005` loopr-specific. All verbatim from v3/v4. See "ipc" ABI section.
 - **Worktree crash recovery:** daemon startup routine `worktree::reconcile(target)` reads registry, reconciles against git state, cleans orphans, marks crashed Works as `FailureReason::CrashInterrupted`. See "Worktree crash recovery" subsection.
 - **Taskstore merge-driver limitation:** inherited from `taskstore`; documented here, full write-up in `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`. Mitigation is cultural (never merge `.taskstore/*` via cloud UIs).
 
 **Open:**
-- **Upstream `taskstore-traits` split** — pending PR to `scottidler/taskstore` to extract the `Record` trait (and `IndexValue`, `Filter`) into a lean crate so `domain` can depend on just the traits instead of the full `taskstore` (which pulls `rusqlite`, `fs2`, etc.). Not a first-gate blocker; scheduled before Stage 5 when `Record` impls start being written.
+- **Upstream `taskstore-traits` split** — in progress. Requirements documented at `~/repos/scottidler/taskstore/docs/`. The extraction separates `Record`/`IndexValue`/`Filter` (pure serde+std) into a lean `taskstore-traits` crate; full `taskstore` depends on traits + keeps `rusqlite`/`fs2`/etc. for the Store layer. Until the split lands and `domain` is rewired to depend on `taskstore-traits` only, `domain`'s purity is source-level (no `use rusqlite`) but not transitive-dep-level.
+- **Inter-crate Cargo-level dep wiring** — was pending at Round 3 review (`[dependencies]` blocks were empty); landed in the follow-up commit that declares `path = "../..."` deps for every internal edge of the 13-crate graph. No longer open after that commit.
 - New questions get added here when they surface.

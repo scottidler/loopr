@@ -1,35 +1,62 @@
 # agents
 
-Ralph Wiggum loops per role. The execute stages of the pipeline. Also the home of `ContextBuilder` — the only crate that sees `domain` + `store` + `llm` + `tools` + `worktree` simultaneously, which is exactly what prompt assembly requires.
+Ralph Wiggum loops per role. The execute stages of the pipeline. Prompt assembly happens in `context` (a shared crate with `decomposer`); agents consume the assembled Messages and orchestrate the LLM/tool/worktree calls.
 
 ## In scope
 
-- `run_implementer(work: &Work, ctx: &Context) -> Result<Bundle>`
-- `run_reviewer(bundle: &Bundle, ctx: &Context) -> Result<Verdict>`
-- `run_researcher(query: &Query, ctx: &Context) -> Result<Finding>`
-- `run_director(event: &Event, ctx: &mut Context) -> Result<Action>`
-- **`ContextBuilder`** — token-budgeted prompt assembly. Renders `domain` records, persisted artifacts fetched via `store`, and `tools` schemas into the `Message` vector handed to `llm::LlmClient`. Uses the prompt templates shipped to `.loopr/prompts/` (handlebars-rust, partials for SSOT chunks).
-- `RetryStrategy`, `EscalationStrategy` traits with named impls selected by config
-- Role-specific prompts live in `.loopr/prompts/agents/` (per-target), populated from `include_dir!()` baked into the binary; fallback chain target → XDG → baked-in per vision.md
-- Per-role `Config` sub-structs composed into this crate's `Config`
+- `run_implementer(work: &Work, deps: &Deps<...>) -> Result<Bundle>`
+- `run_reviewer(bundle: &Bundle, deps: &Deps<...>) -> Result<Verdict>`
+- `run_researcher(query: &Query, deps: &Deps<...>) -> Result<Finding>`
+- `run_director(event: &Event, deps: &Deps<...>) -> Result<Action>`
+- `RetryStrategy`, `EscalationStrategy` traits with named impls selected by config.
+- Per-role `Config` sub-structs composed into this crate's `Config`.
+- `Deps<L, T, W, S, C>` struct bundling the injected dependencies: `LlmClient`, `ToolExecutor`, `WorktreeManager`, `Store`, `ContextBuilder` (from `context`). See "Dependency injection" below.
 
 ## Out of scope
 
-- Decomposition (`decomposer`), integration (`integrator`)
-- LLM transport (`llm`), tool trait + impls (`tools`), worktree lifecycle (`worktree`), record persistence (`store`)
-- Record types and FSM transitions (`domain`); agents transition records but the rules are enforced in `domain`
-- Which role to spawn when (that's the driver in `loopr`)
+- **Prompt assembly — that's `context`.** Agents call `context::build_for_implementer(work, tools_snapshot)` to get a ready-to-send `Vec<Message>`; agents do not touch handlebars, `.pmt` files, or the three-layer override chain directly.
+- Decomposition (`decomposer`), integration (`integrator`).
+- LLM transport (`llm`), tool trait + impls (`tools`), worktree lifecycle (`worktree`), record persistence (`store`).
+- Record types and FSM transitions (`domain`); agents transition records but the rules are enforced in `domain`.
+- Which role to spawn when (that's the driver in `loopr`).
 
 ## Rule
 
 A Ralph loop here takes a typed input, uses injected trait impls for side-effects, and returns a typed output. If a function is making orchestration decisions ("also spawn a reviewer", "escalate to director"), pull that into the driver in `loopr` and emit an event instead.
 
-**Dependency injection via generics, not `dyn`.** Per `rules/rust.md`, agents are generic over their dependencies: `fn run_implementer<L: LlmClient, T: ToolExecutor, W: WorktreeManager, S: Store>(...)`. This lets tests inject fakes without dynamic dispatch.
+## Dependency injection: `Deps<L, T, W, S, C>` over bare generic params
 
-**Agents is the widest-scope crate in v5.** It depends on `domain` + `store` + `llm` + `tools` + `worktree`. The Architect's Round 2 Q7 flagged this as a junk-drawer-in-waiting: four distinct side-effect domains orchestrated in one place, with a correspondingly large test-mock matrix. Mitigation lives here as a cultural rule:
-- Trait-boundary fakes under `tests/fakes/` shared across ralph loops
-- Individual ralph loop tests inject exactly the fakes they need
-- If `src/` starts pushing 1500 lines (see `rules/dealing-with-large-files.md`), split per-role (`implementer/`, `reviewer/`, etc.) as module directories first; per-role crates only if the split proves insufficient
+Per `rules/rust.md`, agents are generic over their dependencies; `dyn` dispatch is forbidden. To avoid "contagious boilerplate" (Architect Round 3 warning) where every function drags `<L: LlmClient, T: ToolExecutor, W: WorktreeManager, S: Store, C: ContextBuilder>` through its signature, we use the `Deps` struct pattern that `rules/rust.md` already sanctions:
+
+```rust
+pub struct Deps<L, T, W, S, C>
+where
+    L: LlmClient,
+    T: ToolExecutor,
+    W: WorktreeManager,
+    S: Store,
+    C: ContextBuilder,
+{
+    pub llm: L,
+    pub tools: T,
+    pub worktrees: W,
+    pub store: S,
+    pub context: C,
+}
+
+pub fn run_implementer<L, T, W, S, C>(work: &Work, deps: &Deps<L, T, W, S, C>) -> Result<Bundle>
+where
+    L: LlmClient,
+    T: ToolExecutor,
+    W: WorktreeManager,
+    S: Store,
+    C: ContextBuilder,
+{ ... }
+```
+
+One generic parameter flows through signatures; concrete trait bounds live on the struct definition. Tests construct `Deps` with fakes; production constructs with real impls. The junk-drawer concern that Architect raised is real but mitigated — not by splitting the crate prematurely, by keeping the dependency surface traceable through one type.
+
+**Per-role crate split is a deferred option.** If `src/` pushes 1500 lines (see `rules/dealing-with-large-files.md`), first split per-role as module directories (`implementer/`, `reviewer/`, etc.); escalate to per-role sub-crates only if the module split proves insufficient.
 
 ## See also
 

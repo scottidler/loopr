@@ -23,7 +23,9 @@ Records + FSM transition tables. The pure symbol layer of v5. No I/O, no persist
 
 ## Rule
 
-This crate must compile without `tokio`, `reqwest`, `ureq`, `rusqlite`, or any I/O-bound dependency. If you reach for one here, the code belongs elsewhere. The Round 1 Architect critique — "a pure symbol layer should not host SQLite caches and JSONL files" — is what drove extracting `Store` into its own crate; don't re-introduce the coupling.
+Source code in this crate must not `use` anything from `tokio`, `reqwest`, `ureq`, `rusqlite`, or any I/O-bound dependency. The Round 1 Architect critique — "a pure symbol layer should not host SQLite caches and JSONL files" — is what drove extracting `Store` into its own crate; don't re-introduce the coupling.
+
+**Transitive-dep caveat (pending `taskstore-traits` split):** because `domain` currently depends on full `taskstore` (v0.2.3) for the `Record` trait, Cargo transitively compiles `rusqlite`, `fs2`, `tracing-subscriber`, `chrono` as part of `domain`'s build graph. The purity claim is source-level only until the upstream split lands. See the Dependency section below and vision.md's "Note on `taskstore` in `domain`".
 
 ## Dependency on `taskstore`
 

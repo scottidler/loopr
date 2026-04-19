@@ -12,7 +12,7 @@
 
 **Status:** done on orphan branch `v5`; tag `v0.5.0` cut at the initial 6-crate scaffold, additional crates landed after tag on branch.
 
-**What shipped:** 12-crate workspace (`derive`, `telemetry`, `store`, `domain`, `llm`, `tools`, `worktree`, `ipc`, `decomposer`, `agents`, `integrator`, `loopr`), README + CLAUDE.md front-door language, `.loopr-source-guard` sentinel, full operational decisions in `vision.md` (prompts, errors, models/budgets, git posture, security, observability, target-repo layout), `[workspace.dependencies]` starter set (tracing, serde, eyre, clap, chrono; promoted via `cargo add`-then-move). Architect consultation round 1 and round 2 reconciled; `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree` cohesive siblings.
+**What shipped:** 13-crate workspace (`derive`, `telemetry`, `store`, `domain`, `llm`, `tools`, `worktree`, `ipc`, `context`, `decomposer`, `agents`, `integrator`, `loopr`), README + CLAUDE.md front-door language, `.loopr-source-guard` sentinel, full operational decisions in `vision.md` (prompts, errors, models/budgets, git posture, security, observability, target-repo layout), `[workspace.dependencies]` starter set (tracing, serde, eyre, clap, chrono; promoted via `cargo add`-then-move). Architect consultation rounds 1, 2, 3 reconciled: `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree`; `context` added as a shared prompt-assembly crate so `decomposer` and `agents` don't duplicate templating logic; `tools` stripped of `domain` coupling; `LOOPR_` env prefix restored to prevent subprocess env-var pollution.
 
 ---
 

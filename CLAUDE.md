@@ -28,8 +28,9 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 | [tools](crates/tools/CLAUDE.md) | Tool trait + builtins + lane classification + bwrap sandbox | domain, telemetry |
 | [worktree](crates/worktree/CLAUDE.md) | Sibling git worktrees + registry + crash recovery | domain, telemetry |
 | [ipc](crates/ipc/CLAUDE.md) | Typed daemon-client wire protocol (messages + framing, no transport) | domain |
-| [decomposer](crates/decomposer/CLAUDE.md) | Goal to Work DAG | domain, store, llm |
-| [agents](crates/agents/CLAUDE.md) | Ralph loops per role; ContextBuilder lives here | domain, store, llm, tools, worktree |
+| [context](crates/context/CLAUDE.md) | Prompt assembly (handlebars + partials + token budgeting); shared by decomposer and agents | domain, store, tools, telemetry |
+| [decomposer](crates/decomposer/CLAUDE.md) | Goal to Work DAG | domain, store, llm, context |
+| [agents](crates/agents/CLAUDE.md) | Ralph loops per role | domain, store, llm, tools, worktree, context |
 | [integrator](crates/integrator/CLAUDE.md) | Merge-validate-publish (non-LLM; no `llm` dep at Cargo level) | domain, store, worktree |
 | [loopr](crates/loopr/CLAUDE.md) | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
 
