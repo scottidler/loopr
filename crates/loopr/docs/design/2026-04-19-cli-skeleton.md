@@ -41,6 +41,7 @@ Each item is an assertable check. The design is Done when every assertion below 
 - `loopr -C /tmp plan "x"` parses, passes source-guard, exits non-zero, stderr contains `"Stage 5"`
 - `loopr plan "x"` run from any directory at or below the loopr-v5 checkout exits non-zero with stderr mentioning the `.loopr-source-guard` sentinel
 - `loopr -C <nonexistent-path> plan "x"` exits non-zero with `LooprError::TargetInvalid`
+- `loopr -C <path-to-a-file> plan "x"` exits non-zero with `LooprError::TargetIsFile` whose message hints to pass the parent (`try -C <parent>`)
 - `LOOPR_TARGET=""` is treated identically to an unset env var (CWD resolves)
 - Precedence test: with `-C /a`, `LOOPR_TARGET=/b`, CWD=`/c`, the resolved target is `/a`
 - Git-root test: `loopr plan "x"` invoked from `<git-repo>/src/foo/bar/` resolves to `<git-repo>/` (the `git rev-parse --show-toplevel` answer)
@@ -191,6 +192,9 @@ pub enum LooprError {
     #[error("target {path} does not exist or is not a directory")]
     TargetInvalid { path: PathBuf },
 
+    #[error("target {} is a file, not a directory (try -C {} to use its parent)", path.display(), parent_hint(path))]
+    TargetIsFile { path: PathBuf },
+
     #[error("subcommand `{subcommand}` is not yet implemented (earned at Stage {stage})")]
     StageUnimplemented { stage: u8, subcommand: &'static str },
 }
@@ -243,25 +247,40 @@ pub fn resolve(
 
 **Git invocation shape**: `std::process::Command::new("git").args(["-C", &canonicalized, "rev-parse", "--show-toplevel"]).output()`. Trim stdout. Non-zero exit → proceed to tier (b). Missing `git` binary → same, plus a one-time `tracing::warn!` emitted when telemetry lights up at Stage 2.
 
+Per `rules/rust.md` §Architecture: Shell/Core Split, all orchestration lives in `lib::run`; `main.rs` is a six-line shell whose only job is parsing argv, calling the library, and returning an `eyre::Result`.
+
 ```rust
-// src/main.rs (sketch)
+// src/main.rs
+use clap::Parser;
+use loopr::Cli;
+
 fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
-    let cwd = std::env::current_dir().wrap_err("current directory unavailable")?;
-    // Treat LOOPR_TARGET="" as unset (shell-empty env var).
-    let env_target = std::env::var("LOOPR_TARGET")
-        .ok()
-        .filter(|v| !v.is_empty());
-    let target = target::resolve(cli.chdir.as_deref(), env_target.as_deref(), &cwd)?;
-    guard::check(&target)?;
+    loopr::run(cli)?;
+    Ok(())
+}
 
-    match cli.command {
-        Command::Init => Err(LooprError::StageUnimplemented { stage: 5, subcommand: "init" }.into()),
-        Command::Plan { .. } => Err(LooprError::StageUnimplemented { stage: 5, subcommand: "plan" }.into()),
+// src/lib.rs
+pub fn run(cli: Cli) -> Result<(), LooprError> {
+    let cwd = std::env::current_dir().map_err(|_| LooprError::TargetInvalid {
+        path: PathBuf::from("."),
+    })?;
+    let env_target = std::env::var("LOOPR_TARGET").ok();
+    let effective = target::resolve(cli.chdir.as_deref(), env_target.as_deref(), &cwd)?;
+    guard::check(&effective)?;
+    dispatch(cli.command)
+}
+
+fn dispatch(command: Command) -> Result<(), LooprError> {
+    match command {
+        Command::Init => Err(LooprError::StageUnimplemented { stage: 5, subcommand: "init" }),
+        Command::Plan { .. } => Err(LooprError::StageUnimplemented { stage: 5, subcommand: "plan" }),
         // ... one arm per command, each mapping to its roadmap stage
     }
 }
 ```
+
+`dispatch` is the unit-test seam (one `Command` in, one `Result<(), LooprError>` out), deliberately kept separate from `run` so tests don't have to stub target resolution or source-guard. The `LOOPR_TARGET=""`-as-unset normalization lives inside `target::resolve` so it's testable in isolation too - `lib::run` passes whatever `std::env::var` returned.
 
 `clap` handles `--version` and `--help` internally before `Command` dispatch runs - meaning neither target resolution nor source-guard fires for those two flags. This is intentional: `--version` / `--help` are pure metadata queries and should work anywhere, including inside the loopr source tree.
 
@@ -311,7 +330,7 @@ The `subcommand: &'static str` field of `StageUnimplemented` is a stable label t
 **Model:** sonnet
 
 - `src/guard.rs`: `check(start: &Path)` walks ancestors via `Path::ancestors()`, stops at the first existing `<ancestor>/.loopr-source-guard`, returns `SourceGuardTripped { path: start.to_owned(), sentinel: ancestor.join(".loopr-source-guard") }`. Reaches root without a match → `Ok(())`.
-- `src/target.rs`: `resolve(chdir, env, cwd)` applies precedence, canonicalizes via `Path::canonicalize` (returns `TargetInvalid` for non-existent or non-directory paths), then does three-tier root discovery: (a) `git -C <path> rev-parse --show-toplevel`; on failure (b) walk ancestors looking for `.loopr/` or `.taskstore/`; on failure (c) fall through to the canonicalized start path.
+- `src/target.rs`: `resolve(chdir, env, cwd)` applies precedence (treating `LOOPR_TARGET=""` as unset), canonicalizes via `Path::canonicalize` (returns `TargetInvalid` for non-existent paths, `TargetIsFile` with a "try parent" hint for paths that exist but are files), then does three-tier root discovery: (a) `git -C <path> rev-parse --show-toplevel`; on failure (b) walk ancestors looking for `.loopr/` or `.taskstore/`; on failure (c) fall through to the canonicalized start path.
 - Wire into `lib::run`: resolve, guard, then dispatch.
 - Tests: source-guard hit (at exact path), hit at ancestor, no hit to root, `/tmp` target clean; target resolution precedence with all four combinations (-C vs env vs CWD).
 - Use `tempfile::TempDir` for filesystem-dependent tests.
@@ -374,7 +393,7 @@ Not a concern at this scale. Clap parse is microseconds; the walk-up loop runs �
 ### Security
 
 - Source-guard prevents the v3/v4 recurring failure where an agent treated the loopr source tree as its target, potentially committing agent-produced changes into the loopr repo itself. Walking to `/` (rather than stopping at the target) defends against `loopr -C crates/loopr plan "x"` - if the guard lives at the v5 repo root, any subdirectory below it also trips.
-- `-C` canonicalizes the path, so `-C ../../../etc/passwd` can't slip by as a relative directory; `TargetInvalid` fires if it's not a directory.
+- `-C` canonicalizes the path, so `-C ../../../etc/passwd` can't slip by as a relative directory; `TargetInvalid` fires for non-existent paths, `TargetIsFile` fires for files (with a hint pointing at the parent directory).
 - No subprocess execution in Stage 1 (that's Stage 7 via `tools`); no user-supplied strings interpolate into shell commands.
 
 ### Testing Strategy
@@ -411,7 +430,7 @@ Not a concern at this scale. Clap parse is microseconds; the walk-up loop runs �
 
 ## Open Questions
 
-- [x] **Does `-C` accept only directories, or also files (with the parent taken as target)?** Decided: directories only. A `TargetInvalid` error for files, with the message hinting to pass the parent. Matches `git -C` semantics exactly.
+- [x] **Does `-C` accept only directories, or also files (with the parent taken as target)?** Decided: directories only. A distinct `TargetIsFile` error variant fires for files, with the message hinting to pass the parent (`try -C <parent>`). Matches `git -C` semantics exactly.
 - [x] **Where does `LOOPR_TARGET` env var fit?** Decided: between `-C` (highest) and CWD (lowest), per `docs/vision.md` CLI targeting section.
 - [x] **Does the source-guard walk stop at the target's git root, or continue to `/`?** Decided: walk to `/`. A guard in an ancestor still counts, because the same issue (agent-writes-into-loopr-tree) applies if the target is a subdirectory of the v5 checkout.
 - [x] **Should `loopr --version` include the workspace tag or each crate's inherited version?** Resolved: workspace `GIT_DESCRIBE` from `build.rs`, identical to `git-tools` / `aws-tools` pattern. All 13 crates inherit `version.workspace = true`; one tag per release; CLI prints `git describe --tags --always` output.

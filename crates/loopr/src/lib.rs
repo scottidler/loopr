@@ -10,7 +10,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let cwd = std::env::current_dir().map_err(|_| LooprError::TargetInvalid {
         path: std::path::PathBuf::from("."),
     })?;
-    let env_target = std::env::var("LOOPR_TARGET").ok().filter(|v| !v.is_empty());
+    let env_target = std::env::var("LOOPR_TARGET").ok();
     let effective = target::resolve(cli.chdir.as_deref(), env_target.as_deref(), &cwd)?;
     guard::check(&effective)?;
     dispatch(cli.command)

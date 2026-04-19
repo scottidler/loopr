@@ -93,7 +93,7 @@ pub enum DaemonCmd {
         #[arg(long)]
         foreground: bool,
     },
-    /// Stop the running daemon.
+    /// Stop the running daemon (SIGTERM, escalate to SIGKILL after 3s).
     Stop,
     /// Query the running daemon's status via IPC.
     Status,

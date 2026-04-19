@@ -42,6 +42,13 @@ fn cwd_used_when_chdir_and_env_unset() {
 }
 
 #[test]
+fn empty_env_string_treated_as_unset() {
+    let c = TempDir::new().unwrap();
+    let resolved = resolve(None, Some(""), c.path()).unwrap();
+    assert_eq!(resolved, c.path().canonicalize().unwrap());
+}
+
+#[test]
 fn invalid_path_errors() {
     let fake = PathBuf::from("/does/not/exist/anywhere/42");
     let err = resolve(Some(&fake), None, Path::new("/tmp")).unwrap_err();
@@ -49,12 +56,24 @@ fn invalid_path_errors() {
 }
 
 #[test]
-fn file_path_errors_as_target_invalid() {
+fn file_path_errors_as_target_is_file_with_parent_hint() {
     let td = TempDir::new().unwrap();
     let file = td.path().join("a-file");
     fs::write(&file, "").unwrap();
     let err = resolve(Some(&file), None, Path::new("/tmp")).unwrap_err();
-    assert!(matches!(err, LooprError::TargetInvalid { .. }));
+    match err {
+        LooprError::TargetIsFile { ref path } => {
+            assert_eq!(path, &file);
+            let msg = err.to_string();
+            assert!(msg.contains("is a file"), "got: {msg}");
+            assert!(msg.contains("try -C"), "got: {msg}");
+            assert!(
+                msg.contains(&td.path().display().to_string()),
+                "parent path missing from hint: {msg}"
+            );
+        }
+        other => panic!("expected TargetIsFile, got {other:?}"),
+    }
 }
 
 #[test]

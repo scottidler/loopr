@@ -71,12 +71,40 @@ fn source_guard_blocks_target_with_sentinel() {
 }
 
 #[test]
+fn source_guard_trips_from_within_loopr_v5_checkout() {
+    // Run the binary with CWD inside the loopr-v5 crate (no -C). Target
+    // resolution walks to the git root (loopr-v5/), and the source-guard
+    // walks ancestors to find the .loopr-source-guard sentinel committed
+    // at the repo root. This is the live-fire check that the sentinel
+    // actually blocks loopr from operating on its own source tree.
+    loopr()
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["plan", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(".loopr-source-guard"));
+}
+
+#[test]
 fn target_invalid_when_path_does_not_exist() {
     loopr()
         .args(["-C", "/does/not/exist/42", "plan", "x"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("does not exist"));
+}
+
+#[test]
+fn target_is_file_hints_at_parent() {
+    let td = TempDir::new().unwrap();
+    let file = td.path().join("a-file");
+    fs::write(&file, "").unwrap();
+    loopr()
+        .args(["-C", file.to_str().unwrap(), "plan", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is a file"))
+        .stderr(predicate::str::contains("try -C"));
 }
 
 #[test]

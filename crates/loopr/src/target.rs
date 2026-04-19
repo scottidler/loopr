@@ -16,7 +16,7 @@ use crate::error::LooprError;
 pub fn resolve(chdir: Option<&Path>, env: Option<&str>, cwd: &Path) -> Result<PathBuf, LooprError> {
     let start = if let Some(p) = chdir {
         p.to_path_buf()
-    } else if let Some(v) = env {
+    } else if let Some(v) = env.filter(|s| !s.is_empty()) {
         PathBuf::from(v)
     } else {
         cwd.to_path_buf()
@@ -26,7 +26,7 @@ pub fn resolve(chdir: Option<&Path>, env: Option<&str>, cwd: &Path) -> Result<Pa
         .canonicalize()
         .map_err(|_| LooprError::TargetInvalid { path: start.clone() })?;
     if !canonical.is_dir() {
-        return Err(LooprError::TargetInvalid { path: start });
+        return Err(LooprError::TargetIsFile { path: start });
     }
 
     if let Some(root) = git_toplevel(&canonical) {
