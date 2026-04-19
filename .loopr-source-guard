@@ -1,0 +1,10 @@
+This file marks the loopr source tree.
+
+Loopr orchestrates OTHER repos; it never operates on itself. The loopr binary,
+when given an effective target directory (CWD by default, `-C <path>` to
+override), walks up from the target looking for this file. If found, loopr
+refuses to run with a clear error.
+
+Do not delete this file. Do not copy it into target repos. If loopr refuses
+your invocation because of this guard, fix the invocation (point `-C` at the
+correct target), not the guard.
