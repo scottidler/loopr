@@ -1,11 +1,23 @@
 pub mod cli;
 pub mod error;
+pub mod guard;
+pub mod target;
 
 pub use cli::{Cli, Command, DaemonCmd, LogsCmd};
 pub use error::LooprError;
 
 pub fn run(cli: Cli) -> Result<(), LooprError> {
-    match cli.command {
+    let cwd = std::env::current_dir().map_err(|_| LooprError::TargetInvalid {
+        path: std::path::PathBuf::from("."),
+    })?;
+    let env_target = std::env::var("LOOPR_TARGET").ok().filter(|v| !v.is_empty());
+    let effective = target::resolve(cli.chdir.as_deref(), env_target.as_deref(), &cwd)?;
+    guard::check(&effective)?;
+    dispatch(cli.command)
+}
+
+fn dispatch(command: Command) -> Result<(), LooprError> {
+    match command {
         Command::Init => Err(LooprError::StageUnimplemented {
             stage: 5,
             subcommand: "init",
@@ -68,13 +80,13 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    fn parse(args: &[&str]) -> Cli {
-        Cli::parse_from(args)
+    fn parse_cmd(args: &[&str]) -> Command {
+        Cli::parse_from(args).command
     }
 
     #[test]
     fn run_init_returns_stage_5() {
-        let err = run(parse(&["loopr", "init"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "init"])).unwrap_err();
         match err {
             LooprError::StageUnimplemented { stage, subcommand } => {
                 assert_eq!(stage, 5);
@@ -86,7 +98,7 @@ mod tests {
 
     #[test]
     fn run_plan_returns_stage_5() {
-        let err = run(parse(&["loopr", "plan", "goal"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "plan", "goal"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -98,7 +110,7 @@ mod tests {
 
     #[test]
     fn run_decompose_returns_stage_6() {
-        let err = run(parse(&["loopr", "decompose", "plan-1"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "decompose", "plan-1"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -110,7 +122,7 @@ mod tests {
 
     #[test]
     fn run_execute_returns_stage_7() {
-        let err = run(parse(&["loopr", "execute"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "execute"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -122,7 +134,7 @@ mod tests {
 
     #[test]
     fn run_integrate_returns_stage_8() {
-        let err = run(parse(&["loopr", "integrate"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "integrate"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -134,7 +146,7 @@ mod tests {
 
     #[test]
     fn run_daemon_start_returns_stage_4() {
-        let err = run(parse(&["loopr", "daemon", "start"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "daemon", "start"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -146,7 +158,7 @@ mod tests {
 
     #[test]
     fn run_daemon_stop_returns_stage_4() {
-        let err = run(parse(&["loopr", "daemon", "stop"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "daemon", "stop"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -158,7 +170,7 @@ mod tests {
 
     #[test]
     fn run_daemon_status_returns_stage_4() {
-        let err = run(parse(&["loopr", "daemon", "status"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "daemon", "status"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -170,7 +182,7 @@ mod tests {
 
     #[test]
     fn run_score_returns_stage_9() {
-        let err = run(parse(&["loopr", "score", "--dir", "/tmp/run"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "score", "--dir", "/tmp/run"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -182,7 +194,7 @@ mod tests {
 
     #[test]
     fn run_logs_tail_returns_stage_2() {
-        let err = run(parse(&["loopr", "logs", "tail"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "logs", "tail"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -194,7 +206,7 @@ mod tests {
 
     #[test]
     fn run_logs_runs_returns_stage_2() {
-        let err = run(parse(&["loopr", "logs", "runs"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "logs", "runs"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
@@ -206,7 +218,7 @@ mod tests {
 
     #[test]
     fn run_list_returns_stage_5() {
-        let err = run(parse(&["loopr", "list", "plans"])).unwrap_err();
+        let err = dispatch(parse_cmd(&["loopr", "list", "plans"])).unwrap_err();
         assert!(matches!(
             err,
             LooprError::StageUnimplemented {
