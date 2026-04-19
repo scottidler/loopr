@@ -10,6 +10,31 @@ tasks:
     bash: |
       whitespace -r
 
+  # File-size enforcement (per rules/rust.md: default 1500-line max per .rs file)
+  # Override with FILESIZE_MAX_LINES=<n> otto ci
+  filesize:
+    help: "Fail if any .rs file exceeds FILESIZE_MAX_LINES (default 1500)"
+    bash: |
+      THRESHOLD="${FILESIZE_MAX_LINES:-1500}"
+      FAILED=0
+      while IFS= read -r file; do
+        lines=$(wc -l < "$file")
+        if [ "$lines" -gt "$THRESHOLD" ]; then
+          echo "  $lines lines: $file"
+          FAILED=1
+        fi
+      done < <(find . -type f -name '*.rs' \
+        -not -path './target/*' \
+        -not -path './*/target/*' \
+        -not -path './.git/*')
+      if [ "$FAILED" -eq 1 ]; then
+        echo ""
+        echo "❌ Files above ${THRESHOLD}-line limit. Decompose into a module directory."
+        echo "   See rules/rust.md §Naming and rules/dealing-with-large-files.md"
+        exit 1
+      fi
+      echo "✅ All .rs files under $THRESHOLD lines"
+
   check:
     help: "Compile, clippy, and format across the workspace"
     bash: |
@@ -28,8 +53,8 @@ tasks:
       cargo test --workspace
 
   ci:
-    help: "Full workspace CI (lint + check + test)"
-    before: [lint, check, test]
+    help: "Full workspace CI (lint + filesize + check + test)"
+    before: [lint, filesize, check, test]
     bash: |
       echo "Workspace CI passed"
 

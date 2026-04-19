@@ -8,6 +8,25 @@ tasks:
     bash: |
       whitespace -r
 
+  filesize:
+    help: "Fail if any .rs file exceeds FILESIZE_MAX_LINES (default 1500)"
+    bash: |
+      THRESHOLD="${FILESIZE_MAX_LINES:-1500}"
+      FAILED=0
+      while IFS= read -r file; do
+        lines=$(wc -l < "$file")
+        if [ "$lines" -gt "$THRESHOLD" ]; then
+          echo "  $lines lines: $file"
+          FAILED=1
+        fi
+      done < <(find src -type f -name '*.rs' 2>/dev/null)
+      if [ "$FAILED" -eq 1 ]; then
+        echo ""
+        echo "❌ Files above ${THRESHOLD}-line limit. Decompose into a module directory."
+        exit 1
+      fi
+      echo "✅ All .rs files under $THRESHOLD lines"
+
   check:
     help: "Compile, clippy, format for this crate"
     bash: |
@@ -22,6 +41,6 @@ tasks:
 
   ci:
     help: "Scoped CI (lint + check + test) for telemetry"
-    before: [lint, check, test]
+    before: [lint, filesize, check, test]
     bash: |
       echo "telemetry CI passed"
