@@ -11,17 +11,17 @@ tasks:
   check:
     help: "Compile, clippy, format for this crate"
     bash: |
-      cargo check -p runtime --all-targets
-      cargo clippy -p runtime --all-targets -- -D warnings
-      cargo fmt -p runtime -- --check
+      cargo check -p worktree --all-targets
+      cargo clippy -p worktree --all-targets -- -D warnings
+      cargo fmt -p worktree -- --check
 
   test:
     help: "Run tests for this crate"
     bash: |
-      cargo test -p runtime
+      cargo test -p worktree
 
   ci:
-    help: "Scoped CI (lint + check + test) for runtime"
+    help: "Scoped CI (lint + check + test) for worktree"
     before: [lint, check, test]
     bash: |
-      echo "runtime CI passed"
+      echo "worktree CI passed"

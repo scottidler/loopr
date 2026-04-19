@@ -1,10 +1,10 @@
-# crates/runtime/docs/
+# crates/store/docs/
 
-Design documentation scoped to the `runtime` crate.
+Design documentation scoped to the `store` crate.
 
 ## What lives here
 
-- Design docs touching only `runtime` (LLM client, tools, context builder, worktree lifecycle, sandbox).
+- Design docs touching only `store` (wrapper API, collection accessors, path resolution, error taxonomy).
 - Convention: `design/YYYY-MM-DD-<name>.md`.
 
 ## What does NOT live here
@@ -18,6 +18,6 @@ One design doc at a time, motivated by a failing test or real code pain. No desi
 
 ## See also
 
-- [../CLAUDE.md](../CLAUDE.md): scope rules for `runtime`
+- [../CLAUDE.md](../CLAUDE.md): scope rules for `store`
 - [../../../docs/vision.md](../../../docs/vision.md): architectural shape
-- [../../../CLAUDE.md](../../../CLAUDE.md): project-wide rules and discipline
+- [../../../CLAUDE.md](../../../CLAUDE.md): project-wide rules

@@ -1,0 +1,27 @@
+otto:
+  api: 1
+  tasks: [ci]
+
+tasks:
+  lint:
+    help: "Whitespace lint"
+    bash: |
+      whitespace -r
+
+  check:
+    help: "Compile, clippy, format for this crate"
+    bash: |
+      cargo check -p tools --all-targets
+      cargo clippy -p tools --all-targets -- -D warnings
+      cargo fmt -p tools -- --check
+
+  test:
+    help: "Run tests for this crate"
+    bash: |
+      cargo test -p tools
+
+  ci:
+    help: "Scoped CI (lint + check + test) for tools"
+    before: [lint, check, test]
+    bash: |
+      echo "tools CI passed"
