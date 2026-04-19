@@ -9,6 +9,7 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 ## Where to find things
 
 - **Architectural shape (vision):** [docs/v5-shape.md](docs/v5-shape.md)
+- **Roadmap (what's built, what's next):** [docs/roadmap.md](docs/roadmap.md)
 - **Top-level docs rules:** [docs/CLAUDE.md](docs/CLAUDE.md)
 - **Per-crate scope rules:** `crates/<name>/CLAUDE.md`
 - **Per-crate design docs:** `crates/<name>/docs/`

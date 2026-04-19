@@ -5,6 +5,7 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 ## Start here
 
 - **[docs/v5-shape.md](docs/v5-shape.md)** - architectural shape, crate layout, process rules, first gate. Read this first.
+- **[docs/roadmap.md](docs/roadmap.md)** - living index of stages and design docs. Where work goes next.
 - **[CLAUDE.md](CLAUDE.md)** - project-wide rules and the canonical crate map.
 - **[crates/](crates/)** - each crate has its own `CLAUDE.md` (scope rules) and `docs/` (design docs).
 
