@@ -12,7 +12,7 @@ Procedural macros for the workspace. Pure compile-time codegen, no runtime.
 
 - **Function-like macros** (`my_macro!(...)`). They hide expansion, encourage DSL-style "magic", and re-introduce the string-keyed-dispatch failure class v5 is built to avoid. If you need one, stop and talk.
 - **Attribute macros** (`#[attr] fn ...`). Same reasoning; they rewrite bodies in ways that are hard to read and debug.
-- Runtime helpers, traits, or types. Those belong in `domain` or `runtime`.
+- Runtime helpers, traits, or types. Those belong in `domain` or the relevant service crate (`llm` / `tools` / `worktree` / `store`).
 - Anything requiring network, filesystem, or env at macro-expansion time.
 
 ## Rule

@@ -12,7 +12,7 @@
 
 **Status:** done on orphan branch `v5`; tag `v0.5.0` cut at the initial 6-crate scaffold, additional crates landed after tag on branch.
 
-**What shipped:** 9-crate workspace (`derive`, `telemetry`, `domain`, `runtime`, `decomposer`, `agents`, `integrator`, `ipc`, `loopr`), README + CLAUDE.md front-door language, `.loopr-source-guard` sentinel, deferred-enhancements section in `vision.md`, observability + target-repo-layout sections in `vision.md`, `[workspace.dependencies]` starter set (tracing, serde, eyre, clap, chrono; promoted via `cargo add`-then-move).
+**What shipped:** 12-crate workspace (`derive`, `telemetry`, `store`, `domain`, `llm`, `tools`, `worktree`, `ipc`, `decomposer`, `agents`, `integrator`, `loopr`), README + CLAUDE.md front-door language, `.loopr-source-guard` sentinel, full operational decisions in `vision.md` (prompts, errors, models/budgets, git posture, security, observability, target-repo layout), `[workspace.dependencies]` starter set (tracing, serde, eyre, clap, chrono; promoted via `cargo add`-then-move). Architect consultation round 1 and round 2 reconciled; `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree` cohesive siblings.
 
 ---
 
@@ -92,11 +92,11 @@
 
 **Design docs:**
 - `crates/domain/docs/design/hierarchy.md` — Plan/Spec/Phase/Work hierarchy and FSM states, deps semantics. (First-gate scope: flat, start with Plan→Work; Spec/Phase deferred.)
-- `crates/runtime/docs/design/llm-client.md` — `LlmClient` trait + Anthropic Messages-API implementation, SSE streaming, cost accounting.
-- `crates/runtime/docs/design/context-builder.md` — token-budgeted prompt assembly.
+- `crates/llm/docs/design/llm-client.md` — `LlmClient` trait + Anthropic Messages-API implementation, SSE streaming, cost accounting.
+- `crates/agents/docs/design/context-builder.md` — token-budgeted prompt assembly; lives in `agents` because it must see `domain` + `store` + `llm` + `tools` simultaneously.
 - `crates/decomposer/docs/design/plan-then-decompose.md` — `plan()` and `decompose()` function signatures, default strategy, validation.
 
-**Crates touched:** `domain`, `runtime`, `decomposer`.
+**Crates touched:** `domain`, `store`, `llm`, `decomposer`.
 
 **Exit criterion:** `loopr plan "Add --version flag to a Rust CLI"` produces at least one Work record persisted to `.taskstore/works.jsonl`.
 
@@ -107,11 +107,11 @@
 **Goal:** daemon spawns an Implementer in a sibling worktree, runs a ralph loop with the tool registry, produces a Bundle record referencing the commit on the worktree branch.
 
 **Design docs:**
-- `crates/runtime/docs/design/tool-registry.md` — `Tool` trait with typed `Input`/`Output`, registry, first builtin set: `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`.
-- `crates/runtime/docs/design/worktree.md` — sibling git worktree creation, cleanup, registry entry in `.loopr/worktree-registry.jsonl`.
+- `crates/tools/docs/design/tool-registry.md` — `Tool` trait with typed `Input`/`Output`, registry, first builtin set: `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`, plus the lane classification table.
+- `crates/worktree/docs/design/lifecycle.md` — sibling worktree creation, cleanup, registry entry in `.loopr/worktree-registry.jsonl`, daemon-startup crash reconciliation.
 - `crates/agents/docs/design/implementer.md` — ralph loop structure, retry strategy selection, bundle production.
 
-**Crates touched:** `runtime`, `agents`.
+**Crates touched:** `tools`, `worktree`, `agents`.
 
 **Exit criterion:** on a toy target repo, a Work item produces a Bundle whose commit diff shows real file edits made by the Implementer.
 

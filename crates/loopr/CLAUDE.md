@@ -18,7 +18,7 @@ The driver. Binary crate: daemon process, IPC transport, CLI dispatch, source-gu
 
 - Any stage logic; that lives in the corresponding stage crate
 - **Protocol definitions** (`DaemonRequest`/`DaemonResponse`/`DaemonEvent`, NDJSON framing choice, RPC error codes) — those live in `crates/ipc`. If you find yourself defining a new message variant here, move it to `ipc` and import it
-- LLM client, tool impls, worktree lifecycle (`runtime`)
+- LLM client (`llm`), tool impls (`tools`), worktree lifecycle (`worktree`), persistence (`store`)
 - Record types (`domain`)
 - Decomposition math (`decomposer`), agent loops (`agents`), integration logic (`integrator`)
 - Tracing subscriber init, span conventions, run-id allocation (`telemetry`)

@@ -13,7 +13,7 @@ Typed wire protocol between the daemon and its clients (short-lived CLI dispatch
 ## Out of scope
 
 - Async I/O, socket acceptance, connection lifecycle. Those live in whoever consumes `ipc` (today that's `loopr`; later, possibly a `daemon` crate if the reactive loop grows enough to deserve one).
-- LLM calls, tool execution, worktree lifecycle. Those belong in `runtime`.
+- LLM calls (`llm`), tool execution (`tools`), worktree lifecycle (`worktree`), persistence (`store`).
 - TUI rendering. That lands in its own `tui` crate when we start building it.
 - Orchestration policy (who handles which request). That's `loopr`.
 

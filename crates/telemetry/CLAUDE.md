@@ -13,7 +13,7 @@ Observability for v5. First-class concern; owns `tracing` subscriber composition
 ## Out of scope
 
 - **Metrics and tracing export** (OpenTelemetry, Prometheus, OTLP). Not first-gate. If it lands later, it extends this crate; don't speculate yet.
-- **LLM call logging per se.** LLM call logs are just `tracing` events emitted by `runtime`; this crate doesn't know what an LLM is.
+- **LLM call logging per se.** LLM call logs are just `tracing` events emitted by the `llm` crate; this crate doesn't know what an LLM is.
 - **Permission/audit events.** Those belong wherever the permission decisions are made; this crate just gives them somewhere to go.
 - **TUI rendering.** The TUI, when it lands, subscribes to the same event stream this crate produces; it does not live here.
 

@@ -22,12 +22,15 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 |---|---|---|
 | [derive](crates/derive/CLAUDE.md) | Proc macros (Fsm, Record); derives only, no fn-like or attribute macros | - |
 | [telemetry](crates/telemetry/CLAUDE.md) | Tracing subscriber init, run-id, span conventions, log-query helpers | - |
-| [domain](crates/domain/CLAUDE.md) | Records, FSM tables, TaskStore wrapper | derive |
-| [runtime](crates/runtime/CLAUDE.md) | LLM, tools, context, worktrees | domain, telemetry |
-| [decomposer](crates/decomposer/CLAUDE.md) | Goal to Work DAG | domain, runtime |
-| [agents](crates/agents/CLAUDE.md) | Ralph loops per role | domain, runtime |
-| [integrator](crates/integrator/CLAUDE.md) | Merge-validate-publish (non-LLM) | domain, runtime |
+| [store](crates/store/CLAUDE.md) | Typed wrapper around `scottidler/taskstore`; JSONL+SQLite+git-hooks anti-corruption layer | derive, taskstore |
+| [domain](crates/domain/CLAUDE.md) | Records + FSM tables only (no I/O) | derive, taskstore |
+| [llm](crates/llm/CLAUDE.md) | LlmClient trait + Anthropic backend (no prompt assembly — that's `agents`) | domain, telemetry |
+| [tools](crates/tools/CLAUDE.md) | Tool trait + builtins + lane classification + bwrap sandbox | domain, telemetry |
+| [worktree](crates/worktree/CLAUDE.md) | Sibling git worktrees + registry + crash recovery | domain, telemetry |
 | [ipc](crates/ipc/CLAUDE.md) | Typed daemon-client wire protocol (messages + framing, no transport) | domain |
+| [decomposer](crates/decomposer/CLAUDE.md) | Goal to Work DAG | domain, store, llm |
+| [agents](crates/agents/CLAUDE.md) | Ralph loops per role; ContextBuilder lives here | domain, store, llm, tools, worktree |
+| [integrator](crates/integrator/CLAUDE.md) | Merge-validate-publish (non-LLM; no `llm` dep at Cargo level) | domain, store, worktree |
 | [loopr](crates/loopr/CLAUDE.md) | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
 
 ## Working rules (v5-specific; user global rules still apply)

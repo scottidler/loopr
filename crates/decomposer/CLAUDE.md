@@ -15,8 +15,8 @@ Goal into validated Plan into Spec/Phase/Work DAG. The middle-end of the pipelin
 
 - Agent execution (`agents`): decomposer produces the plan-of-work and stops
 - Bundle review, integration (`agents`, `integrator`)
-- LLM transport, tool registration (`runtime`)
-- Record persistence mechanics (`domain`)
+- LLM transport (`llm`), tool trait + impls (`tools`), worktree lifecycle (`worktree`)
+- Record persistence (`store`), record definitions (`domain`)
 - Whether to run a decomposer at all (that's the driver's call in `loopr`)
 
 ## Rule
