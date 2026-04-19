@@ -10,30 +10,34 @@ tasks:
     bash: |
       whitespace -r
 
-  # File-size enforcement (per rules/rust.md: default 1500-line max per .rs file)
-  # Override with FILESIZE_MAX_LINES=<n> otto ci
-  filesize:
-    help: "Fail if any .rs file exceeds FILESIZE_MAX_LINES (default 1500)"
+  # Fail if any source file exceeds BLOAT_MAX_LINES (default 1500)
+  bloat:
+    help: "Fail if any source file exceeds BLOAT_MAX_LINES (default 1500)"
     bash: |
-      THRESHOLD="${FILESIZE_MAX_LINES:-1500}"
+      LIMIT="${BLOAT_MAX_LINES:-1500}"
       FAILED=0
+      echo "=== Checking file line counts (limit: $LIMIT) ==="
       while IFS= read -r file; do
         lines=$(wc -l < "$file")
-        if [ "$lines" -gt "$THRESHOLD" ]; then
-          echo "  $lines lines: $file"
+        if [ "$lines" -gt "$LIMIT" ]; then
+          delta=$((lines - LIMIT))
+          echo "  FAIL: $file ($lines lines, +$delta over limit)"
           FAILED=1
         fi
-      done < <(find . -type f -name '*.rs' \
-        -not -path './target/*' \
-        -not -path './*/target/*' \
-        -not -path './.git/*')
+      done < <(find . -type f \( -name "*.rs" -o -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+        -not -path "*/target/*" \
+        -not -path "*/node_modules/*" \
+        -not -path "*/.venv/*" \
+        -not -path "*/__pycache__/*" \
+        -not -path "*/dist/*" \
+        -not -path "*/build/*" \
+        -not -path "*/.git/*")
       if [ "$FAILED" -eq 1 ]; then
         echo ""
-        echo "❌ Files above ${THRESHOLD}-line limit. Decompose into a module directory."
-        echo "   See rules/rust.md §Naming and rules/dealing-with-large-files.md"
+        echo "Decompose these files into modules before proceeding."
         exit 1
       fi
-      echo "✅ All .rs files under $THRESHOLD lines"
+      echo "All files within $LIMIT line limit"
 
   check:
     help: "Compile, clippy, and format across the workspace"
@@ -53,8 +57,8 @@ tasks:
       cargo test --workspace
 
   ci:
-    help: "Full workspace CI (lint + filesize + check + test)"
-    before: [lint, filesize, check, test]
+    help: "Full workspace CI (lint + bloat + check + test)"
+    before: [lint, bloat, check, test]
     bash: |
       echo "Workspace CI passed"
 
