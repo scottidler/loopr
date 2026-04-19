@@ -10,9 +10,9 @@
 
 ## Stage 0: scaffold compiles
 
-**Status:** done at `v0.5.0`, orphan branch `v5`.
+**Status:** done on orphan branch `v5`; tag `v0.5.0` cut at the initial 6-crate scaffold, additional crates landed after tag on branch.
 
-**What shipped:** 8-crate workspace (`derive`, `domain`, `runtime`, `decomposer`, `agents`, `integrator`, `ipc`, `loopr`), README + CLAUDE.md front door, `.loopr-source-guard`, deferred-enhancements section in `vision.md`.
+**What shipped:** 9-crate workspace (`derive`, `telemetry`, `domain`, `runtime`, `decomposer`, `agents`, `integrator`, `ipc`, `loopr`), README + CLAUDE.md front-door language, `.loopr-source-guard` sentinel, deferred-enhancements section in `vision.md`, observability + target-repo-layout sections in `vision.md`, `[workspace.dependencies]` starter set (tracing, serde, eyre, clap, chrono; promoted via `cargo add`-then-move).
 
 ---
 
