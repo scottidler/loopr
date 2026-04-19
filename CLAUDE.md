@@ -2,6 +2,10 @@
 
 Agent orchestrator with Plan decomposition as a central feature. Clean-break rewrite from v4; compiler-style pipeline of typed stages, each in its own crate.
 
+## Start here
+
+**[docs/v5-shape.md](docs/v5-shape.md)** is the front door. It defines the architectural shape, crate layout, ABI contracts, process rules, and first gate. Read it before changing anything non-trivial.
+
 ## Where to find things
 
 - **Architectural shape (vision):** [docs/v5-shape.md](docs/v5-shape.md)
@@ -21,7 +25,8 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 | [decomposer](crates/decomposer/CLAUDE.md) | Goal to Work DAG | domain, runtime |
 | [agents](crates/agents/CLAUDE.md) | Ralph loops per role | domain, runtime |
 | [integrator](crates/integrator/CLAUDE.md) | Merge-validate-publish (non-LLM) | domain, runtime |
-| [loopr](crates/loopr/CLAUDE.md) | Binary: daemon + IPC + TUI + CLI | all of the above |
+| [ipc](crates/ipc/CLAUDE.md) | Typed daemon-client wire protocol (messages + framing, no transport) | domain |
+| [loopr](crates/loopr/CLAUDE.md) | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
 
 ## Working rules (v5-specific; user global rules still apply)
 

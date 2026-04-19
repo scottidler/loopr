@@ -41,7 +41,8 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 | `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `runtime` |
 | `agents` | Ralph loops for Implementer, Reviewer, Researcher, Director | `domain`, `runtime` |
 | `integrator` | Accepted Bundles to Tick (deterministic, non-LLM) | `domain`, `runtime` |
-| `loopr` | Binary: daemon, IPC, TUI, CLI dispatch | all of the above |
+| `ipc` | Typed daemon-client wire protocol (messages + framing, no transport) | `domain` |
+| `loopr` | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
 
 Directory structure:
 
@@ -56,6 +57,7 @@ loopr-v5/
 │   ├── decomposer/
 │   ├── agents/
 │   ├── integrator/
+│   ├── ipc/
 │   └── loopr/
 ```
 
@@ -106,14 +108,24 @@ The linker. Deterministic, non-LLM.
 - `fn integrate(bundles: &[Bundle]) -> Result<Tick, IntegrationError>`
 - Same bundles plus same base equals same Tick SHA or same typed conflict error. No LLM imports in this crate.
 
+### ipc
+
+The daemon-client wire protocol. Typed messages, serde framing, no transport.
+
+- `Request`, `Response`, `Event` as tagged enums with `deny_unknown_fields`.
+- Framing choice (length-prefixed vs. newline-delimited) lives here, decided once, documented.
+- Round-trip tests: message to bytes to message, byte stability, forward/backward compat.
+- No `tokio`, no sockets. Transport is the consumer's job.
+
 ### loopr
 
 The driver.
 
 - `main.rs` parses CLI, forks-to-daemon or connects-as-client (pattern from `docs/v2-proven-patterns.md`).
 - Daemon holds TaskStore, runs the reactive loop, threads records through the stage crates.
-- TUI is the visual debugger: every stage's input and output is inspectable.
+- IPC transport (async socket acceptance, connection lifecycle) lives here; the protocol itself is in `ipc`.
 - CLI subcommands mirror stage boundaries: `loopr plan`, `loopr decompose`, `loopr execute`, `loopr integrate`, `loopr experiment`.
+- TUI is a later, separate crate (see "Deferred Enhancements" and "Explicitly Not in First Gate").
 
 ## AutoResearch Support
 
