@@ -35,7 +35,8 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 
 | Crate | Responsibility | Depends On |
 |---|---|---|
-| `domain` | Domain records, FSM const transition tables, TaskStore wrapper | — |
+| `derive` | Procedural macros (`Fsm`, `Record`); derives only, no fn-like or attribute macros | - |
+| `domain` | Domain records, FSM const transition tables, TaskStore wrapper | `derive` |
 | `runtime` | LLM client, tool trait, context builder, worktree lifecycle | `domain` |
 | `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `runtime` |
 | `agents` | Ralph loops for Implementer, Reviewer, Researcher, Director | `domain`, `runtime` |
@@ -49,6 +50,7 @@ loopr-v5/
 ├── Cargo.toml                    workspace manifest
 ├── docs/                         shape docs, design docs (motivated by runs)
 ├── crates/
+│   ├── derive/
 │   ├── domain/
 │   ├── runtime/
 │   ├── decomposer/

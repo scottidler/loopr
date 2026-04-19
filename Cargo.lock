@@ -11,6 +11,10 @@ name = "decomposer"
 version = "0.5.0"
 
 [[package]]
+name = "derive"
+version = "0.5.0"
+
+[[package]]
 name = "domain"
 version = "0.5.0"
 
