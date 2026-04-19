@@ -7,3 +7,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+domain = { path = "../domain" }
+store = { path = "../store" }
+tools = { path = "../tools" }
+telemetry = { path = "../telemetry" }

@@ -15,6 +15,21 @@ name = "loopr"
 path = "src/lib.rs"
 
 [dependencies]
+# Internal workspace crates (path deps; the full dependency graph per docs/vision.md)
+derive = { path = "../derive" }
+telemetry = { path = "../telemetry" }
+store = { path = "../store" }
+domain = { path = "../domain" }
+llm = { path = "../llm" }
+tools = { path = "../tools" }
+worktree = { path = "../worktree" }
+ipc = { path = "../ipc" }
+context = { path = "../context" }
+decomposer = { path = "../decomposer" }
+agents = { path = "../agents" }
+integrator = { path = "../integrator" }
+
+# Workspace-shared external deps
 chrono = { workspace = true }
 clap = { workspace = true }
 eyre = { workspace = true }
