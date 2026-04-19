@@ -258,6 +258,200 @@ Single idempotent command run inside the target (or via `-C`):
 4. Append `.loopr/` to `.git/info/exclude` (not `.gitignore`) so the local loopr state is ignored without polluting the target's committed ignore list.
 5. Verify the target is not a loopr source tree (source-guard check).
 
+## Prompts
+
+Prompts are first-class content. Carrying over v3/v4's unfinished SSOT refactor (shared blocks like `SECTION_AC` live in one file, referenced elsewhere) with the themed directory structure v4 converged on.
+
+### Layout
+
+Prompts are baked into the binary via `include_dir!()` and written to `.loopr/prompts/` on `loopr init`. They live at the target-level (above `run-id`), so the user can edit them between runs and every run-id under that target picks up the edits. Themed directory structure preserved from v4:
+
+```
+.loopr/prompts/
+├── agents/                 director.pmt, implementer.pmt, reviewer.pmt,
+│                           researcher.pmt, tier-gate.pmt, interview.pmt
+├── chat/                   default.pmt, draft.pmt, executing.pmt, ... (TUI-era)
+├── decompose/              grouped by hierarchy level
+│   ├── plan/, spec/, phase/, work/
+│   └── strategies/         strategy selection (.yml)
+├── engine/                 fsm/, strategies/, triggers/
+└── partials/               SSOT chunks referenced by name
+    ├── section-ac.pmt
+    ├── section-context.pmt
+    └── ...
+```
+
+Extension: `.pmt` (matches v4; signals "prompt" over "handlebars template" so we can swap engines later without a mass rename).
+
+### Templating
+
+**`handlebars-rust`** (5.x). Logic-less matches v5's "no magic" thesis. Partials map SSOT cleanly: `{{> section-ac}}` pulls from `partials/section-ac.pmt`. Direct serde integration: pass a `Serialize` struct as context, reference fields with `{{work.id}}`, `{{#each acs}}`. Dynamic Rust content via registered helpers when the logic-less bent bites.
+
+### Versioning and telemetry
+
+Prompts version with code; no prompt-semver scheme. The `telemetry` crate captures the fully-rendered prompt on every LLM-call span and attaches it to the produced `Bundle` record, so a single run is fully reproducible from its own log. Past-run replay across prompt bumps is deferred; AutoResearch picks that up when it earns its keep.
+
+### Golden-file tests
+
+None for now. Accept drift; revisit if a prompt change silently breaks a working behavior.
+
+### Overrides
+
+Target-level only (the user editing `.loopr/prompts/`). No XDG user-level layer.
+
+## Error Model
+
+Typed end-to-end. The v5 thesis — typed seams, not string dispatch — applies to error paths too.
+
+### Tool errors
+
+`Tool::run` returns `Result<Output, ToolError>`. `ToolError` is a **closed** typed enum; all variants typed; some variants may carry a `String` for detail; **no `eyre::Report` escape hatch**. Retry strategies pattern-match on variants; when a case doesn't fit an existing variant, add one.
+
+### Agent failure persistence
+
+When a ralph loop aborts mid-Work, the `Bundle` / `Work` record stores a typed `FailureReason` enum **plus** a companion `error: String` side field for human-readable detail. Variants: `TokenBudget`, `ToolFailure { tool: String }`, `ReviewerRejection`, `AcUnmet`, `Panic`, `Other(String)`. Downstream counters (`bundle_rejections`, `attempt_count`, `session_failure_count` — the doom-loop safety nets from v4) match on these variants structurally.
+
+### Panic posture
+
+Every agent task is wrapped in `catch_unwind`. A panic becomes `FailureReason::Panic` on the Bundle; the daemon stays up. No scenario where a single Work panicking takes the daemon down with it.
+
+### RPC errors in `ipc`
+
+Closed Rust enum on the daemon/client sides, serialized to JSON-RPC-compatible `{code, message}` on the wire. v4's error codes carry over (`-32601`/`-32602`/`-32603` standard + `-32000` through `-32005` loopr-specific). Matching on the Rust side stays typed; the wire stays JSON-RPC-standard.
+
+### User-facing surface
+
+- **One-shot subcommands** (`loopr --version`, `loopr plan "..."` when the call is short): eyre-formatted errors to stderr.
+- **Long-running operations and the daemon itself**: emit `DaemonEvent::Error { run_id, plan_id, work_id, reason, message }` on the event stream. Pre-TUI clients subscribe to the stream and render errors as they arrive; TUI, when it lands, puts them in a panel.
+
+## Models and Budgets
+
+Models are tiered by config, pinned-at-call-time by telemetry, and bounded by per-scope budgets.
+
+### Role-to-model mapping
+
+Top-level `models:` block with named tiers. Roles reference tiers by name **or** accept literal model IDs. Deserializer tries the tier table first, falls back to literal.
+
+```yaml
+models:
+  primary: claude-sonnet-4-7
+  lightweight: claude-haiku-4-5
+  advisor: claude-opus-4-7
+
+agents:
+  implementer: { model: primary }           # tier reference
+  reviewer:    { model: primary }
+  tier-gate:   { model: claude-haiku-4-5 }  # literal, also accepted
+```
+
+Swapping model versions across the whole system = one line in the `models:` block. AutoResearch variant YAMLs override sparsely.
+
+### Pinning discipline
+
+Config holds **floating** tags (`claude-sonnet-4-7`). Every LLM call records the **concrete model ID** the API returned on its telemetry span **and** on the produced `Bundle` record. Config stays readable; logs and records stay auditable. v4 burned on silent model-ID changes mid-run; this pattern removes that failure mode.
+
+### Budgets
+
+Per-Work cap + per-run cap. Per-role caps earned later when a specific role runs away. Enforcement: **soft pause only**. Hitting either cap stops new agent spawns, lets in-flight agents finish, notifies the client with a `DaemonEvent::BudgetExceeded`. Resume requires explicit user action. No hard kill — in-progress Bundles are never discarded.
+
+### Cost audit
+
+Append-only `.loopr/costs.jsonl`, one line per LLM call:
+
+```json
+{"ts": "...", "run_id": "...", "plan_id": "...", "work_id": "...",
+ "role": "implementer", "model": "claude-sonnet-4-7-20260115",
+ "input_tokens": 1234, "output_tokens": 567, "cost_usd": 0.042}
+```
+
+`loopr costs` queries this directly (trivial awk/jq consumer); full trace context lives in the same events on the telemetry stream.
+
+### Config override chain
+
+For all config knobs (not just API keys):
+
+**XDG config file < environment variable < CLI flag.**
+
+Naming transformation:
+- Config keys: `lowercase-separated-by-hyphens` in YAML.
+- Env vars: `ALL_CAPS` with `-` → `_`. **No tool-name prefix** (`log-level` → `LOG_LEVEL`, not `LOOPR_LOG_LEVEL`). User accepts namespace-collision risk; revisit if it bites.
+- CLI flags: same as the YAML key (`--log-level`).
+
+API keys specifically: loopr honors standard SDK env vars (`ANTHROPIC_API_KEY`) in addition to the chain above. Config-file storage is allowed with a `# only safe on non-shared machines` warning in the template; keychain integration is deferred.
+
+## Git Posture
+
+Agents make commits. Rules settled early so habits form correctly.
+
+### Author identity
+
+Your `~/.gitconfig` identity. Agent commits look like yours in `git blame` for now. Revisit if mixing human and agent work becomes hard to disentangle.
+
+### Signing
+
+Inherited from your git config. Since the agent commits under your identity, `user.signingKey` flows through automatically. You already sign; agent commits are signed without loopr doing anything special.
+
+### Trailers
+
+Every agent commit carries structured trailers:
+
+```
+Loopr-Run: 20260418-123653
+Loopr-Plan: <plan-id>
+Loopr-Work: <work-id>
+Loopr-Role: Implementer
+Loopr-Model: claude-sonnet-4-7-20260115
+```
+
+No `Co-Authored-By: Claude` trailer. `git log --grep="Loopr-Work: <id>"` traces a commit back to its full run context.
+
+### Push policy
+
+**Never.** All branches stay local to the target. Ticks land on the integration branch in the target's local git; you review and push manually when ready. Revisit once v5 actually builds something worth pushing.
+
+### Branch naming
+
+All loopr-owned refs share a `loopr/` prefix, distinguishing them from human branches and from v4's bare `agent/wk-*`:
+
+- **Per-Plan integration branches:** `loopr/plan-<plan-id>`
+- **Per-Work agent worktree branches:** `loopr/wk-<work-id>`
+
+## Security
+
+Agents execute code. The Bash tool is the largest blast radius; bwrap contains it.
+
+### Sandbox
+
+**Bubblewrap (`bwrap`) is hard-required.** `loopr init` fails cleanly with install instructions if `bwrap` is absent (`apt install bubblewrap` on Debian/Ubuntu; distro equivalent otherwise). v4's graceful-degrade "warn and run unsandboxed" mode is gone; the discipline slipped when it was opt-out.
+
+### Lane model (three-lane, v4 verbatim)
+
+Each tool classifies into a lane. Lane determines sandbox posture, concurrency, and timeouts:
+
+| Lane | Network | Sandbox | Slots | Default timeout | Max timeout | Use |
+|---|---|---|---|---|---|---|
+| `Local` | blocked | `bwrap --unshare-net` | 10 | 30s | 60s | filesystem tools (read, write, edit, list, tree, glob, grep, find) |
+| `Net` | allowed | none | 5 | 60s | 120s | network tools (fetch, search, shell) |
+| `Heavy` | allowed | none | 1 (serialized) | 600s | 1800s | builds, tests, lints (cargo test, otto ci, npm test, configured project tools) |
+
+Tool-to-lane classification is a straight string match on tool name. Unknown tools default to `Heavy` (conservative: slot-limit + long timeout).
+
+### Denylist
+
+A base hardcoded denylist of obvious footguns fails Bash commands fast before subprocess launch:
+
+- `rm -rf /`, `rm -rf ~`, `rm -rf $HOME`
+- `sudo *`
+- `curl ... | sh`, `wget ... | sh`
+- `git push` (pushes anywhere; push policy is human-only)
+- `gh repo delete`
+
+Target-level extension via `.loopr/config.yml`: targets can add project-specific denies (e.g., forbid an agent from running `deploy.sh`).
+
+### Target overrides
+
+**Tighten-only.** `.loopr/config.yml` can add denies, force stricter lane rules, reduce slot limits. It **cannot** widen permissions or disable the sandbox. Prevents a target from silently downgrading to "off" without a user action they feel.
+
 ## Process Rules
 
 The rules that change the failure mode of v1–v4, not the rules that the architecture already enforces:
@@ -327,6 +521,11 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **Tool registry:** minimal for first gate ({Read, Write, Edit, Bash, Grep, Glob}). Expands toward Claude / Gemini / Codex parity as TUI Chat and agent capability needs earn each addition.
 - **Observability:** `tracing` + `tracing-subscriber` + `tracing-appender`, owned by `crates/telemetry`. Overrides the `rules/rust.md` default of `log` + `env_logger` for v5 specifically.
 - **Target-repo state:** `.taskstore/` (committed truth) + `.loopr/` (transient, excluded via `.git/info/exclude`).
+- **Prompts:** handlebars-rust, `.pmt` files, themed layout under `.loopr/prompts/` populated from `include_dir!()`, partials for SSOT. See "Prompts" section.
+- **Error model:** closed typed `ToolError` enum; typed `FailureReason` + companion `error: String` on records; `catch_unwind` at every agent task; closed RPC enum serializing to JSON-RPC wire codes; dual user-surface (stderr for one-shot, `DaemonEvent::Error` stream for long-running). See "Error Model" section.
+- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: XDG < env var < CLI flag; env vars are bare `ALL_CAPS` (no tool-name prefix). See "Models and Budgets" section.
+- **Git posture:** user's git identity, user's signing config, rich `Loopr-*` trailers (no `Co-Authored-By: Claude`), never push, `loopr/plan-<id>` and `loopr/wk-<id>` branch prefixes. See "Git Posture" section.
+- **Security:** `bwrap` hard-required, three-lane model (`Local`/`Net`/`Heavy`) verbatim from v4, base denylist of footguns + tighten-only target overrides. See "Security" section.
 
 **Open:**
 - None blocking first-gate work at the moment. New questions get added here when they surface.
