@@ -202,6 +202,18 @@ To avoid scope creep into v4.2:
 
 These are earned features, added when a real run fails for lack of them.
 
+## Deferred Enhancements
+
+Ideas evaluated and not first-gate scope, kept here so future sessions don't re-derive them from scratch. Each line is a pointer, not a design - the detailed design doc gets written when the enhancement is motivated by a real run.
+
+1. **Typed event bus inside the daemon.** Pattern #6 from the leaked Claude Code architecture: structured streaming events (`WorkStatusChanged { work_id, from, to }`-style) that subscriber agents react to instead of polling TaskStore. Earn it when polling becomes the bottleneck, or when the TUI needs to watch the same stream agents do.
+
+2. **Supersession over deletion for record revisions.** Cloudflare Agent Memory pattern: when a Plan gets re-decomposed or a Bundle gets superseded by a fix, keep the old record with a forward pointer instead of dropping it. Good audit trail, matches the Ralph-loop retry ethos. Earn it when decomposition re-runs start losing history we want back.
+
+3. **Graph memory for fast record recall.** Cersei's Grafeo hits indexed lookups in ~98μs vs. Claude Code's 7.5s LLM-based relevance rank. Worth understanding the mechanism before committing to TaskStore's query story. Earn it when the TUI or agents need queries like "which Work modified this file in the last month" without burning an LLM call.
+
+4. **Cersei as a reference to read, not a dependency to adopt.** [pacifio/cersei](https://github.com/pacifio/cersei) is a Rust SDK for coding agents (tool execution, LLM streaming, sub-agent orchestration, graph memory, MCP). Two specific patterns worth studying before we implement corresponding v5 layers: their tool derive macro ergonomics (directly informs our `derive` crate's future `#[derive(Tool)]`) and Grafeo's graph memory mechanism (item 3). Do NOT adopt as a `runtime` dependency - v5's whole point is owning the typed seams, which means owning the code that sits at them; adopting Cersei at our most central crate would repeat v4's failure pattern of fighting a foreign abstraction.
+
 ## Open Questions
 
 Kept sparse on purpose. Only questions that block first-gate work:
