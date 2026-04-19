@@ -37,13 +37,18 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 |---|---|---|
 | `derive` | Procedural macros (`Fsm`, `Record`); derives only, no fn-like or attribute macros | - |
 | `telemetry` | Tracing subscriber init, run-id allocation, span conventions, log-query helpers | - |
-| `domain` | Domain records, FSM const transition tables, TaskStore wrapper | `derive` |
-| `runtime` | LLM client, tool trait, context builder, worktree lifecycle | `domain`, `telemetry` |
-| `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `runtime` |
-| `agents` | Ralph loops for Implementer, Reviewer, Researcher, Director | `domain`, `runtime` |
-| `integrator` | Accepted Bundles to Tick (deterministic, non-LLM) | `domain`, `runtime` |
+| `store` | Typed wrapper around `scottidler/taskstore`; JSONL + SQLite cache + git-hooks install; anti-corruption layer | `derive`, `taskstore` |
+| `domain` | Records + FSM const transition tables only; no I/O, no persistence | `derive`, `taskstore` (for the `Record` trait; see note below) |
+| `llm` | `LlmClient` trait + Anthropic backend with SSE streaming; model tier resolution. **No prompt assembly** — that's `agents`. | `domain`, `telemetry` |
+| `tools` | `Tool` trait + built-in tool impls (`Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`) + lane classification (`Local`/`Net`/`Heavy`) + bwrap sandbox integration | `domain`, `telemetry` |
+| `worktree` | Sibling git worktree lifecycle + registry + daemon-startup crash recovery | `domain`, `telemetry` |
 | `ipc` | Typed daemon-client wire protocol (messages + framing, no transport) | `domain` |
+| `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `store`, `llm` |
+| `agents` | Ralph loops per role; **`ContextBuilder` lives here** (token-budgeted prompt assembly) | `domain`, `store`, `llm`, `tools`, `worktree` |
+| `integrator` | Accepted Bundles to Tick (deterministic, non-LLM); the Cargo graph mechanically forbids an `llm` dep | `domain`, `store`, `worktree` |
 | `loopr` | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
+
+**Note on `taskstore` in `domain`:** `domain`'s use of `taskstore::Record` is a foundational dep, same category as `serde`. The current `taskstore` (v0.2.3) bundles the trait with `Store` (which pulls in `rusqlite`, `fs2`, `tracing-subscriber`, `chrono`). An upstream PR to `scottidler/taskstore` to extract `taskstore-traits` (just `Record`, `IndexValue`, `Filter` — all pure `serde` + `std`) is pending; after it lands, `domain` depends on `taskstore-traits` only and `store` depends on full `taskstore`. Not a v5 blocker; scheduled before Stage 5.
 
 Directory structure:
 
@@ -54,12 +59,15 @@ loopr-v5/
 ├── crates/
 │   ├── derive/
 │   ├── telemetry/
+│   ├── store/
 │   ├── domain/
-│   ├── runtime/
+│   ├── llm/
+│   ├── tools/
+│   ├── worktree/
+│   ├── ipc/
 │   ├── decomposer/
 │   ├── agents/
 │   ├── integrator/
-│   ├── ipc/
 │   └── loopr/
 ```
 
@@ -77,22 +85,54 @@ Observability foundation. First-class, its own crate.
 - Log-query back-end for `loopr logs` CLI subcommands.
 - No `tokio`, no LLM, no network deps.
 
+### store
+
+The persistence anti-corruption layer. Wraps `scottidler/taskstore` with type-safe accessors.
+
+- `Store::open(target_path) -> Result<Store>` — opens `.taskstore/` at the target, initializes schema, installs git hooks, syncs if stale.
+- Typed collection accessors: `store.plans()`, `store.specs()`, `store.phases()`, `store.works()`, `store.bundles()`, `store.ticks()`. Each returns a handle that enforces the record type on read/write.
+- `StoreError` — typed errors; `rusqlite` / `fs2` / `taskstore`-internal types do NOT leak out.
+- No LLM, no subprocess execution, no network.
+
 ### domain
 
-The symbol layer. Pure data and invariants.
+The pure symbol layer. Records and invariants only.
 
-- `Plan`, `Spec`, `Phase`, `Work`, `Bundle`, `Tick` — record types with `Record` impls for persistence.
+- `Plan`, `Spec`, `Phase`, `Work`, `Bundle`, `Tick` — record structs with `#[derive(Fsm, Record)]`.
 - `FsmTransition<T>` — const transition tables with role guards. A transition that isn't in the table is a compile-time mismatch, not a runtime YAML lookup.
-- `Store` — the TaskStore wrapper; JSONL is truth, SQLite is cache (invariant carried over from v3/v4).
+- `Status`, `Role`, `Tier`, and typed IDs (`PlanId`, `WorkId`, `RunId`, ...).
+- No I/O. No `rusqlite`, no `fs2`, no `tokio`. Compile-time enforced by omission of those deps from `domain/Cargo.toml`.
 
-### runtime
+### llm
 
-The services layer. Effectful but generic over roles and stages.
+The LLM API-bounds crate. Agnostic of what we say; owns how we say it on the wire.
 
-- `LlmClient` trait — swappable LLM backends. Default impl is Anthropic Messages API with SSE streaming.
-- `Tool` trait with typed `Input`/`Output` — one builtin per file under `tools/`. Tool schemas validated via serde at registration, not at every call.
-- `ContextBuilder` — token-budgeted prompt assembly.
-- `Worktree` — git worktree handle with guaranteed cleanup.
+- `LlmClient` trait — swappable LLM backends. Default impl is Anthropic Messages API with SSE streaming, retry on transient errors.
+- Model tier resolution: given a tier name (`primary`, `lightweight`, `advisor`) or a literal model ID, returns the concrete model to call. Records the concrete returned model ID on every span.
+- Cost accounting: emits `tracing` spans with `input_tokens`, `output_tokens`, `cost_usd`, and the concrete model ID.
+- **Does NOT do prompt assembly.** `llm` takes ready-to-send `Message` vectors. `agents::ContextBuilder` is the only place that assembles them (because it's the only crate that sees `domain` + `store` + `llm` + `tools` simultaneously).
+
+### tools
+
+The subprocess and capability layer. Tools are agent-callable capabilities with typed input/output and lane-based isolation.
+
+- `Tool` trait with typed `Input` / `Output` / `Error`.
+- Built-in tool impls (first-gate set: `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`); one per file under `src/tools/`.
+- Lane classification (`fn classify(tool_name) -> Lane`): `Local` (no-network, `bwrap --unshare-net`, 10 slots, 30s/60s), `Net` (network allowed, no sandbox, 5 slots, 60s/120s), `Heavy` (network allowed, 1-slot serial, 600s/1800s — for builds/tests/lints).
+- `LaneRouter`: enforces per-lane concurrency via tokio semaphores.
+- bwrap sandbox integration + the `security.sandbox: required | preferred | off` posture logic.
+- Bash denylist (base + target extensions).
+- Tool schemas are exposed for `agents::ContextBuilder` to render into prompts.
+
+### worktree
+
+Sibling git worktree lifecycle and crash-safe registry.
+
+- `Worktree::create(target, work_id) -> Result<Worktree>` — provisions `<target-parent>/<target-name>-work-<work-id>/` on branch `loopr/wk-<work-id>`.
+- `Drop` cleans up on the happy path.
+- `.loopr/worktree-registry.jsonl` — append on create, mark terminal on cleanup.
+- `reconcile(target) -> Result<()>` — daemon-startup routine: reads registry, checks each entry against git state, removes orphaned worktrees, deletes orphaned `loopr/wk-*` branches. Required because `Drop` does not execute on SIGTERM / SIGKILL / power loss.
+- Internal git invocations via `std::process::Command` directly; `worktree` does NOT go through the `tools` crate (infrastructure, not an LLM-facing tool).
 
 ### decomposer
 
@@ -104,30 +144,37 @@ The middle-end. Plan production and decomposition.
 
 ### agents
 
-The backend execute stages. Ralph loops per role.
+The backend execute stages. Ralph loops per role. Also the home of `ContextBuilder`.
 
 - `fn run_implementer(work: &Work, ctx: &Context) -> Result<Bundle>`
 - `fn run_reviewer(bundle: &Bundle, ctx: &Context) -> Result<Verdict>`
 - `fn run_researcher(query: &Query, ctx: &Context) -> Result<Finding>`
 - `fn run_director(event: &Event, ctx: &mut Context) -> Result<Action>`
+- `ContextBuilder` — token-budgeted prompt assembly. Renders `domain` records, persisted artifacts from `store`, and `tools` schemas into the `Message` vector handed to `llm::LlmClient`. Uses handlebars-rust with partials for SSOT; templates loaded from `.loopr/prompts/` with fallback chain target → XDG → baked-in.
+- Ralph loops are generic over their dependencies: `<L: LlmClient, T: ToolExecutor, W: WorktreeManager, S: Store>`. No `dyn` dispatch. Tests inject fakes per trait.
 
 Retry / escalation / advisor strategies are `impl RetryStrategy` / `impl EscalationStrategy` selected by config, not composed from YAML triggers.
+
+`agents` is the widest-scope crate in v5 (depends on five others). The testability strategy — DI via generics + per-trait fakes — is the antidote to the Architect's Round 2 warning about this crate becoming the new junk drawer.
 
 ### integrator
 
 The linker. Deterministic, non-LLM.
 
 - `fn integrate(bundles: &[Bundle]) -> Result<Tick, IntegrationError>`
-- Same bundles plus same base equals same Tick SHA or same typed conflict error. No LLM imports in this crate.
+- Same bundles plus same base equals same Tick SHA or same typed conflict error.
+- **Mechanically cannot import `llm`.** `integrator/Cargo.toml` has no `llm` dep, enforced at the Cargo graph level. The Round 1 Architect flagged the previous `runtime` monolith as a contradiction because `integrator` transitively pulled in `LlmClient`; this split makes the no-LLM rule enforceable by the compiler, not just by review.
 
 ### ipc
 
 The daemon-client wire protocol. Typed messages, serde framing, no transport.
 
-- `Request`, `Response`, `Event` as tagged enums with `deny_unknown_fields`.
-- Framing choice (length-prefixed vs. newline-delimited) lives here, decided once, documented.
+- `DaemonRequest { id: u64, method: String, params: Value }`, `DaemonResponse { id: u64, result: Option<Value>, error: Option<RpcError> }`, `DaemonEvent { event: String, data: Value }` — JSON-RPC-style envelope, inherited verbatim from v3/v4.
+- `IpcMessage` enum discriminates between `Response` and `Event` on the client side.
+- `RpcError { code: i32, message: String }` with named constants: `CODE_METHOD_NOT_FOUND = -32601`, `CODE_INVALID_PARAMS = -32602`, `CODE_INTERNAL = -32603` (JSON-RPC standard) plus loopr-specific `-32000` through `-32005` (transition-rejected, not-found, stale-bundle, validation-required, pool-exhausted, precondition-failed).
+- **Framing: newline-delimited JSON** (one JSON object per line) using `tokio_util::codec::LinesCodec` with a **1 MiB max line**. Chosen to match v3/v4; the 1 MiB cap exists because cargo/clippy/test validation output can be substantial.
 - Round-trip tests: message to bytes to message, byte stability, forward/backward compat.
-- No `tokio`, no sockets. Transport is the consumer's job.
+- No `tokio`, no sockets. Transport is the consumer's job. (Note: the framing *choice* — `LinesCodec` — references `tokio_util`; the actual async read/write lives in `loopr` where it consumes `UnixStream`.)
 
 ### loopr
 
@@ -146,11 +193,14 @@ The v4 motivation was correct; the mechanism was wrong. v5 separates parameters 
 Every crate defines its own config struct in `config.rs`, composed at the top level:
 
 ```
-domain/src/config.rs        Config (top-level, composed of sub-configs)
-decomposer/src/config.rs  DecomposerConfig
-agents/src/config.rs      AgentsConfig { implementer, reviewer, researcher, director }
-integrator/src/config.rs  IntegratorConfig
-runtime/src/config.rs     RuntimeConfig
+loopr/src/config.rs         Config (top-level, composed of sub-configs)
+store/src/config.rs         StoreConfig
+llm/src/config.rs           LlmConfig (incl. models block with tiers)
+tools/src/config.rs         ToolsConfig (incl. sandbox knob, denylist)
+worktree/src/config.rs      WorktreeConfig
+decomposer/src/config.rs    DecomposerConfig
+agents/src/config.rs        AgentsConfig { implementer, reviewer, researcher, director }
+integrator/src/config.rs    IntegratorConfig
 ```
 
 Loaded from one YAML file at startup. Serde validates, with `deny_unknown_fields` catching typos as startup errors with line numbers.
@@ -238,6 +288,24 @@ Loopr operates on **other** repos, not on itself. When pointed at a target, it m
 - **`.loopr/`** holds transient state (logs, socket, pid, per-repo config). Ephemeral, machine-local, never committed. Carries `.git/info/exclude` rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`.
 - **Sibling worktrees** (v3/v4 pattern) live outside the target repo entirely, typically at `<target-parent>/<target-name>-work-<work-id>/`. Git's ignore rules inside the worktree don't accidentally exclude files the agent writes. Only a registry of active worktrees lives inside `.loopr/`.
 
+### Worktree crash recovery
+
+`Drop` guards clean up worktrees on the happy path but do not execute on SIGTERM, SIGKILL, or power loss. `worktree::reconcile(target)` runs at daemon startup and handles ungraceful shutdown:
+
+1. Read `.loopr/worktree-registry.jsonl`.
+2. For each entry, inspect git state: does the `loopr/wk-<work-id>` branch exist? Is the worktree path present on disk? Is the associated `Work` record in a terminal state in the TaskStore?
+3. For entries whose `Work` is terminal (done or abandoned) but whose worktree still exists: remove the worktree (`git worktree remove`) and delete the branch (`git branch -D loopr/wk-<id>`). Mark the registry entry terminal.
+4. For entries whose `Work` is still non-terminal but was in flight when the daemon died: mark the `Work` record as `FailureReason::CrashInterrupted`, decide per retry strategy whether to retry with a fresh worktree or abandon.
+5. Orphaned `loopr/wk-*` branches not in the registry (manual cleanup failures, registry corruption) are reported but not deleted automatically; human resolves.
+
+Without this reconciliation, orphaned worktrees accumulate on disk and orphaned branches clutter the target's git history. Required by v5's reactive-daemon model; absent in v3/v4.
+
+### Merge-driver limitation (inherited from taskstore)
+
+`taskstore` ships a custom git merge driver that resolves `.taskstore/*.jsonl` conflicts by picking the record with the latest `updated_at` timestamp. `loopr init` installs the driver in `.git/config` on the local machine. **The driver only fires where installed.** Cloud-UI merges (GitHub web merge, GitLab, Gerrit) run on their servers without the driver; git's default textual merge on JSONL produces corrupt output when two branches edited the same record.
+
+For v5 this risk is bounded — loopr's push policy is "never" (see "Git Posture"), so loopr-authored commits stay local. The risk surfaces when a human pushes `.taskstore/*.jsonl` across machines where loopr also runs. Mitigation is cultural: never resolve `.taskstore/*` merges via cloud UIs; always pull locally and merge on a machine where `loopr init` has run. Documented in full at `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`.
+
 ### CLI targeting: `-C <path>` (git-style)
 
 - `loopr` uses **CWD** as the effective target by default.
@@ -295,9 +363,17 @@ Prompts version with code; no prompt-semver scheme. The `telemetry` crate captur
 
 None for now. Accept drift; revisit if a prompt change silently breaks a working behavior.
 
-### Overrides
+### Overrides — three-layer resolution
 
-Target-level only (the user editing `.loopr/prompts/`). No XDG user-level layer.
+Resolution order (first hit wins):
+
+1. `.loopr/prompts/<path>` (per-target override)
+2. `~/.config/loopr/prompts/<path>` (user-level baseline)
+3. baked-in via `include_dir!()` (fallback)
+
+Rationale: user-level baseline satisfies DRY across multiple target repos (e.g., "always prefer `eyre` over `unwrap`" lives at the user layer once, not duplicated per target). Per-target override stays supreme when a specific repo has unique needs (e.g., `rust-version` wants a different tone than `python-scraper`). Baked-in always exists as the guaranteed fallback.
+
+`loopr init` seeds `.loopr/prompts/` only with files the user explicitly chose to override (via a future `loopr prompts edit <path>` command) or leaves it empty. The three-layer fallback resolves paths at runtime.
 
 ## Error Model
 
@@ -368,9 +444,11 @@ Append-only `.loopr/costs.jsonl`, one line per LLM call:
 
 ### Config override chain
 
-For all config knobs (not just API keys):
+For all config knobs (not just API keys), resolved in this order (later wins):
 
-**XDG config file < environment variable < CLI flag.**
+**baked-in defaults < XDG user config (`~/.config/loopr/loopr.yml`) < target config (`.loopr/config.yml`) < environment variable < CLI flag.**
+
+The target config sits above the XDG user config: repo-specific overrides trump user-wide defaults. Env and CLI still trump everything for one-shot invocations.
 
 Naming transformation:
 - Config keys: `lowercase-separated-by-hyphens` in YAML.
@@ -420,9 +498,19 @@ All loopr-owned refs share a `loopr/` prefix, distinguishing them from human bra
 
 Agents execute code. The Bash tool is the largest blast radius; bwrap contains it.
 
-### Sandbox
+### Sandbox posture: the `security.sandbox` knob
 
-**Bubblewrap (`bwrap`) is hard-required.** `loopr init` fails cleanly with install instructions if `bwrap` is absent (`apt install bubblewrap` on Debian/Ubuntu; distro equivalent otherwise). v4's graceful-degrade "warn and run unsandboxed" mode is gone; the discipline slipped when it was opt-out.
+A three-value config knob controls how strict sandbox enforcement is. Default is `required` so the secure path is the path of least resistance; `preferred` and `off` exist for environments where `bwrap` is genuinely unavailable:
+
+| Value | Behavior | When to use |
+|---|---|---|
+| `required` (default) | `loopr init` fails cleanly if `bwrap` is absent, with install instructions. Every `Local`-lane tool runs under `bwrap --unshare-net`. | Dev laptops, desktops, any long-running environment. Matches the discipline that v4 intended but lost. |
+| `preferred` | If `bwrap` is present, use it (same behavior as `required`). If absent, emit a prominent `tracing::warn!` at startup and every Local-lane tool invocation; run the tool unsandboxed. Startup proceeds. | Corporate / shared hosts where installing bubblewrap is impossible. Known-unsafe but explicit. |
+| `off` | Skip sandbox entirely, even if `bwrap` is present. No warnings. | CI (GitHub Actions, GitLab CI, Docker-based runners) where the container itself is the isolation boundary. AutoResearch harness running in CI sets this. |
+
+Rationale for the knob (replacing v4's silent-fall-back "preferred"-style default): the user makes the compromise explicitly per target, at init time. `loopr init` prints the chosen posture and the detected `bwrap` status so there's no ambiguity about what will run. v4's failure mode was that the unsandboxed path was reached silently via warnings; here, reaching `preferred` or `off` requires a deliberate config edit.
+
+Install: `apt install bubblewrap` on Debian/Ubuntu; distro equivalent otherwise. macOS has no direct equivalent; macOS users default to `preferred` with a documented note in `docs/vision.md` that macOS runs unsandboxed.
 
 ### Lane model (three-lane, v4 verbatim)
 
@@ -521,11 +609,17 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **Tool registry:** minimal for first gate ({Read, Write, Edit, Bash, Grep, Glob}). Expands toward Claude / Gemini / Codex parity as TUI Chat and agent capability needs earn each addition.
 - **Observability:** `tracing` + `tracing-subscriber` + `tracing-appender`, owned by `crates/telemetry`. Overrides the `rules/rust.md` default of `log` + `env_logger` for v5 specifically.
 - **Target-repo state:** `.taskstore/` (committed truth) + `.loopr/` (transient, excluded via `.git/info/exclude`).
-- **Prompts:** handlebars-rust, `.pmt` files, themed layout under `.loopr/prompts/` populated from `include_dir!()`, partials for SSOT. See "Prompts" section.
+- **Prompts:** handlebars-rust, `.pmt` files, themed layout under `.loopr/prompts/` populated from `include_dir!()`, partials for SSOT, **three-layer override resolution** (target → XDG user → baked-in). See "Prompts" section.
 - **Error model:** closed typed `ToolError` enum; typed `FailureReason` + companion `error: String` on records; `catch_unwind` at every agent task; closed RPC enum serializing to JSON-RPC wire codes; dual user-surface (stderr for one-shot, `DaemonEvent::Error` stream for long-running). See "Error Model" section.
-- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: XDG < env var < CLI flag; env vars are bare `ALL_CAPS` (no tool-name prefix). See "Models and Budgets" section.
+- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: baked-in < XDG < `.loopr/config.yml` < env var < CLI flag; env vars are bare `ALL_CAPS` (no tool-name prefix). See "Models and Budgets" section.
 - **Git posture:** user's git identity, user's signing config, rich `Loopr-*` trailers (no `Co-Authored-By: Claude`), never push, `loopr/plan-<id>` and `loopr/wk-<id>` branch prefixes. See "Git Posture" section.
-- **Security:** `bwrap` hard-required, three-lane model (`Local`/`Net`/`Heavy`) verbatim from v4, base denylist of footguns + tighten-only target overrides. See "Security" section.
+- **Security:** three-lane model (`Local`/`Net`/`Heavy`) verbatim from v4; base denylist of footguns + tighten-only target overrides; **sandbox posture as a `security.sandbox: required | preferred | off` knob**, defaulting to `required`, explicit downgrade required to run unsandboxed. See "Security" section.
+- **Crate restructure (Architect rounds 1+2):** `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree`. `domain` stripped to records+FSM only (no I/O). `integrator` dep graph enforces no-LLM rule at Cargo level. Workspace is 12 crates. See "Crate Layout".
+- **`ContextBuilder` placement:** lives in `agents`, not `llm`. Reason: `llm` cannot depend on `tools` without recoupling network/subprocess concerns, so it cannot render tool schemas; `agents` is the first crate that sees `domain` + `store` + `llm` + `tools` + `worktree` simultaneously. See "agents" ABI section.
+- **IPC framing:** NDJSON via `tokio_util::codec::LinesCodec` with 1 MiB max line; JSON-RPC-style envelope (`id`/`method`/`params`, `id`/`result`/`error`, unsolicited `event`/`data`); error codes `-32601`/`-32602`/`-32603` standard + `-32000`–`-32005` loopr-specific. All verbatim from v3/v4. See "ipc" ABI section.
+- **Worktree crash recovery:** daemon startup routine `worktree::reconcile(target)` reads registry, reconciles against git state, cleans orphans, marks crashed Works as `FailureReason::CrashInterrupted`. See "Worktree crash recovery" subsection.
+- **Taskstore merge-driver limitation:** inherited from `taskstore`; documented here, full write-up in `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`. Mitigation is cultural (never merge `.taskstore/*` via cloud UIs).
 
 **Open:**
-- None blocking first-gate work at the moment. New questions get added here when they surface.
+- **Upstream `taskstore-traits` split** — pending PR to `scottidler/taskstore` to extract the `Record` trait (and `IndexValue`, `Filter`) into a lean crate so `domain` can depend on just the traits instead of the full `taskstore` (which pulls `rusqlite`, `fs2`, etc.). Not a first-gate blocker; scheduled before Stage 5 when `Record` impls start being written.
+- New questions get added here when they surface.
