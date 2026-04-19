@@ -36,8 +36,9 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 | Crate | Responsibility | Depends On |
 |---|---|---|
 | `derive` | Procedural macros (`Fsm`, `Record`); derives only, no fn-like or attribute macros | - |
+| `telemetry` | Tracing subscriber init, run-id allocation, span conventions, log-query helpers | - |
 | `domain` | Domain records, FSM const transition tables, TaskStore wrapper | `derive` |
-| `runtime` | LLM client, tool trait, context builder, worktree lifecycle | `domain` |
+| `runtime` | LLM client, tool trait, context builder, worktree lifecycle | `domain`, `telemetry` |
 | `decomposer` | Goal to Plan to Spec to Phase to Work DAG | `domain`, `runtime` |
 | `agents` | Ralph loops for Implementer, Reviewer, Researcher, Director | `domain`, `runtime` |
 | `integrator` | Accepted Bundles to Tick (deterministic, non-LLM) | `domain`, `runtime` |
@@ -52,6 +53,7 @@ loopr-v5/
 ├── docs/                         shape docs, design docs (motivated by runs)
 ├── crates/
 │   ├── derive/
+│   ├── telemetry/
 │   ├── domain/
 │   ├── runtime/
 │   ├── decomposer/
@@ -64,6 +66,16 @@ loopr-v5/
 ## ABI Contracts
 
 Each crate exports a typed public surface. Crossing crate boundaries is a Rust function call, not a JSON dispatch. `deny_unknown_fields` on every serde type is the norm.
+
+### telemetry
+
+Observability foundation. First-class, its own crate.
+
+- `fn init(target_dir: &Path, run_id: RunId) -> Result<Guard>` — composes the `tracing-subscriber` layers (JSON file, pretty file, console mirror at INFO+) and returns a drop-guard that flushes on shutdown.
+- `RunId` — newtype wrapping a `YYYYMMDD-HHMMSS[-N]` string; allocated atomically by the daemon.
+- Span naming conventions: `stage.<name>`, `ralph.<role>`, `tool.<name>`. `run_id` / `plan_id` / `work_id` carried as span fields.
+- Log-query back-end for `loopr logs` CLI subcommands.
+- No `tokio`, no LLM, no network deps.
 
 ### domain
 

@@ -1,0 +1,27 @@
+otto:
+  api: 1
+  tasks: [ci]
+
+tasks:
+  lint:
+    help: "Whitespace lint"
+    bash: |
+      whitespace -r
+
+  check:
+    help: "Compile, clippy, format for this crate"
+    bash: |
+      cargo check -p telemetry --all-targets
+      cargo clippy -p telemetry --all-targets -- -D warnings
+      cargo fmt -p telemetry -- --check
+
+  test:
+    help: "Run tests for this crate"
+    bash: |
+      cargo test -p telemetry
+
+  ci:
+    help: "Scoped CI (lint + check + test) for telemetry"
+    before: [lint, check, test]
+    bash: |
+      echo "telemetry CI passed"

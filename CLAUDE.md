@@ -21,8 +21,9 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 | Crate | Role | Depends on |
 |---|---|---|
 | [derive](crates/derive/CLAUDE.md) | Proc macros (Fsm, Record); derives only, no fn-like or attribute macros | - |
+| [telemetry](crates/telemetry/CLAUDE.md) | Tracing subscriber init, run-id, span conventions, log-query helpers | - |
 | [domain](crates/domain/CLAUDE.md) | Records, FSM tables, TaskStore wrapper | derive |
-| [runtime](crates/runtime/CLAUDE.md) | LLM, tools, context, worktrees | domain |
+| [runtime](crates/runtime/CLAUDE.md) | LLM, tools, context, worktrees | domain, telemetry |
 | [decomposer](crates/decomposer/CLAUDE.md) | Goal to Work DAG | domain, runtime |
 | [agents](crates/agents/CLAUDE.md) | Ralph loops per role | domain, runtime |
 | [integrator](crates/integrator/CLAUDE.md) | Merge-validate-publish (non-LLM) | domain, runtime |
