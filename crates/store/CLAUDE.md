@@ -14,7 +14,7 @@ Type-safe wrapper around `scottidler/taskstore`. Owns the JSONL-is-truth + SQLit
 ## Out of scope
 
 - Record type definitions (`Plan`, `Spec`, `Phase`, `Work`, `Bundle`, `Tick`) and their FSM tables — those live in `domain`
-- The `Record` trait itself — that lives in `taskstore` (or `taskstore-traits` after the upstream split)
+- The `Record` trait itself — that lives in `taskstore-traits` (and is re-exported by `taskstore`)
 - Orchestration decisions about what to store when — that's each stage crate's business
 - Any LLM, tool, or worktree concern
 
@@ -26,11 +26,11 @@ The Round 1 Architect critique — "domain should not depend on an I/O-bound per
 
 ## Dependencies
 
-`taskstore` (git dep), `derive`, and workspace-shared crates (`eyre`, `tracing`, `serde`). Added via `cargo add` at the time the first code needs them, not speculatively.
+`taskstore` (git dep, inherited via `workspace = true` from the root `[workspace.dependencies]` block), `derive`, and workspace-shared crates (`eyre`, `tracing`, `serde`). Added via `cargo add` at the time the first code needs them, not speculatively.
 
-### Note on `taskstore-traits` split
+### Note on the `taskstore-traits` split
 
-`domain` only needs `taskstore::Record` (the trait). Depending on the full `taskstore` crate transitively pulls in `rusqlite` (bundled), `fs2`, `tracing-subscriber`, `chrono`. An upstream PR to `scottidler/taskstore` should extract `taskstore-traits` (just `Record`, `IndexValue`, `Filter`) from `taskstore/src/record.rs` — trait content uses only `serde` + `std`. After that split, `domain` depends on `taskstore-traits`; `store` depends on full `taskstore`. See `docs/vision.md` note.
+`scottidler/taskstore` is a two-crate workspace: `taskstore-traits` (trait-only, pure `serde` + `std`) and `taskstore` (Store engine + `rusqlite`/`fs2`/`chrono`). `domain` depends on traits-only; `store` depends on the full crate because it needs `Store`. Both deps MUST resolve to the same commit — they're declared centrally in the root `Cargo.toml` for exactly that reason. See `../../docs/taskstore-integration.md` for the split-brain failure mode that motivates the centralized declaration.
 
 ## See also
 

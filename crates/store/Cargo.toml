@@ -8,3 +8,4 @@ license.workspace = true
 
 [dependencies]
 derive = { path = "../derive" }
+taskstore = { workspace = true }

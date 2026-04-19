@@ -38,7 +38,7 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 | `derive` | Procedural macros (`Fsm`, `Record`); derives only, no fn-like or attribute macros | - |
 | `telemetry` | Tracing subscriber init, run-id allocation, span conventions, log-query helpers | - |
 | `store` | Typed wrapper around `scottidler/taskstore`; JSONL + SQLite cache + git-hooks install; anti-corruption layer | `derive`, `taskstore` |
-| `domain` | Records + FSM const transition tables only; no I/O, no persistence | `derive`, `taskstore` (for the `Record` trait; see note below) |
+| `domain` | Records + FSM const transition tables only; no I/O, no persistence | `derive`, `taskstore-traits` (trait-only; no I/O transitively) |
 | `llm` | `LlmClient` trait + Anthropic backend with SSE streaming; model tier resolution. **No prompt assembly** — that's `agents`. | `domain`, `telemetry` |
 | `tools` | `Tool` trait + built-in tool impls (`Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`) + lane classification (`Local`/`Net`/`Heavy`) + bwrap sandbox integration | `domain`, `telemetry` |
 | `worktree` | Sibling git worktree lifecycle + registry + daemon-startup crash recovery | `domain`, `telemetry` |
@@ -49,7 +49,7 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 | `integrator` | Accepted Bundles to Tick (deterministic, non-LLM); the Cargo graph mechanically forbids an `llm` dep | `domain`, `store`, `worktree` |
 | `loopr` | Binary: daemon loop + CLI dispatch + IPC transport + (later) TUI launcher | all of the above |
 
-**Note on `taskstore` in `domain`:** `domain`'s use of `taskstore::Record` is a foundational dep, same category as `serde`. The current `taskstore` (v0.2.3) bundles the trait with `Store` — which pulls in `rusqlite`, `fs2`, `tracing-subscriber`, `chrono`. Until the upstream `taskstore-traits` split lands, `domain` **transitively compiles** those I/O-heavy crates, so the "pure symbol layer" claim is aspirational at the source-code level (we don't `use` them) but not yet enforced at the transitive-dep level. An upstream PR to `scottidler/taskstore` to extract `taskstore-traits` (just `Record`, `IndexValue`, `Filter` — pure `serde` + `std`) is **in progress** alongside v5 Stage 1; requirements documented at `~/repos/scottidler/taskstore/docs/`. After the split lands, `domain` depends on `taskstore-traits` only and the purity claim becomes transitive-dep-enforced.
+**Note on `taskstore` in `domain`:** `domain` uses `taskstore_traits::Record` — the trait-only crate extracted from `scottidler/taskstore` (workspace release `v0.3.0`, traits crate at `taskstore-traits v0.1.0`). Trait content is pure `serde` + `std`, so `domain`'s transitive compile graph stays clean (no `rusqlite` / `fs2` / `chrono`). Persistence-heavy deps are confined to `store`, which depends on the full `taskstore` crate. The two git deps are declared in the root `[workspace.dependencies]` block and inherited via `workspace = true`; this structurally prevents the split-brain failure mode where two members pick different commits and Rust instantiates `taskstore-traits` twice with incompatible `Record` type identities. Integration details in [taskstore-integration.md](taskstore-integration.md).
 
 Directory structure:
 
@@ -634,8 +634,8 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **IPC framing:** NDJSON via `tokio_util::codec::LinesCodec` with 1 MiB max line; JSON-RPC-style envelope (`id`/`method`/`params`, `id`/`result`/`error`, unsolicited `event`/`data`); error codes `-32601`/`-32602`/`-32603` standard + `-32000`–`-32005` loopr-specific. All verbatim from v3/v4. See "ipc" ABI section.
 - **Worktree crash recovery:** daemon startup routine `worktree::reconcile(target)` reads registry, reconciles against git state, cleans orphans, marks crashed Works as `FailureReason::CrashInterrupted`. See "Worktree crash recovery" subsection.
 - **Taskstore merge-driver limitation:** inherited from `taskstore`; documented here, full write-up in `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`. Mitigation is cultural (never merge `.taskstore/*` via cloud UIs).
+- **Upstream `taskstore-traits` split** — shipped. `scottidler/taskstore` is now a two-crate workspace (release `v0.3.0`): `taskstore-traits v0.1.0` holds `Record`/`IndexValue`/`Filter`/`FilterOp` with only `serde` as a dep; full `taskstore` re-exports them and layers on the Store engine. loopr-v5 wires both as git deps in `[workspace.dependencies]`; `domain` pulls trait-only, `store` pulls the full crate. `domain`'s transitive-dep purity is now structurally enforced.
+- **Inter-crate Cargo-level dep wiring** — was pending at Round 3 review (`[dependencies]` blocks were empty); landed in the follow-up commit that declares `path = "../..."` deps for every internal edge of the 13-crate graph. No longer open after that commit.
 
 **Open:**
-- **Upstream `taskstore-traits` split** — in progress. Requirements documented at `~/repos/scottidler/taskstore/docs/`. The extraction separates `Record`/`IndexValue`/`Filter` (pure serde+std) into a lean `taskstore-traits` crate; full `taskstore` depends on traits + keeps `rusqlite`/`fs2`/etc. for the Store layer. Until the split lands and `domain` is rewired to depend on `taskstore-traits` only, `domain`'s purity is source-level (no `use rusqlite`) but not transitive-dep-level.
-- **Inter-crate Cargo-level dep wiring** — was pending at Round 3 review (`[dependencies]` blocks were empty); landed in the follow-up commit that declares `path = "../..."` deps for every internal edge of the 13-crate graph. No longer open after that commit.
 - New questions get added here when they surface.

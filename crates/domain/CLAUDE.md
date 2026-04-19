@@ -6,7 +6,7 @@ Records + FSM transition tables. The pure symbol layer of v5. No I/O, no persist
 
 - Record types: `Plan`, `Spec`, `Phase`, `Work`, `Bundle`, `Tick`, and their FSMs
 - Const transition tables with role guards via `#[derive(Fsm)]` from `crates/derive/`
-- `Record` trait impls (the trait itself lives in `taskstore` / `taskstore-traits` — see dep note below)
+- `Record` trait impls (the trait itself lives in `taskstore-traits`)
 - Shared enums: `Status`, `Role`, `Tier`
 - Typed IDs: `PlanId`, `WorkId`, `RunId`, `BundleId`, etc.
 - Serde types with `deny_unknown_fields`
@@ -25,13 +25,11 @@ Records + FSM transition tables. The pure symbol layer of v5. No I/O, no persist
 
 Source code in this crate must not `use` anything from `tokio`, `reqwest`, `ureq`, `rusqlite`, or any I/O-bound dependency. The Round 1 Architect critique — "a pure symbol layer should not host SQLite caches and JSONL files" — is what drove extracting `Store` into its own crate; don't re-introduce the coupling.
 
-**Transitive-dep caveat (pending `taskstore-traits` split):** because `domain` currently depends on full `taskstore` (v0.2.3) for the `Record` trait, Cargo transitively compiles `rusqlite`, `fs2`, `tracing-subscriber`, `chrono` as part of `domain`'s build graph. The purity claim is source-level only until the upstream split lands. See the Dependency section below and vision.md's "Note on `taskstore` in `domain`".
+## Dependency on `taskstore-traits`
 
-## Dependency on `taskstore`
+`domain` depends on `taskstore-traits` only (not the full `taskstore` crate). The traits crate holds `Record`, `IndexValue`, `Filter`, `FilterOp` — pure `serde` + `std`, no I/O. This is a foundational dep, same category as `serde::Serialize`: it's what makes domain records persistable by downstream layers.
 
-`domain` uses `taskstore::Record` (the trait) to make records persistable. This is a foundational dep, same category as `serde::Serialize`. The trait itself lives in `taskstore/src/record.rs` and uses only `serde` + `std`.
-
-**Known pending work:** the current `taskstore` crate (v0.2.3) bundles the `Record` trait alongside `Store` (which pulls in `rusqlite`, `fs2`, `tracing-subscriber`, `chrono`). Depending on the full `taskstore` transitively imports all of that into `domain`, which weakens the "pure symbol layer" claim. An upstream PR to `scottidler/taskstore` should extract `taskstore-traits` (just `Record`, `IndexValue`, `Filter`) so `domain` can depend on the traits crate only. Tracked in `docs/vision.md` as a pending upstream task; not a v5 blocker but scheduled before Stage 5 (when Records start being written).
+The dep is declared in the root `[workspace.dependencies]` block as a git source (`branch = "main"`) and inherited here via `workspace = true`. Never declare a second independent source for `taskstore-traits` in this crate — the root declaration is load-bearing for the same-commit guarantee (see `../../docs/taskstore-integration.md` for the split-brain failure mode).
 
 ## See also
 
