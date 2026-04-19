@@ -172,6 +172,80 @@ loopr experiment --config variants/v47.yml --target rust-version
 
 Novel strategies mean writing a new `impl RetryStrategy` in Rust. Novel topologies mean human-designed then exposed for AR to tune. AR is for parameter sweeping, not structural invention — and that's what AR is actually good at.
 
+## Observability
+
+v5 overrides the `rules/rust.md` default of `log` + `env_logger` and uses **`tracing` + `tracing-subscriber` + `tracing-appender`**. Reason: a multi-crate daemon with long-lived async stages needs span-level context that survives across tasks and crate boundaries. The `log` crate gives flat events; `tracing` gives the span hierarchy that makes "follow one Work from Plan through Tick" tractable. Observability is a first-class concern in v5, owned by its own crate (`telemetry`).
+
+### Three-layer log strategy
+
+1. **Universal structured log** at `.loopr/runs/<run-id>/events.log`, JSON format. Every event carries `crate`, `span` hierarchy, `run_id` / `plan_id` / `work_id` when in scope, `level`, `ts`, and arbitrary kv. One file per run, grep- and jq-friendly, full history.
+2. **Pretty per-run log** at `.loopr/runs/<run-id>/loopr.log`, same events formatted for humans. Mirrored to console at INFO+ during interactive runs.
+3. **Per-Work fanout files** at `.loopr/runs/<run-id>/work/<work-id>.log`. A subscriber watches the `work_id` span and splits a file per Work. Deferred until Stage 7; infrastructure is present in Stage 2.
+
+### Run identifier
+
+`run_id = YYYYMMDD-HHMMSS` in local time; e.g., `20260418-123653`. If two runs start in the same second, the daemon appends `-N` where N increments from 2: `20260418-123653-2`. The first run gets the clean name; disambiguator is rare and only when necessary.
+
+### Span conventions
+
+- `stage.<name>`: a pipeline stage (`stage.decompose`, `stage.implement`, `stage.review`, `stage.integrate`).
+- `ralph.<role>`: one iteration of a ralph loop (`ralph.implementer`, `ralph.reviewer`).
+- `tool.<name>`: one tool invocation (`tool.bash`, `tool.edit`).
+- Every span carries `run_id`; spans within a Plan carry `plan_id`; spans within a Work carry `work_id`.
+
+## Target Repo Layout
+
+Loopr operates on **other** repos, not on itself. When pointed at a target, it manages two sibling directories at the target's root and leaves the rest of the target untouched.
+
+```
+<target>/
+├── .taskstore/              committed (JSONL is truth, merge driver resolves conflicts)
+│   ├── plans.jsonl
+│   ├── specs.jsonl
+│   ├── works.jsonl
+│   ├── bundles.jsonl
+│   ├── ticks.jsonl
+│   ├── .version             schema version
+│   └── .gitignore           taskstore-managed: excludes its .db cache
+├── .loopr/                  NOT committed (listed in .git/info/exclude)
+│   ├── runs/
+│   │   └── 20260418-123653/
+│   │       ├── events.log   structured JSON, per-run
+│   │       └── loopr.log    pretty format, per-run
+│   ├── config.yml           per-repo loopr overrides (local only)
+│   ├── socket               Unix domain socket for daemon<->client IPC
+│   ├── daemon.pid           PID lockfile; one daemon per target
+│   └── worktree-registry.jsonl   list of active agent worktrees
+├── .gitattributes           committed; sets taskstore merge driver on *.jsonl
+└── (sibling worktrees outside the target, not inside .loopr/)
+```
+
+### Rationale for the dual-directory split
+
+- **`.taskstore/`** holds the truth (Plan/Spec/Phase/Work/Bundle/Tick records as JSONL). Committed so collaborators share state; taskstore's git merge driver resolves concurrent edits by timestamp.
+- **`.loopr/`** holds transient state (logs, socket, pid, per-repo config). Ephemeral, machine-local, never committed. Carries `.git/info/exclude` rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`.
+- **Sibling worktrees** (v3/v4 pattern) live outside the target repo entirely, typically at `<target-parent>/<target-name>-work-<work-id>/`. Git's ignore rules inside the worktree don't accidentally exclude files the agent writes. Only a registry of active worktrees lives inside `.loopr/`.
+
+### CLI targeting: `-C <path>` (git-style)
+
+- `loopr` uses **CWD** as the effective target by default.
+- `loopr -C <path> <subcommand>` changes the effective target before any other logic runs, matching `git -C`.
+- `LOOPR_TARGET` environment variable is a fallback when neither CLI nor CWD is definitive.
+
+### Source-guard
+
+`loopr`, before operating on an effective target, walks up from the target directory to `/` looking for the sentinel file `.loopr-source-guard`. If found, it refuses with a clear error. The sentinel is committed at the root of this loopr-v5 repo. Protects against v3/v4's recurring confusion where an agent treated the loopr source tree as the target.
+
+### `loopr init` on a new target
+
+Single idempotent command run inside the target (or via `-C`):
+
+1. Create `.loopr/` and seed it with an empty `config.yml`.
+2. Open the TaskStore via `Store::open(".")`, which creates `.taskstore/` on first call.
+3. Install taskstore's git hooks and merge driver (`taskstore install-hooks`).
+4. Append `.loopr/` to `.git/info/exclude` (not `.gitignore`) so the local loopr state is ignored without polluting the target's committed ignore list.
+5. Verify the target is not a loopr source tree (source-guard check).
+
 ## Process Rules
 
 The rules that change the failure mode of v1–v4, not the rules that the architecture already enforces:
@@ -186,21 +260,22 @@ The rules that change the failure mode of v1–v4, not the rules that the archit
 v5 is "real" when the following can be run end-to-end against a real git repo:
 
 ```
-loopr daemon start
-loopr plan "Add a --version flag that prints CARGO_PKG_VERSION to stdout"
+loopr -C ~/repos/scottidler/rust-version daemon start
+loopr -C ~/repos/scottidler/rust-version plan \
+  "Add a --version flag that prints CARGO_PKG_VERSION to stdout"
 ```
 
 …and the daemon:
 
 1. Decomposes the goal into one or more Work items with deps and AC.
-2. Spawns an Implementer in a worktree, produces a Bundle.
+2. Spawns an Implementer in a sibling worktree, produces a Bundle.
 3. Spawns a Reviewer, gets a Verdict.
 4. If approved, Integrator merges into the integration branch, runs validation, publishes a Tick.
 5. Tick merges to main.
 
 No YAML composition engine involved. No Director unless escalation triggers. No Researcher unless tool discovery needed. The trivial path works before anything else is added.
 
-This is the same scenario that succeeded once on v4 (`rust-version`, v0.1.121). v5's gate is: reproduce that, against the same target, with the 6-crate pipeline and typed seams.
+This is the same scenario that succeeded once on v4 (`rust-version`, v0.1.121). v5's gate: reproduce that, on a fresh `rust-version` target (created with the `scaffold-rust-repo` skill when Stage 9 begins), through the typed multi-crate pipeline.
 
 ## Explicitly Not in First Gate
 
@@ -226,10 +301,20 @@ Ideas evaluated and not first-gate scope, kept here so future sessions don't re-
 
 4. **Cersei as a reference to read, not a dependency to adopt.** [pacifio/cersei](https://github.com/pacifio/cersei) is a Rust SDK for coding agents (tool execution, LLM streaming, sub-agent orchestration, graph memory, MCP). Two specific patterns worth studying before we implement corresponding v5 layers: their tool derive macro ergonomics (directly informs our `derive` crate's future `#[derive(Tool)]`) and Grafeo's graph memory mechanism (item 3). Do NOT adopt as a `runtime` dependency - v5's whole point is owning the typed seams, which means owning the code that sits at them; adopting Cersei at our most central crate would repeat v4's failure pattern of fighting a foreign abstraction.
 
+5. **LLM response cache at `~/.local/share/loopr/llm-cache/`.** Keyed by prompt hash. Cross-repo dedup (same prompt on multiple targets hits the cache once). Optional, disable-able. XDG path, not per-target. Earn it when repeated LLM calls on similar prompts across targets become a cost problem.
+
+6. **Global runs-index at `~/.local/share/loopr/runs-index.jsonl`.** Tiny append-only index: `{run_id, target_path, started_at, goal, outcome}` per run. Enables `loopr runs list --all` cross-target queries ("which repo was that demo I did last week"). Cheap, powerful, XDG path. Earn it when "I can't remember which repo" becomes a question worth answering in code.
+
 ## Open Questions
 
-Kept sparse on purpose. Only questions that block first-gate work:
+Kept sparse on purpose. Only questions that block first-gate work. Decisions made during the scaffolding phase are recorded as closed; leave them listed so future sessions see the context.
 
-- Do we carry over TaskStore from scottidler/taskstore as a git dep, or vendor a minimal in-crate implementation until the Record trait surface stabilizes?
-- Do we keep `#[derive(Fsm)]` from `loopr-derive` (the proc macro), or write the const transition tables by hand in v5?
-- Does `runtime` carry over the v4 tool registry wholesale, or is it scoped down to the smallest builtin set needed for first gate?
+**Closed:**
+- **TaskStore:** git dep on `scottidler/taskstore`. (No vendoring.)
+- **Fsm derive:** port `#[derive(Fsm)]` from v4's `loopr-derive`. Rehomed in `crates/derive` under v5's single-word naming convention. New `#[derive(Record)]` joins it; derives only, no function-like or attribute macros.
+- **Tool registry:** minimal for first gate ({Read, Write, Edit, Bash, Grep, Glob}). Expands toward Claude / Gemini / Codex parity as TUI Chat and agent capability needs earn each addition.
+- **Observability:** `tracing` + `tracing-subscriber` + `tracing-appender`, owned by `crates/telemetry`. Overrides the `rules/rust.md` default of `log` + `env_logger` for v5 specifically.
+- **Target-repo state:** `.taskstore/` (committed truth) + `.loopr/` (transient, excluded via `.git/info/exclude`).
+
+**Open:**
+- None blocking first-gate work at the moment. New questions get added here when they surface.
