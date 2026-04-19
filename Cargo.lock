@@ -598,6 +598,7 @@ dependencies = [
  "serde_yaml",
  "store",
  "telemetry",
+ "thiserror",
  "tools",
  "tracing",
  "tracing-appender",

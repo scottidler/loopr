@@ -1,1 +1,3 @@
-//! Driver: daemon process, IPC protocol, TUI client, CLI dispatch. Orchestrates the pipeline.
+pub mod error;
+
+pub use error::LooprError;
