@@ -12,7 +12,7 @@
 
 **Status:** done at `v0.5.0`, orphan branch `v5`.
 
-**What shipped:** 8-crate workspace (`derive`, `domain`, `runtime`, `decomposer`, `agents`, `integrator`, `ipc`, `loopr`), README + CLAUDE.md front door, `.loopr-source-guard`, deferred-enhancements section in `v5-shape.md`.
+**What shipped:** 8-crate workspace (`derive`, `domain`, `runtime`, `decomposer`, `agents`, `integrator`, `ipc`, `loopr`), README + CLAUDE.md front door, `.loopr-source-guard`, deferred-enhancements section in `vision.md`.
 
 ---
 
@@ -153,7 +153,7 @@ The daemon decomposes, implements, reviews, integrates, and produces a Tick that
 
 ## Beyond First Gate (earned features)
 
-Not scheduled. Earn each when a real run fails for lack of it. Cross-reference `docs/v5-shape.md` "Deferred Enhancements" and "Explicitly Not in First Gate."
+Not scheduled. Earn each when a real run fails for lack of it. Cross-reference `docs/vision.md` "Deferred Enhancements" and "Explicitly Not in First Gate."
 
 - **TUI** as its own crate. Ratatui app + widgets + event loop. Subscribes to the telemetry stream.
 - **Per-Work fanout subscriber.** Split `events.log` by `work_id` span into `.loopr/runs/<run-id>/work/<work-id>.log`.
@@ -172,6 +172,6 @@ Not scheduled. Earn each when a real run fails for lack of it. Cross-reference `
 
 ## See also
 
-- [v5-shape.md](v5-shape.md): architectural shape, ABI contracts, process rules.
+- [vision.md](vision.md): architectural shape, ABI contracts, process rules.
 - [CLAUDE.md](../CLAUDE.md): project-wide rules and canonical crate map.
 - `crates/<name>/docs/design/`: where each stage's design docs land when written.

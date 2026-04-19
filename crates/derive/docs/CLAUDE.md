@@ -19,5 +19,5 @@ One design doc at a time, motivated by a failing test or real code pain. No desi
 ## See also
 
 - [../CLAUDE.md](../CLAUDE.md): scope rules for `derive`
-- [../../../docs/v5-shape.md](../../../docs/v5-shape.md): architectural shape
+- [../../../docs/vision.md](../../../docs/vision.md): architectural shape
 - [../../../CLAUDE.md](../../../CLAUDE.md): project-wide rules and discipline

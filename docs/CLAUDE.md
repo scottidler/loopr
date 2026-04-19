@@ -4,7 +4,7 @@ Top-level documentation: vision, cross-cutting design, reference material.
 
 ## What lives here
 
-- **Vision:** [v5-shape.md](v5-shape.md) is the canonical architectural shape. Read-heavy, edit-light.
+- **Vision:** [vision.md](vision.md) is the canonical architectural shape. Read-heavy, edit-light.
 - **Cross-cutting design docs:** anything touching two or more crates. Convention: `design/YYYY-MM-DD-<name>.md`.
 - **Research, reference, post-mortems:** long-form notes that aren't crate-scoped.
 
@@ -21,5 +21,5 @@ Before putting a design doc here, ask: does this genuinely touch two or more cra
 ## See also
 
 - [../CLAUDE.md](../CLAUDE.md): project-wide rules and crate map
-- [v5-shape.md](v5-shape.md): architectural shape
+- [vision.md](vision.md): architectural shape
 - `../crates/<name>/docs/CLAUDE.md`: rules for a specific crate's docs

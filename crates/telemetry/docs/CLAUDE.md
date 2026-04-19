@@ -19,6 +19,6 @@ One design doc at a time, motivated by a failing test or real code pain. No desi
 ## See also
 
 - [../CLAUDE.md](../CLAUDE.md): scope rules for `telemetry`
-- [../../../docs/v5-shape.md](../../../docs/v5-shape.md): architectural shape, Observability section
+- [../../../docs/vision.md](../../../docs/vision.md): architectural shape, Observability section
 - [../../../docs/roadmap.md](../../../docs/roadmap.md): Stage 2 lists the first docs this crate needs
 - [../../../CLAUDE.md](../../../CLAUDE.md): project-wide rules and discipline
