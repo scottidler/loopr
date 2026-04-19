@@ -10,3 +10,14 @@ repository = "ssh://git@github.com/scottidler/loopr"
 license = "MIT"
 
 [workspace.dependencies]
+# Versions were discovered via `cargo add -p <crate> <dep>` on a consumer crate,
+# then promoted here. Do not hand-edit versions; re-run `cargo add` when bumping.
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.6.1", features = ["derive"] }
+eyre = "0.6.12"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+serde_yaml = "0.9.34"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
