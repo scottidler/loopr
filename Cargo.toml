@@ -34,8 +34,12 @@ tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
-# taskstore workspace (scottidler/taskstore): traits-only crate for pure-symbol
-# layers (domain), full engine for persistence layers (store). Both entries MUST
-# point at the same branch/rev - split-brain creates incompatible Record traits.
+# taskstore workspace (scottidler/taskstore): three-crate workspace as of v0.4.1.
+# - taskstore-traits: trait-only crate for pure-symbol layers (domain)
+# - taskstore: blocking engine (taskstore-merge git driver, non-async consumers)
+# - taskstore-async: async-native Store (store crate, daemon IPC handlers)
+# All three entries MUST point at the same branch/rev - split-brain creates
+# incompatible Record traits across crate boundaries.
 taskstore-traits = { git = "ssh://git@github.com/scottidler/taskstore", branch = "main" }
 taskstore        = { git = "ssh://git@github.com/scottidler/taskstore", branch = "main" }
+taskstore-async  = { git = "ssh://git@github.com/scottidler/taskstore", branch = "main" }

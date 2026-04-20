@@ -1259,7 +1259,9 @@ name = "store"
 version = "0.5.11"
 dependencies = [
  "derive",
- "taskstore",
+ "domain",
+ "taskstore-async",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1314,8 +1316,8 @@ checksum = "591ef38edfb78ca4771ee32cf494cb8771944bee237a9b91fc9c1424ac4b777b"
 
 [[package]]
 name = "taskstore"
-version = "0.3.0"
-source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#64036faf730f704fe2cbcc42865d9bba0fe47543"
+version = "0.4.1"
+source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#86f20c27c42172b92494cc7c30090394ff90d3c3"
 dependencies = [
  "chrono",
  "clap",
@@ -1336,9 +1338,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "taskstore-async"
+version = "0.1.1"
+source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#86f20c27c42172b92494cc7c30090394ff90d3c3"
+dependencies = [
+ "eyre",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "taskstore",
+ "taskstore-traits",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "taskstore-traits"
 version = "0.1.0"
-source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#64036faf730f704fe2cbcc42865d9bba0fe47543"
+source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#86f20c27c42172b92494cc7c30090394ff90d3c3"
 dependencies = [
  "serde",
 ]

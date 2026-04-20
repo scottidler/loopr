@@ -8,4 +8,6 @@ license.workspace = true
 
 [dependencies]
 derive = { path = "../derive" }
-taskstore = { workspace = true }
+domain = { path = "../domain" }
+taskstore-async = { workspace = true }
+thiserror = "2.0.18"
