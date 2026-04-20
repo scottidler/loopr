@@ -34,8 +34,20 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         Command::Daemon {
             cmd: DaemonCmd::Start { foreground: false },
         } => {
-            // Background daemon start: parent forks and exits. Never inits
-            // client-side telemetry.
+            // Idempotency (AC 11): if a live, version-matching daemon is
+            // already running, this is a no-op. Otherwise clean stale
+            // sentinel state and fork fresh.
+            let pid_file = daemon::sentinel::pid_path(&effective);
+            if let Some(pid) = daemon::sentinel::read_pid(&pid_file)?
+                && daemon::sentinel::is_daemon_alive(pid)
+                && daemon::sentinel::version_matches(
+                    &daemon::sentinel::version_path(&effective),
+                    daemon::DAEMON_VERSION,
+                )?
+            {
+                println!("daemon already running at pid {pid}");
+                return Ok(());
+            }
             daemon::ensure_daemon(&effective)?;
             println!("daemon started");
             return Ok(());
@@ -43,6 +55,17 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         Command::Daemon {
             cmd: DaemonCmd::Start { foreground: true },
         } => {
+            // AC 14: a background daemon already running must block a
+            // foreground start with a clear error; we don't want the
+            // LockLost path's internal message.
+            let pid_file = daemon::sentinel::pid_path(&effective);
+            if let Some(pid) = daemon::sentinel::read_pid(&pid_file)?
+                && daemon::sentinel::is_daemon_alive(pid)
+            {
+                return Err(LooprError::DaemonStartup(format!(
+                    "daemon already running at pid {pid}; use `loopr daemon stop` first"
+                )));
+            }
             // Foreground daemon: this process IS the daemon. No fork. Run
             // daemon_main directly so its own telemetry init is the only
             // subscriber installation on this process.
