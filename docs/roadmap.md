@@ -79,7 +79,7 @@
 **Design docs:**
 - [`docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md) — `#[derive(Fsm)]` revived from v3's `loopr-derive` (v4 had deleted it for a YAML runtime that v5 also rejects). Located at the repo-root `docs/design/` rather than the crate's own `docs/design/` because it touches two crates (`derive` emits the macro; `domain` hosts the runtime support types `Transition`, `FsmError<S>`, `FsmErrorKind`, `TargetKind`, `Role`). Shipped in v0.5.8 (v0.5.9 followed with a validator tightening from Architect audit). Status: Implemented.
 - [`crates/derive/docs/design/2026-04-20-record-macro.md`](../crates/derive/docs/design/2026-04-20-record-macro.md) — `#[derive(Record)]` that implements taskstore's `Record` trait (`id()`, `updated_at()`, `collection_name()`, `indexed_fields()`). Shipped in v0.5.10. Status: Implemented.
-- `crates/domain/docs/design/records.md` — `Plan` record type, fields, FSM states, indexed fields.
+- [`crates/domain/docs/design/2026-04-20-records.md`](../crates/domain/docs/design/2026-04-20-records.md) — `Plan` record type (five fields), `PlanStatus` FSM (six states, v4's hierarchy.yml verbatim), `PlanId` typed newtype, `id_type!` macro_rules for stamping out future record IDs. Shipped in v0.5.11. Status: Implemented.
 - `crates/domain/docs/design/store.md` — thin wrapper over taskstore's `Store`, type-safe collection accessors.
 
 **Crates touched:** `derive`, `domain`, `loopr`.
