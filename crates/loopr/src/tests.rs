@@ -199,31 +199,27 @@ fn run_list_returns_stage_5() {
     ));
 }
 
-// ---------- resolve_log_filter ----------
+// ---------- resolve_log_directive ----------
 //
 // Env-variable precedence (flag > env > default) is covered by the smoke
 // tests that run the compiled binary in a subprocess - that's the only way
 // to isolate env state when cargo runs unit tests in parallel. The unit
-// tests here cover only directive parsing, which is pure.
+// tests here cover only directive assembly, which is pure.
 
 #[test]
-fn resolve_log_filter_bare_level_parses() {
-    let f = resolve_log_filter(Some("debug")).unwrap();
-    assert!(f.to_string().contains("debug"), "directive: {}", f);
+fn resolve_log_directive_flag_passes_through() {
+    let d = resolve_log_directive(Some("debug"));
+    assert_eq!(d, "debug");
 }
 
 #[test]
-fn resolve_log_filter_per_target_directive_parses() {
-    let f = resolve_log_filter(Some("loopr=debug,tools=error")).unwrap();
-    let s = f.to_string();
-    assert!(s.contains("loopr"), "contains loopr: {s}");
-    assert!(s.contains("tools"), "contains tools: {s}");
+fn resolve_log_directive_per_target_passes_through() {
+    let d = resolve_log_directive(Some("loopr=debug,tools=error"));
+    assert_eq!(d, "loopr=debug,tools=error");
 }
 
 #[test]
-fn resolve_log_filter_off_parses() {
-    // EnvFilter is permissive enough that constructing a genuinely invalid
-    // directive is awkward; cover the edge case that "off" is accepted.
-    let f = resolve_log_filter(Some("off")).unwrap();
-    assert_eq!(f.to_string(), "off");
+fn resolve_log_directive_off_passes_through() {
+    let d = resolve_log_directive(Some("off"));
+    assert_eq!(d, "off");
 }

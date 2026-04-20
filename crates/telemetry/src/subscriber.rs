@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use thiserror::Error;
-use tracing_subscriber::filter::{FilterExt, LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -105,8 +104,27 @@ impl Drop for Guard {
 /// fork trap (Stage 4's daemon child would inherit dead channels from a
 /// non-blocking appender initialized pre-fork).
 ///
-/// Filter is `EnvFilter` to preserve `tracing`'s per-target directive surface.
-pub fn init(target: &Path, run_id: &RunId, filter: EnvFilter) -> Result<Guard, TelemetryInitError> {
+/// Directive is an `EnvFilter`-parseable string (e.g. `"info"`,
+/// `"loopr=debug,tools=error"`, `"off"`). `init` validates it once at the top
+/// before touching the filesystem — an invalid directive surfaces as
+/// `InvalidFilter` without leaving a ghost run directory behind. Each layer
+/// then parses its own fresh `EnvFilter` from the same string (cheaper than
+/// and no less correct than `EnvFilter::Clone`, which does not exist).
+pub fn init(target: &Path, run_id: &RunId, directive: &str) -> Result<Guard, TelemetryInitError> {
+    // Validate before any I/O: a bad directive must not leave a stale run dir.
+    EnvFilter::try_new(directive).map_err(|e| TelemetryInitError::InvalidFilter {
+        directive: directive.to_string(),
+        reason: e.to_string(),
+    })?;
+    let console_directive = floor_at_info(directive);
+    // Validate the floored directive too — it is a straight transformation of
+    // `directive` and should always re-parse, but a belt-and-suspenders check
+    // keeps any future `floor_at_info` regression from shipping silently.
+    EnvFilter::try_new(&console_directive).map_err(|e| TelemetryInitError::InvalidFilter {
+        directive: console_directive.clone(),
+        reason: e.to_string(),
+    })?;
+
     let run_dir = target.join(".loopr").join("runs").join(run_id.as_str());
     std::fs::create_dir_all(&run_dir).map_err(|source| TelemetryInitError::DirCreate {
         path: run_dir.clone(),
@@ -125,7 +143,8 @@ pub fn init(target: &Path, run_id: &RunId, filter: EnvFilter) -> Result<Guard, T
     let fanout_cache = fanout.cache_handle();
 
     compose(
-        filter,
+        directive,
+        &console_directive,
         json_writer.clone(),
         pretty_writer.clone(),
         fanout,
@@ -153,32 +172,44 @@ fn open_append(path: &Path) -> Result<File, TelemetryInitError> {
 /// Build and install the subscriber. Separated from `init` so tests can
 /// exercise subscriber composition with local `SharedWriter` instances via
 /// `with_default`, avoiding the global once-per-process constraint.
+///
+/// `directive` is the user's raw filter (used by json, pretty, fanout).
+/// `console_directive` is the same directive with an INFO floor applied — all
+/// four layers therefore carry the same `EnvFilter` type, which keeps a
+/// future runtime-reload (e.g. Stage 4's hypothetical `loopr logs tail
+/// --level debug`) straightforward.
 fn compose(
-    filter: EnvFilter,
+    directive: &str,
+    console_directive: &str,
     json_writer: SharedWriter,
     pretty_writer: SharedWriter,
     fanout: WorkFanoutLayer,
     stderr_is_tty: bool,
 ) -> Result<(), TelemetryInitError> {
+    // `directive` has been validated by `init` (or constructed directly in
+    // tests); every `expect` below is an invariant, not a runtime gamble.
     let json_layer = fmt::layer()
         .json()
         .with_writer(json_writer)
-        .with_filter(filter_clone(&filter));
+        .with_filter(parse_validated(directive));
 
     let pretty_layer = fmt::layer()
         .with_writer(pretty_writer)
         .with_ansi(false)
-        .with_filter(filter_clone(&filter));
+        .with_filter(parse_validated(directive));
 
-    // Console filter: user directive AND an INFO floor. The AND means an
-    // event reaches stderr only if BOTH filters admit it, so:
+    // Console filter: `directive` with every trace/debug clause floored to
+    // info. An event reaches stderr only if the floored filter admits it, so:
     //   --log-level warn   -> stderr shows warn+ (user filter wins)
     //   --log-level debug  -> stderr shows info+ (floor prevents spam)
     //   --log-level off    -> stderr shows nothing
     // Files (events.log + loopr.log) still honor the full user directive.
     let console_layer = if stderr_is_tty {
-        let console_filter = filter_clone(&filter).and(LevelFilter::INFO);
-        Some(fmt::layer().with_writer(io::stderr).with_filter(console_filter))
+        Some(
+            fmt::layer()
+                .with_writer(io::stderr)
+                .with_filter(parse_validated(console_directive)),
+        )
     } else {
         None
     };
@@ -187,16 +218,55 @@ fn compose(
         .with(json_layer)
         .with(pretty_layer)
         .with(console_layer)
-        .with(fanout.with_filter(filter))
+        .with(fanout.with_filter(parse_validated(directive)))
         .try_init()
         .map_err(|_| TelemetryInitError::AlreadyInitialized)?;
     Ok(())
 }
 
-/// `EnvFilter` doesn't impl `Clone`. Re-parse its string representation.
-/// The serialized form is lossless for filter directives we care about.
-fn filter_clone(f: &EnvFilter) -> EnvFilter {
-    EnvFilter::try_new(f.to_string()).unwrap_or_else(|_| EnvFilter::new("info"))
+/// Parse a directive that has already been validated by the caller. Any
+/// failure here is a bug (the caller's invariant was wrong), not a user
+/// input problem, so panicking is correct — and better than silently
+/// falling back to `info` and masking the regression.
+fn parse_validated(directive: &str) -> EnvFilter {
+    EnvFilter::try_new(directive).expect("directive validated by caller")
+}
+
+/// Apply an INFO floor to every clause of an EnvFilter directive. Clauses
+/// whose level is more permissive than INFO (`trace`, `debug`) are clamped
+/// to `info`; `info`, `warn`, `error`, and `off` pass through unchanged.
+///
+/// Works on the common subset of EnvFilter syntax — bare levels, `target=level`,
+/// and comma-separated combinations. Exotic forms (span/field filters inside
+/// `[...]`) are left untouched; those directives are rare and tend to mean
+/// "I know what I'm doing" anyway.
+pub(crate) fn floor_at_info(directive: &str) -> String {
+    directive
+        .split(',')
+        .map(|clause| {
+            let trimmed = clause.trim();
+            if trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+            // Field / span / regex filters contain `[` or `{`; keep them
+            // verbatim rather than mangling structure we don't parse.
+            if trimmed.contains('[') || trimmed.contains('{') {
+                return trimmed.to_string();
+            }
+            match trimmed.rsplit_once('=') {
+                Some((target, level)) => format!("{}={}", target, floor_level(level.trim())),
+                None => floor_level(trimmed).to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn floor_level(level: &str) -> &str {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "trace" | "debug" => "info",
+        _ => level,
+    }
 }
 
 #[derive(Error, Debug)]
@@ -207,4 +277,6 @@ pub enum TelemetryInitError {
     DirCreate { path: PathBuf, source: io::Error },
     #[error("failed to open log file {path}: {source}", path = .path.display())]
     FileOpen { path: PathBuf, source: io::Error },
+    #[error("invalid log filter `{directive}`: {reason}")]
+    InvalidFilter { directive: String, reason: String },
 }

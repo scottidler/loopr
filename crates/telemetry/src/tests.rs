@@ -12,6 +12,78 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 use super::*;
 
+// ---------- floor_at_info ----------
+
+#[test]
+fn floor_bare_info_unchanged() {
+    assert_eq!(crate::subscriber::floor_at_info("info"), "info");
+}
+
+#[test]
+fn floor_bare_debug_raised_to_info() {
+    assert_eq!(crate::subscriber::floor_at_info("debug"), "info");
+}
+
+#[test]
+fn floor_bare_trace_raised_to_info() {
+    assert_eq!(crate::subscriber::floor_at_info("trace"), "info");
+}
+
+#[test]
+fn floor_bare_warn_unchanged() {
+    assert_eq!(crate::subscriber::floor_at_info("warn"), "warn");
+}
+
+#[test]
+fn floor_bare_error_unchanged() {
+    assert_eq!(crate::subscriber::floor_at_info("error"), "error");
+}
+
+#[test]
+fn floor_bare_off_unchanged() {
+    assert_eq!(crate::subscriber::floor_at_info("off"), "off");
+}
+
+#[test]
+fn floor_per_target_clamps_each_clause() {
+    assert_eq!(
+        crate::subscriber::floor_at_info("loopr=debug,tools=error"),
+        "loopr=info,tools=error"
+    );
+    assert_eq!(
+        crate::subscriber::floor_at_info("loopr::agents=trace,worktree=warn"),
+        "loopr::agents=info,worktree=warn"
+    );
+}
+
+#[test]
+fn floor_mixed_global_and_per_target() {
+    assert_eq!(crate::subscriber::floor_at_info("warn,loopr=trace"), "warn,loopr=info");
+    assert_eq!(
+        crate::subscriber::floor_at_info("debug,loopr=error"),
+        "info,loopr=error"
+    );
+}
+
+#[test]
+fn floor_result_parses_as_envfilter() {
+    // Regression guard: every output must be a valid EnvFilter directive.
+    for input in [
+        "info",
+        "debug",
+        "trace",
+        "warn",
+        "error",
+        "off",
+        "loopr=debug,tools=error",
+        "warn,loopr::agents=trace",
+    ] {
+        let floored = crate::subscriber::floor_at_info(input);
+        EnvFilter::try_new(&floored)
+            .unwrap_or_else(|e| panic!("floor_at_info({input:?}) -> {floored:?} did not parse: {e}"));
+    }
+}
+
 // ---------- RunId ----------
 
 #[test]

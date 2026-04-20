@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use tracing_subscriber::EnvFilter;
-
 pub mod cli;
 pub mod error;
 pub mod guard;
@@ -31,13 +29,14 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     // Variables are named (not `_guard` / `_enter`) because
     // `rules/rust.md` forbids the leading-underscore crutch for used locals;
     // these locals ARE used - their Drop timing is the whole point.
-    let filter = resolve_log_filter(cli.log_level.as_deref())?;
+    let directive = resolve_log_directive(cli.log_level.as_deref());
     let runs_dir = effective.join(".loopr").join("runs");
     std::fs::create_dir_all(&runs_dir)
         .map_err(|e| LooprError::TelemetryInit(format!("create {}: {e}", runs_dir.display())))?;
     let run_id =
         telemetry::RunId::allocate(&runs_dir).map_err(|e| LooprError::TelemetryInit(format!("run id alloc: {e}")))?;
-    let guard = telemetry::init(&effective, &run_id, filter).map_err(|e| LooprError::TelemetryInit(e.to_string()))?;
+    let guard =
+        telemetry::init(&effective, &run_id, &directive).map_err(|e| LooprError::TelemetryInit(e.to_string()))?;
     let invocation = tracing::info_span!(
         "loopr.invocation",
         run_id = %run_id,
@@ -60,14 +59,16 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     dispatch(&effective, &run_id, cli.command)
 }
 
-/// Resolve the `EnvFilter` directive from CLI flag > env var > default (`info`).
-fn resolve_log_filter(flag: Option<&str>) -> Result<EnvFilter, LooprError> {
-    let directive = flag
-        .map(str::to_owned)
+/// Resolve the log-filter directive string from CLI flag > env var > default
+/// (`info`). The string is NOT parsed here; `telemetry::init` validates once
+/// at the top (before any I/O) and then lets each layer do its own fresh
+/// `EnvFilter::try_new`. This sidesteps the old `filter_clone` hack that
+/// round-tripped an already-parsed `EnvFilter` back through its `Display`
+/// form, since `EnvFilter` does not impl `Clone`.
+fn resolve_log_directive(flag: Option<&str>) -> String {
+    flag.map(str::to_owned)
         .or_else(|| std::env::var(telemetry::LOG_ENV_VAR).ok())
-        .unwrap_or_else(|| "info".to_string());
-    EnvFilter::try_new(&directive)
-        .map_err(|e| LooprError::TelemetryInit(format!("invalid log filter `{directive}`: {e}")))
+        .unwrap_or_else(|| "info".to_string())
 }
 
 fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Result<(), LooprError> {
