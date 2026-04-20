@@ -3,7 +3,9 @@
 //! persistence engine.
 
 mod error;
+mod plans;
 mod store;
 
 pub use error::StoreError;
+pub use plans::PlansStore;
 pub use store::Store;
