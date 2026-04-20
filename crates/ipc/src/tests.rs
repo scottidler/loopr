@@ -346,7 +346,7 @@ fn e2e_handshake_roundtrip() {
 
     let result = serde_json::to_value(HandshakeResult {
         protocol_version: PROTOCOL_VERSION,
-        daemon_version: "0.5.4".into(),
+        daemon_version: env!("CARGO_PKG_VERSION").into(),
     })
     .unwrap();
     let resp = DaemonResponse::ok(decoded_req.id, result);
