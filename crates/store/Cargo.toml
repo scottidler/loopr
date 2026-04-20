@@ -7,7 +7,6 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-derive = { path = "../derive" }
 domain = { path = "../domain" }
 taskstore-async = { workspace = true }
 thiserror = "2.0.18"

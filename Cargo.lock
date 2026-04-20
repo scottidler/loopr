@@ -1258,7 +1258,6 @@ dependencies = [
 name = "store"
 version = "0.5.12"
 dependencies = [
- "derive",
  "domain",
  "taskstore-async",
  "tempfile",
