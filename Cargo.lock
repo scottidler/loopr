@@ -290,6 +290,12 @@ dependencies = [
 [[package]]
 name = "derive"
 version = "0.5.7"
+dependencies = [
+ "domain",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "difflib"
