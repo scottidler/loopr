@@ -15,6 +15,12 @@ pub enum LooprError {
 
     #[error("subcommand `{subcommand}` is not yet implemented (earned at Stage {stage})")]
     StageUnimplemented { stage: u8, subcommand: &'static str },
+
+    #[error("log query failed: {0}")]
+    LogsQuery(String),
+
+    #[error("telemetry setup failed: {0}")]
+    TelemetryInit(String),
 }
 
 fn parent_hint(path: &Path) -> String {

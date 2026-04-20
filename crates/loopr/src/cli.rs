@@ -15,6 +15,16 @@ pub struct Cli {
     #[arg(short = 'C', long = "chdir", global = true, value_name = "PATH")]
     pub chdir: Option<PathBuf>,
 
+    /// Set the tracing filter directive. Env: LOOPR_LOG_LEVEL. Default: info.
+    ///
+    /// Accepts any `EnvFilter`-parseable string:
+    ///   --log-level debug                           (bare level, all targets)
+    ///   --log-level loopr=debug,tools=error         (per-target directives)
+    ///   --log-level warn,loopr::agents=trace        (combination)
+    ///   --log-level off                             (silence everything)
+    #[arg(short = 'l', long = "log-level", global = true, value_name = "DIRECTIVE")]
+    pub log_level: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -73,6 +83,32 @@ pub enum Command {
         /// One of: plans, specs, phases, works, bundles, ticks.
         kind: String,
     },
+}
+
+impl Command {
+    /// Stable string label for telemetry and error reporting. Matches the
+    /// `StageUnimplemented.subcommand` labels from `cli-skeleton.md` - one
+    /// source of truth for subcommand naming.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Command::Init => "init",
+            Command::Plan { .. } => "plan",
+            Command::Decompose { .. } => "decompose",
+            Command::Execute { .. } => "execute",
+            Command::Integrate => "integrate",
+            Command::Daemon { cmd } => match cmd {
+                DaemonCmd::Start { .. } => "daemon-start",
+                DaemonCmd::Stop => "daemon-stop",
+                DaemonCmd::Status => "daemon-status",
+            },
+            Command::Score { .. } => "score",
+            Command::Logs { cmd } => match cmd {
+                LogsCmd::Tail { .. } => "logs-tail",
+                LogsCmd::Runs => "logs-runs",
+            },
+            Command::List { .. } => "list",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

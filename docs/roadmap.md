@@ -25,21 +25,23 @@
 
 **Crates touched:** `loopr` only.
 
+**Amendment:** the global `--log-level` / `-l` flag (mandated by `rules/rust.md`) was omitted from the Stage 1 doc and is caught up under Stage 2. See [`docs/design/2026-04-19-telemetry-stage-2.md`](design/2026-04-19-telemetry-stage-2.md).
+
 **Exit criterion:** `cargo install --path crates/loopr && loopr --version` prints the current tag; `loopr -C /tmp plan "x"` errors cleanly (no subcommand implementation yet, but CLI parse works).
 
 ---
 
 ## Stage 2: telemetry initialized
 
-**Goal:** tracing subscriber lives, writes structured JSON to `.loopr/runs/<run-id>/events.log`, pretty output to `.loopr/runs/<run-id>/loopr.log`, and console mirror at INFO+ for interactive runs. `loopr logs tail` shows the latest run. Per-run fanout can be added later; the structured single-file layer must exist before anything else logs.
+**Goal:** tracing subscriber lives, writes structured JSON to `.loopr/runs/<run-id>/events.log`, pretty output to `.loopr/runs/<run-id>/loopr.log`, console mirror at INFO+ for interactive runs, and a `WorkFanoutLayer` that splits events into `.loopr/runs/<run-id>/work/<work_id>.log` whenever a `work_id`-scoped span fires. `loopr logs tail` shows the latest run. Fanout is built in Stage 2 but stays inert until Stage 7's first `work_id`-bearing span fires.
 
-**Design docs:**
-- `crates/telemetry/docs/design/subscriber-layers.md` — subscriber composition (file writer, console formatter), log layout on disk, run-id generation and collision policy (`YYYYMMDD-HHMMSS[-N]`).
-- `crates/telemetry/docs/design/span-conventions.md` — standard span names (`stage.<name>`, `ralph.<role>`, `tool.<name>`), required context fields (`run_id`, `plan_id`, `work_id`).
+**Design doc:** [`docs/design/2026-04-19-telemetry-stage-2.md`](design/2026-04-19-telemetry-stage-2.md) — consolidated subscriber + run-id + span-conventions + `loopr logs tail` body. Originally listed as two separate docs; collapsed because they cannot be reviewed independently (layers define where spans go; conventions define what spans look like).
 
-**Crates touched:** `telemetry`, `loopr` (init call).
+**Scope caveat:** catches up a Stage 1 omission — the global `--log-level` / `-l` flag that `rules/rust.md` mandates but the CLI skeleton did not add. Documented in the Stage 2 design doc; Stage 1's doc gets a one-line amendment pointer.
 
-**Exit criterion:** `loopr --version` emits one span to `.loopr/runs/<run-id>/events.log`, round-trips through `tracing-subscriber::fmt::json`, and `loopr logs tail` can display it.
+**Crates touched:** `telemetry`, `loopr` (CLI flag + run() rewire + logs module).
+
+**Exit criterion:** `loopr -C /tmp plan "x"` allocates a run-id, writes non-empty `events.log` + `loopr.log`, and returns `StageUnimplemented`. `loopr -C /tmp logs tail` prints the pretty log; `loopr -C /tmp logs runs` lists known runs newest-first. (The originally-stated "`loopr --version` emits one span" criterion was unsatisfiable — clap short-circuits `--version` before `lib::run` — so it was replaced.)
 
 ---
 

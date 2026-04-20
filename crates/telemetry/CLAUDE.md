@@ -7,7 +7,7 @@ Observability for v5. First-class concern; owns `tracing` subscriber composition
 - **Subscriber init.** Compose `tracing-subscriber` layers: JSON file writer to `.loopr/runs/<run-id>/events.log`, pretty file writer to `.loopr/runs/<run-id>/loopr.log`, console mirror at INFO+ for interactive runs. One `init()` entry point called from the binary.
 - **Run identifiers.** Generate `YYYYMMDD-HHMMSS` local-time IDs with `-N` collision suffix (atomic; the daemon is the allocator). Expose as a typed `RunId` newtype so callers can't fat-finger a plain `String`.
 - **Span naming conventions.** Stable names: `stage.<name>`, `ralph.<role>`, `tool.<name>`. Every span carries `run_id`; nested spans inherit and add `plan_id` / `work_id` when entering their scope. Provide helper macros if they reduce repetition meaningfully; otherwise raw `#[tracing::instrument]` with structured fields.
-- **Per-Work fanout subscriber** (Stage 7). Watches the `work_id` span, splits events into `.loopr/runs/<run-id>/work/<work-id>.log`. Deferred; infrastructure but not implementation lands in Stage 2.
+- **Per-Work fanout subscriber** (built Stage 2; activates Stage 7). Watches the `work_id` span, splits events into `.loopr/runs/<run-id>/work/<work-id>.log`. `WorkFanoutLayer` ships in Stage 2 and runs inert until Stage 7 emits the first `work_id`-bearing span.
 - **Log-query helpers.** Back-end functions for `loopr logs tail`, `loopr logs work <id>`, `loopr logs run <id>`. The CLI surface lives in `loopr`; the actual log reading and filtering lives here.
 
 ## Out of scope

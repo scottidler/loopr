@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 authors = ["Scott A. Idler <scott.a.idler@gmail.com>"]
 repository = "ssh://git@github.com/scottidler/loopr"

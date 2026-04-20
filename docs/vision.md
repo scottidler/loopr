@@ -253,7 +253,7 @@ v5 overrides the `rules/rust.md` default of `log` + `env_logger` and uses **`tra
 
 1. **Universal structured log** at `.loopr/runs/<run-id>/events.log`, JSON format. Every event carries `crate`, `span` hierarchy, `run_id` / `plan_id` / `work_id` when in scope, `level`, `ts`, and arbitrary kv. One file per run, grep- and jq-friendly, full history.
 2. **Pretty per-run log** at `.loopr/runs/<run-id>/loopr.log`, same events formatted for humans. Mirrored to console at INFO+ during interactive runs.
-3. **Per-Work fanout files** at `.loopr/runs/<run-id>/work/<work-id>.log`. A subscriber watches the `work_id` span and splits a file per Work. Deferred until Stage 7; infrastructure is present in Stage 2.
+3. **Per-Work fanout files** at `.loopr/runs/<run-id>/work/<work-id>.log`. A `WorkFanoutLayer` subscriber watches the `work_id` span and splits a file per Work. Built in Stage 2 (design doc: `docs/design/2026-04-19-telemetry-stage-2.md`); stays inert until Stage 7 emits the first `work_id`-bearing span.
 
 ### Run identifier
 

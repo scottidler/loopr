@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-19
-**Status:** Implemented
+**Status:** Implemented (amended by [`docs/design/2026-04-19-telemetry-stage-2.md`](../../../../docs/design/2026-04-19-telemetry-stage-2.md) for the `--log-level` / `-l` global flag)
 **Review Passes Completed:** 5/5
 
 ## Summary

@@ -177,3 +177,57 @@ fn test_cli_parses_chdir_long() {
     let cli = Cli::parse_from(["loopr", "--chdir", "/tmp/target", "init"]);
     assert_eq!(cli.chdir, Some(PathBuf::from("/tmp/target")));
 }
+
+#[test]
+fn test_cli_parses_log_level_short() {
+    let cli = Cli::parse_from(["loopr", "-l", "debug", "init"]);
+    assert_eq!(cli.log_level.as_deref(), Some("debug"));
+}
+
+#[test]
+fn test_cli_parses_log_level_long() {
+    let cli = Cli::parse_from(["loopr", "--log-level", "loopr=debug,tools=error", "init"]);
+    assert_eq!(cli.log_level.as_deref(), Some("loopr=debug,tools=error"));
+}
+
+#[test]
+fn test_cli_log_level_defaults_to_none() {
+    let cli = Cli::parse_from(["loopr", "init"]);
+    assert!(cli.log_level.is_none());
+}
+
+#[test]
+fn test_cli_log_level_is_global() {
+    let cli = Cli::parse_from(["loopr", "plan", "-l", "debug", "goal"]);
+    assert_eq!(cli.log_level.as_deref(), Some("debug"));
+    match cli.command {
+        Command::Plan { goal } => assert_eq!(goal, "goal"),
+        _ => panic!("expected Plan"),
+    }
+}
+
+#[test]
+fn test_command_label_covers_every_variant() {
+    let cases = [
+        (&["loopr", "init"][..], "init"),
+        (&["loopr", "plan", "x"][..], "plan"),
+        (&["loopr", "decompose", "p1"][..], "decompose"),
+        (&["loopr", "execute"][..], "execute"),
+        (&["loopr", "integrate"][..], "integrate"),
+        (&["loopr", "daemon", "start"][..], "daemon-start"),
+        (&["loopr", "daemon", "stop"][..], "daemon-stop"),
+        (&["loopr", "daemon", "status"][..], "daemon-status"),
+        (&["loopr", "score", "--dir", "/tmp/run"][..], "score"),
+        (&["loopr", "logs", "tail"][..], "logs-tail"),
+        (&["loopr", "logs", "runs"][..], "logs-runs"),
+        (&["loopr", "list", "plans"][..], "list"),
+    ];
+    for (argv, expected) in cases {
+        let cli = Cli::parse_from(argv);
+        assert_eq!(
+            cli.command.label(),
+            expected,
+            "label for argv {argv:?} should be {expected}"
+        );
+    }
+}

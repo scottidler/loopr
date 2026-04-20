@@ -7,3 +7,15 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono.workspace = true
+dashmap = "6.1.0"
+eyre.workspace = true
+rev_lines = "0.3.0"
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2.0.18"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
