@@ -90,6 +90,14 @@ v3 did not have this derive. v4 did not have this derive. This is net-new codege
 - **Automatic ID generation.** Some records in v5 may want `id = format!("plan-{nanoid}")`-style synthesis at construction time. That's constructor-side logic, not derive-side. The derive only reads `self.id`; how the consumer populates `id` is entirely out of scope.
 - **Graph / reference integrity.** v5's `parent_id` on `Work` is an indexed string; the derive doesn't validate that it points at an extant `Plan`. Referential integrity belongs to the `store` layer (future doc).
 
+### Earned-When-Needed Features
+
+Deliberately NOT in v1, but pre-cleared as non-breaking to add when a real call site demands them. Listed here so the design carries an explicit signal that these were considered and rejected for now on cost/benefit, rather than overlooked.
+
+- **Pluralization smarts beyond lowercase + `"s"`.** Handles every v5 record name in Stages 5–8 (Plan → `"plans"`, Work → `"works"`, Spec → `"specs"`, Phase → `"phases"`, Bundle → `"bundles"`, Tick → `"ticks"`) and 9/11 v4 records. The two v4 outliers (`Coverage`, `Validation`) used explicit `#[record(collection = "…")]` overrides, which remain the escape valve. If v5 ever grows a record whose name ends in `s`, `x`, `z`, `ch`, or `sh`, the default will produce something awkward (`"boxs"`, `"strategys"`) that surfaces loudly on first test run; the override fixes it in one line without touching the derive.
+- **Numeric / boolean `IndexValue` variants.** The taskstore SQLite schema already has dedicated `field_value_int` and `field_value_bool` columns alongside `field_value_str` — v1 of the derive simply emits `IndexValue::String` for every indexed field. When a future record wants numeric range filtering (e.g., `retry_count > 3`, `updated_at` between two timestamps), add `#[record(indexed_int)]` / `#[record(indexed_bool)]` forms that dispatch to the matching column. Not speculative; the engine-side capability exists, the derive just hasn't exposed it yet.
+- **`const COLLECTION_NAME: &str` alongside the trait method.** A free-standing `const` would let callers write `taskstore.get::<Plan>(Plan::COLLECTION_NAME, id)` without the function call syntax. Marginal ergonomic gain; trivially additive.
+
 ## Proposed Solution
 
 ### Overview
@@ -134,7 +142,9 @@ A struct carrying `#[derive(Record)]` must have:
 2. A field literally named `id`, typed so that `self.id.as_ref()` returns `&str` — i.e., the type satisfies `AsRef<str>`. Works for `String` (stdlib impl) and for typed-ID newtypes like `struct PlanId(String)` where the consumer provides `impl AsRef<str>`.
 3. A field literally named `updated_at`, typed `i64` (milliseconds since epoch; matches `taskstore_traits::Record::updated_at`'s signature).
 
-The macro checks field *presence* at expansion time (spanned `compile_error!` if `id` or `updated_at` is missing). It does NOT check field *types* — rustc's native errors on the generated body (`trait bound AsRef<str> not satisfied`; `mismatched types: expected i64`) fire at the consumer with the correct span.
+The macro checks field *presence* at expansion time (spanned `compile_error!` if `id` or `updated_at` is missing). For `updated_at`, it also performs a `syn::Type` path-segment check to enforce `i64` directly. For `id`, it does not inspect the type — rustc's native error on the generated body (`trait bound AsRef<str> not satisfied`) fires at the consumer with the correct span.
+
+**Intentionally not restricted:** nothing prevents a consumer from attaching `#[record(indexed)]` to the `id` or `updated_at` field. That produces an extra entry in the `indexed_fields()` map keyed on `"id"` / `"updated_at"` alongside the `id()` / `updated_at()` methods. Semantically reasonable (some stores index the primary key for redundant fast lookup); flagged so readers don't mistake the permissiveness for an oversight.
 
 **Input (what the user writes):**
 
@@ -395,14 +405,6 @@ Generated code does no I/O, no subprocess execution, no secret handling. The Rec
 | `#[record(...)]` helper attribute usage creep — someone wants nested structure like `#[record(collection = "…", audit_log = true)]` | Medium | Low | Design says exactly two keys (`collection` struct-level, `indexed` field-level). Anything else is rejected at validate. Reserve grammar space for future expansion if a use case earns it; don't pre-build. |
 | `ToString::to_string(&self.field)` allocates a `String` even for fields that are already `String` | Medium | Low | That's the cost of the uniform coercion path. Callers who care about zero-allocation index extraction build a custom lookup — derive is for the common case. |
 
-## Open Questions
-
-- [ ] **Pluralization rule refinement.** Lowercase + `"s"` handles every v4 record except two, and v5's initial six (Plan, Work, Spec, Phase, Bundle, Tick) all fit cleanly. If we ever hit a record name ending in `s`, `x`, `z`, `ch`, or `sh` (where English plural would add `es`), the default would produce an awkward `"boxs"` or similar. Current plan: don't preempt; require the consumer to use `#[record(collection = "…")]` if the default is awkward. Flagged here for future reviewers.
-- [ ] **Should the derive also emit `const COLLECTION_NAME: &str`?** A free-standing `const` lets callers write `taskstore.get::<Plan>(&Plan::COLLECTION_NAME, id)` instead of `Plan::collection_name()`. Marginal benefit; easy to add later. Not in v1.
-- [ ] **Typed-ID ecosystem coordination with `records.md`.** This doc says "id: PlanId works if PlanId: AsRef<str>". The `records.md` design (not yet written) must land the actual `PlanId` / `WorkId` newtype structs with those impls. Noted here so `records.md` doesn't forget.
-- [ ] **Indexing the `id` or `updated_at` field.** Nothing in the design forbids `#[record(indexed)] pub id: String`, which produces `m.insert("id", IndexValue::String(self.id.to_string()))` alongside the `id()` method. Semantically reasonable (some stores index by primary key for redundant fast lookup). Not restricted; flagged so future readers understand it's an intentional non-restriction, not an oversight.
-- [ ] **Numeric / boolean `IndexValue` variants.** The taskstore SQLite schema has dedicated `field_value_int` and `field_value_bool` columns alongside `field_value_str`; v1 of this derive only emits `IndexValue::String`. When a future record wants numeric range filtering (e.g., `updated_at` range queries, `retry_count > 3`), add `#[record(indexed_int)]` / `#[record(indexed_bool)]` forms. Not speculative — the taskstore engine already supports it; the derive simply hasn't exposed the capability yet. Earn it when a real call site needs it.
-
 ## References
 
 - [`docs/vision.md`](../../../../docs/vision.md) §domain: records layer and FSM tables.
@@ -412,6 +414,7 @@ Generated code does no I/O, no subprocess execution, no secret handling. The Rec
 - [`crates/derive/docs/CLAUDE.md`](../CLAUDE.md) §What lives here: single-crate designs go in `crates/derive/docs/design/`. This doc qualifies (no types added to `domain`; all generated references resolve against the existing `taskstore_traits` dep).
 - `taskstore-traits` crate (`scottidler/taskstore`, branch `main`, workspace dep): source for the `Record` trait signature and `IndexValue` shape.
 - v4 reference: `~/repos/scottidler/loopr-v4/src/domain/{plan,work,tick,…}.rs` — 11 hand-written `impl Record for X` blocks. Same shape each time; target to collapse.
+- Cross-doc coordination: the (unwritten) `crates/domain/docs/design/records.md` owes `impl AsRef<str>` for the typed-ID newtypes it defines (`PlanId`, `WorkId`, etc.) so they satisfy the `id` field contract from §Data Model.
 
 ---
 
@@ -452,11 +455,11 @@ After converging at 5/5 Rule-of-Five passes, this doc went to an Architect consu
 ### Net design diff vs. pre-review 5/5 draft
 
 - §Goals: +1 validation bullet (`updated_at` type check), extended `indexed` bullet (grammar + Option handling).
-- §Non-Goals: unchanged. (The numeric/bool indexing Non-Goal was reframed into Open Questions as an earned feature, not deferred speculation.)
-- §Data Model: grammar gained `indexed(key = "…")`; input example gained an `Option<PlanId>` field using both the override and the Option path; generated output shows the conditional `if let Some` arm; IR grew an `IndexedFieldIr` struct.
+- §Non-Goals: gained a §Earned-When-Needed Features subsection listing pluralization smarts, numeric/bool `IndexValue` variants, and `const COLLECTION_NAME` as non-breaking future additions. The numeric/bool entry was reframed from deferred speculation into a real earned feature (the taskstore schema already supports it at the engine layer).
+- §Data Model: grammar gained `indexed(key = "…")`; input example gained an `Option<PlanId>` field using both the override and the Option path; generated output shows the conditional `if let Some` arm; IR grew an `IndexedFieldIr` struct; a non-restriction note added for indexing the `id` / `updated_at` fields.
 - §Implementation Plan Phase 1: scope expanded to cover Option detection, key-override parsing, and the `updated_at` type check.
 - §Risks: the "Option<T> fields cannot be indexed" row replaced with the narrower "syn detection defeated by type aliases" risk.
-- §Open Questions: three items retired (Option handling, serde-rename drift, indexed key override) now that they're settled behavior; one new item added (numeric/bool `IndexValue` variants as earned future features).
+- §Open Questions: section removed entirely. The three Architect-surfaced questions (Option handling, serde-rename drift, indexed key override) are now settled behavior; the remaining items were misfiled — two (pluralization, numeric/bool variants, `const COLLECTION_NAME`) belonged in §Non-Goals as earned features; one (typed-ID coordination) belonged in §References as a cross-doc footnote; one (indexing id / updated_at) belonged in §Data Model as a non-restriction note. Prior commit had them as Open Questions because the Rule-of-Five template has the section, not because they were actually blocking questions.
 - §Addendum: this section, capturing the review's audit trail.
 
 ### Architect items not addressed
