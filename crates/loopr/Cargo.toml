@@ -44,6 +44,7 @@ tokio = { version = "1.52.1", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 libc = "0.2.185"
 uuid = { version = "1.23.1", features = ["v4"] }
+futures-util = { version = "0.3.32", features = ["sink"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.1"

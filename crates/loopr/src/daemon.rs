@@ -28,9 +28,7 @@ use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::Notify;
 
 use telemetry::RunId;
 
@@ -207,17 +205,15 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
             .map_err(|e| LooprError::DaemonStartup(format!("remove stale socket {}: {e}", socket.display())))?;
     }
 
-    let listener = UnixListener::bind(&socket)
-        .map_err(|e| LooprError::DaemonStartup(format!("bind {}: {e}", socket.display())))?;
+    let listener = crate::transport::server::bind_listener(&socket)?;
 
     // Signal-watcher task. Awaits SIGTERM/SIGINT as async values; sets
     // shutting_down + notify_waiters on first signal. No POSIX
     // signal-handler-safety concerns.
     spawn_signal_watcher(ctx.clone());
 
-    // Stage 4 Phase 3: placeholder accept loop. Phase 4 replaces this
-    // with `transport::server::accept_loop(listener, ctx)`.
-    shutdown_placeholder(listener, ctx).await;
+    // Phase 4: real accept loop. Spawns one per-connection handler task.
+    crate::transport::server::accept_loop(listener, ctx).await?;
     Ok(())
 }
 
@@ -246,16 +242,4 @@ fn spawn_signal_watcher(ctx: Arc<DaemonContext>) {
         ctx.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
         ctx.shutdown_notify.notify_waiters();
     });
-}
-
-/// Stage 4 Phase 3 placeholder. Awaits the shutdown notify and returns;
-/// Phase 4 replaces this with the real accept loop. The `_listener` is
-/// kept in scope so the socket file stays alive until shutdown.
-async fn shutdown_placeholder(listener: UnixListener, ctx: Arc<DaemonContext>) {
-    shutdown_future(ctx.shutdown_notify.clone()).await;
-    drop(listener);
-}
-
-async fn shutdown_future(notify: Arc<Notify>) {
-    notify.notified().await;
 }
