@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use thiserror::Error;
+use tracing_subscriber::filter::{FilterExt, LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -169,8 +170,15 @@ fn compose(
         .with_ansi(false)
         .with_filter(filter_clone(&filter));
 
+    // Console filter: user directive AND an INFO floor. The AND means an
+    // event reaches stderr only if BOTH filters admit it, so:
+    //   --log-level warn   -> stderr shows warn+ (user filter wins)
+    //   --log-level debug  -> stderr shows info+ (floor prevents spam)
+    //   --log-level off    -> stderr shows nothing
+    // Files (events.log + loopr.log) still honor the full user directive.
     let console_layer = if stderr_is_tty {
-        Some(fmt::layer().with_writer(io::stderr).with_filter(EnvFilter::new("info")))
+        let console_filter = filter_clone(&filter).and(LevelFilter::INFO);
+        Some(fmt::layer().with_writer(io::stderr).with_filter(console_filter))
     } else {
         None
     };

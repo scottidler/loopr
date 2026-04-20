@@ -771,6 +771,46 @@ No `tokio`, no `reqwest`, no LLM deps enter the telemetry crate — matches the 
 - [x] **When does per-Work fanout (Stage 7) actually earn its keep?** Decided (superseding the vision/roadmap/telemetry-CLAUDE "Stage 7" language): **Stage 2 ships it.** Building the `WorkFanoutLayer` alongside the other three layers while we're already in subscriber code is cheaper than a Stage 7 revisit that requires re-entering the subscriber composition. The layer runs harmlessly in Stages 2–6 (no `work_id` spans exist yet, so no fanout files get created); Stage 7 only adds the `work_id`-bearing span emitters and suddenly fanout files start appearing. See the new **Per-Work Fanout Layer** subsections in §Architecture, §Data Model, §API Design, and §Acceptance Criteria. Roadmap Stage 7 entry and vision §Observability "three-layer log strategy" both get amendments.
 - [x] **`logs` subcommand self-reference — does tail/runs read its own run dir?** (Surfaced during implementation.) A `logs tail` invocation goes through `lib::run`, allocates a run-id, and initializes telemetry just like any other command — the Goals section commits to "every invocation that reaches `lib::run` emits a single `loopr.invocation` span." That creates a subtle bug: the invocation's own (still-empty) run dir is the newest, and `tail_latest_run` would return it. Decided: **`tail_latest_run` and `list_runs` accept an `Option<&RunId>` `exclude` parameter.** The logs subcommands pass their own run-id as the exclusion; other callers pass `None`. Keeps the "every invocation emits a span" invariant intact while making the user-facing query ignore the self-referential run. `LooprError` gains a `TelemetryInit(String)` variant at the same time so telemetry-setup failures don't share the `LogsQuery` channel.
 
+## Post-Implementation Audit (Architect round, v0.5.2)
+
+Audit performed after the Stage 2 commit landed. Six findings; three code fixes applied in a follow-up, three acknowledged with rationale below.
+
+### Fixes applied
+
+- **Missing `tracing-appender` block comment.** The Open Questions row on "Non-blocking writers post-fork" mandated a block comment above the `tracing-appender` entry in `Cargo.toml` explaining the reservation. Originally omitted; added in the audit follow-up with the full rationale inline.
+- **Console layer ignored stricter user filters.** Initial implementation hardcoded the console layer's filter to `EnvFilter::new("info")`, which meant `loopr --log-level warn` still printed `info`-level events to stderr because each layer evaluates its filter independently. Fixed by composing the user directive with `LevelFilter::INFO` via `FilterExt::and`, so the console sees events that pass both filters - the stricter wins, and the INFO floor still prevents debug/trace spam on interactive stderr. Files (`events.log`, `loopr.log`) still honor the full user directive unchanged.
+- **API Design `dispatch` signature drift.** The design's API Design code block declared `fn dispatch(target: &Path, command: Command)` but the implementation ships `fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command)` — the `run_id` was added to feed the `exclude`-parameter mechanism from the "logs subcommand self-reference" Open Questions row. Functionally correct; the signature in the doc is now amended below for accuracy.
+
+### Deferred
+
+- **`WorkFanoutLayer` formatting parity.** Implementation section of `fanout.rs` says "render the event using the same pretty format as `loopr.log`." Stage 2 ships a hand-rolled `PrettyEventVisitor` that emits `ts [LEVEL] target: message`. Visible shape matches `loopr.log`'s baseline but is not byte-identical with `tracing_subscriber::fmt`'s pretty formatter (timestamp resolution differs, field-rendering subtly differs). The layer is inert in Stage 2 (no `work_id` spans fire), so no user sees the divergence yet. Revisit in Stage 7 when the Implementer agent fires the first `work_id`-bearing span: either accept the minor format difference as the per-Work log's visual identity, or route fanout through a second `fmt::Layer` instance that shares the pretty formatter with `loopr.log`.
+
+### Rejected with rationale
+
+- **Injected `tracing::info!` / `tracing::debug!` in `lib::run` for smoke-test signal.** The design Goals section commits to "every invocation emits a single `loopr.invocation` span" and an Architect finding flagged the explicit `info!("loopr::run dispatching subcommand=...")` + debug twin as smoke-test-motivated pollution of the mainline code path. Accepted the pollution because: (a) the invocation span itself doesn't emit a log line at span open — span open is an internal tracing event, not a logged event — so asserting the span exists in `loopr.log` requires either parsing the close event (fragile, schema-dependent) or emitting an event INSIDE the span (what we do); (b) the info event serves as the user-visible "loopr started" signal in interactive runs, which is useful beyond smoke tests; (c) the debug twin is the clean asymmetric assertion target for the `--log-level` gate test. If Stage 4+ finds these events annoying, they can be moved into `#[cfg(test)]` hooks or demoted to a single `debug!`, but Stage 2 keeps them at info because the interactive UX benefit outweighs the "pure mainline" ideal.
+- **`let _ = &guard; let _ = &enter;` to silence unused-variable lints.** An Architect finding noted this as a "new crutch" circumventing the spirit of `rules/rust.md`'s no-leading-underscore rule. Rejected because the underlying problem is real: `guard` and `enter` have `Drop` impls whose side effects are the entire point, but rust-analyzer and clippy's `unused_variables` will still flag them if the telemetry crate ever adopts `#![deny(unused_variables)]` (which `rules/rust.md` recommends for scaffolded crates). The alternatives are worse: `#[allow(unused)]` (also a crutch, but crate-wide), `drop(guard); drop(enter);` at function end (design-doc-forbidden — flushes before the span close event), or renaming back to `_guard` / `_enter` (explicit rules violation). `let _ = &x` is the least-bad idiom for "I need this binding alive to end-of-scope for its Drop, but I don't use its value." A future workspace-wide `deny(unused_variables)` pass may standardize on `#[must_use]`-based suppression at the type level; Stage 2 does not take that on.
+
+### API Design amendment (from fix #3 above)
+
+The `dispatch` function in `crates/loopr/src/lib.rs` ships with this signature (differs from the code block earlier in the design doc, which did not yet incorporate the `exclude`-parameter decision):
+
+```rust
+fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Result<(), LooprError> {
+    match command {
+        // ... stub arms unchanged ...
+        Command::Logs { cmd } => match cmd {
+            // Pass the current run_id as exclude so the query never returns
+            // its own in-flight run dir.
+            LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(run_id)),
+            LogsCmd::Runs => logs::handle_runs(target, Some(run_id)),
+        },
+        // ... list stub unchanged ...
+    }
+}
+```
+
+The corresponding `logs::handle_tail` / `handle_runs` signatures each take `exclude: Option<&telemetry::RunId>`, and the `telemetry::tail_latest_run` / `list_runs` signatures take the same exclusion in their final parameter position.
+
 ## References
 
 - [`docs/vision.md`](../../../../docs/vision.md) §Observability, §telemetry ABI, §Models and Budgets (env var naming)

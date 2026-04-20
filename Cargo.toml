@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
 authors = ["Scott A. Idler <scott.a.idler@gmail.com>"]
 repository = "ssh://git@github.com/scottidler/loopr"
@@ -19,6 +19,18 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml = "0.9.34"
 tracing = "0.1.44"
+# Reserved for Stage 4's post-fork daemon.
+#
+# Stage 2 deliberately uses blocking `LineWriter<File>` writers because
+# `tracing-appender::non_blocking` spawns a worker thread per file, and POSIX
+# `fork()` destroys all threads except the caller - initializing a non-blocking
+# appender pre-fork would produce a daemon child writing into a dead channel.
+#
+# The appender stays declared here as a deliberate reservation: Stage 4 may
+# add `telemetry::init_nonblocking(...)` post-fork in the daemon child if and
+# only if measured log throughput justifies it. Do NOT remove as "unused" -
+# see `docs/design/2026-04-19-telemetry-stage-2.md` Open Questions row on
+# "Non-blocking writers post-fork in the daemon."
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
