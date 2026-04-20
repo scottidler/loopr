@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-20
-**Status:** Draft (5/5 Rule-of-Five + 1 Architect-review round)
+**Status:** Implemented (shipped in v0.5.10)
 **Review Passes Completed:** 5/5 + Architect
 
 ## Summary
