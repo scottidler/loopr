@@ -1,0 +1,5 @@
+error: #[derive(Record)] requires named fields; tuple structs are not supported
+ --> tests/compile-fail/record-tuple-struct.rs:4:8
+  |
+4 | struct Tup(String, i64);
+  |        ^^^

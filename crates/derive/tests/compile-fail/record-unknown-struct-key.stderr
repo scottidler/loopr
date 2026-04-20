@@ -1,0 +1,5 @@
+error: unknown `#[record(...)]` key on struct: `collecton`; expected `collection`
+ --> tests/compile-fail/record-unknown-struct-key.rs:4:10
+  |
+4 | #[record(collecton = "plans")]
+  |          ^^^^^^^^^

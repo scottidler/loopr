@@ -1,0 +1,5 @@
+error: `updated_at` field must be of type `i64`
+ --> tests/compile-fail/record-wrong-updated-at-type.rs:6:17
+  |
+6 |     updated_at: u64,
+  |                 ^^^

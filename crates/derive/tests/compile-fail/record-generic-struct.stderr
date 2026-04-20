@@ -1,0 +1,5 @@
+error: #[derive(Record)] does not support generic structs
+ --> tests/compile-fail/record-generic-struct.rs:4:15
+  |
+4 | struct Generic<T> {
+  |               ^

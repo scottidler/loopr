@@ -1,0 +1,5 @@
+error: duplicate indexed map key `same`; each indexed field must produce a unique map key
+ --> tests/compile-fail/record-duplicate-map-key.rs:9:28
+  |
+9 |     #[record(indexed(key = "same"))]
+  |                            ^^^^^^

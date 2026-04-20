@@ -1,0 +1,5 @@
+error: unknown `#[record(...)]` key on field: `indexe`; expected `indexed` or `indexed(key = "...")`
+ --> tests/compile-fail/record-unknown-field-key.rs:7:14
+  |
+7 |     #[record(indexe)]
+  |              ^^^^^^

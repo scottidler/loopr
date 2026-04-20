@@ -1,0 +1,5 @@
+error: multiple `#[record(...)]` attributes on struct; merge into a single attribute
+ --> tests/compile-fail/record-multi-attr.rs:5:1
+  |
+5 | #[record(collection = "two")]
+  | ^

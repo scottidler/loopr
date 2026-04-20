@@ -1,0 +1,5 @@
+error: #[derive(Record)] requires a field named `updated_at`
+ --> tests/compile-fail/record-missing-updated-at.rs:4:8
+  |
+4 | struct NoUpdatedAt {
+  |        ^^^^^^^^^^^

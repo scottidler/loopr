@@ -1,0 +1,5 @@
+error: #[derive(Record)] cannot be applied to enums
+ --> tests/compile-fail/record-on-enum.rs:4:6
+  |
+4 | enum NotAStruct {
+  |      ^^^^^^^^^^
