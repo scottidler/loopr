@@ -16,4 +16,6 @@ syn = { version = "2.0.117", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 domain = { path = "../domain" }
+serde = { workspace = true }
+taskstore-traits = { workspace = true }
 trybuild = "1.0.116"

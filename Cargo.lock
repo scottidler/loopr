@@ -294,7 +294,9 @@ dependencies = [
  "domain",
  "proc-macro2",
  "quote",
+ "serde",
  "syn",
+ "taskstore-traits",
  "trybuild",
 ]
 
