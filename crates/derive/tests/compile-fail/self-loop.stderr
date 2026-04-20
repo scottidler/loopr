@@ -1,0 +1,5 @@
+error: self-loop `Draft => Draft` in transitions; remove this entry, self-transitions are implicit
+ --> tests/compile-fail/self-loop.rs:8:9
+  |
+8 |         Draft => Draft by (Coordinator),
+  |         ^^^^^

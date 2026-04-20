@@ -1,0 +1,5 @@
+error: #[derive(Fsm)] only supports unit variants
+  --> tests/compile-fail/non-unit-variant.rs:12:5
+   |
+12 |     Draft(u32),
+   |     ^^^^^

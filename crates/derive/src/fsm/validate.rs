@@ -18,7 +18,6 @@ pub(crate) fn validate(ir: &FsmIr) -> Result<()> {
     check_edges(&ir.overrides, &variant_set, "overrides")?;
     check_terminal_has_no_outgoing(&ir.terminal, &ir.transitions)?;
     check_terminal_has_no_outgoing(&ir.terminal, &ir.overrides)?;
-    check_no_overlap_between_tables(&ir.transitions, &ir.overrides)?;
 
     Ok(())
 }
@@ -84,23 +83,6 @@ fn check_terminal_has_no_outgoing(terminal: &[Ident], edges: &[EdgeIr]) -> Resul
             return Err(Error::new(
                 edge.from.span(),
                 format!("terminal state `{}` cannot have outgoing transitions", edge.from),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn check_no_overlap_between_tables(normal: &[EdgeIr], overrides: &[EdgeIr]) -> Result<()> {
-    let normal_set: HashSet<(String, String)> = normal.iter().map(|e| (e.from.to_string(), e.to.to_string())).collect();
-    for edge in overrides {
-        let key = (edge.from.to_string(), edge.to.to_string());
-        if normal_set.contains(&key) {
-            return Err(Error::new(
-                edge.from.span(),
-                format!(
-                    "edge `{} => {}` appears in both `transitions(...)` and `overrides(...)`; overrides exist only for edges the normal table does not authorize",
-                    edge.from, edge.to
-                ),
             ));
         }
     }

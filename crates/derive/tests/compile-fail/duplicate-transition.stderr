@@ -1,0 +1,5 @@
+error: duplicate edge `Draft => Done` in transitions; merge role lists into a single entry
+ --> tests/compile-fail/duplicate-transition.rs:9:9
+  |
+9 |         Draft => Done by (Director),
+  |         ^^^^^

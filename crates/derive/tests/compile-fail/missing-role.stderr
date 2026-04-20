@@ -1,0 +1,5 @@
+error: `#[fsm(...)]` requires `role = <path>`
+ --> tests/compile-fail/missing-role.rs:4:1
+  |
+4 | #[fsm(
+  | ^
