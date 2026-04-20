@@ -29,22 +29,13 @@ fn run_init_returns_stage_5() {
     }
 }
 
-#[test]
-fn run_plan_returns_stage_5() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "plan", "goal"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 5,
-            subcommand: "plan"
-        }
-    ));
-}
+// `run_plan_returns_stage_5` used to assert that `dispatch` returned the
+// stub `StageUnimplemented { stage: 5 }` directly. Phase 5 replaces that
+// stub with a real client round-trip: plan() now tries to connect to a
+// daemon at `<target>/.loopr/socket`. The daemon is live in an E2E test
+// (see `tests/smoke.rs::plan_on_tempdir_returns_stage_unimplemented`),
+// not in a pure unit test. The unit-level coverage moves to the per-
+// function coverage of `daemon_stop` / `daemon_status` below.
 
 #[test]
 fn run_decompose_returns_stage_6() {
@@ -104,37 +95,20 @@ fn run_integrate_returns_stage_8() {
 // `tests/smoke.rs::daemon_start_forks_daemon_and_writes_sentinels`.
 
 #[test]
-fn run_daemon_stop_returns_stage_4() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "daemon", "stop"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 4,
-            subcommand: "daemon-stop"
-        }
-    ));
+fn run_daemon_stop_on_empty_target_prints_no_daemon() {
+    // Phase 5: `daemon stop` with no daemon running returns Ok(()) and
+    // prints "no daemon running" (smoke-tested separately for stdout).
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(td.path(), &stub_run_id(), parse_cmd(&["loopr", "daemon", "stop"])).unwrap();
 }
 
 #[test]
-fn run_daemon_status_returns_stage_4() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "daemon", "status"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 4,
-            subcommand: "daemon-status"
-        }
-    ));
+fn run_daemon_status_on_empty_target_prints_no_daemon() {
+    // Phase 5: `daemon status` with no pid file returns Ok(()) and
+    // prints "no daemon running". Does NOT attempt to connect (would
+    // hang on connect_or_wait without a daemon).
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(td.path(), &stub_run_id(), parse_cmd(&["loopr", "daemon", "status"])).unwrap();
 }
 
 #[test]

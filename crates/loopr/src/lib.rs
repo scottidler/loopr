@@ -124,10 +124,7 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             stage: 5,
             subcommand: "init",
         }),
-        Command::Plan { .. } => Err(LooprError::StageUnimplemented {
-            stage: 5,
-            subcommand: "plan",
-        }),
+        Command::Plan { goal } => plan_command(target, goal),
         Command::Decompose { .. } => Err(LooprError::StageUnimplemented {
             stage: 6,
             subcommand: "decompose",
@@ -142,19 +139,13 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
         }),
         Command::Daemon { cmd } => match cmd {
             // `Start` is handled above in `run` (pre-telemetry); it never
-            // reaches `dispatch`. `Stop` and `Status` are Phase 5 bodies.
+            // reaches `dispatch`.
             DaemonCmd::Start { .. } => Err(LooprError::StageUnimplemented {
                 stage: 4,
                 subcommand: "daemon-start",
             }),
-            DaemonCmd::Stop => Err(LooprError::StageUnimplemented {
-                stage: 4,
-                subcommand: "daemon-stop",
-            }),
-            DaemonCmd::Status => Err(LooprError::StageUnimplemented {
-                stage: 4,
-                subcommand: "daemon-status",
-            }),
+            DaemonCmd::Stop => daemon_stop(target),
+            DaemonCmd::Status => daemon_status(target),
         },
         Command::Score { .. } => Err(LooprError::StageUnimplemented {
             stage: 9,
@@ -173,6 +164,96 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             subcommand: "list",
         }),
     }
+}
+
+/// `loopr daemon stop` body. Idempotent: if no daemon is running, prints
+/// "no daemon running" and exits 0. Otherwise SIGTERMs the daemon, polls
+/// for exit with escalation to SIGKILL, and cleans up residual sentinels.
+fn daemon_stop(target: &Path) -> Result<(), LooprError> {
+    let pid_file = daemon::sentinel::pid_path(target);
+    match daemon::sentinel::read_pid(&pid_file)? {
+        None => {
+            println!("no daemon running");
+            Ok(())
+        }
+        Some(pid) if !daemon::sentinel::is_daemon_alive(pid) => {
+            daemon::sentinel::clean(target);
+            println!("no daemon running");
+            Ok(())
+        }
+        Some(_) => {
+            daemon::sentinel::kill_stale(target)?;
+            Ok(())
+        }
+    }
+}
+
+/// `loopr daemon status` body. Connects to the daemon, handshakes, asks
+/// for `system.status`, prints the response in a human-readable form.
+/// Idempotent on the no-daemon path.
+fn daemon_status(target: &Path) -> Result<(), LooprError> {
+    let pid_file = daemon::sentinel::pid_path(target);
+    match daemon::sentinel::read_pid(&pid_file)? {
+        Some(pid) if daemon::sentinel::is_daemon_alive(pid) => {}
+        _ => {
+            println!("no daemon running");
+            return Ok(());
+        }
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
+    rt.block_on(async {
+        let mut client = transport::connect_or_wait(target).await?;
+        client.handshake().await?;
+        let (resp, _events) = client
+            .request(ipc::MethodName::SystemStatus, serde_json::Value::Null)
+            .await?;
+        if let Some(err) = resp.error {
+            return Err(LooprError::Rpc(err));
+        }
+        let result_value = resp
+            .result
+            .ok_or_else(|| LooprError::ClientIo("status response missing result".into()))?;
+        let status: ipc::StatusResult =
+            serde_json::from_value(result_value).map_err(|e| LooprError::ClientIo(format!("decode status: {e}")))?;
+        println!("pid:           {}", status.pid);
+        println!("started-at:    {}", status.started_at);
+        println!("active-plans:  {}", status.active_plans);
+        println!("active-works:  {}", status.active_works);
+        Ok(())
+    })
+}
+
+/// Stage 4 `loopr plan "x"` body: exercise the full round-trip
+/// (connect -> handshake -> request_raw -> daemon replies
+/// `MethodNotFound("plan.create")` -> map to `StageUnimplemented`).
+/// Stage 5 replaces the `request_raw` call with a typed
+/// `MethodName::PlanCreate` request that returns `Ok`.
+fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
+    rt.block_on(async {
+        let mut client = transport::connect_or_wait(target).await?;
+        client.handshake().await?;
+        let (resp, _events) = client
+            .request_raw("plan.create", serde_json::json!({ "goal": goal }))
+            .await?;
+        if let Some(err) = resp.error {
+            if matches!(err, ipc::RpcError::MethodNotFound(_)) {
+                return Err(LooprError::StageUnimplemented {
+                    stage: 5,
+                    subcommand: "plan",
+                });
+            }
+            return Err(LooprError::Rpc(err));
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
