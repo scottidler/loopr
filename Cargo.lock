@@ -323,6 +323,7 @@ name = "domain"
 version = "0.5.7"
 dependencies = [
  "derive",
+ "strum",
  "taskstore-traits",
 ]
 

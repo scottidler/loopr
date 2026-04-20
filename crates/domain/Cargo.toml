@@ -8,4 +8,5 @@ license.workspace = true
 
 [dependencies]
 derive = { path = "../derive" }
+strum = { version = "0.28.0", features = ["derive"] }
 taskstore-traits = { workspace = true }
