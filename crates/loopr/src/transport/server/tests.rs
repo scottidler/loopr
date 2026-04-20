@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, broadcast};
 use tokio::time::timeout;
@@ -80,7 +81,7 @@ async fn handshake_then_status_roundtrip() {
 
     // Drop the client to close its side, then shut the server down.
     drop(framed);
-    ctx.shutting_down.store(true, Ordering::SeqCst);
+    ctx.shutting_down.store(true, Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
@@ -102,7 +103,7 @@ async fn malformed_line_closes_connection() {
     let next = timeout(Duration::from_secs(2), framed.next()).await.unwrap();
     assert!(next.is_none(), "connection closed after parse error: {next:?}");
 
-    ctx.shutting_down.store(true, Ordering::SeqCst);
+    ctx.shutting_down.store(true, Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
@@ -154,7 +155,77 @@ async fn concurrent_clients_do_not_cross_correlate() {
         assert_eq!(st_id, client_id * 10 + 1, "status id preserved for client {client_id}");
     }
 
-    ctx.shutting_down.store(true, Ordering::SeqCst);
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+// AC 20: a 2-MiB line (>1 MiB MAX_LINE_BYTES) must close the offending
+// connection without tearing the daemon down. We bypass `Framed` on the
+// client side and write raw bytes via `AsyncWriteExt` so LinesCodec's
+// encoder doesn't refuse the oversize frame before it leaves the test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversize_line_closes_connection_daemon_stays_up() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    // First connection: send 2 MiB + newline, expect disconnect.
+    //
+    // The daemon closes the connection as soon as LinesCodec's internal
+    // buffer crosses MAX_LINE_BYTES, which can happen mid-write. The
+    // kernel may then return EPIPE on any subsequent `write_all`. We
+    // tolerate that: either the full payload goes out and the read
+    // returns 0, or the write itself errors because the peer closed.
+    {
+        let mut raw = UnixStream::connect(&socket).await.unwrap();
+        let payload = vec![b'x'; 2 * 1024 * 1024];
+        let _ = raw.write_all(&payload).await;
+        let _ = raw.write_all(b"\n").await;
+        let _ = raw.flush().await;
+        let mut buf = [0u8; 64];
+        let read = timeout(
+            Duration::from_secs(3),
+            tokio::io::AsyncReadExt::read(&mut raw, &mut buf),
+        )
+        .await
+        .unwrap();
+        match read {
+            Ok(0) => {} // clean close after LineTooLong
+            Ok(n) => panic!("unexpected payload back from daemon: {n} bytes"),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            Err(e) => panic!("unexpected read error: {e}"),
+        }
+    }
+
+    // Second connection: a well-formed client can still handshake +
+    // status, proving the daemon itself is still up.
+    {
+        let stream = UnixStream::connect(&socket).await.unwrap();
+        let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+        let handshake = DaemonRequest {
+            id: 1,
+            method: "system.handshake".into(),
+            params: serde_json::to_value(HandshakeParams {
+                protocol_version: PROTOCOL_VERSION,
+            })
+            .unwrap(),
+        };
+        framed.send(serde_json::to_string(&handshake).unwrap()).await.unwrap();
+        let line = timeout(Duration::from_secs(2), framed.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let resp: DaemonResponse = serde_json::from_str(&line).unwrap();
+        assert_eq!(resp.id, 1);
+        assert!(resp.error.is_none(), "daemon survived oversize client: {resp:?}");
+    }
+
+    ctx.shutting_down.store(true, Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }

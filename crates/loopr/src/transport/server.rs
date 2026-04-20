@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
-use tokio_util::codec::{Framed, LinesCodec};
+use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 use tracing::{Instrument, info, warn};
 
 use ipc::{DaemonResponse, RpcError, decode_request_line};
@@ -40,7 +40,12 @@ pub async fn accept_loop(listener: UnixListener, ctx: Arc<DaemonContext>) -> Res
         // the last `select!` return and the next iteration, the wakeup
         // would be lost and `listener.accept()` could block forever. The
         // atomic load catches that case.
-        if ctx.shutting_down.load(Ordering::SeqCst) {
+        //
+        // `Relaxed` is sufficient: the flag carries no happens-before
+        // relationship with other data. The paired `Notify` wakes
+        // tasks that race with the load; no read or write depends on
+        // observing the flag before another memory location.
+        if ctx.shutting_down.load(Ordering::Relaxed) {
             info!("accept_loop: shutdown flag observed");
             return Ok(());
         }
@@ -78,7 +83,7 @@ pub async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
 
     loop {
         // Fast loop-top shutdown check (same reason as `accept_loop`).
-        if ctx.shutting_down.load(Ordering::SeqCst) {
+        if ctx.shutting_down.load(Ordering::Relaxed) {
             return;
         }
         tokio::select! {
@@ -122,7 +127,23 @@ pub async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     }
                 }
                 Some(Err(e)) => {
-                    warn!("codec error: {e}; closing connection");
+                    // AC 20: discriminate the oversize-frame path from
+                    // generic codec failures so the log message matches
+                    // the Stage 4 design. `LinesCodec` enforces the
+                    // 1-MiB limit at its own layer (before bytes reach
+                    // ipc::decode_request_line), so the "LineTooLong"
+                    // marker lives here, not in ipc::ParseError.
+                    match e {
+                        LinesCodecError::MaxLineLengthExceeded => {
+                            warn!(
+                                "ParseError::LineTooLong (line exceeds MAX_LINE_BYTES={}); closing connection",
+                                ipc::MAX_LINE_BYTES
+                            );
+                        }
+                        LinesCodecError::Io(io_err) => {
+                            warn!("codec error: {io_err}; closing connection");
+                        }
+                    }
                     return;
                 }
                 None => return, // client disconnected

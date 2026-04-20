@@ -239,7 +239,7 @@ fn spawn_signal_watcher(ctx: Arc<DaemonContext>) {
             _ = term.recv() => tracing::info!("signal watcher: SIGTERM received"),
             _ = intr.recv() => tracing::info!("signal watcher: SIGINT received"),
         }
-        ctx.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+        ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
         ctx.shutdown_notify.notify_waiters();
     });
 }

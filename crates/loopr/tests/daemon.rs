@@ -60,6 +60,105 @@ fn start_daemon(target: &Path) {
     panic!("daemon did not become ready in 3s");
 }
 
+// AC 3: `.loopr/daemon.version` must equal the binary's `GIT_DESCRIBE`.
+// This is the pivot that lets a client detect a version-mismatched
+// daemon and trigger a silent restart.
+#[test]
+fn ac3_version_file_matches_git_describe() {
+    let td = TempDir::new().unwrap();
+    start_daemon(td.path());
+
+    let written = fs::read_to_string(td.path().join(".loopr").join("daemon.version")).unwrap();
+    // The test binary and the loopr binary share the same workspace
+    // package version, so `env!("GIT_DESCRIBE")` in the test resolves
+    // to the same string `daemon.rs` wrote. Trim trailing newline.
+    assert_eq!(written.trim(), env!("GIT_DESCRIBE"), "version file content");
+
+    stop_daemon(td.path());
+}
+
+// AC 4: `.loopr/daemon.run-id` must name an existing directory under
+// `.loopr/runs/`. Log queries rely on this pointer.
+#[test]
+fn ac4_run_id_file_points_to_extant_run_dir() {
+    let td = TempDir::new().unwrap();
+    start_daemon(td.path());
+
+    let run_id = fs::read_to_string(td.path().join(".loopr").join("daemon.run-id")).unwrap();
+    let run_id = run_id.trim();
+    let run_dir = td.path().join(".loopr").join("runs").join(run_id);
+    assert!(
+        run_dir.is_dir(),
+        "daemon.run-id ({run_id}) points to extant dir: {}",
+        run_dir.display()
+    );
+
+    stop_daemon(td.path());
+}
+
+// AC 5: the daemon allocates its own telemetry guard and emits at least
+// one `daemon.started` event to its run dir's events.log.
+#[test]
+fn ac5_daemon_emits_started_event_to_its_own_events_log() {
+    let td = TempDir::new().unwrap();
+    start_daemon(td.path());
+
+    let run_id = fs::read_to_string(td.path().join(".loopr").join("daemon.run-id"))
+        .unwrap()
+        .trim()
+        .to_string();
+    let events = td.path().join(".loopr").join("runs").join(&run_id).join("events.log");
+    let pretty = td.path().join(".loopr").join("runs").join(&run_id).join("loopr.log");
+
+    // Give the tracing-appender a beat to flush the first event.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if events.is_file() && fs::metadata(&events).map(|m| m.len() > 0).unwrap_or(false) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let events_body = fs::read_to_string(&events).unwrap();
+    assert!(
+        events_body.contains("daemon.started"),
+        "events.log contains daemon.started: {events_body}"
+    );
+    assert!(pretty.is_file(), "pretty log exists: {}", pretty.display());
+
+    stop_daemon(td.path());
+}
+
+// AC 14: `loopr daemon start --foreground` while a background daemon is
+// already running must exit non-zero with a clear error that mentions
+// the running pid and directs the user at `loopr daemon stop`.
+#[test]
+fn ac14_foreground_start_blocked_by_running_background_daemon() {
+    let td = TempDir::new().unwrap();
+    start_daemon(td.path());
+    let pid = read_pid(td.path()).unwrap();
+
+    let assertion = loopr()
+        .args(["-C", td.path().to_str().unwrap(), "daemon", "start", "--foreground"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).to_string();
+    assert!(
+        stderr.contains("daemon already running"),
+        "stderr mentions collision: {stderr}"
+    );
+    assert!(
+        stderr.contains(&pid.to_string()),
+        "stderr mentions the running pid {pid}: {stderr}"
+    );
+    assert!(
+        stderr.contains("loopr daemon stop"),
+        "stderr hints at the fix: {stderr}"
+    );
+
+    stop_daemon(td.path());
+}
+
 // AC 6: `loopr -C /tmp daemon status` connects, handshakes, receives a
 // StatusResult, prints it in a human-readable form (key: value lines),
 // exits 0.

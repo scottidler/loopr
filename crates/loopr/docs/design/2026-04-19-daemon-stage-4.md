@@ -771,6 +771,60 @@ Design review surfaced five findings. All five were acted on in this draft.
 - **Concern:** a literal `0x0A` byte inside a string field would split the NDJSON line prematurely under `LinesCodec`, producing a parse error on the receiving end.
 - **Action:** reclassified from "assumption" to "verified": `serde_json::to_string` ASCII-escapes every control character in string values per RFC 8259, so `\n` in source data becomes `\\n` on the wire. Documented in §Security with a Phase 4 unit test (`{"message": "line1\nline2"}` round-trip) to pin the guarantee.
 
+## Implementation Errata (post-audit)
+
+Gemini's Architect persona audited the shipped implementation against this document and surfaced five deviations. All five were addressed before this section was written; the entries below record what the spec said, what the implementation actually does, and why.
+
+### 1. `RunId::allocate` moved to the lock-acquire phase
+
+**Spec (§Implementation Plan, Phase 3):** the lock-acquire phase ends with `sentinel::write_run_id`; "Allocate `RunId`" is listed as the first step of the active-daemon phase, which also calls `telemetry::init`.
+
+**Reality:** `write_run_id` needs the run-id string, so `RunId::allocate` MUST run before it. The implementation allocates `RunId` inside the lock-acquire phase, writes the sentinel, and then enters the active-daemon phase where `telemetry::init` consumes the same `RunId`. The `telemetry::init` itself still lives in the active-daemon phase.
+
+**Why this is safe:** `RunId::allocate` is pure filesystem I/O (`mkdir -p` + directory-scan for collision). It does not install a global subscriber, so nothing the parent COW-inherits is observable from the grandchild even if allocation fails. Placing allocation in the lock-acquire phase preserves the "no cleanup on failure" invariant: a failed allocation returns an error before any sentinel is written, and `run_grandchild` exits without calling `sentinel::clean`.
+
+### 2. `futures-util` added as a loopr dependency
+
+**Spec (§Technical Considerations → Dependencies):** lists `tokio`, `tokio-util`, `libc`, `uuid`, `chrono` and closes with "no other unnecessary deps creep in."
+
+**Reality:** `futures-util = "0.3"` with `features = ["sink"]` is also a runtime dep of `loopr`. `SinkExt::send` and `StreamExt::next` are defined in `futures-util`, not re-exported by `tokio-util`; they are the ergonomic extension traits that every `Framed<_, LinesCodec>` consumer needs. The crate is already pulled in transitively through the async-ecosystem tree; the explicit dep only surfaces the traits.
+
+**Why the deviation is kept:** the alternative is an in-house implementation of `poll_ready + start_send + poll_flush` everywhere we currently write `framed.send(line).await`, which is strictly worse for readability and adds zero safety. Documented rather than hidden.
+
+### 3. `ParseError::LineTooLong` log remap
+
+**Spec (§Acceptance Criteria, AC 20):** "a client sends a 2-MiB line; daemon logs `ParseError::LineTooLong` at `warn!`, closes the connection; daemon stays up."
+
+**Reality:** `LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES)` enforces the 1-MiB ceiling at the framing layer, before bytes reach `ipc::decode_request_line`. The codec surfaces `LinesCodecError::MaxLineLengthExceeded`, not `ipc::ParseError::LineTooLong`. `handle_client` now matches on the codec error and logs `"ParseError::LineTooLong (line exceeds MAX_LINE_BYTES=…)"` explicitly so the log fingerprint matches the spec. Functional behavior (close connection, daemon stays up) was already correct; this is a string-level alignment only.
+
+### 4. Atomic ordering softened from `SeqCst` to `Relaxed`
+
+**Spec (§API Design):** `ctx.shutting_down.load(Ordering::Relaxed)` at the loop top of `accept_loop` and `handle_client`.
+
+**Reality:** the first cut used `Ordering::SeqCst`. Post-audit restored `Ordering::Relaxed` per the spec. The flag carries no happens-before relationship with other data (the paired `Notify` is the synchronization primitive), so `Relaxed` is sufficient and matches the design.
+
+### 5. Tests for AC 3, 4, 5, 14, 20
+
+**Spec:** every AC item is an assertable check, and "the design is Done when every assertion below is true."
+
+**Reality:** the Phase 6 E2E suite covered AC 6-13, 15, 21, 22. The remaining five items were covered only transitively by inspection. Follow-up tests:
+
+- `ac3_version_file_matches_git_describe` (tests/daemon.rs): reads `.loopr/daemon.version`, asserts it equals `env!("GIT_DESCRIBE")`.
+- `ac4_run_id_file_points_to_extant_run_dir` (tests/daemon.rs): reads `.loopr/daemon.run-id`, asserts `.loopr/runs/<id>/` is a directory.
+- `ac5_daemon_emits_started_event_to_its_own_events_log` (tests/daemon.rs): reads the daemon's run-dir `events.log`, asserts it contains `daemon.started`.
+- `ac14_foreground_start_blocked_by_running_background_daemon` (tests/daemon.rs): starts a background daemon, invokes `daemon start --foreground`, asserts non-zero exit + stderr matches "daemon already running at pid X" + "loopr daemon stop".
+- `oversize_line_closes_connection_daemon_stays_up` (src/transport/server/tests.rs): sends a 2-MiB line on a fresh `UnixStream`, asserts the connection closes, then opens a second connection and completes a handshake to prove the daemon is still up.
+
+## Deferred work (tracked for future stages)
+
+Items surfaced by Stage 4 that are intentionally not addressed here. Each is linked to the stage that will own the fix; listing them keeps the Stage 4 close-out honest.
+
+- **Per-request telemetry context.** Every `handle_client` task opens an `ipc.connection` span with `conn_id`; every request log line carries `request_id` + `method`. The daemon's `run_id` is inherited from the run-level span. However, the `telemetry::init` call in `run_active_daemon` does not wrap the accept loop in a top-level run span, so `run_id` is only attached to events emitted inside the per-connection span tree. Harmless today because every event is emitted from inside a connection. Revisit during Stage 7 when the agent loop emits events without a live client connection.
+- **Graceful in-flight request drain on shutdown.** When `shutting_down` flips, the accept loop exits on the next iteration and every `handle_client` task exits on its next select. A task that is mid-`framed.send` at that instant may be aborted when the tokio runtime drops. For Stage 4 the only responses are `HandshakeResult` (tens of bytes) and `StatusResult` (hundreds of bytes), so the drop hazard is negligible. Stage 7 will need a `JoinSet` + bounded graceful-shutdown timeout once responses carry agent bundle payloads. Noted in Risks table row 7.
+- **macOS `/proc` fallback smoke-test.** `is_daemon_alive` uses `/proc/<pid>/comm` when the file exists and falls back to `ps -p <pid> -o comm=` on hosts without procfs. The fallback path is exercised only in the AC-15 PID-1 test. Stage 4 runs Linux-primary (§Non-Goals); a future CI-on-macOS job is where the fallback gets real coverage.
+- **`ipc::MethodName` typed `plan.create`.** `Command::Plan` currently uses `request_raw("plan.create", …)` — the explicit Stage-4-only escape hatch per §API Design. Stage 5 adds `MethodName::PlanCreate` paired with a `Method::PlanCreate` handler arm; the `request_raw` call in `lib::plan_command` flips to `request(MethodName::PlanCreate, …)` at that same seam.
+- **`daemon status --json` output.** `daemon_status` emits a fixed multi-line human format. Open Question §daemon status output format flags this for the first user who pipes it to `jq`.
+
 ## References
 
 - [`docs/vision.md`](../../../../docs/vision.md) §ipc (lines 179-196), §loopr (lines 191-198), §Target Repo Layout (lines 270-300), §Worktree crash recovery (line 303; informs the general "reconcile on startup" ethos).

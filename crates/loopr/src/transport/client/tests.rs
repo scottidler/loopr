@@ -65,7 +65,7 @@ async fn client_handshake_then_status() {
     assert_eq!(st.pid, ctx.pid);
 
     drop(client);
-    ctx.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
@@ -92,7 +92,7 @@ async fn client_request_raw_unknown_method_returns_method_not_found() {
     }
 
     drop(client);
-    ctx.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
@@ -128,7 +128,7 @@ async fn client_handshake_version_mismatch_closes_connection() {
     }
 
     drop(client);
-    ctx.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
