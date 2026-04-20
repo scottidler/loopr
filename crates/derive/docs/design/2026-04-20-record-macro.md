@@ -2,8 +2,8 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-20
-**Status:** Draft
-**Review Passes Completed:** 5/5
+**Status:** Draft (5/5 Rule-of-Five + 1 Architect-review round)
+**Review Passes Completed:** 5/5 + Architect
 
 ## Summary
 
@@ -58,8 +58,11 @@ v3 did not have this derive. v4 did not have this derive. This is net-new codege
 - **A `#[derive(Record)]` macro** that attaches to a struct (never an enum), inspects `#[record(...)]` helper attributes on the struct and its fields, and generates `impl ::taskstore_traits::Record for StructName { … }` with the four required methods.
 - **Default collection name** derived from the struct's ident: lowercase + append `"s"`. `Plan` → `"plans"`, `Work` → `"works"`, `Phase` → `"phases"`, `Bundle` → `"bundles"`, `Tick` → `"ticks"`. Overridable via `#[record(collection = "custom-name")]` for the v4 precedents where the default doesn't fit (v4's `Coverage` → `"coverage_reports"`, v4's `Validation` → `"validation_reports"`).
 - **`id` field requirement**: the struct must have a field literally named `id`, whose type implements `AsRef<str>`. The generated `fn id(&self) -> &str` emits `self.id.as_ref()`. This works for `id: String` (stdlib impl) and for typed-ID newtypes `id: PlanId` where `PlanId: AsRef<str>` (standard pattern in `domain`). The macro does NOT verify the trait bound at expansion — that's rustc's job, and its error (`the trait bound PlanId: AsRef<str> is not satisfied`) is exactly what the consumer needs to see.
-- **`updated_at` field requirement**: a field literally named `updated_at`, of type `i64`. The generated `fn updated_at(&self) -> i64` emits `self.updated_at`. As with `id`, the macro does not inspect the type — rustc's return-type mismatch error is the appropriate surface.
-- **Indexed fields via `#[record(indexed)]` on field declarations**. The derive collects every field carrying the attribute, emits one `.insert(…)` per field into the returned `HashMap<String, IndexValue>`. Key is the field name as a string literal (snake_case, matching Rust field names and v4's map-key convention). Value is `::taskstore_traits::IndexValue::String(::std::string::ToString::to_string(&self.field))`. Rationale: every indexed field in v4 is coerced through `.to_string()` (via strum's kebab-case `Display` for enums and `String::clone()` for strings); using `ToString::to_string` unconditionally handles both and gives a single codegen path. Numeric and boolean indexing are not needed at first-gate and are left as future attribute options (see §Non-Goals).
+- **`updated_at` field requirement**: a field literally named `updated_at`, of type `i64`. The generated `fn updated_at(&self) -> i64` emits `self.updated_at`. Unlike the `id` field (whose type varies — `String`, typed IDs, etc.), `updated_at` has exactly one valid shape, and a wrong shape is always a consumer mistake rather than a new use case. The validator therefore performs a `syn::Type` path-segment check at expansion: the type must be `i64` (or a path ending in `i64`). A spanned `compile_error!` fires at the field declaration with "expected `i64` for `updated_at`" — higher-signal than rustc's generated-body return-type mismatch.
+- **Indexed fields via `#[record(indexed)]` or `#[record(indexed(key = "…"))]` on field declarations**. The derive collects every field carrying either form, emits one `.insert(…)` per field into the returned `HashMap<String, IndexValue>`:
+    - Map key: by default the Rust field name verbatim (e.g., `status`, `parent_id`). The `indexed(key = "…")` form overrides this with an explicit string literal; use when a consumer's field name diverges from the caller-facing index name (for example, after a `#[serde(rename_all = "camelCase")]` makes the JSON wire key camelCase while the Rust field stays snake_case — the `indexed(key = …)` override lets the index map align with the wire form). Without the override, the map key is always the Rust field name; callers writing `Filter::Eq("…", …)` must use that convention.
+    - Map value: `::taskstore_traits::IndexValue::String(::std::string::ToString::to_string(&self.field))`. Every indexed field in v4 is coerced through `.to_string()` (via strum's kebab-case `Display` for enums and `String::clone()` for strings); using `ToString::to_string` unconditionally handles both and gives a single codegen path. Numeric and boolean indexing are not needed at first-gate — left as future attribute options (see §Non-Goals).
+    - **`Option<T>` handling:** when the macro sees a field whose type is a `syn::Type::Path` ending in `Option` (best-effort detection; aliased `type Option<T> = MyOption<T>` would defeat it, which is the consumer's problem), it emits a conditional `if let Some(v) = &self.field { m.insert(key, IndexValue::String(v.to_string())); }`. `None` values are simply omitted from the map, matching the "absent means unset" semantic that filter queries naturally support. Consumers can index `parent_id: Option<PlanId>` directly — the common Stage 6+ case of orphan Works with no parent is covered without a separate attribute form.
 - **Struct-only.** The derive rejects enums and unions at expansion with a spanned `compile_error!`. `taskstore_traits::Record` requires `Serialize + Deserialize + Clone + Send + Sync + 'static` — trivially satisfiable for a struct of owned serde types and impossible to meaningfully derive for an enum without tagging choices that belong to the consumer.
 - **Unit structs and tuple structs are rejected**. Named-field structs only. A record with no id / no updated_at has no business being persistable; the attribute-driven indexed-field mechanism requires named fields to address.
 - **No runtime dependency added to consumers** beyond what they already have. Consumers already depend on `taskstore-traits` (via `domain`'s Cargo.toml). The derive crate itself does not depend on `taskstore-traits`; generated code resolves `::taskstore_traits::Record` at the consumer's compile time, same pattern as `Fsm`'s `::domain::FsmError<S>`.
@@ -69,9 +72,11 @@ v3 did not have this derive. v4 did not have this derive. This is net-new codege
     - Struct is generic. Stage 5+ records are all non-generic; earn it later.
     - No field literally named `id`.
     - No field literally named `updated_at`.
+    - `updated_at` field's type path does not end in `i64` (per-field syn-level check; higher-signal than rustc's generated-body error).
     - `#[record(...)]` appears more than once on the struct itself (merge into a single attribute, same rule as `Fsm`).
     - `#[record(collection = …)]` value is not a string literal, or is empty.
-    - `#[record(indexed)]` appears on a field with the same name twice (name-collision across duplicate attributes; not a real case but trivially detectable).
+    - Two `#[record(indexed)]` attributes on the same field (duplicate; trivially detectable).
+    - `#[record(indexed(key = …))]` has an empty or non-string-literal value, or produces a map key that collides with another indexed field's key (duplicate keys would cause silent last-writer-wins in the HashMap).
     - Unknown keys inside `#[record(...)]` (exhaustive keyword match; typos like `#[record(collecton = "plans")]` fail with a clear hint).
 
 ### Non-Goals
@@ -146,6 +151,9 @@ pub struct Plan {
     #[record(indexed)]
     pub tier: Tier,                      // Tier: strum::Display -> "tier1", "tier2", …
 
+    #[record(indexed(key = "parentId"))] // override: map key "parentId" (wire form), field name stays parent_id
+    pub parent_id: Option<PlanId>,       // Option is detected; None omits the entry
+
     pub goal: String,                    // not indexed, not mentioned
     pub created_at: i64,                 // not indexed, not mentioned
 }
@@ -179,6 +187,13 @@ impl ::taskstore_traits::Record for Plan {
             "tier".to_string(),
             ::taskstore_traits::IndexValue::String(::std::string::ToString::to_string(&self.tier)),
         );
+        // Option<PlanId> — detected via syn::Type::Path ending in Option; conditional insert
+        if let ::std::option::Option::Some(ref v) = self.parent_id {
+            m.insert(
+                "parentId".to_string(),   // key override from #[record(indexed(key = "parentId"))]
+                ::taskstore_traits::IndexValue::String(::std::string::ToString::to_string(v)),
+            );
+        }
         m
     }
 }
@@ -194,23 +209,33 @@ struct_arg         := "collection" "=" string_literal
 record_field_attr  := "#[record(" field_arg ")]"
 
 field_arg          := "indexed"
+                    | "indexed" "(" "key" "=" string_literal ")"
 ```
 
-Argument vocabulary is intentionally tiny. If a key that isn't `collection` appears on the struct, or any key other than `indexed` appears on a field, the macro emits a spanned `compile_error!` pointing at the offending token with an explicit "expected one of: …" message.
+Argument vocabulary is intentionally tiny. If a key that isn't `collection` appears on the struct, or any key other than `indexed` / `indexed(key = …)` appears on a field, the macro emits a spanned `compile_error!` pointing at the offending token with an explicit "expected one of: …" message.
 
 **IR during macro expansion:**
 
 ```rust
 struct RecordIr {
     struct_ident: syn::Ident,                 // e.g. "Plan"
-    collection_name: String,                  // "plans" (either derived or from collection = "...")
-    indexed_fields: Vec<syn::Ident>,          // fields carrying #[record(indexed)]
+    collection_name: String,                  // "plans" (derived or from collection = "...")
+    indexed_fields: Vec<IndexedFieldIr>,
+}
+
+struct IndexedFieldIr {
+    field_ident: syn::Ident,                  // the Rust field ident, for `&self.#ident`
+    map_key: String,                          // map key in indexed_fields() HashMap
+                                              //   — defaults to field_ident.to_string()
+                                              //   — overridden by #[record(indexed(key = "..."))]
+    is_optional: bool,                        // true when the field's type is syn-detected as
+                                              // `Option<T>` (emit wraps insert in `if let Some`)
 }
 ```
 
-The IR carries `Ident` rather than a pre-computed string for indexed fields because `emit.rs` already needs the `Ident` for the `&self.#ident` reference and can trivially call `.to_string()` when building the map key. Pre-computing would duplicate state.
-
 Notably absent: no `id_field` or `updated_at_field` fields on the IR. Their names are hardcoded (`id`, `updated_at`), so the IR carries only what varies across record types.
+
+Option-detection rule for `is_optional`: the macro walks `syn::Type::Path` and marks the field optional if the last path segment's ident equals `"Option"` and it has exactly one angle-bracketed generic argument. This catches `Option<T>`, `std::option::Option<T>`, and `core::option::Option<T>` but misses user-level type aliases (`type MaybeId = Option<String>`). When the detection is wrong, the generated code either fails at rustc with a legible error (`Display not implemented for MaybeId`) or the consumer writes `Option<...>` directly. Consumers who alias `Option` are vanishingly rare; the fragility is acceptable.
 
 ### API Design
 
@@ -240,12 +265,12 @@ Three phases, each a single-commit milestone. (Fewer than the Fsm derive's four 
 **Model:** opus
 
 - Add `src/record.rs` as module entry (2018+ style).
-- Add `src/record/parse.rs` — `DeriveInput` + struct / field `#[record(...)]` attrs → `RecordIr`. Hand-rolled `Parse` impls, mirroring `fsm/parse.rs`.
-- Add `src/record/validate.rs` — the compile-time checks from §Goals, one spanned `compile_error!` per failure.
-- Add `src/record/emit.rs` — `quote!`-driven emission of the full `impl ::taskstore_traits::Record for StructName` block including `indexed_fields` construction (`HashMap::insert` per `#[record(indexed)]` field, each wrapping `ToString::to_string(&self.field)` in `IndexValue::String`).
+- Add `src/record/parse.rs` — `DeriveInput` + struct / field `#[record(...)]` attrs → `RecordIr`. Hand-rolled `Parse` impls, mirroring `fsm/parse.rs`. Parses `indexed` and `indexed(key = "…")` into `IndexedFieldIr`. Option detection walks the field's `syn::Type::Path`.
+- Add `src/record/validate.rs` — the compile-time checks from §Goals, one spanned `compile_error!` per failure. Includes the `updated_at: i64` type-path check and the duplicate-map-key check across `IndexedFieldIr.map_key` values.
+- Add `src/record/emit.rs` — `quote!`-driven emission of the full `impl ::taskstore_traits::Record for StructName` block including `indexed_fields` construction. Each `IndexedFieldIr` produces either an unconditional `HashMap::insert(...)` or (when `is_optional`) an `if let Some(ref v) = self.field { m.insert(...) }` guard. Map keys come from `IndexedFieldIr.map_key` so the `indexed(key = "…")` override threads through correctly.
 - Update `src/lib.rs` with `#[proc_macro_derive(Record, attributes(record))]` entry point alongside the existing `Fsm` entry.
 - Rationale for one-phase (instead of parse/validate/emit split across commits): the Fsm derive proved the three-stage pipeline works and is debuggable; for a second derive in the same crate using the same patterns, splitting provides no additional safety and creates a window where the derive callable emits nothing (a form of "half-finished implementation").
-- Model = opus because generated code must thread fully-qualified paths (`::taskstore_traits::*`, `::std::collections::HashMap`, `::std::string::ToString`) correctly across any consumer crate's import state. Path-hygiene bugs in proc macros are notoriously hard to see from outside rust-analyzer.
+- Model = opus because generated code must thread fully-qualified paths (`::taskstore_traits::*`, `::std::collections::HashMap`, `::std::string::ToString`, `::std::option::Option`) correctly across any consumer crate's import state. The Option-conditional codegen adds one more dimension of expansion-time correctness; path-hygiene bugs in proc macros are notoriously hard to see from outside rust-analyzer.
 
 #### Phase 2: integration tests + trybuild compile-fail
 
@@ -256,14 +281,18 @@ Three phases, each a single-commit milestone. (Fewer than the Fsm derive's four 
     - Override fixture using `#[record(collection = "plans-v2")]`.
     - Zero-indexed fixture (no `#[record(indexed)]` anywhere) produces an empty `HashMap`.
     - Typed-ID fixture with `PlanId(String)` + `impl AsRef<str>`; `record.id()` returns the inner `&str`.
+    - `Option<T>` fixture with `#[record(indexed)] parent_id: Option<String>`; `None` produces a map missing the key; `Some("x")` produces an entry `"parent_id" -> IndexValue::String("x")`.
+    - Key-override fixture with `#[record(indexed(key = "parentId"))] parent_id: Option<String>`; verifies the map key is `"parentId"`, not `"parent_id"`.
 - `crates/derive/tests/compile-fail/record-*.rs` — one fixture per validation check, goldens via `TRYBUILD=overwrite`:
     - `record-on-enum.rs` — non-struct rejection.
     - `record-tuple-struct.rs` — tuple-variant rejection.
     - `record-unit-struct.rs` — unit-variant rejection.
     - `record-missing-id.rs` — no `id` field.
     - `record-missing-updated-at.rs` — no `updated_at` field.
+    - `record-wrong-updated-at-type.rs` — `updated_at: u64` or `updated_at: String` (validator catches the type mismatch at the field ident, not in the generated body).
     - `record-unknown-struct-key.rs` — `#[record(collecton = …)]` typo.
     - `record-unknown-field-key.rs` — `#[record(indexe)]` typo on a field.
+    - `record-duplicate-map-key.rs` — two fields with `#[record(indexed(key = "same"))]`.
     - `record-generic-struct.rs` — generic structs rejected.
     - `record-multi-attr.rs` — two `#[record(...)]` attributes on the struct.
 - `tests/trybuild.rs` already globs `compile-fail/*.rs`; new fixtures pick up automatically.
@@ -360,7 +389,7 @@ Generated code does no I/O, no subprocess execution, no secret handling. The Rec
 | `updated_at: i64` locks the unit to milliseconds; if the project later wants `DateTime<Utc>` or `SystemTime`, the derive breaks | Low | Medium | `i64` ms matches `taskstore-traits::Record::updated_at`'s signature. Any unit change is a trait-crate change first; the derive reacts to that, not the other way around. |
 | Hand-written `impl Record for X` and `#[derive(Record)]` on the same type → duplicate impl | Low | Low | rustc's "conflicting implementations" error is the right surface. Derive doesn't pre-check. |
 | An indexed field's type does not implement `Display` → `ToString::to_string(&self.field)` fails to compile | Low | Low | rustc error points at the indexed attribute / field. Clear message ("Display is not implemented for T"). Fix is on the consumer. |
-| Common-case `Option<T>` fields cannot be indexed (the `Display` rule above rejects them) | Medium | Medium | See §Open Questions. Current plan: flag at macro expansion with a clearer "use a concrete type, not Option, or add `#[record(indexed_optional)]` (not yet implemented)" message if we detect a path-segment match for `Option`. Since `syn::Type` can't reliably distinguish `std::option::Option<T>` from a user-aliased `type Option<T> = ...`, the detection is best-effort. Worst case: rustc's native "Display not implemented for Option<T>" error surfaces and the consumer files the fix. |
+| `Option<T>` detection via `syn::Type::Path` segment match is defeated by user-level type aliases (`type Foo = Option<String>`) | Low | Low | Detection is best-effort; aliased Option produces either a rustc "Display not implemented for Foo" error (if the alias points at a user newtype) or a correct conditional insert (if rustc can see through the alias to `Option<T>`, which it usually can't at macro-expansion time). Consumers who need detection for an alias either inline `Option<T>` directly or write a manual `impl Record`. No known real case. |
 | Default collection-name pluralization bites (`Strategy` → `"strategys"`) | Medium | Low | Document the simple rule; offer `#[record(collection = "…")]` as the standard override. Every real v4 case either fit the simple rule or already used an override. |
 | Derive emits a generated `impl` with a method-name collision against the consumer's own inherent impl on the same type | Low | Low | Inherent methods win the resolution fight for direct calls; trait method still reachable via `<X as Record>::collection_name()`. No compile error from the overlap. |
 | `#[record(...)]` helper attribute usage creep — someone wants nested structure like `#[record(collection = "…", audit_log = true)]` | Medium | Low | Design says exactly two keys (`collection` struct-level, `indexed` field-level). Anything else is rejected at validate. Reserve grammar space for future expansion if a use case earns it; don't pre-build. |
@@ -369,13 +398,10 @@ Generated code does no I/O, no subprocess execution, no secret handling. The Rec
 ## Open Questions
 
 - [ ] **Pluralization rule refinement.** Lowercase + `"s"` handles every v4 record except two, and v5's initial six (Plan, Work, Spec, Phase, Bundle, Tick) all fit cleanly. If we ever hit a record name ending in `s`, `x`, `z`, `ch`, or `sh` (where English plural would add `es`), the default would produce an awkward `"boxs"` or similar. Current plan: don't preempt; require the consumer to use `#[record(collection = "…")]` if the default is awkward. Flagged here for future reviewers.
-- [ ] **Should `#[record(indexed)]` accept a key override?** E.g., `#[record(indexed(key = "status_display"))]` to let the HashMap key diverge from the Rust field name. v4 always aligned them; v5 has no call for divergence yet. If a use case shows up (serde rename forcing a wire name different from the Rust field name?), extend the grammar.
 - [ ] **Should the derive also emit `const COLLECTION_NAME: &str`?** A free-standing `const` lets callers write `taskstore.get::<Plan>(&Plan::COLLECTION_NAME, id)` instead of `Plan::collection_name()`. Marginal benefit; easy to add later. Not in v1.
-- [ ] **Compile-time check for `i64` on `updated_at`?** Currently delegated to rustc's return-type mismatch on `fn updated_at(&self) -> i64`. Could add an explicit syn-level type-ident check for earlier / friendlier error. Deferred; rustc's message is already adequate.
 - [ ] **Typed-ID ecosystem coordination with `records.md`.** This doc says "id: PlanId works if PlanId: AsRef<str>". The `records.md` design (not yet written) must land the actual `PlanId` / `WorkId` newtype structs with those impls. Noted here so `records.md` doesn't forget.
-- [ ] **Serde-rename interaction with indexed-field keys.** `indexed_fields()` keys are the Rust field name verbatim. If the consumer later adds `#[serde(rename = "statusCode")]` or `#[serde(rename_all = "camelCase")]`, the JSONL file on disk and the `indexed_fields` map key will diverge (JSON: `"statusCode"`; index key: `"status_code"`). Callers filtering via `Filter::Eq("status_code", …)` get what they expect; callers who assume the index key matches the wire name get surprised. Current plan: document that indexed keys are Rust names, not wire names. If this bites, add `#[record(indexed(key = "…"))]` to override the map key independently of serde.
-- [ ] **`Option<T>` fields marked `#[record(indexed)]`.** The generated code calls `ToString::to_string(&self.field)`. `Option<T>` does not implement `Display`, so indexing an `Option<String>` field produces a rustc error at expansion-downstream. v4 never hit this (`Work::parent_id` is `String`, not `Option<String>`). If v5 wants optional indexed fields (e.g., a `Work` with no parent for standalone tasks), we need a path: either (a) document that indexed fields must be non-optional, (b) introduce a second attribute `#[record(indexed_optional)]` that emits `if let Some(v) = &self.field { m.insert(…) }`, or (c) detect `Option<T>` at the `syn::Type` level and handle it automatically (fragile; syn can see the path `Option` but not its type alias). Defer until Stage 5+ shows a concrete need.
 - [ ] **Indexing the `id` or `updated_at` field.** Nothing in the design forbids `#[record(indexed)] pub id: String`, which produces `m.insert("id", IndexValue::String(self.id.to_string()))` alongside the `id()` method. Semantically reasonable (some stores index by primary key for redundant fast lookup). Not restricted; flagged so future readers understand it's an intentional non-restriction, not an oversight.
+- [ ] **Numeric / boolean `IndexValue` variants.** The taskstore SQLite schema has dedicated `field_value_int` and `field_value_bool` columns alongside `field_value_str`; v1 of this derive only emits `IndexValue::String`. When a future record wants numeric range filtering (e.g., `updated_at` range queries, `retry_count > 3`), add `#[record(indexed_int)]` / `#[record(indexed_bool)]` forms. Not speculative — the taskstore engine already supports it; the derive simply hasn't exposed the capability yet. Earn it when a real call site needs it.
 
 ## References
 
@@ -386,3 +412,53 @@ Generated code does no I/O, no subprocess execution, no secret handling. The Rec
 - [`crates/derive/docs/CLAUDE.md`](../CLAUDE.md) §What lives here: single-crate designs go in `crates/derive/docs/design/`. This doc qualifies (no types added to `domain`; all generated references resolve against the existing `taskstore_traits` dep).
 - `taskstore-traits` crate (`scottidler/taskstore`, branch `main`, workspace dep): source for the `Record` trait signature and `IndexValue` shape.
 - v4 reference: `~/repos/scottidler/loopr-v4/src/domain/{plan,work,tick,…}.rs` — 11 hand-written `impl Record for X` blocks. Same shape each time; target to collapse.
+
+---
+
+## Addendum: Architect Review (pre-implementation)
+
+After converging at 5/5 Rule-of-Five passes, this doc went to an Architect consultation (Gemini via `~/.claude/skills/architect/script.sh`). Three of the Architect's findings were accepted and are now folded into the design above; two were pushed back on or deferred with explicit rationale. Logged here so future readers can see what was tried and why.
+
+### Accepted and incorporated
+
+1. **`Option<T>` as first-class indexed-field behavior (was: Non-Goal / Open Question).**
+   - Architect critique: "The moment Stage 6 introduces a `Work` item with an optional `assigned_to` or `parent_id`, this macro fails entirely because `Option<String>` does not implement `Display`."
+   - Accepted. The design no longer defers Option handling. The macro now walks `syn::Type::Path`, detects `Option<T>` as a best-effort path-segment match, and emits conditional `if let Some(ref v) = &self.field { m.insert(…) }` code. `None` values produce no map entry; `Some(v)` indexes the inner value. Open Question retired; non-alias consumers are covered. Documented in §Goals and §Data Model.
+
+2. **`#[record(indexed(key = "…"))]` override promoted from Open Question to first-class grammar.**
+   - Architect critique: "You are institutionalizing a split-brain schema where the derive macro and `serde` operate in uncoordinated silos." (referring to the drift between Rust field names and serde-rename'd wire names).
+   - Accepted. Grammar extended in §Data Model; the `field_arg` rule now carries two forms, `indexed` and `indexed(key = "…")`. The input example in §Data Model shows the override in use. Open Question retired.
+
+3. **`updated_at: i64` type check in `validate.rs` (was: deferred to rustc).**
+   - Architect critique: "A simple `syn::Type` check during the validate phase would emit a much higher-signal error directly at the struct field definition."
+   - Accepted. §Goals validation list now carries the check explicitly; §Implementation Plan Phase 1 scope includes it. A new compile-fail fixture `record-wrong-updated-at-type.rs` pins the behavior. Open Question retired.
+
+### Pushed back on
+
+1. **Allocation floor from `ToString::to_string` coercion.**
+   - Architect framing: "the `Record` trait shape combined with brute-force `ToString` scales poorly … during mass operations (e.g., rebuilding indices on a node or syncing a large chunk of records), generating this map for thousands of `Work` records will repeatedly trash the allocator."
+   - Pushback: verified against `scottidler/taskstore@64036fa` — `indexed_fields()` is called in exactly two places in the engine (`store.rs:275` inside `create_many`'s validation+prep phase, and `store.rs:735` inside `rebuild_indexes<T>` which is an explicit slow-path recovery operation). Never called during queries. At write time the HashMap allocation is dominated by `serde_json::to_string` + JSONL I/O + SQLite transaction commit; the map is not the bottleneck. Pre-optimizing the allocation path would require either a `&[u8]`-typed IndexValue surface (not what taskstore-traits exposes) or a zero-alloc intermediate representation (premature). Re-examine only if a benchmark surfaces it as a real cost, not based on a priori framing. Design stays with `ToString::to_string`.
+
+### Deferred with explicit rationale
+
+1. **Pluralization smarts for collection names.**
+   - Architect framing: "`Status` → `'statuss'`, `Strategy` → `'strategys'` … developers forgetting to add `#[record(collection = "x")]` codifies typos into persistent storage paths."
+   - Deferred. The fallback rule (lowercase struct ident + `"s"`) matches all six Stage 5 record names (Plan, Work, Spec, Phase, Bundle, Tick) and 9/11 v4 record names. The two v4 outliers (`Coverage`, `Validation`) used explicit overrides. Awkward defaults surface loudly on first test run — the file name in `.taskstore/` tells you immediately. The override attribute is discoverable and cheap. No v5 record in Stages 5–8 trips the edge case; no reason to add English-plural rules to the macro now. Flagged as an Open Question for future review.
+
+2. **Typed-ID traits: `AsRef<str>` vs. `Deref<Target=str>`.**
+   - Architect framing: "If a consumer uses a standard derive macro that provides `Deref<Target=str>` or `Into<String>` but not `AsRef`, the generated code fails opaquely."
+   - Deferred. Standard newtype-ID ecosystems (`nutype`, `derive_more`, hand-rolled) emit `AsRef<str>` first because that's the common consumer of typed IDs. A consumer who lands on `Deref`-only gets a clear rustc error pointing at the generated `self.id.as_ref()` call; adding `impl AsRef<str>` is a one-liner. Not worth threading a more permissive trait surface (e.g., a sealed helper trait accepting both `AsRef` and `Deref`) at v1. Re-examine if a real consumer actually arrives with `Deref`-only.
+
+### Net design diff vs. pre-review 5/5 draft
+
+- §Goals: +1 validation bullet (`updated_at` type check), extended `indexed` bullet (grammar + Option handling).
+- §Non-Goals: unchanged. (The numeric/bool indexing Non-Goal was reframed into Open Questions as an earned feature, not deferred speculation.)
+- §Data Model: grammar gained `indexed(key = "…")`; input example gained an `Option<PlanId>` field using both the override and the Option path; generated output shows the conditional `if let Some` arm; IR grew an `IndexedFieldIr` struct.
+- §Implementation Plan Phase 1: scope expanded to cover Option detection, key-override parsing, and the `updated_at` type check.
+- §Risks: the "Option<T> fields cannot be indexed" row replaced with the narrower "syn detection defeated by type aliases" risk.
+- §Open Questions: three items retired (Option handling, serde-rename drift, indexed key override) now that they're settled behavior; one new item added (numeric/bool `IndexValue` variants as earned future features).
+- §Addendum: this section, capturing the review's audit trail.
+
+### Architect items not addressed
+
+None. Every Architect finding has either a corresponding design change or an explicit rationale above.
