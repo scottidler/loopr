@@ -21,6 +21,21 @@ pub enum LooprError {
 
     #[error("telemetry setup failed: {0}")]
     TelemetryInit(String),
+
+    #[error("ipc client error: {0}")]
+    ClientIo(String),
+
+    #[error("daemon startup failed: {0}")]
+    DaemonStartup(String),
+
+    #[error("daemon pid lock already held by another grandchild")]
+    LockLost,
+
+    #[error("handshake failed: {0}")]
+    HandshakeFailed(String),
+
+    #[error("daemon returned rpc error: {0}")]
+    Rpc(#[from] ipc::RpcError),
 }
 
 fn parent_hint(path: &Path) -> String {

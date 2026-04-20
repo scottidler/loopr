@@ -1,10 +1,12 @@
 use std::path::Path;
 
 pub mod cli;
+pub mod daemon;
 pub mod error;
 pub mod guard;
 pub mod logs;
 pub mod target;
+pub mod transport;
 
 pub use cli::{Cli, Command, DaemonCmd, LogsCmd};
 pub use error::LooprError;
