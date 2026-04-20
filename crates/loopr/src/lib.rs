@@ -19,6 +19,51 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let effective = target::resolve(cli.chdir.as_deref(), env_target.as_deref(), &cwd)?;
     guard::check(&effective)?;
 
+    // Fork hoist: handle or ensure the daemon BEFORE any telemetry init.
+    // `tracing::subscriber::set_global_default` sets a per-process "already
+    // installed" flag; `fork()` COW-inherits that flag, so a second
+    // telemetry::init in the grandchild would crash on AlreadyInitialized.
+    // By routing every fork-triggering command through this block (which
+    // runs PRE-telemetry), the parent never touches a subscriber before
+    // the fork, and the grandchild inherits a clean subscriber state.
+    //
+    // This is also where `daemon start --foreground` is recognized so the
+    // foreground branch (which IS the daemon) doesn't init a second
+    // subscriber on top of the one `daemon_main` will install.
+    match &cli.command {
+        Command::Daemon {
+            cmd: DaemonCmd::Start { foreground: false },
+        } => {
+            // Background daemon start: parent forks and exits. Never inits
+            // client-side telemetry.
+            daemon::ensure_daemon(&effective)?;
+            println!("daemon started");
+            return Ok(());
+        }
+        Command::Daemon {
+            cmd: DaemonCmd::Start { foreground: true },
+        } => {
+            // Foreground daemon: this process IS the daemon. No fork. Run
+            // daemon_main directly so its own telemetry init is the only
+            // subscriber installation on this process.
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| LooprError::DaemonStartup(format!("runtime build: {e}")))?;
+            return rt.block_on(daemon::daemon_main(effective));
+        }
+        Command::Plan { .. }
+        | Command::Decompose { .. }
+        | Command::Execute { .. }
+        | Command::Integrate
+        | Command::Daemon { cmd: DaemonCmd::Status } => {
+            // Client commands that need a live daemon: ensure one exists
+            // before the parent installs its own telemetry subscriber.
+            daemon::ensure_daemon_if_needed(&effective)?;
+        }
+        _ => {}
+    }
+
     let label = cli.command.label();
 
     // Telemetry init. Declaration order is load-bearing: Rust drops locals in
@@ -96,6 +141,8 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             subcommand: "integrate",
         }),
         Command::Daemon { cmd } => match cmd {
+            // `Start` is handled above in `run` (pre-telemetry); it never
+            // reaches `dispatch`. `Stop` and `Status` are Phase 5 bodies.
             DaemonCmd::Start { .. } => Err(LooprError::StageUnimplemented {
                 stage: 4,
                 subcommand: "daemon-start",

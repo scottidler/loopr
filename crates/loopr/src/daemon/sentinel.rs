@@ -10,12 +10,6 @@
 //! Everything here is sync; no tokio. Callers that want to wait for the
 //! daemon to become ready live in the transport layer.
 
-// Phase 2 ships the sentinel helpers in isolation. Phase 3 wires them into
-// `daemon::ensure_daemon` / `daemon_main`; the `allow` below is the
-// "active transition" exception to the usual `#![deny(dead_code)]` rule,
-// and is removed in Phase 3 once every helper is consumed.
-#![allow(dead_code)]
-
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};

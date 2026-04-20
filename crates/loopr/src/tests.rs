@@ -97,22 +97,11 @@ fn run_integrate_returns_stage_8() {
     ));
 }
 
-#[test]
-fn run_daemon_start_returns_stage_4() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "daemon", "start"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 4,
-            subcommand: "daemon-start"
-        }
-    ));
-}
+// `run_daemon_start_returns_stage_4` was removed at Stage 4 Phase 3:
+// `daemon start` (background) is now handled by `lib::run`'s pre-
+// telemetry fork hoist and never reaches `dispatch`. The background-fork
+// behavior is smoke-tested end-to-end in
+// `tests/smoke.rs::daemon_start_forks_daemon_and_writes_sentinels`.
 
 #[test]
 fn run_daemon_stop_returns_stage_4() {
