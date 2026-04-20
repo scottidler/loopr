@@ -101,7 +101,7 @@ The persistence anti-corruption layer. Wraps `scottidler/taskstore` with type-sa
 The pure symbol layer. Records and invariants only.
 
 - `Plan`, `Spec`, `Phase`, `Work`, `Bundle`, `Tick` — record structs with `#[derive(Fsm, Record)]`.
-- `FsmTransition<T>` — const transition tables with role guards. A transition that isn't in the table is a compile-time mismatch, not a runtime YAML lookup.
+- `#[derive(Fsm)]`-generated state machines — compile-time transition dispatch with role guards expanded as `match (from, to)` arms. A transition that isn't in the table is a compile-time mismatch, not a runtime YAML lookup. Transition tables live inside each status enum's generated `validate_transition` body; there is no publicly-exposed `FsmTransition<T>` wrapper type. Rich error context (valid targets per state, with and without overrides) is pre-generated at macro-expansion time into const slices stored on the `FsmError<S>` returned from a rejection. See [`docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md).
 - `Status`, `Role`, `Tier`, and typed IDs (`PlanId`, `WorkId`, `RunId`, ...).
 - No I/O. No `rusqlite`, no `fs2`, no `tokio`. Compile-time enforced by omission of those deps from `domain/Cargo.toml`.
 
@@ -618,7 +618,7 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 
 **Closed:**
 - **TaskStore:** git dep on `scottidler/taskstore`. (No vendoring.)
-- **Fsm derive:** port `#[derive(Fsm)]` from v4's `loopr-derive`. Rehomed in `crates/derive` under v5's single-word naming convention. New `#[derive(Record)]` joins it; derives only, no function-like or attribute macros.
+- **Fsm derive:** revive `#[derive(Fsm)]` from v3's `loopr-derive` (v4 deleted it in favor of a runtime YAML interpreter that v5 also rejects). Rehomed in `crates/derive` under v5's single-word naming convention. The v5 shape is v3's compile-time derive plus v4's rich-error output minus v4's YAML/string-dispatch regressions; full rationale and provenance in [`docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md). New `#[derive(Record)]` joins it; derives only, no function-like or attribute macros.
 - **Tool registry:** minimal for first gate ({Read, Write, Edit, Bash, Grep, Glob}). Expands toward Claude / Gemini / Codex parity as TUI Chat and agent capability needs earn each addition.
 - **Observability:** `tracing` + `tracing-subscriber` + `tracing-appender`, owned by `crates/telemetry`. Overrides the `rules/rust.md` default of `log` + `env_logger` for v5 specifically.
 - **Target-repo state:** `.taskstore/` (committed truth) + `.loopr/` (transient, excluded via `.git/info/exclude`).

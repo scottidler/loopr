@@ -77,7 +77,7 @@
 **Goal:** daemon accepts `Plan` requests, opens `.taskstore/` (taskstore git dep), persists the Plan record. `loopr plan "x"` returns the persisted Plan's ID. Second invocation sees the first Plan via `loopr list plans`.
 
 **Design docs:**
-- `crates/derive/docs/design/fsm-macro.md` — port `#[derive(Fsm)]` from `loopr-derive` (v4), adapt to v5 naming.
+- [`docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md) — `#[derive(Fsm)]` revived from v3's `loopr-derive` (v4 had deleted it for a YAML runtime that v5 also rejects). Located at the repo-root `docs/design/` rather than the crate's own `docs/design/` because it touches two crates (`derive` emits the macro; `domain` hosts the runtime support types `Transition`, `FsmError<S>`, `FsmErrorKind`, `TargetKind`, `Role`). Status: Draft.
 - `crates/derive/docs/design/record-macro.md` — new `#[derive(Record)]` that implements taskstore's `Record` trait (`id()`, `updated_at()`, `collection_name()`, `indexed_fields()`).
 - `crates/domain/docs/design/records.md` — `Plan` record type, fields, FSM states, indexed fields.
 - `crates/domain/docs/design/store.md` — thin wrapper over taskstore's `Store`, type-safe collection accessors.
