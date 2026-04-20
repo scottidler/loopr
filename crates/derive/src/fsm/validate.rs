@@ -18,8 +18,48 @@ pub(crate) fn validate(ir: &FsmIr) -> Result<()> {
     check_edges(&ir.overrides, &variant_set, "overrides")?;
     check_terminal_has_no_outgoing(&ir.terminal, &ir.transitions)?;
     check_terminal_has_no_outgoing(&ir.terminal, &ir.overrides)?;
+    check_no_identical_cross_table_duplicates(&ir.transitions, &ir.overrides)?;
 
     Ok(())
+}
+
+fn check_no_identical_cross_table_duplicates(normal: &[EdgeIr], overrides: &[EdgeIr]) -> Result<()> {
+    for o in overrides {
+        for n in normal {
+            if o.from != n.from || o.to != n.to {
+                continue;
+            }
+            if role_lists_equal(&o.by, &n.by) {
+                let role_desc = if o.by.is_empty() {
+                    "(Any)".to_string()
+                } else {
+                    format!(
+                        "({})",
+                        o.by.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+                    )
+                };
+                return Err(Error::new(
+                    o.from.span(),
+                    format!(
+                        "edge `{} => {} by {}` appears identically in both `transitions(...)` and `overrides(...)`; the override arm would be dead code since `validate_transition` would succeed first. Either remove the override entry or widen its role list",
+                        o.from, o.to, role_desc
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn role_lists_equal(a: &[Ident], b: &[Ident]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_sorted: Vec<String> = a.iter().map(|i| i.to_string()).collect();
+    let mut b_sorted: Vec<String> = b.iter().map(|i| i.to_string()).collect();
+    a_sorted.sort();
+    b_sorted.sort();
+    a_sorted == b_sorted
 }
 
 fn check_no_duplicate_terminal(terminal: &[Ident]) -> Result<()> {

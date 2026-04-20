@@ -1,0 +1,5 @@
+error: edge `Draft => Done by (Coordinator)` appears identically in both `transitions(...)` and `overrides(...)`; the override arm would be dead code since `validate_transition` would succeed first. Either remove the override entry or widen its role list
+  --> tests/compile-fail/identical-cross-table.rs:11:9
+   |
+11 |         Draft => Done by (Coordinator),
+   |         ^^^^^
