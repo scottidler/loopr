@@ -2,5 +2,6 @@
 
 mod error;
 mod tool;
+mod tree;
 
 pub use error::DecomposerError;
