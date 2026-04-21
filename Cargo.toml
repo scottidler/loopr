@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.14"
+version = "0.5.15"
 edition = "2024"
 authors = ["Scott A. Idler <scott.a.idler@gmail.com>"]
 repository = "ssh://git@github.com/scottidler/loopr"
@@ -34,12 +34,17 @@ tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
-# taskstore workspace (scottidler/taskstore): three-crate workspace as of v0.4.1.
+# taskstore workspace (scottidler/taskstore): three-crate workspace with a
+# single flat v* tag covering all three crates (v0.5.0 = taskstore 0.5.0 +
+# taskstore-async 0.2.0 + taskstore-traits 0.1.0).
 # - taskstore-traits: trait-only crate for pure-symbol layers (domain)
 # - taskstore: blocking engine (taskstore-merge git driver, non-async consumers)
 # - taskstore-async: async-native Store (store crate, daemon IPC handlers)
-# All three entries MUST point at the same branch/rev - split-brain creates
-# incompatible Record traits across crate boundaries.
-taskstore-traits = { git = "ssh://git@github.com/scottidler/taskstore", branch = "main" }
-taskstore        = { git = "ssh://git@github.com/scottidler/taskstore", branch = "main" }
-taskstore-async  = { git = "ssh://git@github.com/scottidler/taskstore", branch = "main" }
+# All three MUST point at the same tag - split-brain creates incompatible
+# Record traits across crate boundaries. Pin to a tag (not `branch = "main"`)
+# so `cargo update` and `cargo install` cannot silently pull a newer commit
+# with a breaking API change (see the v0.5.13 install regression that
+# motivated the switch).
+taskstore-traits = { git = "ssh://git@github.com/scottidler/taskstore", tag = "v0.5.0" }
+taskstore        = { git = "ssh://git@github.com/scottidler/taskstore", tag = "v0.5.0" }
+taskstore-async  = { git = "ssh://git@github.com/scottidler/taskstore", tag = "v0.5.0" }

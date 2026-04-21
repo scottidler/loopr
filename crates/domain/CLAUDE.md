@@ -29,7 +29,7 @@ Source code in this crate must not `use` anything from `tokio`, `reqwest`, `ureq
 
 `domain` depends on `taskstore-traits` only (not the full `taskstore` crate). The traits crate holds `Record`, `IndexValue`, `Filter`, `FilterOp` — pure `serde` + `std`, no I/O. This is a foundational dep, same category as `serde::Serialize`: it's what makes domain records persistable by downstream layers.
 
-The dep is declared in the root `[workspace.dependencies]` block as a git source (`branch = "main"`) and inherited here via `workspace = true`. Never declare a second independent source for `taskstore-traits` in this crate — the root declaration is load-bearing for the same-commit guarantee (see `../../docs/taskstore-integration.md` for the split-brain failure mode).
+The dep is declared in the root `[workspace.dependencies]` block as a git source pinned to a flat tag (`tag = "v0.5.0"`; all three taskstore crates share the same workspace tag) and inherited here via `workspace = true`. Never declare a second independent source for `taskstore-traits` in this crate — the root declaration is load-bearing for the same-commit guarantee (see `../../docs/taskstore-integration.md` for the split-brain failure mode and why branch-tracking is rejected here).
 
 ## See also
 

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agents"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "context",
  "domain",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "context"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "store",
@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "decomposer"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "context",
  "domain",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "derive"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "proc-macro2",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "derive",
  "rand",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "integrator"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "store",
@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "ipc"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "serde",
@@ -742,7 +742,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "llm"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "telemetry",
@@ -765,7 +765,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loopr"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "agents",
  "assert_cmd",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "store"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "taskstore-async",
@@ -1318,7 +1318,7 @@ checksum = "591ef38edfb78ca4771ee32cf494cb8771944bee237a9b91fc9c1424ac4b777b"
 [[package]]
 name = "taskstore"
 version = "0.5.0"
-source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#cc4cb5b1d7a9cc77586df15d94506dc08d19e419"
+source = "git+ssh://git@github.com/scottidler/taskstore?tag=v0.5.0#cc4cb5b1d7a9cc77586df15d94506dc08d19e419"
 dependencies = [
  "chrono",
  "clap",
@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "taskstore-async"
 version = "0.2.0"
-source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#cc4cb5b1d7a9cc77586df15d94506dc08d19e419"
+source = "git+ssh://git@github.com/scottidler/taskstore?tag=v0.5.0#cc4cb5b1d7a9cc77586df15d94506dc08d19e419"
 dependencies = [
  "eyre",
  "rusqlite",
@@ -1357,14 +1357,14 @@ dependencies = [
 [[package]]
 name = "taskstore-traits"
 version = "0.1.0"
-source = "git+ssh://git@github.com/scottidler/taskstore?branch=main#cc4cb5b1d7a9cc77586df15d94506dc08d19e419"
+source = "git+ssh://git@github.com/scottidler/taskstore?tag=v0.5.0#cc4cb5b1d7a9cc77586df15d94506dc08d19e419"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "telemetry"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "chrono",
  "dashmap",
@@ -1568,7 +1568,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
 name = "tools"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "telemetry",
 ]
@@ -2035,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "worktree"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "domain",
  "telemetry",
