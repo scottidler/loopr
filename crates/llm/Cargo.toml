@@ -8,4 +8,7 @@ license.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 telemetry = { path = "../telemetry" }
+thiserror = "2.0.18"

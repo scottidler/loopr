@@ -745,7 +745,10 @@ name = "llm"
 version = "0.5.17"
 dependencies = [
  "domain",
+ "serde",
+ "serde_json",
  "telemetry",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
