@@ -102,18 +102,26 @@ impl BashDenylist {
                 return Ok(());
             }
         };
+        self.check_tree(&tree, command)
+    }
 
+    /// Same as `check`, but reuses a pre-parsed `Tree`. Bash::execute parses
+    /// the command once and calls this + `lane_for_tree` both, per the
+    /// design doc ("parse command via tree-sitter-bash ONCE, reuse the
+    /// tree"). Re-parsing inside `check` would double the tree-sitter cost
+    /// for every bash invocation.
+    pub fn check_tree(&self, tree: &Tree, source: &str) -> Result<(), &DenyPattern> {
         // Structural check: any `sh` / `bash` as a bare command inside a
         // pipeline is the canonical `curl X | sh` footgun. Because "|" is a
         // pipeline node in the CST rather than an argv token, a plain token
         // pattern like `["|", "sh"]` cannot catch it - this is the
         // CST-aware equivalent, and the reason the design doc chose
         // tree-sitter over substring matching.
-        if pipe_to_shell(&tree, command) {
+        if pipe_to_shell(tree, source) {
             return Err(&self.patterns[PIPE_TO_SHELL_IDX]);
         }
 
-        let commands = collect_commands(&tree, command);
+        let commands = collect_commands(tree, source);
         for argv in &commands {
             // Skip the synthetic pipe-to-shell pattern in token matching;
             // it only fires via the structural check above.
@@ -128,6 +136,10 @@ impl BashDenylist {
         }
         Ok(())
     }
+}
+
+pub fn parse_bash(source: &str) -> Option<Tree> {
+    parse(source)
 }
 
 /// Index of the synthetic pipe-to-shell pattern inside `base()`.

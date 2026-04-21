@@ -67,15 +67,35 @@ async fn spawn_timeout_kills_pgid_strategy() {
 
 #[tokio::test]
 async fn spawn_non_utf8_output_survives() {
-    // \xff is not valid UTF-8; from_utf8_lossy must not panic.
-    // Print raw bytes via printf; BufReader::lines() reads via from_utf8_lossy
-    // internally on each line break.
-    let cmd = sh_command(r#"printf 'ok\xff\n'"#, &std::env::temp_dir());
+    // Emit genuine raw bytes via python3 (printf \xNN is inconsistent across
+    // sh/bash/coreutils). This is D15's regression test: the lines()-based
+    // reader terminated mid-stream on invalid UTF-8; the read_until + lossy
+    // conversion preserves the full output.
+    let cmd = sh_command(
+        r#"python3 -c "import sys; sys.stdout.buffer.write(b'before\xff\xfeafter\n')""#,
+        &std::env::temp_dir(),
+    );
     let result = spawn_with_process_group(cmd, 10, KillStrategy::Pgid, PersistConfig::default())
         .await
         .unwrap();
     assert_eq!(result.exit_code, 0);
-    assert!(result.stdout.contains("ok"), "stdout: {:?}", result.stdout);
+    // "before" is before the invalid bytes; "after" is after. The lines()-
+    // based reader would have dropped "after" entirely.
+    assert!(
+        result.stdout.contains("before"),
+        "stdout missing 'before': {:?}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("after"),
+        "stdout missing 'after' - D15 regression (lines() reader terminated on invalid UTF-8): {:?}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains('\u{FFFD}'),
+        "expected replacement character for invalid bytes: {:?}",
+        result.stdout
+    );
 }
 
 #[tokio::test]

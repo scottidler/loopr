@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 
 use crate::error::ToolError;
 use crate::lane::Lane;
@@ -37,19 +37,29 @@ pub struct Output {
 }
 
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolError> {
-    // 1. Denylist pre-flight. This parses the command via tree-sitter-bash
-    //    (inside BashDenylist); unparseable fragments pass through and the
+    // Parse the command via tree-sitter-bash ONCE; reuse the CST for both
+    // the denylist check (step 1) and the lane-routing decision (step 2).
+    // Per the design doc Phase 3 flow: "parse command via tree-sitter-bash
+    // ONCE -> BashDenylist::check(&tree) -> lane_for_command(&tree)". This
+    // avoids parsing the same string twice on every bash invocation.
+    let tree_opt = crate::denylist::parse_bash(&input.command);
+
+    // 1. Denylist pre-flight. Unparseable fragments pass through and the
     //    subprocess will surface the parse error.
-    if let Err(pat) = ctx.bash_denylist.check(&input.command) {
+    if let Some(ref tree) = tree_opt
+        && let Err(pat) = ctx.bash_denylist.check_tree(tree, &input.command)
+    {
         return Err(ToolError::BashDenied {
             reason: pat.reason.clone(),
         });
     }
 
-    // 2. Per-invocation lane routing (D8). Reparse once via tree-sitter-bash
-    //    and walk every `command` node; if any executable matches
-    //    HEAVY_EXECUTABLES or HEAVY_PREFIXES, upgrade to the Heavy lane.
-    let lane = classify_bash_command(&input.command);
+    // 2. Per-invocation lane routing (D8). If any `command` node's resolved
+    //    head matches HEAVY_EXECUTABLES or HEAVY_PREFIXES, upgrade to Heavy.
+    let lane = match &tree_opt {
+        Some(tree) => lane_for_tree(tree, &input.command),
+        None => Lane::Net,
+    };
 
     // 3. Build the shell command and hand off to the router.
     let cmd = sh_command(&input.command, &ctx.working_dir);
@@ -76,13 +86,21 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolErro
 
 /// Walk the parsed command; if any simple command's head resolves to an entry
 /// in HEAVY_EXECUTABLES or matches HEAVY_PREFIXES, route Heavy. Otherwise Net.
-/// Unparseable input defaults to Net (the subprocess will fail on the parse
-/// error; no need to guess the lane).
+/// `execute()` calls this with the tree it already parsed for the denylist
+/// check, so we amortize parsing across both checks.
+pub(crate) fn lane_for_tree(tree: &Tree, source: &str) -> Lane {
+    if contains_heavy(tree, source) { Lane::Heavy } else { Lane::Net }
+}
+
+/// Test convenience: parse the command and classify in one call. Production
+/// code calls `crate::denylist::parse_bash` + `lane_for_tree` to reuse the
+/// tree across the denylist check and the lane decision.
+#[cfg(test)]
 pub(crate) fn classify_bash_command(command: &str) -> Lane {
-    let Some(tree) = parse(command) else {
+    let Some(tree) = crate::denylist::parse_bash(command) else {
         return Lane::Net;
     };
-    if contains_heavy(&tree, command) { Lane::Heavy } else { Lane::Net }
+    lane_for_tree(&tree, command)
 }
 
 /// Heavy executables: tools that routinely run for minutes (compilers, test
@@ -206,18 +224,6 @@ fn normalize_head(s: &str) -> String {
         Some(idx) => t[idx + 1..].to_string(),
         None => t.to_string(),
     }
-}
-
-fn parser() -> Parser {
-    let mut p = Parser::new();
-    let lang = tree_sitter_bash::LANGUAGE;
-    p.set_language(&lang.into())
-        .expect("tree-sitter-bash grammar must load");
-    p
-}
-
-fn parse(source: &str) -> Option<Tree> {
-    parser().parse(source, None)
 }
 
 #[cfg(test)]

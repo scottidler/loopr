@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::ChildStderr;
 use tokio::process::ChildStdout;
 use tracing::debug;
@@ -178,12 +178,7 @@ fn spawn_stdout_reader(
     target: Arc<Mutex<String>>,
     combined: Arc<Mutex<String>>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(pipe).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            append_line(&target, &combined, &line);
-        }
-    })
+    tokio::spawn(read_pipe_to_buffers(pipe, target, combined))
 }
 
 fn spawn_stderr_reader(
@@ -191,22 +186,44 @@ fn spawn_stderr_reader(
     target: Arc<Mutex<String>>,
     combined: Arc<Mutex<String>>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(pipe).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            append_line(&target, &combined, &line);
-        }
-    })
+    tokio::spawn(read_pipe_to_buffers(pipe, target, combined))
 }
 
-fn append_line(target: &Arc<Mutex<String>>, combined: &Arc<Mutex<String>>, line: &str) {
+/// Read a pipe chunk-by-chunk at byte granularity, lossy-convert each chunk,
+/// and append to both the per-stream and combined buffers under the shared
+/// mutexes. Using `read_until(b'\n', ...)` (byte-level) instead of `lines()`
+/// (UTF-8-bounded) is D15's authoritative fix: the `lines()` implementation
+/// returns `io::Error(InvalidData)` the moment a non-UTF-8 byte appears,
+/// terminating the reader mid-stream and losing everything after. Byte-level
+/// read + `from_utf8_lossy` preserves the full output and replaces invalid
+/// sequences with U+FFFD.
+async fn read_pipe_to_buffers<R: AsyncRead + Unpin + Send>(
+    pipe: R,
+    target: Arc<Mutex<String>>,
+    combined: Arc<Mutex<String>>,
+) {
+    let mut reader = BufReader::new(pipe);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = match reader.read_until(b'\n', &mut buf).await {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if n == 0 {
+            break;
+        }
+        let chunk = String::from_utf8_lossy(&buf);
+        append_chunk(&target, &combined, &chunk);
+    }
+}
+
+fn append_chunk(target: &Arc<Mutex<String>>, combined: &Arc<Mutex<String>>, chunk: &str) {
     if let Ok(mut t) = target.lock() {
-        t.push_str(line);
-        t.push('\n');
+        t.push_str(chunk);
     }
     if let Ok(mut c) = combined.lock() {
-        c.push_str(line);
-        c.push('\n');
+        c.push_str(chunk);
     }
 }
 
