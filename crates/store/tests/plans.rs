@@ -3,7 +3,7 @@ use std::str::FromStr;
 use tempfile::TempDir;
 
 use domain::{Plan, PlanId, PlanStatus};
-use store::{PlansStore, Store, StoreError};
+use store::{PlansStore, Store, StoreError, TASKSTORE_SUBPATH};
 
 fn assert_send_sync<T: Send + Sync>() {}
 
@@ -13,10 +13,129 @@ fn plans_store_is_send_sync() {
     assert_send_sync::<PlansStore<'static>>();
 }
 
+#[test]
+fn taskstore_subpath_is_loopr_taskstore() {
+    // Pin the layout: if this changes, target-repo git exclusion rules,
+    // docs, and the merge-driver install-path all need to move in
+    // lockstep. Better to fail one test than to silently split the
+    // "where does the taskstore live?" contract.
+    assert_eq!(TASKSTORE_SUBPATH, ".loopr/taskstore");
+}
+
 async fn fresh_store() -> (TempDir, Store) {
     let dir = TempDir::new().expect("tempdir");
     let store = Store::open(dir.path()).await.expect("open");
     (dir, store)
+}
+
+#[tokio::test]
+async fn open_creates_nested_taskstore_directory_under_loopr() {
+    // Verifies two things at once:
+    // 1. The seam with the upstream `AsyncStore::open_at(path, opts)` API —
+    //    if taskstore regresses to an API that ignores or re-derives the
+    //    path, this test fails because the directory appears somewhere else
+    //    (e.g. `<target>/.taskstore/` under the legacy behavior).
+    // 2. That `Store::open` actually uses `TASKSTORE_SUBPATH` — a subtle
+    //    `target.join("taskstore")` or `target.join(".taskstore")` typo in
+    //    the wrapper would make the round-trip tests still pass but would
+    //    put the committed state in the wrong place.
+    let dir = TempDir::new().expect("tempdir");
+    let target = dir.path();
+
+    let loopr_dir = target.join(".loopr");
+    let taskstore_dir = target.join(".loopr").join("taskstore");
+    let legacy_dir = target.join(".taskstore");
+
+    assert!(!loopr_dir.exists(), "pre-open: no .loopr/ at target");
+    assert!(!taskstore_dir.exists(), "pre-open: no .loopr/taskstore/ at target");
+    assert!(!legacy_dir.exists(), "pre-open: no legacy .taskstore/ at target");
+
+    let store = Store::open(target).await.expect("open");
+
+    assert!(loopr_dir.is_dir(), "post-open: .loopr/ created at target root");
+    assert!(
+        taskstore_dir.is_dir(),
+        "post-open: .loopr/taskstore/ created (nested under .loopr/)"
+    );
+    assert!(
+        !legacy_dir.exists(),
+        "post-open: bare .taskstore/ at the target root must NOT be created — that would be the pre-v0.5.14 layout"
+    );
+
+    store.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn open_persists_plans_jsonl_under_loopr_taskstore() {
+    // Corollary to the directory-layout test: not only must the
+    // taskstore live at `.loopr/taskstore/`, the JSONL truth files have
+    // to land inside it. If taskstore ever nests a further subdirectory
+    // (unlikely, but the seam is worth pinning) this fails loudly.
+    let dir = TempDir::new().expect("tempdir");
+    let target = dir.path();
+    let store = Store::open(target).await.expect("open");
+
+    let plan = Plan::new("test goal for on-disk verification".to_string());
+    store.plans().create(plan.clone()).await.expect("create");
+    store.close().await.expect("close");
+
+    let plans_jsonl = target.join(".loopr").join("taskstore").join("plans.jsonl");
+    assert!(
+        plans_jsonl.is_file(),
+        "plans.jsonl exists at the nested location: {}",
+        plans_jsonl.display()
+    );
+    let body = std::fs::read_to_string(&plans_jsonl).expect("read jsonl");
+    assert!(
+        body.contains(plan.id.as_ref()),
+        "plans.jsonl contains the plan id: body={body}"
+    );
+    assert!(body.contains("test goal for on-disk verification"), "goal round-trips");
+
+    // No competing copy at the pre-v0.5.14 legacy path.
+    assert!(
+        !target.join(".taskstore").join("plans.jsonl").exists(),
+        "legacy .taskstore/plans.jsonl must NOT exist"
+    );
+}
+
+#[tokio::test]
+async fn two_stores_under_two_different_target_roots_are_isolated() {
+    // Targets are repo-scoped; opening Store::open against two distinct
+    // tempdirs must produce two independent taskstore directories with
+    // no shared state. This is the positive case for target isolation
+    // and also a sanity check that `open_at` honors the caller-provided
+    // path instead of some process-global default.
+    let dir_a = TempDir::new().expect("tempdir A");
+    let dir_b = TempDir::new().expect("tempdir B");
+
+    let store_a = Store::open(dir_a.path()).await.expect("open A");
+    let store_b = Store::open(dir_b.path()).await.expect("open B");
+
+    let plan_a = Plan::new("in target A".to_string());
+    let plan_b = Plan::new("in target B".to_string());
+    store_a.plans().create(plan_a.clone()).await.expect("create A");
+    store_b.plans().create(plan_b.clone()).await.expect("create B");
+
+    // A sees only A; B sees only B.
+    let listed_a = store_a.plans().list().await.expect("list A");
+    let listed_b = store_b.plans().list().await.expect("list B");
+    assert_eq!(listed_a.len(), 1);
+    assert_eq!(listed_b.len(), 1);
+    assert_eq!(listed_a[0].goal, "in target A");
+    assert_eq!(listed_b[0].goal, "in target B");
+
+    // And the on-disk paths are distinct files.
+    let jsonl_a = dir_a.path().join(".loopr").join("taskstore").join("plans.jsonl");
+    let jsonl_b = dir_b.path().join(".loopr").join("taskstore").join("plans.jsonl");
+    assert!(jsonl_a.is_file(), "A's plans.jsonl exists in A");
+    assert!(jsonl_b.is_file(), "B's plans.jsonl exists in B");
+    let canon_a = jsonl_a.canonicalize().expect("canon A");
+    let canon_b = jsonl_b.canonicalize().expect("canon B");
+    assert_ne!(canon_a, canon_b, "A's and B's plans.jsonl are different files");
+
+    store_a.close().await.expect("close A");
+    store_b.close().await.expect("close B");
 }
 
 #[tokio::test]

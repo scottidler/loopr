@@ -8,4 +8,4 @@ mod store;
 
 pub use error::StoreError;
 pub use plans::PlansStore;
-pub use store::Store;
+pub use store::{Store, TASKSTORE_SUBPATH};
