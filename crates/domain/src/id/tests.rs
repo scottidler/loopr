@@ -80,3 +80,51 @@ fn plan_id_display_matches_as_ref() {
     let id = PlanId::new();
     assert_eq!(id.to_string(), id.as_ref());
 }
+
+#[test]
+fn work_id_new_has_prefix() {
+    let id = WorkId::new();
+    assert!(
+        id.as_ref().starts_with("wk-"),
+        "WorkId::new should produce wk-prefixed id: {id}"
+    );
+    assert_eq!(WorkId::prefix(), "wk");
+}
+
+#[test]
+fn work_id_serde_roundtrip() {
+    let id = WorkId::new();
+    let json = serde_json::to_string(&id).unwrap();
+    let back: WorkId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, back);
+}
+
+#[test]
+fn work_id_serde_wire_form_is_bare_string() {
+    let id = WorkId::new();
+    let json = serde_json::to_string(&id).unwrap();
+    assert!(
+        json.starts_with('"') && json.ends_with('"'),
+        "expected bare JSON string, got: {json}"
+    );
+    assert!(!json.starts_with('['), "wire form must not be a JSON array: {json}");
+}
+
+#[test]
+fn work_id_from_str_roundtrip() {
+    let original = "wk-k7m2p";
+    let id = WorkId::from_str(original).unwrap();
+    assert_eq!(id.as_ref(), original);
+}
+
+#[test]
+fn work_id_display_matches_as_ref() {
+    let id = WorkId::new();
+    assert_eq!(id.to_string(), id.as_ref());
+}
+
+#[test]
+fn work_id_uniqueness_1000() {
+    let ids: HashSet<String> = (0..1000).map(|_| WorkId::new().as_ref().to_string()).collect();
+    assert_eq!(ids.len(), 1000, "expected 1000 distinct WorkIds");
+}

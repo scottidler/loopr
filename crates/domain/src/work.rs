@@ -159,11 +159,7 @@ impl Work {
     /// updates `self.status` and `self.updated_at`. `Unchanged`
     /// (from == to) leaves state intact. Invalid transitions return
     /// `FsmError`.
-    pub fn transition(
-        &mut self,
-        target: WorkStatus,
-        role: Role,
-    ) -> Result<Transition, FsmError<WorkStatus>> {
+    pub fn transition(&mut self, target: WorkStatus, role: Role) -> Result<Transition, FsmError<WorkStatus>> {
         let result = WorkStatus::validate_transition(self.status, target, role)?;
         if result != Transition::Unchanged {
             self.status = target;
@@ -178,11 +174,7 @@ impl Work {
     /// rejection. Any state-changing result (`Changed` or `Override`)
     /// updates `self.status` and `self.updated_at`; only `Unchanged`
     /// leaves state intact.
-    pub fn override_status(
-        &mut self,
-        target: WorkStatus,
-        role: Role,
-    ) -> Result<Transition, FsmError<WorkStatus>> {
+    pub fn override_status(&mut self, target: WorkStatus, role: Role) -> Result<Transition, FsmError<WorkStatus>> {
         let result = WorkStatus::validate_override(self.status, target, role)?;
         if result != Transition::Unchanged {
             self.status = target;
