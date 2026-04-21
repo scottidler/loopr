@@ -18,4 +18,4 @@ pub use fsm::{FsmError, FsmErrorKind, TargetKind, Transition};
 pub use id::{PlanId, WorkId, generate_id, now_millis};
 pub use plan::{Plan, PlanStatus};
 pub use role::Role;
-pub use work::WorkStatus;
+pub use work::{Work, WorkStatus};

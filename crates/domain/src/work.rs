@@ -17,7 +17,11 @@
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use derive::Fsm;
+use derive::{Fsm, Record};
+
+use crate::criteria::AcceptanceCriteria;
+use crate::id::{PlanId, WorkId, now_millis};
+use crate::{FsmError, Role, Transition};
 
 /// Lifecycle state for `Work`. Ports v4's 10-state `work.yml` table,
 /// with round-2 Architect adjustments applied: `Integrated =>
@@ -79,4 +83,111 @@ pub enum WorkStatus {
     Done,
     Superseded,
     Abandoned,
+}
+
+/// Leaf-level implementation unit decomposed from a `Plan`. Persisted
+/// at `<target>/.loopr/taskstore/works.jsonl` via the `Record` derive.
+///
+/// Fields ported from v3's `Work` post-v0.1.96 (the
+/// description-field-crisis remediation) with two v5 upgrades: typed
+/// `WorkId` / `PlanId` instead of `String`, and indexed `parent_id`
+/// for Stage 7's reactive coordinator (which scans "child Works of
+/// this Plan" on every tick). `attempt_count`, `session_failure_count`,
+/// `files`, and `assignee` ship with `Default` values; Stage 7
+/// populates them when the coordinator and reviewer wire up. No
+/// `description` field (v0.1.96 removed it); no `blocked_reason`
+/// (deferred per scope memo D3).
+#[derive(Debug, Clone, Serialize, Deserialize, Record)]
+#[serde(deny_unknown_fields)]
+pub struct Work {
+    pub id: WorkId,
+    #[record(indexed)]
+    pub parent_id: PlanId,
+    pub updated_at: i64,
+    pub created_at: i64,
+    pub title: String,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[record(indexed)]
+    pub status: WorkStatus,
+    #[serde(default)]
+    pub dependencies: Vec<WorkId>,
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: AcceptanceCriteria,
+    #[serde(default)]
+    pub attempt_count: u32,
+    #[serde(default)]
+    pub session_failure_count: u32,
+}
+
+impl Work {
+    /// New Work under the given Plan. Status starts `Pending` (not
+    /// `Draft`) because the reactive-execution convention is that a
+    /// freshly decomposed Work is immediately eligible for the
+    /// Coordinator's `Pending -> Ready` transition once its deps
+    /// clear. Stage 6's decomposer never constructs a `Draft` Work;
+    /// `Draft` is reserved for a future pre-decomposition authoring
+    /// flow that would want a different constructor.
+    pub fn new(parent_id: PlanId, title: String) -> Self {
+        let now = now_millis();
+        Self {
+            id: WorkId::new(),
+            parent_id,
+            updated_at: now,
+            created_at: now,
+            title,
+            assignee: None,
+            status: WorkStatus::Pending,
+            dependencies: Vec::new(),
+            files: Vec::new(),
+            acceptance_criteria: AcceptanceCriteria::default(),
+            attempt_count: 0,
+            session_failure_count: 0,
+        }
+    }
+
+    /// Read current status. The field is `pub`; this method exists
+    /// for method-chain call sites.
+    pub fn status(&self) -> WorkStatus {
+        self.status
+    }
+
+    /// Validated FSM transition. Delegates to the Fsm-derived
+    /// `validate_transition`. On any state-changing result (`Changed`),
+    /// updates `self.status` and `self.updated_at`. `Unchanged`
+    /// (from == to) leaves state intact. Invalid transitions return
+    /// `FsmError`.
+    pub fn transition(
+        &mut self,
+        target: WorkStatus,
+        role: Role,
+    ) -> Result<Transition, FsmError<WorkStatus>> {
+        let result = WorkStatus::validate_transition(self.status, target, role)?;
+        if result != Transition::Unchanged {
+            self.status = target;
+            self.updated_at = now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Validated FSM override. Delegates to the Fsm-derived
+    /// `validate_override`, which itself tries `validate_transition`
+    /// first and falls through to the override table only on
+    /// rejection. Any state-changing result (`Changed` or `Override`)
+    /// updates `self.status` and `self.updated_at`; only `Unchanged`
+    /// leaves state intact.
+    pub fn override_status(
+        &mut self,
+        target: WorkStatus,
+        role: Role,
+    ) -> Result<Transition, FsmError<WorkStatus>> {
+        let result = WorkStatus::validate_override(self.status, target, role)?;
+        if result != Transition::Unchanged {
+            self.status = target;
+            self.updated_at = now_millis();
+        }
+        Ok(result)
+    }
 }
