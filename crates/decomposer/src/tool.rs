@@ -7,12 +7,6 @@
 //! `{title, content, dependencies, acceptance_criteria}`; only `title`
 //! and `content` are required per-item.
 
-// Phase 1 ships these types ahead of Phase 4's `decompose` function,
-// which is their sole caller. The allow is lifted in Phase 4 once
-// `decompose.rs` wires them in. Per `rust.md`, dead-code allows are
-// tolerated only during active transitions; this is one.
-#![allow(dead_code)]
-
 use serde::Deserialize;
 use serde_json::json;
 

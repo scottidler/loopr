@@ -21,13 +21,6 @@
 //! a `... and N more entries` marker so the LLM knows it isn't seeing
 //! the complete tree.
 
-// Phase 2 ships the tree collector ahead of Phase 4's `decompose`
-// function, which is its sole caller. The allow is lifted in Phase 4
-// once `decompose.rs` wires in `collect_workspace_tree`. Per
-// `rust.md`, dead-code allows are tolerated only during active
-// transitions; this is one.
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::Path;
 use std::process::Command;

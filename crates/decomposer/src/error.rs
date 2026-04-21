@@ -60,4 +60,13 @@ pub enum DecomposerError {
     /// targets.
     #[error("LLM produced duplicate child titles: {0:?}")]
     DuplicateTitles(Vec<String>),
+
+    /// At least one child's `title` was empty or whitespace-only.
+    /// Included in its own variant (rather than folded into
+    /// `MalformedChildren`) because the semantics is "the model
+    /// produced a well-shaped but unusable Work" — a distinct failure
+    /// from schema malformation. The usize is the child's index into
+    /// the `children` array so the retry prompt can point at it.
+    #[error("child at index {0} has empty title")]
+    EmptyTitle(usize),
 }

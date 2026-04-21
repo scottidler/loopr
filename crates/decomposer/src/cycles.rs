@@ -8,8 +8,6 @@
 //! borrow would fight the borrow checker for no performance win at
 //! n <= 5.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use domain::WorkId;
