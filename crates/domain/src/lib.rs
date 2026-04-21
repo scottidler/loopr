@@ -11,9 +11,11 @@ mod fsm;
 mod id;
 mod plan;
 mod role;
+mod work;
 
 pub use criteria::AcceptanceCriteria;
 pub use fsm::{FsmError, FsmErrorKind, TargetKind, Transition};
 pub use id::{PlanId, WorkId, generate_id, now_millis};
 pub use plan::{Plan, PlanStatus};
 pub use role::Role;
+pub use work::WorkStatus;
