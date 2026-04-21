@@ -10,11 +10,25 @@ use ipc::{
     DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, PlanListResult, RpcError,
     StatusResult,
 };
+use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
 
 use super::*;
 use crate::daemon::DaemonContext;
+
+/// Build a dummy `AnthropicClient` whose `api_base_url` points at a
+/// non-listening local port so any actual call fails fast. Lets
+/// handler tests exercise the Plan-persistence path without hitting
+/// real Anthropic.
+fn dummy_anthropic() -> Arc<AnthropicClient> {
+    let cfg = LlmConfig {
+        api_base_url: "http://127.0.0.1:1".to_string(),
+        ..LlmConfig::default()
+    };
+    let client = AnthropicClient::new(cfg, "test-key".to_string()).expect("dummy anthropic");
+    Arc::new(client)
+}
 
 /// Test context backed by a real `Store` rooted at a `TempDir`. Callers
 /// keep the `TempDir` alive for the life of the test so the store's
@@ -32,6 +46,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
         shutting_down: Arc::new(AtomicBool::new(false)),
         shutdown_notify: Arc::new(Notify::new()),
         store,
+        llm: dummy_anthropic(),
     });
     (td, ctx)
 }

@@ -30,8 +30,10 @@ use std::time::Duration;
 
 use tokio::signal::unix::{SignalKind, signal};
 
+use llm::AnthropicClient;
 use telemetry::RunId;
 
+use crate::config::{Config, resolve_api_key};
 use crate::error::LooprError;
 
 pub use context::DaemonContext;
@@ -225,7 +227,23 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         .await
         .map_err(|e| LooprError::DaemonStartup(format!("store open: {e}")))?;
 
-    let ctx = Arc::new(DaemonContext::new(target.clone(), run_id, pid, store));
+    // Load top-level Config (composes each stage's config) and build the
+    // process-wide AnthropicClient. Config missing from `.loopr/config.yml`
+    // falls back to defaults; API key missing from env falls back to a
+    // placeholder that keeps the daemon booting but makes real LLM calls
+    // fail with 401. See `crate::config` for the degradation contract.
+    let config = Config::load(&target)?;
+    let api_key = resolve_api_key(&config.llm);
+    let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
+        .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
+
+    let ctx = Arc::new(DaemonContext::new(
+        target.clone(),
+        run_id,
+        pid,
+        store,
+        Arc::new(anthropic),
+    ));
 
     tracing::info!(
         target_dir = %target.display(),

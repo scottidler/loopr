@@ -5,7 +5,7 @@
 //! that by adding an arm for `Method::PlanCreate`; the exhaustive match
 //! is the mechanism that forces the pair.
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use ipc::{
     DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams,
@@ -107,18 +107,44 @@ fn handle_status(id: u64, ctx: &DaemonContext) -> DaemonResponse {
 async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &DaemonContext) -> DaemonResponse {
     let plan = domain::Plan::new(params.goal);
     let plan_snapshot = plan.clone();
-    match ctx.store.plans().create(plan).await {
-        Ok(_) => {
-            let result = PlanCreateResult { plan: plan_snapshot };
-            match serde_json::to_value(&result) {
-                Ok(v) => DaemonResponse::ok(id, v),
-                Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.create: {e}"))),
+    if let Err(e) = ctx.store.plans().create(plan.clone()).await {
+        warn!(request_id = id, error = %e, "plan.create failed at store");
+        return DaemonResponse::err(id, map_store_error(e));
+    }
+
+    // Stage 6: decompose the Plan into Works and persist them. On
+    // decomposer error the Plan remains persisted (scope memo A+2:
+    // reconcile-on-restart is Stage 7's problem); we log and return
+    // Plan success so the user at least sees their Plan landed.
+    match decomposer::decompose(&plan_snapshot, &ctx.target, &*ctx.llm).await {
+        Ok(works) => {
+            let count = works.len();
+            match ctx.store.works().create_many(works).await {
+                Ok(ids) => {
+                    info!(request_id = id, plan_id = %plan_snapshot.id, work_count = count, ids = ?ids, "plan.create decomposed + persisted")
+                }
+                Err(e) => warn!(
+                    request_id = id,
+                    plan_id = %plan_snapshot.id,
+                    error = %e,
+                    "plan.create persisted Plan but works.create_many failed; Stage 7 reconcile"
+                ),
             }
         }
         Err(e) => {
-            warn!(request_id = id, error = %e, "plan.create failed at store");
-            DaemonResponse::err(id, map_store_error(e))
+            warn!(
+                request_id = id,
+                plan_id = %plan_snapshot.id,
+                error = %e,
+                "plan.create persisted Plan but decomposer failed; Stage 7 reconcile"
+            );
         }
+    }
+
+    let result = PlanCreateResult { plan: plan_snapshot };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.create: {e}"))),
     }
 }
 

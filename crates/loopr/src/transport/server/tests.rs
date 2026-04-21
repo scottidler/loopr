@@ -13,11 +13,20 @@ use tokio::time::timeout;
 use tokio_util::codec::{Framed, LinesCodec};
 
 use ipc::{DaemonRequest, DaemonResponse, HandshakeParams, PROTOCOL_VERSION};
+use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
 use tempfile::TempDir;
 
 use super::*;
+
+fn dummy_llm() -> Arc<AnthropicClient> {
+    let cfg = LlmConfig {
+        api_base_url: "http://127.0.0.1:1".to_string(),
+        ..LlmConfig::default()
+    };
+    Arc::new(AnthropicClient::new(cfg, "test-key".to_string()).unwrap())
+}
 
 async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
     let store = Store::open(&target).await.unwrap();
@@ -31,6 +40,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         shutting_down: Arc::new(AtomicBool::new(false)),
         shutdown_notify: Arc::new(Notify::new()),
         store,
+        llm: dummy_llm(),
     })
 }
 

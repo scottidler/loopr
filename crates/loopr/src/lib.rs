@@ -1,6 +1,7 @@
 use std::path::Path;
 
 pub mod cli;
+pub mod config;
 pub mod daemon;
 pub mod error;
 pub mod guard;

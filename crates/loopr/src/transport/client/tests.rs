@@ -11,12 +11,21 @@ use tokio::sync::{Mutex, MutexGuard, Notify, broadcast};
 use tokio::time::timeout;
 
 use ipc::{PROTOCOL_VERSION, RpcError, StatusResult};
+use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
 
 use super::*;
 use crate::daemon::DaemonContext;
 use crate::transport::server::{accept_loop, bind_listener};
+
+fn dummy_llm() -> Arc<AnthropicClient> {
+    let cfg = LlmConfig {
+        api_base_url: "http://127.0.0.1:1".to_string(),
+        ..LlmConfig::default()
+    };
+    Arc::new(AnthropicClient::new(cfg, "test-key".to_string()).unwrap())
+}
 
 /// Serialize every test that reads/writes process-global env vars so the
 /// `LOOPR_PROTOCOL_VERSION_OVERRIDE` mismatch test cannot leak into
@@ -41,6 +50,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         shutting_down: Arc::new(AtomicBool::new(false)),
         shutdown_notify: Arc::new(Notify::new()),
         store,
+        llm: dummy_llm(),
     })
 }
 

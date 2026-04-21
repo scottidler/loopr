@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::{Notify, broadcast};
 
 use ipc::DaemonEvent;
+use llm::AnthropicClient;
 use store::Store;
 use telemetry::RunId;
 
@@ -62,14 +63,21 @@ pub struct DaemonContext {
     /// short timeout after the accept loop returns, specifically to make
     /// this contract hold.
     pub store: Store,
+    /// Handle to the process-wide Anthropic client. Built once at
+    /// daemon startup from `LlmConfig` + env-resolved API key and
+    /// shared across handler tasks via `Arc`. Decompose call sites
+    /// pass `&*ctx.llm` as the `&L` where `L: LlmClient`; the Arc
+    /// deref produces `&AnthropicClient`, which implements the trait.
+    pub llm: Arc<AnthropicClient>,
 }
 
 impl DaemonContext {
     /// Construct a new context. All fields are set once at daemon startup;
     /// nothing mutable is exposed except the `shutting_down` atomic.
-    /// Takes an already-opened `Store`; opening is async and happens in
+    /// Takes an already-opened `Store` and a pre-built `AnthropicClient`;
+    /// opening / building is async / fallible and happens in
     /// `run_active_daemon` before this constructor.
-    pub fn new(target: PathBuf, run_id: RunId, pid: u32, store: Store) -> Self {
+    pub fn new(target: PathBuf, run_id: RunId, pid: u32, store: Store, llm: Arc<AnthropicClient>) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         Self {
             target,
@@ -80,6 +88,7 @@ impl DaemonContext {
             shutting_down: Arc::new(AtomicBool::new(false)),
             shutdown_notify: Arc::new(Notify::new()),
             store,
+            llm,
         }
     }
 }
