@@ -8,11 +8,10 @@
 //!
 //! Generics rather than `dyn` (scope memo U+4). `impl Future<...> +
 //! Send` rather than `async fn` in trait so the Send bound is explicit
-//! (tokio-spawned tasks need it); the explicit `+ '_` pins the
-//! returned future's lifetime to `&self` and the `&str` parameters.
-//! On edition 2024 the `+ '_` is the default for RPIT; keeping it
-//! written out makes the capture contract legible without depending
-//! on the reader knowing 2024's RPIT rules.
+//! (tokio-spawned tasks need it). A single named lifetime `'a` binds
+//! `&self`, `system`, and `user` so the returned future captures all
+//! three under one constraint; using anonymous `'_` instead fails to
+//! unify the parameter lifetimes and the compiler rejects it.
 
 use std::future::Future;
 
@@ -23,6 +22,7 @@ use crate::tool::{ToolCall, ToolSchema};
 /// method, one response shape. Implementations MUST be cancel-safe at
 /// the boundary: callers may drop the returned future without leaking
 /// state.
+#[allow(clippy::manual_async_fn)] // explicit `+ Send` bound required for tokio::spawn (design doc Alt 2)
 pub trait LlmClient {
     /// Send a tool-constrained completion. The backend forces the
     /// model to invoke exactly the supplied tool (`tool_choice = {type:
@@ -31,10 +31,10 @@ pub trait LlmClient {
     ///
     /// `system` and `user` are fully-assembled prompt strings; this
     /// crate does NOT touch them beyond forwarding.
-    fn complete_with_tool(
-        &self,
-        system: &str,
-        user: &str,
+    fn complete_with_tool<'a>(
+        &'a self,
+        system: &'a str,
+        user: &'a str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + '_;
+    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a;
 }

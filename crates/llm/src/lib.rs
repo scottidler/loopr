@@ -7,11 +7,13 @@
 //! tier resolution, and cost-accounting spans are Stage 7+ concerns
 //! tracked in the design doc.
 
+mod anthropic;
 mod client;
 mod config;
 mod error;
 mod tool;
 
+pub use anthropic::AnthropicClient;
 pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
