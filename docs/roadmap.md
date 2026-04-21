@@ -86,17 +86,20 @@
 
 **Exit criterion:** `loopr plan "x" && loopr plan "y" && loopr list plans` shows both plans; `.loopr/taskstore/plans.jsonl` has two lines.
 
+**Init carry-over (Stage 6 dependency):** `loopr init` is still `StageUnimplemented` at the end of Stage 5 (v0.5.16). Stage 6's scope memo ([`docs/design/2026-04-20-stage-6-scope.md`](design/2026-04-20-stage-6-scope.md)) settles that `init` must write `.loopr/config.yml` (from a canonical template at `resources/config/default.yml`) and `.loopr/prompts/**/*.pmt` (materialized via `include_dir!()`). Stage 6 code falls back to baked-in defaults when the target has not been init'd so unit tests and ad-hoc commands do not require init, but the user-facing "edit your prompts" flow depends on init actually writing them. Land init's real body alongside or just before Stage 6's execution; either way, track it under Stage 5 scope so Stage 6 is not gated on a second feature.
+
 ---
 
 ## Stage 6: decomposer produces a Work DAG
 
 **Goal:** daemon, on receiving a Plan request, runs the decomposer which produces a trivial Work DAG (single Work is fine for now). Work records land in `.loopr/taskstore/works.jsonl` with dependencies on the Plan.
 
-**Design docs:**
-- `crates/domain/docs/design/hierarchy.md` — Plan/Spec/Phase/Work hierarchy and FSM states, deps semantics. (First-gate scope: flat, start with Plan→Work; Spec/Phase deferred.)
-- `crates/llm/docs/design/llm-client.md` — `LlmClient` trait + Anthropic Messages-API implementation, SSE streaming, cost accounting.
-- `crates/agents/docs/design/context-builder.md` — token-budgeted prompt assembly; lives in `agents` because it must see `domain` + `store` + `llm` + `tools` simultaneously.
-- `crates/decomposer/docs/design/plan-then-decompose.md` — `plan()` and `decompose()` function signatures, default strategy, validation.
+**Scope memo:** [`docs/design/2026-04-20-stage-6-scope.md`](design/2026-04-20-stage-6-scope.md) — gates the design docs below. Architect consulted (round 1, 2026-04-20); final decision matrix locks records shape (`Work.parent_id: PlanId`), FSM shape (v4's 10-state `WorkStatus` matching v5 `PlanStatus` symmetry — NOT v3's asymmetric 9), LLM client shape (tool-use only, buffered, generics not `dyn`), and the v3→v5 lineage (v4's agent-harness decomposer rejected in favor of v3's standalone function).
+
+**Design docs (3, not 4; `context-builder.md` deferred to Stage 7 per scope memo D11):**
+- `crates/domain/docs/design/2026-04-20-hierarchy.md` — `Work` record + `WorkStatus` FSM (10 states, via `#[derive(Fsm)]`); flat `Plan → Work` scope, Spec/Phase deferred.
+- `crates/llm/docs/design/2026-04-20-llm-client.md` — `LlmClient` trait (tool-use only, buffered), Anthropic backend, typed `Retryable` / `Fatal` error enum, `.loopr/config.yml`-sourced model/tokens/temperature, API-key precedence CLI > env > config-env-name.
+- `crates/decomposer/docs/design/2026-04-20-plan-then-decompose.md` — `async fn decompose<L: LlmClient>(plan, target, llm) -> Result<Vec<Work>>`, tool-schema + text fallback, title-based deps with server-side id map, cycle detection, workspace-file-tree injection via `git ls-files`, zero-children bails.
 
 **Crates touched:** `domain`, `store`, `llm`, `decomposer`.
 
