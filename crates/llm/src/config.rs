@@ -51,3 +51,6 @@ impl Default for LlmConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
