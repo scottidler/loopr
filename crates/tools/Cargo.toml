@@ -7,13 +7,18 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2.185"
 schemars = "1.2.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 telemetry = { path = "../telemetry" }
 thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = ["full"] }
 tracing.workspace = true
+tree-sitter = "0.26.8"
+tree-sitter-bash = "0.25.1"
 uuid = { version = "1.23.1", features = ["v7"] }
 
 [dev-dependencies]
 serde_yaml.workspace = true
+tempfile = "3.27.0"

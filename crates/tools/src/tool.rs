@@ -1,11 +1,14 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::denylist::BashDenylist;
 use crate::error::ToolError;
 use crate::lane::Lane;
+use crate::router::LaneRouter;
 use crate::sandbox::SandboxMode;
 use crate::schema::ToolSchema;
 
@@ -32,8 +35,10 @@ pub trait Tool: Sized + Send + Sync {
 /// `router: Arc<LaneRouter>` and `bash_denylist: Arc<BashDenylist>`.
 pub struct ToolContext {
     pub working_dir: PathBuf,
+    pub router: Arc<LaneRouter>,
     pub sandbox: SandboxMode,
     pub path_deny_patterns: Vec<String>,
+    pub bash_denylist: Arc<BashDenylist>,
     /// Base directory for persisting subprocess output when inline-truncation
     /// fires. Agents set `Some(.loopr/runs/<run-id>/work/<work-id>/)`; unit
     /// tests leave `None` (spawn falls back to

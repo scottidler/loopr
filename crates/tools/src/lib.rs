@@ -1,13 +1,21 @@
 pub mod config;
+pub mod denylist;
 pub mod error;
 pub mod lane;
+pub mod router;
 pub mod sandbox;
 pub mod schema;
+pub mod shell;
+pub mod spawn;
 pub mod tool;
 
 pub use config::{DenyEntryConfig, ToolsConfig};
+pub use denylist::{BashDenylist, DenyPattern, TokenMatcher};
 pub use error::ToolError;
 pub use lane::{Lane, LanePolicy, classify};
-pub use sandbox::SandboxMode;
+pub use router::{LaneRouter, RouterInitError};
+pub use sandbox::{SandboxMode, bwrap_command, detect_bwrap_functional};
 pub use schema::ToolSchema;
+pub use shell::sh_command;
+pub use spawn::{KillStrategy, MAX_INLINE_OUTPUT, PersistConfig, SpawnResult, spawn_with_process_group};
 pub use tool::{Tool, ToolContext};
