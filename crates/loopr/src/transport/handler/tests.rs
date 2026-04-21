@@ -165,6 +165,32 @@ async fn plan_create_persists_and_returns_plan() {
     assert_eq!(listed[0].goal, "first goal");
 }
 
+/// With the dummy `AnthropicClient` (pointing at a non-listening
+/// port) the decomposer's LLM call fails; the handler must still
+/// return Plan success AND leave the works collection empty — not
+/// partially populated, not errored-out.
+#[tokio::test]
+async fn plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 100,
+        method: "plan.create".into(),
+        params: serde_json::json!({"goal": "will decompose-fail"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 100);
+    assert!(
+        resp.error.is_none(),
+        "plan.create returns Plan success even when decompose fails: {resp:?}"
+    );
+
+    let plans = ctx.store.plans().list().await.unwrap();
+    assert_eq!(plans.len(), 1);
+    let works = ctx.store.works().list().await.unwrap();
+    assert!(works.is_empty(), "no Works persisted when decompose fails");
+}
+
 #[tokio::test]
 async fn plan_list_returns_all_plans() {
     let (_td, ctx) = stub_ctx().await;
