@@ -91,7 +91,7 @@ Observability foundation. First-class, its own crate.
 
 The persistence anti-corruption layer. Wraps `scottidler/taskstore` with type-safe accessors.
 
-- `Store::open(target_path) -> Result<Store>` — opens `.taskstore/` at the target, initializes schema, installs git hooks, syncs if stale.
+- `Store::open(target_path) -> Result<Store>` — opens `.loopr/taskstore/` at the target (see `store::TASKSTORE_SUBPATH`), initializes schema, installs git hooks, syncs if stale.
 - Typed collection accessors: `store.plans()`, `store.specs()`, `store.phases()`, `store.works()`, `store.bundles()`, `store.ticks()`. Each returns a handle that enforces the record type on read/write.
 - `StoreError` — typed errors; `rusqlite` / `fs2` / `taskstore`-internal types do NOT leak out.
 - No LLM, no subprocess execution, no network.
@@ -268,36 +268,40 @@ v5 overrides the `rules/rust.md` default of `log` + `env_logger` and uses **`tra
 
 ## Target Repo Layout
 
-Loopr operates on **other** repos, not on itself. When pointed at a target, it manages two sibling directories at the target's root and leaves the rest of the target untouched.
+Loopr operates on **other** repos, not on itself. When pointed at a target, it manages a single top-level directory `.loopr/` at the target's root, with taskstore nested inside it. Nothing else under the target is touched.
 
 ```
 <target>/
-├── .taskstore/              committed (JSONL is truth, merge driver resolves conflicts)
-│   ├── plans.jsonl
-│   ├── specs.jsonl
-│   ├── works.jsonl
-│   ├── bundles.jsonl
-│   ├── ticks.jsonl
-│   ├── .version             schema version
-│   └── .gitignore           taskstore-managed: excludes its .db cache
-├── .loopr/                  NOT committed (listed in .git/info/exclude)
-│   ├── runs/
+├── .loopr/                       single loopr-owned directory at the target root
+│   ├── taskstore/                committed (JSONL is truth, merge driver resolves conflicts)
+│   │   ├── plans.jsonl
+│   │   ├── specs.jsonl
+│   │   ├── works.jsonl
+│   │   ├── bundles.jsonl
+│   │   ├── ticks.jsonl
+│   │   ├── .version              schema version
+│   │   └── .gitignore            taskstore-managed: excludes its .db cache
+│   ├── runs/                     NOT committed
 │   │   └── 20260418-123653/
-│   │       ├── events.log   structured JSON, per-run
-│   │       └── loopr.log    pretty format, per-run
-│   ├── config.yml           per-repo loopr overrides (local only)
-│   ├── socket               Unix domain socket for daemon<->client IPC
-│   ├── daemon.pid           PID lockfile; one daemon per target
-│   └── worktree-registry.jsonl   list of active agent worktrees
-├── .gitattributes           committed; sets taskstore merge driver on *.jsonl
+│   │       ├── events.log        structured JSON, per-run
+│   │       └── loopr.log         pretty format, per-run
+│   ├── config.yml                per-repo loopr overrides (local only, NOT committed)
+│   ├── socket                    Unix domain socket for daemon<->client IPC (NOT committed)
+│   ├── daemon.pid                PID lockfile, one daemon per target (NOT committed)
+│   └── worktree-registry.jsonl   list of active agent worktrees (NOT committed)
+├── .gitattributes                committed; sets taskstore merge driver on .loopr/taskstore/*.jsonl
 └── (sibling worktrees outside the target, not inside .loopr/)
 ```
 
-### Rationale for the dual-directory split
+Commit boundary runs **inside** `.loopr/`: `taskstore/` is committed (truth), everything else under `.loopr/` is transient and excluded via `.git/info/exclude`. The excludes pattern keeps `.loopr/taskstore/` in git while ignoring `.loopr/runs/`, `.loopr/socket`, `.loopr/daemon.pid`, etc.
 
-- **`.taskstore/`** holds the truth (Plan/Spec/Phase/Work/Bundle/Tick records as JSONL). Committed so collaborators share state; taskstore's git merge driver resolves concurrent edits by timestamp.
-- **`.loopr/`** holds transient state (logs, socket, pid, per-repo config). Ephemeral, machine-local, never committed. Carries `.git/info/exclude` rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`.
+### Rationale for nesting taskstore inside `.loopr/`
+
+- **One top-level folder to reason about.** Every loopr-created file lives under a single `.loopr/` at the target root. Grep, ignore rules, permissions, and tab-completion all benefit.
+- **`.loopr/taskstore/`** holds the truth (Plan/Spec/Phase/Work/Bundle/Tick records as JSONL). Committed so collaborators share state; taskstore's git merge driver resolves concurrent edits by timestamp.
+- **Transient siblings under `.loopr/`** (logs, socket, pid, config, worktree registry) are ephemeral, machine-local, never committed. The target's `.git/info/exclude` carries the ignore patterns rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`.
 - **Sibling worktrees** (v3/v4 pattern) live outside the target repo entirely, typically at `<target-parent>/<target-name>-work-<work-id>/`. Git's ignore rules inside the worktree don't accidentally exclude files the agent writes. Only a registry of active worktrees lives inside `.loopr/`.
+- **Upstream enablement.** `taskstore 0.5.0` split `open` into `open()` (default `$CWD/.taskstore/`) and `open_at(path, opts)` (exact path). The nested layout is consumer-controlled; `store::Store::open` passes `<target>/.loopr/taskstore/` to `open_at`.
 
 ### Worktree crash recovery
 
@@ -313,9 +317,9 @@ Without this reconciliation, orphaned worktrees accumulate on disk and orphaned 
 
 ### Merge-driver limitation (inherited from taskstore)
 
-`taskstore` ships a custom git merge driver that resolves `.taskstore/*.jsonl` conflicts by picking the record with the latest `updated_at` timestamp. `loopr init` installs the driver in `.git/config` on the local machine. **The driver only fires where installed.** Cloud-UI merges (GitHub web merge, GitLab, Gerrit) run on their servers without the driver; git's default textual merge on JSONL produces corrupt output when two branches edited the same record.
+`taskstore` ships a custom git merge driver that resolves `.loopr/taskstore/*.jsonl` conflicts by picking the record with the latest `updated_at` timestamp. `loopr init` installs the driver in `.git/config` on the local machine. **The driver only fires where installed.** Cloud-UI merges (GitHub web merge, GitLab, Gerrit) run on their servers without the driver; git's default textual merge on JSONL produces corrupt output when two branches edited the same record.
 
-For v5 this risk is bounded — loopr's push policy is "never" (see "Git Posture"), so loopr-authored commits stay local. The risk surfaces when a human pushes `.taskstore/*.jsonl` across machines where loopr also runs. Mitigation is cultural: never resolve `.taskstore/*` merges via cloud UIs; always pull locally and merge on a machine where `loopr init` has run. Documented in full at `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`.
+For v5 this risk is bounded — loopr's push policy is "never" (see "Git Posture"), so loopr-authored commits stay local. The risk surfaces when a human pushes `.loopr/taskstore/*.jsonl` across machines where loopr also runs. Mitigation is cultural: never resolve `.loopr/taskstore/*` merges via cloud UIs; always pull locally and merge on a machine where `loopr init` has run. Documented in full at `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`.
 
 ### CLI targeting: `-C <path>` (git-style)
 
@@ -332,9 +336,9 @@ For v5 this risk is bounded — loopr's push policy is "never" (see "Git Posture
 Single idempotent command run inside the target (or via `-C`):
 
 1. Create `.loopr/` and seed it with an empty `config.yml`.
-2. Open the TaskStore via `Store::open(".")`, which creates `.taskstore/` on first call.
+2. Open the TaskStore via `Store::open(".")`, which creates `.loopr/taskstore/` on first call (path comes from `store::TASKSTORE_SUBPATH`).
 3. Install taskstore's git hooks and merge driver (`taskstore install-hooks`).
-4. Append `.loopr/` to `.git/info/exclude` (not `.gitignore`) so the local loopr state is ignored without polluting the target's committed ignore list.
+4. Append the transient `.loopr/` subpaths (`runs/`, `socket`, `daemon.pid`, `config.yml`, `worktree-registry.jsonl`) to `.git/info/exclude` — leaving `.loopr/taskstore/` tracked — so the local loopr state is ignored without polluting the target's committed `.gitignore` and without excluding the committed truth.
 5. Verify the target is not a loopr source tree (source-guard check).
 
 ## Prompts
@@ -621,7 +625,7 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **Fsm derive:** revive `#[derive(Fsm)]` from v3's `loopr-derive` (v4 deleted it in favor of a runtime YAML interpreter that v5 also rejects). Rehomed in `crates/derive` under v5's single-word naming convention. The v5 shape is v3's compile-time derive plus v4's rich-error output minus v4's YAML/string-dispatch regressions; full rationale and provenance in [`docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md). New `#[derive(Record)]` joins it; derives only, no function-like or attribute macros.
 - **Tool registry:** minimal for first gate ({Read, Write, Edit, Bash, Grep, Glob}). Expands toward Claude / Gemini / Codex parity as TUI Chat and agent capability needs earn each addition.
 - **Observability:** `tracing` + `tracing-subscriber` + `tracing-appender`, owned by `crates/telemetry`. Overrides the `rules/rust.md` default of `log` + `env_logger` for v5 specifically.
-- **Target-repo state:** `.taskstore/` (committed truth) + `.loopr/` (transient, excluded via `.git/info/exclude`).
+- **Target-repo state:** single top-level `.loopr/` with `.loopr/taskstore/` (committed truth) and everything else transient (excluded via `.git/info/exclude`).
 - **Prompts:** handlebars-rust, `.pmt` files, themed layout under `.loopr/prompts/` populated from `include_dir!()`, partials for SSOT, **three-layer override resolution** (target → XDG user → baked-in). See "Prompts" section.
 - **Error model:** closed typed `ToolError` enum; typed `FailureReason` + companion `error: String` on records; `catch_unwind` at every agent task; closed RPC enum serializing to JSON-RPC wire codes; dual user-surface (stderr for one-shot, `DaemonEvent::Error` stream for long-running). See "Error Model" section.
 - **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: baked-in < XDG < `.loopr/config.yml` < env var < CLI flag; env vars use a `LOOPR_` prefix + `ALL_CAPS` to avoid polluting spawned subprocess environments. See "Models and Budgets" section.
@@ -633,7 +637,7 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **`LOOPR_` env var prefix (restored):** env vars are `LOOPR_<KEY>` (all caps, hyphens to underscores). Earlier bare-ALL_CAPS decision reversed after Architect Round 3 flagged subprocess env inheritance as a correctness hazard: `tools` spawns cargo/npm/bash, which inherit loopr's environment, so unprefixed `LOG_LEVEL` would pollute child processes.
 - **IPC framing:** NDJSON via `tokio_util::codec::LinesCodec` with 1 MiB max line; JSON-RPC-style envelope (`id`/`method`/`params`, `id`/`result`/`error`, unsolicited `event`/`data`); error codes `-32601`/`-32602`/`-32603` standard + `-32000`–`-32005` loopr-specific. All verbatim from v3/v4. See "ipc" ABI section.
 - **Worktree crash recovery:** daemon startup routine `worktree::reconcile(target)` reads registry, reconciles against git state, cleans orphans, marks crashed Works as `FailureReason::CrashInterrupted`. See "Worktree crash recovery" subsection.
-- **Taskstore merge-driver limitation:** inherited from `taskstore`; documented here, full write-up in `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`. Mitigation is cultural (never merge `.taskstore/*` via cloud UIs).
+- **Taskstore merge-driver limitation:** inherited from `taskstore`; documented here, full write-up in `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`. Mitigation is cultural (never merge `.loopr/taskstore/*` via cloud UIs).
 - **Upstream `taskstore-traits` split** — shipped. `scottidler/taskstore` is now a two-crate workspace (release `v0.3.0`): `taskstore-traits v0.1.0` holds `Record`/`IndexValue`/`Filter`/`FilterOp` with only `serde` as a dep; full `taskstore` re-exports them and layers on the Store engine. loopr-v5 wires both as git deps in `[workspace.dependencies]`; `domain` pulls trait-only, `store` pulls the full crate. `domain`'s transitive-dep purity is now structurally enforced.
 - **Inter-crate Cargo-level dep wiring** — was pending at Round 3 review (`[dependencies]` blocks were empty); landed in the follow-up commit that declares `path = "../..."` deps for every internal edge of the 13-crate graph. No longer open after that commit.
 

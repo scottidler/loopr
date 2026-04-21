@@ -4,7 +4,7 @@ Type-safe wrapper around `scottidler/taskstore`. Owns the JSONL-is-truth + SQLit
 
 ## In scope
 
-- `Store` struct wrapping `taskstore::Store`; opens at `<target>/.taskstore/` on first call
+- `Store` struct wrapping `taskstore::Store`; opens at `<target>/.loopr/taskstore/` on first call (`TASKSTORE_SUBPATH` in `store::store`)
 - Type-safe collection accessors: `store.plans()`, `store.works()`, etc., returning handles that preserve record types instead of raw `taskstore` generics
 - Path resolution relative to the effective target (`loopr -C <path>` or CWD)
 - `install-hooks`: invokes `taskstore install-hooks` as part of `loopr init`

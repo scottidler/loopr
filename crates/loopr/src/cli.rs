@@ -31,7 +31,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize loopr state (.loopr/, .taskstore/, git hooks) at the target. [Stage 5]
+    /// Initialize loopr state (.loopr/, .loopr/taskstore/, git hooks) at the target. [Stage 5]
     Init,
 
     /// Submit a Plan goal to the daemon. [Stage 5]

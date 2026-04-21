@@ -5,19 +5,31 @@ use taskstore_async::{AsyncStore, OpenOptions};
 use crate::error::StoreError;
 use crate::plans::PlansStore;
 
+/// Path of the taskstore directory relative to the target repo root.
+/// v5 nests taskstore beneath the transient `.loopr/` directory so a
+/// target's entire loopr footprint (logs, pid, socket, store) lives
+/// under a single top-level folder. The path is created on first open
+/// via `AsyncStore::open_at`.
+pub const TASKSTORE_SUBPATH: &str = ".loopr/taskstore";
+
 pub struct Store {
     inner: AsyncStore,
 }
 
 impl Store {
-    /// Open the store rooted at the given target directory.
+    /// Open the store rooted at the given target directory. The on-disk
+    /// location is `<target>/.loopr/taskstore/` (see `TASKSTORE_SUBPATH`).
     ///
-    /// `taskstore_async::AsyncStore::open` appends `.taskstore/` to its
-    /// argument and creates the subdirectory on first call. Pass the target
-    /// repo root; do NOT pre-append `.taskstore/` or the subdirectory gets
-    /// nested.
+    /// Upstream note: as of `taskstore 0.5.0` / `taskstore-async 0.2.0`
+    /// the library no longer appends any path segment of its own;
+    /// callers pick the exact directory via `open_at`. We use that here
+    /// to keep loopr's full state under a single `.loopr/` top-level
+    /// folder. Passing a bare `target` to the old `open(path, opts)` is
+    /// an API that no longer exists; this wrapper is the sole consumer
+    /// that needs to know about the nested layout.
     pub async fn open(target: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let inner = AsyncStore::open(target.as_ref(), OpenOptions::default()).await?;
+        let path = target.as_ref().join(TASKSTORE_SUBPATH);
+        let inner = AsyncStore::open_at(path, OpenOptions::default()).await?;
         Ok(Self { inner })
     }
 

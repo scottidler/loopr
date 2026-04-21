@@ -11,8 +11,13 @@ use crate::error::LooprError;
 /// non-directory resolutions map to `LooprError::TargetInvalid`.
 /// Step 3 (three-tier root discovery, first match wins):
 ///   (a) `git -C <path> rev-parse --show-toplevel` -> use that path
-///   (b) walk ancestors looking for `.loopr/` or `.taskstore/` -> use first match
+///   (b) walk ancestors looking for `.loopr/` -> use first match
 ///   (c) fall through to the canonicalized start path
+///
+/// Prior versions also honored a top-level `.taskstore/` marker. Since
+/// `store::Store::open` now nests taskstore at `.loopr/taskstore/`, a
+/// bare `.taskstore/` at a target's root is not a v5-created directory
+/// and no longer counts as an init marker.
 pub fn resolve(chdir: Option<&Path>, env: Option<&str>, cwd: &Path) -> Result<PathBuf, LooprError> {
     let start = if let Some(p) = chdir {
         p.to_path_buf()
@@ -58,7 +63,7 @@ fn git_toplevel(start: &Path) -> Option<PathBuf> {
 
 fn marker_walk(start: &Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
-        if ancestor.join(".loopr").is_dir() || ancestor.join(".taskstore").is_dir() {
+        if ancestor.join(".loopr").is_dir() {
             return Some(ancestor.to_path_buf());
         }
     }

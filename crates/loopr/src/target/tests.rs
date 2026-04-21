@@ -97,13 +97,22 @@ fn marker_walk_finds_loopr_dir() {
 }
 
 #[test]
-fn marker_walk_finds_taskstore_dir() {
+fn bare_taskstore_dir_is_no_longer_a_marker() {
+    // Pre-v0.5.13 targets could end up with a top-level `.taskstore/`
+    // directory (the old `AsyncStore::open` appended `.taskstore/`
+    // itself). v0.5.13 nests taskstore at `.loopr/taskstore/`, so a
+    // bare `.taskstore/` at the root is either legacy or unrelated
+    // tooling and must not resolve as a loopr target.
     let td = TempDir::new().unwrap();
     fs::create_dir_all(td.path().join(".taskstore")).unwrap();
     let sub = td.path().join("src/foo");
     fs::create_dir_all(&sub).unwrap();
     let resolved = resolve(Some(&sub), None, Path::new("/tmp")).unwrap();
-    assert_eq!(resolved, td.path().canonicalize().unwrap());
+    assert_eq!(
+        resolved,
+        sub.canonicalize().unwrap(),
+        "bare .taskstore/ must fall through to the canonical start path, not anchor to the ancestor that contains it"
+    );
 }
 
 #[test]

@@ -108,7 +108,7 @@ fn help_lists_all_stage_subcommands() {
 fn plan_on_tempdir_creates_and_prints_plan() {
     // Stage 5: tempdir with no pre-existing .loopr marker. The resolver
     // falls through, the guard passes, the daemon auto-forks, the store
-    // opens under .taskstore/, and plan.create returns the record.
+    // opens under .loopr/taskstore/, and plan.create returns the record.
     let td = TempDir::new().unwrap();
     let output = loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])

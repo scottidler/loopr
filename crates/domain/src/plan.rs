@@ -52,8 +52,8 @@ pub enum PlanStatus {
     Abandoned,
 }
 
-/// User-filed objective. Persisted in `.taskstore/plans.jsonl` via the
-/// `Record` derive.
+/// User-filed objective. Persisted at `<target>/.loopr/taskstore/plans.jsonl`
+/// via the `Record` derive.
 #[derive(Debug, Clone, Serialize, Deserialize, Record)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {

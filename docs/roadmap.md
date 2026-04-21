@@ -74,7 +74,7 @@
 
 ## Stage 5: daemon persists Plan via TaskStore
 
-**Goal:** daemon accepts `Plan` requests, opens `.taskstore/` (taskstore git dep), persists the Plan record. `loopr plan "x"` returns the persisted Plan's ID. Second invocation sees the first Plan via `loopr list plans`.
+**Goal:** daemon accepts `Plan` requests, opens `.loopr/taskstore/` (taskstore git dep), persists the Plan record. `loopr plan "x"` returns the persisted Plan's ID. Second invocation sees the first Plan via `loopr list plans`.
 
 **Design docs:**
 - [`docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md) — `#[derive(Fsm)]` revived from v3's `loopr-derive` (v4 had deleted it for a YAML runtime that v5 also rejects). Located at the repo-root `docs/design/` rather than the crate's own `docs/design/` because it touches two crates (`derive` emits the macro; `domain` hosts the runtime support types `Transition`, `FsmError<S>`, `FsmErrorKind`, `TargetKind`, `Role`). Shipped in v0.5.8 (v0.5.9 followed with a validator tightening from Architect audit). Status: Implemented.
@@ -84,13 +84,13 @@
 
 **Crates touched:** `derive`, `domain`, `loopr`.
 
-**Exit criterion:** `loopr plan "x" && loopr plan "y" && loopr list plans` shows both plans; `.taskstore/plans.jsonl` has two lines.
+**Exit criterion:** `loopr plan "x" && loopr plan "y" && loopr list plans` shows both plans; `.loopr/taskstore/plans.jsonl` has two lines.
 
 ---
 
 ## Stage 6: decomposer produces a Work DAG
 
-**Goal:** daemon, on receiving a Plan request, runs the decomposer which produces a trivial Work DAG (single Work is fine for now). Work records land in `.taskstore/works.jsonl` with dependencies on the Plan.
+**Goal:** daemon, on receiving a Plan request, runs the decomposer which produces a trivial Work DAG (single Work is fine for now). Work records land in `.loopr/taskstore/works.jsonl` with dependencies on the Plan.
 
 **Design docs:**
 - `crates/domain/docs/design/hierarchy.md` — Plan/Spec/Phase/Work hierarchy and FSM states, deps semantics. (First-gate scope: flat, start with Plan→Work; Spec/Phase deferred.)
@@ -100,7 +100,7 @@
 
 **Crates touched:** `domain`, `store`, `llm`, `decomposer`.
 
-**Exit criterion:** `loopr plan "Add --version flag to a Rust CLI"` produces at least one Work record persisted to `.taskstore/works.jsonl`.
+**Exit criterion:** `loopr plan "Add --version flag to a Rust CLI"` produces at least one Work record persisted to `.loopr/taskstore/works.jsonl`.
 
 ---
 
