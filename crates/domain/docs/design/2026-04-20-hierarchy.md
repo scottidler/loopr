@@ -2,8 +2,8 @@
 
 **Author:** Claude (with Scott)
 **Date:** 2026-04-20
-**Status:** Draft
-**Review Passes Completed:** 5/5
+**Status:** Implemented
+**Review Passes Completed:** 5/5 + Architect rounds 1 and 2
 **Scope gate:** [`docs/design/2026-04-20-stage-6-scope.md`](../../../../docs/design/2026-04-20-stage-6-scope.md) — decisions D1–D11, A+1..3, U+1..5 are locked there; this doc references the matrix by row rather than re-litigating.
 
 ## Summary
