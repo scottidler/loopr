@@ -9,16 +9,24 @@
 //! `ToolCall`.
 
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
+use tracing::{debug, info_span, warn};
 
 use crate::client::LlmClient;
 use crate::config::LlmConfig;
 use crate::error::{FatalReason, LlmError};
 use crate::tool::{ToolCall, ToolSchema};
+
+/// Maximum bytes of `system` / `user` prompt to emit as a span field.
+/// Beyond this, the span records a truncated preview plus the
+/// original byte-length suffix so `events.log` stays bounded on long
+/// prompts without losing debugging signal. Locked by design doc
+/// Security → Telemetry payload rules.
+const PROMPT_PREVIEW_MAX_BYTES: usize = 4096;
 
 /// Wall-clock ceiling for a single Anthropic call. Sonnet with 8192
 /// max_tokens usually completes in 1-10s; 120s is 12x headroom for
@@ -61,6 +69,8 @@ impl AnthropicClient {
                 reason: FatalReason::ConfigInvalid("empty API key".into()),
             });
         }
+
+        validate_api_base_url(&config.api_base_url)?;
 
         let mut headers = HeaderMap::new();
         let mut key_val = HeaderValue::from_str(&api_key).map_err(|e| LlmError::Fatal {
@@ -124,46 +134,159 @@ impl LlmClient for AnthropicClient {
         tool: ToolSchema,
     ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
         async move {
-            let url = format!("{}/v1/messages", self.config.api_base_url);
-            let body = AnthropicRequest {
-                model: &self.config.model,
-                max_tokens: self.config.max_tokens,
-                temperature: self.config.temperature,
-                system,
-                messages: [AnthropicMessage {
-                    role: "user",
-                    content: user,
-                }],
-                tools: [ToolSchemaWire {
-                    name: &tool.name,
-                    description: &tool.description,
-                    input_schema: &tool.input_schema,
-                }],
-                tool_choice: ToolChoiceWire {
-                    kind: "tool",
-                    name: &tool.name,
-                },
-            };
+            // Span fields per design doc Security → Telemetry rules:
+            // model + prompt byte-lengths + previews (truncated to
+            // PROMPT_PREVIEW_MAX_BYTES) + duration. NEVER the tool
+            // schema, ToolCall.input, headers, or API key.
+            let span = info_span!(
+                "llm.anthropic",
+                model = %self.config.model,
+                system_len = system.len(),
+                user_len = user.len(),
+                system_preview = %truncate_preview(system),
+                user_preview = %truncate_preview(user),
+                tool_name = %tool.name,
+                duration_ms = tracing::field::Empty,
+                outcome = tracing::field::Empty,
+            );
+            let _enter = span.enter();
+            let started = Instant::now();
 
-            let response = self
-                .http
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(reqwest_err_to_llm_error)?;
+            let result = self.send_request(system, user, &tool).await;
 
-            let status = response.status();
-            let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
-                reason: format!("failed to read response body: {e}"),
-            })?;
-
-            classify_response(status, &body_bytes, &tool.name, self.config.max_tokens)
+            let elapsed = started.elapsed().as_millis() as u64;
+            span.record("duration_ms", elapsed);
+            match &result {
+                Ok(_) => {
+                    span.record("outcome", "ok");
+                    debug!("llm.anthropic call succeeded");
+                }
+                Err(LlmError::Retryable { reason }) => {
+                    span.record("outcome", "retryable");
+                    warn!(reason = %reason, "llm.anthropic call failed (retryable)");
+                }
+                Err(LlmError::Fatal { reason }) => {
+                    span.record("outcome", "fatal");
+                    warn!(reason = ?reason, "llm.anthropic call failed (fatal)");
+                }
+            }
+            result
         }
     }
 }
 
+impl AnthropicClient {
+    async fn send_request(&self, system: &str, user: &str, tool: &ToolSchema) -> Result<ToolCall, LlmError> {
+        let url = format!("{}/v1/messages", self.config.api_base_url);
+        let body = AnthropicRequest {
+            model: &self.config.model,
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+            system,
+            messages: [AnthropicMessage {
+                role: "user",
+                content: user,
+            }],
+            tools: [ToolSchemaWire {
+                name: &tool.name,
+                description: &tool.description,
+                input_schema: &tool.input_schema,
+            }],
+            tool_choice: ToolChoiceWire {
+                kind: "tool",
+                name: &tool.name,
+            },
+        };
+
+        let response = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(reqwest_err_to_llm_error)?;
+
+        let status = response.status();
+        let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
+            reason: format!("failed to read response body: {e}"),
+        })?;
+
+        classify_response(status, &body_bytes, &tool.name, self.config.max_tokens)
+    }
+}
+
+/// Validate `api_base_url` at construction time so a malformed config
+/// value surfaces as `Fatal(ConfigInvalid)` immediately instead of as
+/// a misclassified `Retryable` at call time.
+///
+/// Checks: non-empty, no control characters, must parse as a URL,
+/// scheme must be `http` or `https`, host must be present, path must
+/// not include a trailing slash (since we concatenate `/v1/messages`
+/// at call time).
+fn validate_api_base_url(url_str: &str) -> Result<(), LlmError> {
+    if url_str.is_empty() {
+        return Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid("empty api-base-url".into()),
+        });
+    }
+    if url_str.chars().any(|c| c.is_control()) {
+        return Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid("api-base-url contains control characters".into()),
+        });
+    }
+    if url_str.ends_with('/') {
+        return Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid("api-base-url must not end with a trailing slash".into()),
+        });
+    }
+    let parsed = url::Url::parse(url_str).map_err(|e| LlmError::Fatal {
+        reason: FatalReason::ConfigInvalid(format!("api-base-url not a valid URL: {e}")),
+    })?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(LlmError::Fatal {
+                reason: FatalReason::ConfigInvalid(format!("api-base-url scheme must be http or https, got {other}")),
+            });
+        }
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid("api-base-url missing host".into()),
+        });
+    }
+    Ok(())
+}
+
+/// Truncate a prompt to `PROMPT_PREVIEW_MAX_BYTES` for span emission,
+/// preserving UTF-8 boundaries. Longer prompts get an ellipsis plus
+/// the original byte-length suffix so readers of `events.log` know a
+/// truncation happened and can find the full prompt in the caller's
+/// own records.
+fn truncate_preview(s: &str) -> String {
+    if s.len() <= PROMPT_PREVIEW_MAX_BYTES {
+        return s.to_string();
+    }
+    let mut cut = PROMPT_PREVIEW_MAX_BYTES;
+    while !s.is_char_boundary(cut) && cut > 0 {
+        cut -= 1;
+    }
+    format!("{}… [truncated; original {} bytes]", &s[..cut], s.len())
+}
+
 fn reqwest_err_to_llm_error(e: reqwest::Error) -> LlmError {
+    // `is_builder()` covers URL parsing and other client-construction
+    // failures that happen when the `reqwest::RequestBuilder` is built
+    // from a bad URL string — retrying identically will fail
+    // identically, so this is Fatal. The URL validation in
+    // `AnthropicClient::new` catches the common case at construction
+    // time; this branch catches anything that slips past (e.g. a
+    // builder failing mid-send for a reason our pre-check missed).
+    if e.is_builder() {
+        return LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(format!("request builder error: {e}")),
+        };
+    }
     if e.is_timeout() || e.is_connect() || e.is_request() {
         LlmError::Retryable {
             reason: format!("network error: {e}"),

@@ -317,3 +317,63 @@ fn new_rejects_key_with_control_chars() {
         Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
     }
 }
+
+#[test]
+fn new_rejects_empty_base_url() {
+    let result = AnthropicClient::new(test_config(String::new()), "test-key".into());
+    match result {
+        Ok(_) => panic!("expected empty-URL rejection"),
+        Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(msg),
+        }) => assert!(msg.contains("empty"), "msg: {msg}"),
+        Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
+    }
+}
+
+#[test]
+fn new_rejects_base_url_with_trailing_slash() {
+    let result = AnthropicClient::new(test_config("https://api.anthropic.com/".into()), "test-key".into());
+    match result {
+        Ok(_) => panic!("expected trailing-slash rejection"),
+        Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(msg),
+        }) => assert!(msg.contains("trailing slash"), "msg: {msg}"),
+        Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
+    }
+}
+
+#[test]
+fn new_rejects_base_url_with_control_chars() {
+    let result = AnthropicClient::new(test_config("https://api.anthropic.com\n".into()), "test-key".into());
+    match result {
+        Ok(_) => panic!("expected control-char rejection"),
+        Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(msg),
+        }) => assert!(msg.contains("control"), "msg: {msg}"),
+        Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
+    }
+}
+
+#[test]
+fn new_rejects_non_http_scheme() {
+    let result = AnthropicClient::new(test_config("ftp://api.anthropic.com".into()), "test-key".into());
+    match result {
+        Ok(_) => panic!("expected non-http-scheme rejection"),
+        Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(msg),
+        }) => assert!(msg.contains("scheme"), "msg: {msg}"),
+        Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
+    }
+}
+
+#[test]
+fn new_rejects_unparseable_base_url() {
+    let result = AnthropicClient::new(test_config("not-a-url".into()), "test-key".into());
+    match result {
+        Ok(_) => panic!("expected unparseable-URL rejection"),
+        Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(_),
+        }) => {}
+        Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
+    }
+}

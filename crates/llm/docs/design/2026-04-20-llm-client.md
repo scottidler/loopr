@@ -521,12 +521,22 @@ Seam tests, hermetic (no network):
 - [ ] Does `AnthropicClient` need a builder (`AnthropicClientBuilder::new().with_timeout(…)`)? Stage 6 says no (scope memo says bare `reqwest::Client::new()`). If Stage 7 needs per-call timeout overrides, earn the builder then.
 - [ ] Should `LlmError::Retryable` carry a structured `retry_after: Option<Duration>` parsed from the `retry-after` header on 429? Stage 6's decomposer has a simple retry strategy that doesn't use it; leave it as `String` for now and upgrade when the agents crate's retry loop wants it.
 - [ ] Token-count extraction from `usage` block: ship or defer? Leaning defer; the scope memo D6 doesn't require it for Stage 6, and `telemetry` span emission without token counts is strictly acceptable for one-shot decomposition. Earn it when cost accounting motivates it.
+- [ ] **Explicit deferral: timeout-test coverage.** The Phase 4 bullet that specified "mock server sleeps longer than `REQUEST_TIMEOUT_SECS` → `Retryable` via `is_timeout()`" is not shipped. Overriding `REQUEST_TIMEOUT_SECS` for a hermetic test requires either a new `LlmConfig.timeout_secs` field (scope creep for Stage 6) or a test-only builder (surface bloat). The `reqwest::Error::is_timeout()` path is tested upstream; rolled into Stage 7's "Timeout split" forward-ref below where a config field is already on the table.
 
 **Forward-referenced for Stage 7 (not Stage 6 concerns, but flagged by Architect round 1 so Stage 7's design doesn't get surprised):**
 
 - [ ] **Connection pooling for concurrent agents.** Stage 7's agents crate will make 2-N concurrent LLM calls through the same `AnthropicClient`. Default `reqwest::Client` pool sizing may be wrong for that load; revisit `pool_max_idle_per_host` / `pool_idle_timeout` when the agents crate lands.
 - [ ] **Timeout split (total vs. connect vs. read).** The 120s `REQUEST_TIMEOUT_SECS` applies to the entire request. Under a degraded-Anthropic trickle-tokens scenario, a 90%-complete response gets sliced at the boundary and reclassified `Retryable` when the model was actually succeeding. Stage 7's retry strategy may want the split to preserve near-completions.
 - [ ] **Response payload size ceiling.** `reqwest::Response::json::<Value>()` reads the entire body into memory and lets `serde_json` unbound. A malicious or malfunctioning upstream returning pathologically nested JSON could overflow. Anthropic is trusted; corporate-proxy scenarios with `api-base-url` overrides are less so. Consider a max-bytes guard when such an override is detected.
+
+## Post-Implementation Audit (v0.5.19)
+
+Architect audit after the v0.5.18 ship surfaced four genuine misses. All landed in v0.5.19 before `plan-then-decompose.md` was started.
+
+- **Span emission was missing.** Phase 3 shipped no `tracing` span on `complete_with_tool`. Fixed: `info_span!("llm.anthropic", model, system_len, user_len, system_preview, user_preview, tool_name)` entered around the request; `duration_ms` and `outcome` recorded at completion. Prompt previews truncated to `PROMPT_PREVIEW_MAX_BYTES` (4 KiB) on UTF-8 boundaries, with a `truncated; original N bytes` suffix. Tool schema, `ToolCall.input`, api-key, and headers are never emitted.
+- **`api_base_url` validation was missing.** `AnthropicClient::new` accepted any string and deferred the failure to call time, where `reqwest_err_to_llm_error` mis-classified builder errors as `Retryable` — a doom-loop hazard for bad config. Fixed: `validate_api_base_url` in `anthropic.rs` rejects empty / control-char / trailing-slash / non-`http(s)` / non-parseable URLs with `Fatal(ConfigInvalid)`.
+- **Builder-error classification was wrong.** `reqwest_err_to_llm_error` now checks `is_builder()` first and routes those to `Fatal(ConfigInvalid)`. Primary case (URL) is already caught by the validator at construction; this branch catches anything that slips past.
+- **Span snapshot test + URL-validation tests were missing.** Fixed: `crates/llm/tests/span.rs` installs a capturing `tracing_subscriber::Layer` once (via `OnceLock`) and asserts the `llm.anthropic` span emits the required fields and does not leak the api-key, tool-schema description, or `input_schema`. Five new URL-validation tests (empty, trailing slash, control chars, non-http scheme, unparseable) added to `tests/anthropic.rs`. Timeout test remains deferred — rationale in Open Questions.
 
 ## References
 
