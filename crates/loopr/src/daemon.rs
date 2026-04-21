@@ -40,6 +40,16 @@ pub use context::DaemonContext;
 /// `.loopr/daemon.version` on startup so clients can detect version drift.
 pub const DAEMON_VERSION: &str = env!("GIT_DESCRIBE");
 
+/// Upper bound on how long we wait for the signal-watcher task to finish
+/// after the accept loop has observed shutdown. The watcher's last
+/// statement is `notify_waiters` (which wakes the accept loop); by the
+/// time the accept loop unwinds back here, the watcher is either already
+/// finished or within a few scheduler ticks of finishing. The timeout is
+/// defensive — if the watcher registration errored out up front, we
+/// skip the wait entirely. This exists so `Arc::try_unwrap(ctx)` below
+/// observes the watcher's `Arc<DaemonContext>` clone as already-dropped.
+pub const WATCHER_JOIN_TIMEOUT_SECS: u64 = 2;
+
 /// Unconditional parent-side entry: fork a daemon, wait (briefly) for its
 /// socket to appear, return. Invoked by `loopr daemon start` (background
 /// mode) and by `ensure_daemon_if_needed` when it decides a fork is needed.
@@ -178,6 +188,27 @@ pub async fn daemon_main(target: PathBuf) -> Result<(), LooprError> {
 
 /// Phase B body. Isolated so the lock-acquire phase above is obviously
 /// cleanup-free.
+///
+/// ## Shutdown sequence
+///
+/// 1. `accept_loop` observes `shutting_down` / `shutdown_notify` and
+///    drains its handler `JoinSet` with a bounded timeout before
+///    returning. Every handler's `Arc<DaemonContext>` clone is released
+///    by the time this await resolves.
+/// 2. The signal-watcher task is joined with a short timeout so its
+///    `Arc<DaemonContext>` clone drops. The watcher's final statement is
+///    the `notify_waiters` that woke the accept loop, so by the time the
+///    await resolves the task is at most a few scheduler ticks from
+///    done; the timeout is defensive for the rare case where the
+///    watcher errored out before ever receiving a signal.
+/// 3. With every cloned `Arc<DaemonContext>` released, `Arc::try_unwrap`
+///    recovers the owned `DaemonContext`, and we call `Store::close`
+///    (which consumes `self` and moves the synchronous writer-thread
+///    join into a `spawn_blocking` so the tokio reactor is not pinned).
+///    If `try_unwrap` unexpectedly finds an outstanding clone we skip
+///    close and let the final `Arc::drop` invoke `Store::Drop` — the
+///    crash-interrupt fallback path that the store is explicitly
+///    designed to tolerate as best-effort only.
 async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(), LooprError> {
     // Init the daemon's own telemetry subscriber. Safe because `lib::run`'s
     // pre-telemetry hoist guarantees the parent never called
@@ -187,7 +218,14 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     let _guard = telemetry::init(&target, &run_id, &directive)
         .map_err(|e| LooprError::DaemonStartup(format!("telemetry init: {e}")))?;
 
-    let ctx = Arc::new(DaemonContext::new(target.clone(), run_id, pid));
+    // Open the per-target store AFTER telemetry init so open errors land
+    // in the daemon's run log, and BEFORE `DaemonContext::new` because the
+    // context owns the store for the duration of the active phase.
+    let store = store::Store::open(&target)
+        .await
+        .map_err(|e| LooprError::DaemonStartup(format!("store open: {e}")))?;
+
+    let ctx = Arc::new(DaemonContext::new(target.clone(), run_id, pid, store));
 
     tracing::info!(
         target_dir = %target.display(),
@@ -210,16 +248,44 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // Signal-watcher task. Awaits SIGTERM/SIGINT as async values; sets
     // shutting_down + notify_waiters on first signal. No POSIX
     // signal-handler-safety concerns.
-    spawn_signal_watcher(ctx.clone());
+    let watcher_handle = spawn_signal_watcher(ctx.clone());
 
-    // Phase 4: real accept loop. Spawns one per-connection handler task.
-    crate::transport::server::accept_loop(listener, ctx).await?;
+    // Phase 4: real accept loop. Upgraded at Stage 5 to hold a JoinSet of
+    // per-connection handlers and drain it before returning (see
+    // `crate::transport::server::accept_loop`).
+    let accept_result = crate::transport::server::accept_loop(listener, ctx.clone()).await;
+
+    // Wait for the signal watcher to finish so its `Arc<DaemonContext>`
+    // clone drops. Bounded by WATCHER_JOIN_TIMEOUT_SECS in case the
+    // watcher never observed a signal (e.g. registration error).
+    let _ = tokio::time::timeout(Duration::from_secs(WATCHER_JOIN_TIMEOUT_SECS), watcher_handle).await;
+
+    // Every other `Arc<DaemonContext>` clone (accept loop's parameter,
+    // watcher task, every handler task) should be dropped by now. Try to
+    // unwrap the Arc to recover the owned Store and close it async.
+    match Arc::try_unwrap(ctx) {
+        Ok(owned) => match owned.store.close().await {
+            Ok(()) => tracing::info!("daemon.store.closed"),
+            Err(e) => tracing::warn!(error = %e, "daemon.store.close failed"),
+        },
+        Err(still_shared) => {
+            tracing::warn!(
+                strong_count = Arc::strong_count(&still_shared),
+                "DaemonContext Arc still shared at shutdown; falling back to Store::Drop"
+            );
+        }
+    }
+
+    accept_result?;
     Ok(())
 }
 
 /// Install the SIGTERM / SIGINT watcher. On first signal: set
 /// `shutting_down = true` and notify every awaiter of `shutdown_notify`.
-fn spawn_signal_watcher(ctx: Arc<DaemonContext>) {
+/// Returns the spawned `JoinHandle` so `run_active_daemon` can await it
+/// during shutdown and release the watcher's `Arc<DaemonContext>` clone
+/// before `Arc::try_unwrap`.
+fn spawn_signal_watcher(ctx: Arc<DaemonContext>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut term = match signal(SignalKind::terminate()) {
             Ok(s) => s,
@@ -241,5 +307,5 @@ fn spawn_signal_watcher(ctx: Arc<DaemonContext>) {
         }
         ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
         ctx.shutdown_notify.notify_waiters();
-    });
+    })
 }

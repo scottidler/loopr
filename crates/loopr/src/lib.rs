@@ -79,6 +79,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         | Command::Decompose { .. }
         | Command::Execute { .. }
         | Command::Integrate
+        | Command::List { .. }
         | Command::Daemon { cmd: DaemonCmd::Status } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
@@ -182,10 +183,7 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(run_id)),
             LogsCmd::Runs => logs::handle_runs(target, Some(run_id)),
         },
-        Command::List { .. } => Err(LooprError::StageUnimplemented {
-            stage: 5,
-            subcommand: "list",
-        }),
+        Command::List { kind } => list_command(target, kind),
     }
 }
 
@@ -250,11 +248,10 @@ fn daemon_status(target: &Path) -> Result<(), LooprError> {
     })
 }
 
-/// Stage 4 `loopr plan "x"` body: exercise the full round-trip
-/// (connect -> handshake -> request_raw -> daemon replies
-/// `MethodNotFound("plan.create")` -> map to `StageUnimplemented`).
-/// Stage 5 replaces the `request_raw` call with a typed
-/// `MethodName::PlanCreate` request that returns `Ok`.
+/// `loopr plan "x"` body: connect to the daemon, handshake, issue a
+/// typed `MethodName::PlanCreate` request. Stage 5 replaces Stage 4's
+/// `request_raw` escape hatch with this typed path; the daemon persists
+/// the plan through its `Store` and returns the created record.
 fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -263,17 +260,71 @@ fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
     rt.block_on(async {
         let mut client = transport::connect_or_wait(target).await?;
         client.handshake().await?;
+        let params = ipc::PlanCreateParams { goal };
+        let params_value = serde_json::to_value(&params)
+            .map_err(|e| LooprError::ClientIo(format!("serialize plan.create params: {e}")))?;
+        let (resp, _events) = client.request(ipc::MethodName::PlanCreate, params_value).await?;
+        if let Some(err) = resp.error {
+            return Err(LooprError::Rpc(err));
+        }
+        let result_value = resp
+            .result
+            .ok_or_else(|| LooprError::ClientIo("plan.create response missing result".into()))?;
+        let result: ipc::PlanCreateResult = serde_json::from_value(result_value)
+            .map_err(|e| LooprError::ClientIo(format!("decode plan.create: {e}")))?;
+        println!("plan:   {}", result.plan.id);
+        println!("goal:   {}", result.plan.goal);
+        println!("status: {}", result.plan.status);
+        Ok(())
+    })
+}
+
+/// `loopr list <kind>` dispatcher. Stage 5 wires only `plans`; the other
+/// kinds return `StageUnimplemented` until their stage lands, and an
+/// unrecognized kind is reported as a client-side error rather than
+/// silently swallowed.
+fn list_command(target: &Path, kind: String) -> Result<(), LooprError> {
+    match kind.as_str() {
+        "plans" => list_plans(target),
+        "specs" | "phases" | "works" => Err(LooprError::StageUnimplemented {
+            stage: 6,
+            subcommand: "list",
+        }),
+        "bundles" | "ticks" => Err(LooprError::StageUnimplemented {
+            stage: 7,
+            subcommand: "list",
+        }),
+        other => Err(LooprError::ClientIo(format!(
+            "unknown list kind: {other} (expected one of: plans, specs, phases, works, bundles, ticks)"
+        ))),
+    }
+}
+
+fn list_plans(target: &Path) -> Result<(), LooprError> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
+    rt.block_on(async {
+        let mut client = transport::connect_or_wait(target).await?;
+        client.handshake().await?;
         let (resp, _events) = client
-            .request_raw("plan.create", serde_json::json!({ "goal": goal }))
+            .request(ipc::MethodName::PlanList, serde_json::Value::Null)
             .await?;
         if let Some(err) = resp.error {
-            if matches!(err, ipc::RpcError::MethodNotFound(_)) {
-                return Err(LooprError::StageUnimplemented {
-                    stage: 5,
-                    subcommand: "plan",
-                });
-            }
             return Err(LooprError::Rpc(err));
+        }
+        let result_value = resp
+            .result
+            .ok_or_else(|| LooprError::ClientIo("plan.list response missing result".into()))?;
+        let result: ipc::PlanListResult =
+            serde_json::from_value(result_value).map_err(|e| LooprError::ClientIo(format!("decode plan.list: {e}")))?;
+        if result.plans.is_empty() {
+            println!("no plans");
+        } else {
+            for plan in &result.plans {
+                println!("{}  {:<10}  {}", plan.id, plan.status, plan.goal);
+            }
         }
         Ok(())
     })

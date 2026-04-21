@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
 
+use domain::Plan;
+
 use crate::envelope::DaemonRequest;
 use crate::error::RpcError;
 
@@ -10,18 +12,30 @@ pub enum MethodName {
     SystemHandshake,
     #[strum(serialize = "system.status")]
     SystemStatus,
+    #[strum(serialize = "plan.create")]
+    PlanCreate,
+    #[strum(serialize = "plan.list")]
+    PlanList,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Method {
     Handshake(HandshakeParams),
     Status,
+    PlanCreate(PlanCreateParams),
+    PlanList,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandshakeParams {
     pub protocol_version: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanCreateParams {
+    pub goal: String,
 }
 
 impl TryFrom<&DaemonRequest> for Method {
@@ -41,6 +55,17 @@ impl TryFrom<&DaemonRequest> for Method {
                 }
                 Ok(Method::Status)
             }
+            MethodName::PlanCreate => {
+                let params: PlanCreateParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::PlanCreate(params))
+            }
+            MethodName::PlanList => {
+                if !req.params.is_null() && !matches!(&req.params, serde_json::Value::Object(m) if m.is_empty()) {
+                    return Err(RpcError::InvalidParams("plan.list takes no params".into()));
+                }
+                Ok(Method::PlanList)
+            }
         }
     }
 }
@@ -59,4 +84,24 @@ pub struct StatusResult {
     pub pid: u32,
     pub active_plans: u32,
     pub active_works: u32,
+}
+
+/// Success payload for `plan.create`: the newly persisted Plan record.
+/// `Plan` does not implement `PartialEq`/`Eq` (`created_at`/`updated_at`
+/// would make equality slippery), so neither does this wrapper. Wire
+/// round-trip is asserted by encoding a known-good JSON string and
+/// comparing byte stability in the seam tests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanCreateResult {
+    pub plan: Plan,
+}
+
+/// Success payload for `plan.list`: every Plan in the store, ordered by
+/// `AsyncStore::list`'s contract (updated_at descending). See
+/// `store::PlansStore::list` for the ordering guarantee.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanListResult {
+    pub plans: Vec<Plan>,
 }

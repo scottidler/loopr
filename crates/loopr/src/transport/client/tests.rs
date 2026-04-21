@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, MutexGuard, Notify, broadcast};
 use tokio::time::timeout;
 
 use ipc::{PROTOCOL_VERSION, RpcError, StatusResult};
+use store::Store;
 use telemetry::RunId;
 
 use super::*;
@@ -28,7 +29,8 @@ async fn env_mutex() -> MutexGuard<'static, ()> {
     M.get_or_init(|| Mutex::new(())).lock().await
 }
 
-fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
+async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
+    let store = Store::open(&target).await.unwrap();
     let (events, _) = broadcast::channel(16);
     Arc::new(DaemonContext {
         target,
@@ -38,6 +40,7 @@ fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         events,
         shutting_down: Arc::new(AtomicBool::new(false)),
         shutdown_notify: Arc::new(Notify::new()),
+        store,
     })
 }
 
@@ -47,7 +50,7 @@ async fn client_handshake_then_status() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
@@ -76,18 +79,18 @@ async fn client_request_raw_unknown_method_returns_method_not_found() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
     let mut client = IpcClient::connect(&socket).await.unwrap();
     client.handshake().await.unwrap();
     let (resp, _) = client
-        .request_raw("plan.create", serde_json::json!({"goal": "x"}))
+        .request_raw("bogus.method", serde_json::json!({"goal": "x"}))
         .await
         .unwrap();
     match resp.error {
-        Some(RpcError::MethodNotFound(m)) => assert_eq!(m, "plan.create"),
+        Some(RpcError::MethodNotFound(m)) => assert_eq!(m, "bogus.method"),
         other => panic!("expected MethodNotFound, got {other:?}"),
     }
 
@@ -106,7 +109,7 @@ async fn client_handshake_version_mismatch_closes_connection() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 

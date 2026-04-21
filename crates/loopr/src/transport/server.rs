@@ -10,10 +10,13 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
+use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 use tracing::{Instrument, info, warn};
 
@@ -22,6 +25,16 @@ use ipc::{DaemonResponse, RpcError, decode_request_line};
 use crate::daemon::DaemonContext;
 use crate::error::LooprError;
 use crate::transport::handler::{self, HandshakeState};
+
+/// Ceiling on how long the accept loop waits for in-flight handler tasks
+/// to finish after shutdown is observed. Matches the daemon-stop
+/// SIGTERM-to-SIGKILL escalation window: a handler that has not yielded
+/// in this long is wedged by the same definition that motivates escalating
+/// signal strength. Handlers still outstanding when the window expires
+/// are `JoinSet::abort_all`'d so shutdown does not deadlock and the
+/// `Arc<DaemonContext>` clones they hold can be released before
+/// `daemon::run_active_daemon` calls `Arc::try_unwrap` to close the store.
+pub const HANDLER_DRAIN_TIMEOUT_SECS: u64 = 10;
 
 /// Bind a `UnixListener` at `socket`. Caller is responsible for removing
 /// any pre-existing file at the path (the daemon's active-phase does that
@@ -32,9 +45,31 @@ pub fn bind_listener(socket: &Path) -> Result<UnixListener, LooprError> {
 
 /// Daemon accept loop. Exits when `ctx.shutting_down` is set and the
 /// shutdown notify wakes us. Spawns one `handle_client` task per
-/// incoming connection.
+/// incoming connection into a `JoinSet` so shutdown can drain their
+/// `Arc<DaemonContext>` clones before the daemon tries to close the
+/// store.
+///
+/// **Shutdown sequence:** on shutdown, await `join_next` with a bounded
+/// timeout so handlers that have already observed shutdown themselves
+/// exit cleanly; any still outstanding after the timeout are
+/// `abort_all`'d and reaped. Either path guarantees that by the time
+/// this function returns, every spawned handler has released its
+/// `Arc<DaemonContext>` clone.
 pub async fn accept_loop(listener: UnixListener, ctx: Arc<DaemonContext>) -> Result<(), LooprError> {
+    let mut handlers: JoinSet<()> = JoinSet::new();
+
     loop {
+        // Reap completed handlers non-blockingly so the JoinSet does not
+        // grow unbounded under sustained connection churn and so their
+        // `Arc<DaemonContext>` clones release as soon as their tasks end.
+        while let Some(res) = handlers.try_join_next() {
+            if let Err(e) = res
+                && !e.is_cancelled()
+            {
+                warn!("handler task panicked: {e}");
+            }
+        }
+
         // Loop-top atomic check: `Notify::notify_waiters` is non-sticky,
         // so if the signal watcher fires during the microseconds between
         // the last `select!` return and the next iteration, the wakeup
@@ -47,24 +82,50 @@ pub async fn accept_loop(listener: UnixListener, ctx: Arc<DaemonContext>) -> Res
         // observing the flag before another memory location.
         if ctx.shutting_down.load(Ordering::Relaxed) {
             info!("accept_loop: shutdown flag observed");
-            return Ok(());
+            break;
         }
         tokio::select! {
             biased;
             _ = ctx.shutdown_notify.notified() => {
                 info!("accept_loop: shutdown notified");
-                return Ok(());
+                break;
             }
             accept = listener.accept() => {
                 let (stream, _) = accept
                     .map_err(|e| LooprError::ClientIo(format!("accept: {e}")))?;
                 let conn_id = uuid::Uuid::new_v4();
                 let span = tracing::info_span!("ipc.connection", conn_id = %conn_id);
-                let ctx = ctx.clone();
-                tokio::spawn(handle_client(stream, ctx).instrument(span));
+                let ctx_cloned = ctx.clone();
+                handlers.spawn(handle_client(stream, ctx_cloned).instrument(span));
             }
         }
     }
+
+    let remaining = handlers.len();
+    if remaining > 0 {
+        info!("accept_loop: draining {remaining} in-flight handler(s)");
+    }
+    let drain = async {
+        while let Some(res) = handlers.join_next().await {
+            if let Err(e) = res
+                && !e.is_cancelled()
+            {
+                warn!("handler task panicked during shutdown drain: {e}");
+            }
+        }
+    };
+    match timeout(Duration::from_secs(HANDLER_DRAIN_TIMEOUT_SECS), drain).await {
+        Ok(()) => info!("accept_loop: all handlers drained"),
+        Err(_) => {
+            warn!(
+                "accept_loop: drain timed out after {HANDLER_DRAIN_TIMEOUT_SECS}s; aborting {} handler(s)",
+                handlers.len()
+            );
+            handlers.abort_all();
+            while handlers.join_next().await.is_some() {}
+        }
+    }
+    Ok(())
 }
 
 /// Per-connection handler. Reads NDJSON request lines, dispatches each

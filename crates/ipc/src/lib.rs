@@ -39,7 +39,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub use envelope::{DaemonEvent, DaemonRequest, DaemonResponse, IpcMessage};
 pub use error::{RpcError, RpcErrorWire};
 pub use frame::{ParseError, decode_line, decode_request_line, encode_line};
-pub use method::{HandshakeParams, HandshakeResult, Method, MethodName, StatusResult};
+pub use method::{
+    HandshakeParams, HandshakeResult, Method, MethodName, PlanCreateParams, PlanCreateResult, PlanListResult,
+    StatusResult,
+};
 
 #[cfg(test)]
 mod tests;

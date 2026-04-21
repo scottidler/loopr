@@ -232,16 +232,18 @@ fn ac8_daemon_stop_no_daemon_prints_message() {
         .stdout(predicate::str::contains("no daemon running"));
 }
 
-// AC 9: `loopr plan "x"` with no daemon auto-forks, round-trips, returns
-// Stage 5. Verifies the daemon was actually forked (its pid exists).
+// AC 9: `loopr plan "x"` with no daemon auto-forks, round-trips, and
+// prints the created plan on success. Verifies the daemon was actually
+// forked (its pid exists). Stage 5 upgrade: `plan` now succeeds instead
+// of returning the Stage-4 StageUnimplemented stub.
 #[test]
-fn ac9_plan_auto_forks_daemon_then_stage5() {
+fn ac9_plan_auto_forks_daemon_and_creates_plan() {
     let td = TempDir::new().unwrap();
     loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .success()
+        .stdout(predicate::str::contains("plan:"));
     assert!(read_pid(td.path()).is_some(), "daemon was auto-forked");
 
     stop_daemon(td.path());
@@ -258,8 +260,7 @@ fn ac10_plan_reuses_running_daemon() {
     loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .success();
     let pid_after = read_pid(td.path()).unwrap();
     assert_eq!(pid_before, pid_after, "same daemon reused");
 
@@ -321,8 +322,7 @@ fn ac13_version_mismatch_triggers_silent_restart() {
     loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .success();
     let pid_after = read_pid(td.path()).unwrap();
     assert_ne!(pid_before, pid_after, "daemon was restarted");
 

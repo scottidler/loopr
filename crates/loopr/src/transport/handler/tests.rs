@@ -1,28 +1,39 @@
 #![allow(clippy::unwrap_used)]
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use tempfile::TempDir;
 use tokio::sync::{Notify, broadcast};
 
-use ipc::{DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, RpcError, StatusResult};
+use ipc::{
+    DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, PlanListResult, RpcError,
+    StatusResult,
+};
+use store::Store;
 use telemetry::RunId;
 
 use super::*;
 use crate::daemon::DaemonContext;
 
-fn stub_ctx() -> Arc<DaemonContext> {
+/// Test context backed by a real `Store` rooted at a `TempDir`. Callers
+/// keep the `TempDir` alive for the life of the test so the store's
+/// on-disk files outlive its in-process operations.
+async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
+    let td = TempDir::new().unwrap();
+    let store = Store::open(td.path()).await.unwrap();
     let (events, _) = broadcast::channel(16);
-    Arc::new(DaemonContext {
-        target: PathBuf::from("/tmp"),
+    let ctx = Arc::new(DaemonContext {
+        target: td.path().to_path_buf(),
         run_id: RunId::parse("20260419-000000").unwrap(),
         started_at: chrono::Local::now(),
         pid: 12345,
         events,
         shutting_down: Arc::new(AtomicBool::new(false)),
         shutdown_notify: Arc::new(Notify::new()),
-    })
+        store,
+    });
+    (td, ctx)
 }
 
 fn handshake_req(id: u64, version: u32) -> DaemonRequest {
@@ -46,7 +57,7 @@ fn status_req(id: u64) -> DaemonRequest {
 
 #[tokio::test]
 async fn handshake_completes_state() {
-    let ctx = stub_ctx();
+    let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Pending;
     let resp = dispatch(&handshake_req(1, PROTOCOL_VERSION), &mut state, &ctx).await;
     assert_eq!(resp.id, 1);
@@ -58,7 +69,7 @@ async fn handshake_completes_state() {
 
 #[tokio::test]
 async fn handshake_mismatch_returns_protocol_version_mismatch() {
-    let ctx = stub_ctx();
+    let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Pending;
     let resp = dispatch(&handshake_req(2, 99), &mut state, &ctx).await;
     assert_eq!(resp.id, 2);
@@ -74,7 +85,7 @@ async fn handshake_mismatch_returns_protocol_version_mismatch() {
 
 #[tokio::test]
 async fn status_before_handshake_is_invalid_request() {
-    let ctx = stub_ctx();
+    let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Pending;
     let resp = dispatch(&status_req(3), &mut state, &ctx).await;
     assert_eq!(resp.id, 3);
@@ -88,7 +99,7 @@ async fn status_before_handshake_is_invalid_request() {
 
 #[tokio::test]
 async fn status_after_handshake_returns_status_result() {
-    let ctx = stub_ctx();
+    let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Pending;
     dispatch(&handshake_req(4, PROTOCOL_VERSION), &mut state, &ctx).await;
     let resp = dispatch(&status_req(5), &mut state, &ctx).await;
@@ -102,18 +113,106 @@ async fn status_after_handshake_returns_status_result() {
 
 #[tokio::test]
 async fn unknown_method_returns_method_not_found() {
-    let ctx = stub_ctx();
+    let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Complete;
     let req = DaemonRequest {
         id: 6,
-        method: "plan.create".into(),
+        method: "bogus.method".into(),
         params: serde_json::json!({"goal": "x"}),
     };
     let resp = dispatch(&req, &mut state, &ctx).await;
     assert_eq!(resp.id, 6);
     match resp.error {
-        Some(RpcError::MethodNotFound(m)) => assert_eq!(m, "plan.create"),
+        Some(RpcError::MethodNotFound(m)) => assert_eq!(m, "bogus.method"),
         other => panic!("expected MethodNotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plan_create_persists_and_returns_plan() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 10,
+        method: "plan.create".into(),
+        params: serde_json::json!({"goal": "first goal"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 10);
+    assert!(resp.error.is_none(), "no error: {resp:?}");
+    let result: PlanCreateResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(result.plan.goal, "first goal");
+    assert!(result.plan.id.as_ref().starts_with("pl-"));
+
+    // Seam verification: the store actually received the record.
+    let listed = ctx.store.plans().list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].goal, "first goal");
+}
+
+#[tokio::test]
+async fn plan_list_returns_all_plans() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+
+    // Seed two plans via the handler so the test exercises the store
+    // through the dispatch path, not through the store API directly.
+    for goal in ["first", "second"] {
+        let req = DaemonRequest {
+            id: 11,
+            method: "plan.create".into(),
+            params: serde_json::json!({"goal": goal}),
+        };
+        let resp = dispatch(&req, &mut state, &ctx).await;
+        assert!(resp.error.is_none(), "seed create no error: {resp:?}");
+    }
+
+    let req = DaemonRequest {
+        id: 12,
+        method: "plan.list".into(),
+        params: serde_json::Value::Null,
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 12);
+    assert!(resp.error.is_none(), "list no error: {resp:?}");
+    let result: PlanListResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(result.plans.len(), 2);
+    let goals: Vec<_> = result.plans.iter().map(|p| p.goal.clone()).collect();
+    assert!(goals.contains(&"first".to_string()));
+    assert!(goals.contains(&"second".to_string()));
+}
+
+#[tokio::test]
+async fn plan_create_bad_params_is_invalid_params() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 13,
+        method: "plan.create".into(),
+        params: serde_json::json!({"bad-field": "x"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 13);
+    match resp.error {
+        Some(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plan_list_rejects_non_empty_params() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 14,
+        method: "plan.list".into(),
+        params: serde_json::json!({"filter": "x"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 14);
+    match resp.error {
+        Some(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
     }
 }
 

@@ -8,8 +8,10 @@
 use tracing::warn;
 
 use ipc::{
-    DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, RpcError, StatusResult,
+    DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams,
+    PlanCreateResult, PlanListResult, RpcError, StatusResult,
 };
+use store::StoreError;
 
 use crate::daemon::{DAEMON_VERSION, DaemonContext};
 
@@ -58,6 +60,8 @@ pub async fn dispatch(req: &DaemonRequest, state: &mut HandshakeState, ctx: &Dae
     match method {
         Method::Handshake(params) => handle_handshake(req.id, params, state),
         Method::Status => handle_status(req.id, ctx),
+        Method::PlanCreate(params) => handle_plan_create(req.id, params, ctx).await,
+        Method::PlanList => handle_plan_list(req.id, ctx).await,
     }
 }
 
@@ -97,6 +101,56 @@ fn handle_status(id: u64, ctx: &DaemonContext) -> DaemonResponse {
     match serde_json::to_value(&result) {
         Ok(v) => DaemonResponse::ok(id, v),
         Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize status: {e}"))),
+    }
+}
+
+async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &DaemonContext) -> DaemonResponse {
+    let plan = domain::Plan::new(params.goal);
+    let plan_snapshot = plan.clone();
+    match ctx.store.plans().create(plan).await {
+        Ok(_) => {
+            let result = PlanCreateResult { plan: plan_snapshot };
+            match serde_json::to_value(&result) {
+                Ok(v) => DaemonResponse::ok(id, v),
+                Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.create: {e}"))),
+            }
+        }
+        Err(e) => {
+            warn!(request_id = id, error = %e, "plan.create failed at store");
+            DaemonResponse::err(id, map_store_error(e))
+        }
+    }
+}
+
+async fn handle_plan_list(id: u64, ctx: &DaemonContext) -> DaemonResponse {
+    match ctx.store.plans().list().await {
+        Ok(plans) => {
+            let result = PlanListResult { plans };
+            match serde_json::to_value(&result) {
+                Ok(v) => DaemonResponse::ok(id, v),
+                Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.list: {e}"))),
+            }
+        }
+        Err(e) => {
+            warn!(request_id = id, error = %e, "plan.list failed at store");
+            DaemonResponse::err(id, map_store_error(e))
+        }
+    }
+}
+
+/// Translate `store::StoreError` into a wire-level `RpcError`. Kept in the
+/// handler crate (not in `store`) so the anti-corruption boundary is
+/// explicit: the protocol chooses which internal errors surface as which
+/// RPC codes and how their messages are shaped.
+fn map_store_error(err: StoreError) -> RpcError {
+    match err {
+        StoreError::RecordNotFound { collection, id } => RpcError::NotFound(format!("{collection}/{id}")),
+        StoreError::AlreadyExists { collection, id } => {
+            RpcError::InvalidRequest(format!("already exists: {collection}/{id}"))
+        }
+        StoreError::Io(msg) => RpcError::Internal(format!("store io: {msg}")),
+        StoreError::Corruption(msg) => RpcError::Internal(format!("store corruption: {msg}")),
+        StoreError::Serde(msg) => RpcError::Internal(format!("store serde: {msg}")),
     }
 }
 

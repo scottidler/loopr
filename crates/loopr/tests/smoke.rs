@@ -105,16 +105,62 @@ fn help_lists_all_stage_subcommands() {
 }
 
 #[test]
-fn plan_on_tempdir_returns_stage_unimplemented() {
-    // Tempdir has no source-guard and no .loopr/.taskstore markers. The
-    // resolver falls through, the guard passes, telemetry initializes (writes
-    // log files into the tempdir), and the stub errors with Stage 5.
+fn plan_on_tempdir_creates_and_prints_plan() {
+    // Stage 5: tempdir with no pre-existing .loopr marker. The resolver
+    // falls through, the guard passes, the daemon auto-forks, the store
+    // opens under .taskstore/, and plan.create returns the record.
     let td = TempDir::new().unwrap();
-    loopr()
+    let output = loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    assert!(
+        stdout.contains("plan:"),
+        "stdout prints the created plan id line: {stdout}"
+    );
+    assert!(stdout.contains("goal:"), "stdout prints the goal line: {stdout}");
+    assert!(stdout.contains("  x"), "stdout echoes the goal text: {stdout}");
+
+    stop_daemon(td.path());
+}
+
+#[test]
+fn list_plans_shows_created_plans_in_order() {
+    let td = TempDir::new().unwrap();
+    // Create two plans via the binary so the test exercises the full
+    // round-trip (client -> daemon -> store -> client) for both ends.
+    loopr()
+        .args(["-C", td.path().to_str().unwrap(), "plan", "first"])
+        .assert()
+        .success();
+    loopr()
+        .args(["-C", td.path().to_str().unwrap(), "plan", "second"])
+        .assert()
+        .success();
+
+    let output = loopr()
+        .args(["-C", td.path().to_str().unwrap(), "list", "plans"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    assert!(stdout.contains("first"), "first plan in list: {stdout}");
+    assert!(stdout.contains("second"), "second plan in list: {stdout}");
+    assert!(stdout.contains("pl-"), "list shows the Plan id prefix (pl-): {stdout}");
+
+    stop_daemon(td.path());
+}
+
+#[test]
+fn list_unknown_kind_errors_cleanly() {
+    let td = TempDir::new().unwrap();
+    loopr()
+        .args(["-C", td.path().to_str().unwrap(), "list", "bogus"])
+        .assert()
         .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .stderr(predicate::str::contains("unknown list kind"));
+
+    stop_daemon(td.path());
 }
 
 #[test]
@@ -204,11 +250,15 @@ fn score_returns_stage_9() {
 // ---------- Stage 2 smoke tests ----------
 
 fn run_plan(target: &std::path::Path) {
+    // Stage 5: `loopr plan "x"` now succeeds — it auto-forks a daemon,
+    // handshakes, persists the Plan, and prints the record. These log-
+    // harness tests care about run-dir layout and subscriber behavior,
+    // not the subcommand's exit code; we just need a successful client
+    // invocation to exercise the telemetry pipeline.
     loopr()
         .args(["-C", target.to_str().unwrap(), "plan", "x"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .success();
 }
 
 #[test]
@@ -363,8 +413,7 @@ fn log_level_debug_emits_debug_events() {
     loopr()
         .args(["-C", td.path().to_str().unwrap(), "--log-level", "debug", "plan", "x"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .success();
     let client_dirs = client_run_dirs(td.path());
     let run_dir = &client_dirs[0];
     let pretty = fs::read_to_string(run_dir.join("loopr.log")).unwrap();
@@ -383,8 +432,7 @@ fn log_level_via_env_var() {
         .env("LOOPR_LOG_LEVEL", "debug")
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 5"));
+        .success();
     let client_dirs = client_run_dirs(td.path());
     let run_dir = &client_dirs[0];
     let pretty = fs::read_to_string(run_dir.join("loopr.log")).unwrap();
@@ -399,13 +447,14 @@ fn log_level_via_env_var() {
 #[test]
 fn console_layer_gated_on_tty() {
     // assert_cmd pipes stderr (not a TTY), so the console layer should be
-    // suppressed. The invocation-span trace should NOT appear on stderr; the
-    // only stderr content is eyre's StageUnimplemented message.
+    // suppressed. The invocation-span trace should NOT appear on stderr.
+    // Stage 5: `plan` now succeeds and prints the plan to stdout; stderr
+    // should be empty of the invocation span regardless.
     let td = TempDir::new().unwrap();
     let assertion = loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
-        .failure();
+        .success();
     let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).to_string();
     assert!(
         !stderr.contains("loopr.invocation"),

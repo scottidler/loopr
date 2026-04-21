@@ -146,20 +146,38 @@ fn run_logs_runs_on_empty_target_succeeds_with_no_output() {
 }
 
 #[test]
-fn run_list_returns_stage_5() {
+fn run_list_unknown_kind_errors_via_client_io() {
     let err = dispatch(
         std::path::Path::new("/tmp"),
         &stub_run_id(),
-        parse_cmd(&["loopr", "list", "plans"]),
+        parse_cmd(&["loopr", "list", "bogus"]),
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 5,
-            subcommand: "list"
+    match err {
+        LooprError::ClientIo(msg) => assert!(msg.contains("unknown list kind"), "msg: {msg}"),
+        other => panic!("expected ClientIo for unknown list kind, got {other:?}"),
+    }
+}
+
+#[test]
+fn run_list_unwired_kinds_return_stage_unimplemented() {
+    for (kind, expected_stage) in [("specs", 6), ("phases", 6), ("works", 6), ("bundles", 7), ("ticks", 7)] {
+        let err = dispatch(
+            std::path::Path::new("/tmp"),
+            &stub_run_id(),
+            parse_cmd(&["loopr", "list", kind]),
+        )
+        .unwrap_err();
+        match err {
+            LooprError::StageUnimplemented {
+                stage,
+                subcommand: "list",
+            } => {
+                assert_eq!(stage, expected_stage, "stage for kind={kind}");
+            }
+            other => panic!("expected StageUnimplemented for kind={kind}, got {other:?}"),
         }
-    ));
+    }
 }
 
 // ---------- resolve_log_directive ----------

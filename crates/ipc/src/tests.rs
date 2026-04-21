@@ -1,9 +1,13 @@
 use serde_json::json;
 
+use domain::Plan;
+
 use crate::envelope::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::error::RpcError;
 use crate::frame::{ParseError, decode_line, decode_request_line, encode_line};
-use crate::method::{HandshakeParams, HandshakeResult, Method, StatusResult};
+use crate::method::{
+    HandshakeParams, HandshakeResult, Method, PlanCreateParams, PlanCreateResult, PlanListResult, StatusResult,
+};
 use crate::{IpcMessage, MAX_LINE_BYTES, PROTOCOL_VERSION};
 
 // --- Phase 2: envelope construction invariants ---
@@ -384,6 +388,132 @@ fn e2e_status_roundtrip() {
         IpcMessage::Response(r) => assert_eq!(r.id, 2),
         IpcMessage::Event(_) => panic!("expected Response"),
     }
+}
+
+// --- Stage 5: plan.create / plan.list method dispatch + result serde ---
+
+#[test]
+fn method_try_from_plan_create() {
+    let req = DaemonRequest {
+        id: 1,
+        method: "plan.create".into(),
+        params: json!({"goal": "ship v5"}),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::PlanCreate(PlanCreateParams { goal: "ship v5".into() })
+    );
+}
+
+#[test]
+fn method_try_from_plan_create_missing_goal_is_invalid_params() {
+    let req = DaemonRequest {
+        id: 1,
+        method: "plan.create".into(),
+        params: json!({}),
+    };
+    match Method::try_from(&req) {
+        Err(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn method_try_from_plan_create_deny_unknown_fields() {
+    let req = DaemonRequest {
+        id: 1,
+        method: "plan.create".into(),
+        params: json!({"goal": "x", "bonus": "evil"}),
+    };
+    match Method::try_from(&req) {
+        Err(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn method_try_from_plan_list_null_params() {
+    let req = DaemonRequest {
+        id: 2,
+        method: "plan.list".into(),
+        params: json!(null),
+    };
+    assert_eq!(Method::try_from(&req).unwrap(), Method::PlanList);
+}
+
+#[test]
+fn method_try_from_plan_list_empty_object_params() {
+    let req = DaemonRequest {
+        id: 2,
+        method: "plan.list".into(),
+        params: json!({}),
+    };
+    assert_eq!(Method::try_from(&req).unwrap(), Method::PlanList);
+}
+
+#[test]
+fn method_try_from_plan_list_unexpected_params() {
+    let req = DaemonRequest {
+        id: 2,
+        method: "plan.list".into(),
+        params: json!({"filter": "x"}),
+    };
+    match Method::try_from(&req) {
+        Err(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn plan_create_result_roundtrip() {
+    let plan = Plan::new("round-trip me".into());
+    let before = PlanCreateResult { plan: plan.clone() };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: PlanCreateResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after.plan.id, before.plan.id);
+    assert_eq!(after.plan.goal, before.plan.goal);
+    assert_eq!(after.plan.status, before.plan.status);
+    assert_eq!(after.plan.created_at, before.plan.created_at);
+    assert_eq!(after.plan.updated_at, before.plan.updated_at);
+}
+
+#[test]
+fn plan_list_result_roundtrip_empty() {
+    let before = PlanListResult { plans: Vec::new() };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: PlanListResult = serde_json::from_slice(&bytes).unwrap();
+    assert!(after.plans.is_empty());
+}
+
+#[test]
+fn plan_list_result_roundtrip_preserves_order() {
+    let p1 = Plan::new("first".into());
+    let p2 = Plan::new("second".into());
+    let before = PlanListResult {
+        plans: vec![p1.clone(), p2.clone()],
+    };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: PlanListResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after.plans.len(), 2);
+    assert_eq!(after.plans[0].id, p1.id);
+    assert_eq!(after.plans[1].id, p2.id);
+}
+
+#[test]
+fn plan_create_result_deny_unknown_fields() {
+    let bytes = br#"{"plan": {"id": "pl-aaaaa", "updated_at": 0, "created_at": 0, "goal": "g", "status": "active"}, "bonus": "evil"}"#;
+    assert!(
+        serde_json::from_slice::<PlanCreateResult>(bytes).is_err(),
+        "deny_unknown_fields must reject extra field"
+    );
+}
+
+#[test]
+fn plan_create_method_name_wire_form() {
+    let name: &'static str = crate::method::MethodName::PlanCreate.into();
+    assert_eq!(name, "plan.create");
+    let name: &'static str = crate::method::MethodName::PlanList.into();
+    assert_eq!(name, "plan.list");
 }
 
 #[test]

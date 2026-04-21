@@ -13,12 +13,14 @@ use tokio::time::timeout;
 use tokio_util::codec::{Framed, LinesCodec};
 
 use ipc::{DaemonRequest, DaemonResponse, HandshakeParams, PROTOCOL_VERSION};
+use store::Store;
 use telemetry::RunId;
 use tempfile::TempDir;
 
 use super::*;
 
-fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
+async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
+    let store = Store::open(&target).await.unwrap();
     let (events, _) = broadcast::channel(16);
     Arc::new(DaemonContext {
         target,
@@ -28,6 +30,7 @@ fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         events,
         shutting_down: Arc::new(AtomicBool::new(false)),
         shutdown_notify: Arc::new(Notify::new()),
+        store,
     })
 }
 
@@ -38,7 +41,7 @@ async fn handshake_then_status_roundtrip() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
@@ -91,7 +94,7 @@ async fn malformed_line_closes_connection() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
@@ -113,7 +116,7 @@ async fn concurrent_clients_do_not_cross_correlate() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
@@ -169,7 +172,7 @@ async fn oversize_line_closes_connection_daemon_stays_up() {
     let td = TempDir::new().unwrap();
     let socket = td.path().join("socket");
     let listener = bind_listener(&socket).unwrap();
-    let ctx = ctx_for_test(td.path().to_path_buf());
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
