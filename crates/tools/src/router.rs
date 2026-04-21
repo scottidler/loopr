@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
+use crate::env::scrub_command;
 use crate::error::ToolError;
 use crate::lane::{Lane, LanePolicy};
 use crate::sandbox::{SandboxMode, bwrap_command, detect_bwrap_functional};
@@ -20,7 +21,14 @@ pub struct LaneRouter {
     policies: HashMap<Lane, LanePolicy>,
     semaphores: HashMap<Lane, Arc<Semaphore>>,
     sandbox: SandboxMode,
-    bwrap_available: bool,
+    /// D14 (Architect R2 amendment): the implementation performs exactly one
+    /// bwrap detection — `detect_bwrap_functional()`, which invokes bwrap
+    /// with the full flag set against `/bin/true`. There is no separate
+    /// `--version` binary-presence check. The spec originally requested
+    /// `bwrap_available` + `bwrap_functional` as distinct log fields; since
+    /// both would collapse to the same value in every code path, we carry
+    /// one field, named for what it actually measures.
+    bwrap_functional: bool,
 }
 
 impl LaneRouter {
@@ -30,23 +38,23 @@ impl LaneRouter {
     /// - `Preferred` + no bwrap => warn + continue unsandboxed.
     /// - `Off` => skip detection entirely (quiet).
     pub fn new(sandbox: SandboxMode) -> Result<Self, RouterInitError> {
-        let bwrap_available = match sandbox {
+        let bwrap_functional = match sandbox {
             SandboxMode::Off => false,
             _ => detect_bwrap_functional(),
         };
-        match (sandbox, bwrap_available) {
+        match (sandbox, bwrap_functional) {
             (SandboxMode::Required, false) => {
                 return Err(RouterInitError::BwrapRequired);
             }
             (SandboxMode::Preferred, false) => {
-                warn!("bwrap not available; Local lane will run UNSANDBOXED (sandbox: preferred)");
+                warn!("bwrap not functional; Local lane will run UNSANDBOXED (sandbox: preferred)");
             }
             _ => {}
         }
-        Ok(Self::build(sandbox, bwrap_available))
+        Ok(Self::build(sandbox, bwrap_functional))
     }
 
-    fn build(sandbox: SandboxMode, bwrap_available: bool) -> Self {
+    fn build(sandbox: SandboxMode, bwrap_functional: bool) -> Self {
         let policies = HashMap::from([
             (Lane::Local, LanePolicy::local()),
             (Lane::Net, LanePolicy::net()),
@@ -59,7 +67,7 @@ impl LaneRouter {
 
         info!(
             ?sandbox,
-            bwrap_available,
+            bwrap_functional,
             local_slots = LanePolicy::local().max_slots,
             net_slots = LanePolicy::net().max_slots,
             heavy_slots = LanePolicy::heavy().max_slots,
@@ -70,7 +78,7 @@ impl LaneRouter {
             policies,
             semaphores,
             sandbox,
-            bwrap_available,
+            bwrap_functional,
         }
     }
 
@@ -78,8 +86,8 @@ impl LaneRouter {
         self.sandbox
     }
 
-    pub fn bwrap_available(&self) -> bool {
-        self.bwrap_available
+    pub fn bwrap_functional(&self) -> bool {
+        self.bwrap_functional
     }
 
     pub fn policy(&self, lane: Lane) -> Option<&LanePolicy> {
@@ -124,14 +132,21 @@ impl LaneRouter {
             .await
             .map_err(|_| ToolError::LaneClosed(lane))?;
 
-        let wrap = policy.sandbox_net && self.bwrap_available && !matches!(self.sandbox, SandboxMode::Off);
+        let wrap = policy.sandbox_net && self.bwrap_functional && !matches!(self.sandbox, SandboxMode::Off);
 
-        let (final_cmd, kill_strategy) = if wrap {
+        let (mut final_cmd, kill_strategy) = if wrap {
             debug!("wrapping command with bwrap");
             (bwrap_command(cmd, working_dir), KillStrategy::BwrapChild)
         } else {
             (cmd, KillStrategy::Pgid)
         };
+
+        // D12: strip secret-bearing env vars from the subprocess. Applied
+        // AFTER bwrap-wrapping because the env set on the outer bwrap
+        // Command is what bwrap's `execve` of the inner shell inherits;
+        // bwrap does not mutate env across its namespace boundary. The
+        // scrub covers both wrapped and plain paths.
+        scrub_command(&mut final_cmd);
 
         let result = spawn_with_process_group(final_cmd, timeout, kill_strategy, persist)
             .await

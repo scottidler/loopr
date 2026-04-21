@@ -26,6 +26,14 @@ pub struct Input {
 #[derive(Debug, Serialize)]
 pub struct Output {
     pub matches: Vec<String>,
+    /// D17: stderr from the grep subprocess. grep emits here on
+    /// `Permission denied` for unreadable files, binary-file notices, etc.
+    /// Surfacing it lets agents reason about WHY a search returned no hits.
+    pub stderr: String,
+    /// D17: arrival-order interleave of stdout and stderr, mirroring the
+    /// SpawnResult shape. Useful when a grep run produces both matches and
+    /// permission errors and the agent needs the causal order.
+    pub combined_output: String,
     pub exit_code: i32,
     pub truncated: bool,
     pub persisted_output_path: Option<PathBuf>,
@@ -63,6 +71,8 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolErro
 
     Ok(Output {
         matches,
+        stderr: result.stderr,
+        combined_output: result.combined_output,
         exit_code: result.exit_code,
         truncated: result.truncated,
         persisted_output_path: result.persisted_output_path,

@@ -35,7 +35,7 @@ fn required_without_bwrap_errors() {
 fn off_skips_bwrap_entirely() {
     let r = router(SandboxMode::Off);
     assert_eq!(r.sandbox_mode(), SandboxMode::Off);
-    assert!(!r.bwrap_available());
+    assert!(!r.bwrap_functional());
 }
 
 #[tokio::test]
@@ -117,4 +117,72 @@ async fn slot_released_after_error_path() {
         .spawn(cmd, Lane::Heavy, Path::new("/tmp"), Some(5), PersistConfig::default())
         .await;
     assert_eq!(r.available_slots(Lane::Heavy), before);
+}
+
+#[tokio::test]
+async fn scrub_strips_secret_env_from_subprocess() {
+    // D12: set a secret-shaped env var in the parent, verify the child
+    // subprocess does NOT see it via `printenv`. Uses a uniquely-named var
+    // so parallel tests don't collide.
+    let secret_var = "LOOPR_TEST_SECRET_A_TOKEN";
+    let benign_var = "LOOPR_TEST_A_BENIGN_VAR_UNDENIED";
+    // SAFETY: test-process-global env mutation; vars are unique to this test
+    // and are removed before assertions complete.
+    unsafe {
+        std::env::set_var(secret_var, "leak-me");
+        std::env::set_var(benign_var, "pass-through");
+    }
+
+    let r = router(SandboxMode::Off);
+    let cmd = sh_command(
+        &format!("printenv {secret_var} >/dev/null && echo SAW-SECRET; printenv {benign_var}"),
+        Path::new("/tmp"),
+    );
+    let result = r
+        .spawn(cmd, Lane::Net, Path::new("/tmp"), Some(5), PersistConfig::default())
+        .await
+        .unwrap();
+
+    unsafe {
+        std::env::remove_var(secret_var);
+        std::env::remove_var(benign_var);
+    }
+
+    assert!(
+        !result.stdout.contains("SAW-SECRET"),
+        "secret var leaked into subprocess: stdout={:?}",
+        result.stdout
+    );
+    // A _TOKEN-ending var is stripped by the suffix matcher; the benign
+    // var name does not match any prefix or suffix and must pass through.
+    // Note: LOOPR_TEST_A_BENIGN_VAR_UNDENIED starts with LOOPR_ so the
+    // prefix matcher strips it too. Pick a different benign var.
+}
+
+#[tokio::test]
+async fn scrub_preserves_non_secret_env() {
+    // A var whose name matches no prefix and no suffix must pass through
+    // unchanged. Pick a name that cannot accidentally match any entry.
+    let benign = "XDG_BENIGN_DAEMON_FOO";
+    unsafe {
+        std::env::set_var(benign, "present-in-child");
+    }
+
+    let r = router(SandboxMode::Off);
+    let cmd = sh_command(&format!("printenv {benign}"), Path::new("/tmp"));
+    let result = r
+        .spawn(cmd, Lane::Net, Path::new("/tmp"), Some(5), PersistConfig::default())
+        .await
+        .unwrap();
+
+    unsafe {
+        std::env::remove_var(benign);
+    }
+
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stdout.contains("present-in-child"),
+        "benign var dropped: stdout={:?}",
+        result.stdout
+    );
 }

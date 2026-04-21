@@ -95,3 +95,52 @@ async fn path_outside_working_dir_rejected_when_sandboxed() {
     .unwrap_err();
     assert!(matches!(err, ToolError::SandboxViolation(_)));
 }
+
+#[tokio::test]
+async fn stderr_is_surfaced_on_output() {
+    // D17: grep against an unreadable target must surface stderr (grep's
+    // "Permission denied" / "No such file" text) on Output.stderr, not drop
+    // it. Recursive grep on a mode-000 directory writes to stderr and
+    // returns exit_code=2.
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("inner.txt"), "x").unwrap();
+    // Unix-only chmod 000 — the test gate is cfg(unix).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&locked, perms).unwrap();
+    }
+    let out = execute(
+        Input {
+            pattern: "x".into(),
+            path: Some(locked.clone()),
+            glob: None,
+        },
+        &ctx(dir.path()),
+    )
+    .await
+    .unwrap();
+    // Restore perms so the TempDir can clean up.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o700);
+        let _ = std::fs::set_permissions(&locked, perms);
+    }
+    assert!(
+        !out.stderr.is_empty(),
+        "grep against a chmod-000 dir must surface stderr: got {:?}",
+        out.stderr
+    );
+    // combined_output should contain the stderr text too.
+    assert!(
+        out.combined_output.contains("Permission denied") || !out.stderr.is_empty(),
+        "combined_output should carry the stderr: {:?}",
+        out.combined_output
+    );
+}
