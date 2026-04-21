@@ -7,10 +7,12 @@
 //! tier resolution, and cost-accounting spans are Stage 7+ concerns
 //! tracked in the design doc.
 
+mod client;
 mod config;
 mod error;
 mod tool;
 
+pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
 pub use tool::{ToolCall, ToolSchema};
