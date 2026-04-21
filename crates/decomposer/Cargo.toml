@@ -11,3 +11,7 @@ domain = { path = "../domain" }
 store = { path = "../store" }
 llm = { path = "../llm" }
 context = { path = "../context" }
+thiserror = "2.0.18"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

@@ -4,6 +4,7 @@ use taskstore_async::{AsyncStore, OpenOptions};
 
 use crate::error::StoreError;
 use crate::plans::PlansStore;
+use crate::works::WorksStore;
 
 /// Path of the taskstore directory relative to the target repo root.
 /// v5 nests taskstore beneath the transient `.loopr/` directory so a
@@ -36,6 +37,11 @@ impl Store {
     /// Typed accessor for Plan records. Borrowed, zero-cost handle.
     pub fn plans(&self) -> PlansStore<'_> {
         PlansStore::new(&self.inner)
+    }
+
+    /// Typed accessor for Work records. Borrowed, zero-cost handle.
+    pub fn works(&self) -> WorksStore<'_> {
+        WorksStore::new(&self.inner)
     }
 
     /// Graceful async shutdown. Drops the writer queue, awaits the writer

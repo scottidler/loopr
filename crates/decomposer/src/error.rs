@@ -1,0 +1,63 @@
+//! `DecomposerError`: typed failure modes of `decompose`.
+//!
+//! Each variant names a distinct caller-distinguishable failure. The
+//! daemon's `plan.create` handler maps these to log messages and
+//! structured span fields; the retry-with-error-in-prompt path uses
+//! the `Display` impl as the error text embedded into the retry
+//! prompt so the model can self-correct.
+
+use domain::PlanId;
+use llm::LlmError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DecomposerError {
+    /// The LLM call failed after the single retry. Carries the last
+    /// error so callers can inspect whether it was `Retryable` (the
+    /// caller may choose to loop again) or `Fatal` (bail to user).
+    #[error("LLM call failed: {0}")]
+    LlmFailed(#[from] LlmError),
+
+    /// The model returned `children: []`. Scope memo A+1: bail loudly.
+    #[error("LLM produced zero child Works for plan {0}")]
+    ZeroChildren(PlanId),
+
+    /// One or more children named a sibling title that did not appear
+    /// in the same batch. The LLM hallucinated a dependency target.
+    #[error("unresolved sibling dependencies: {0}")]
+    UnresolvedDeps(String),
+
+    /// Title-to-id resolution produced a DAG with a cycle among the
+    /// named titles.
+    #[error("dependency cycle among: {0}")]
+    CycleDetected(String),
+
+    /// Workspace scan (`git ls-files` + fallback) failed at the IO
+    /// layer. Empty workspace is legal (yields `(empty workspace)`);
+    /// this variant fires only on permissions / non-existent target.
+    #[error("workspace scan failed: {0}")]
+    WorkspaceScanFailed(String),
+
+    /// A Work's `acceptance_criteria` came back empty and markdown
+    /// extraction from its `content` also yielded zero criteria. A
+    /// Work with empty AC would deadlock Stage 7's
+    /// `Ready -> InProgress` precondition, so we bail at decompose
+    /// time rather than persist the broken record.
+    #[error("Work {0:?} has zero acceptance criteria; LLM must produce at least one")]
+    EmptyAcceptanceCriteria(String),
+
+    /// The `llm` crate returned a well-formed `ToolCall` (tool-use
+    /// block present, `input` is valid JSON), but the `input` did not
+    /// deserialize into `DecomposeResponse` — missing `children`
+    /// field, wrong per-child shape, non-string `title`, etc. This
+    /// is a decomposer-layer structural problem distinct from
+    /// `llm::FatalReason::SchemaValidation`.
+    #[error("tool_call input didn't deserialize into decompose schema: {0}")]
+    MalformedChildren(String),
+
+    /// Two or more children in the same decomposition normalize to
+    /// the same title (after `trim().to_lowercase()`). The
+    /// server-side title-to-id map cannot disambiguate dependency
+    /// targets.
+    #[error("LLM produced duplicate child titles: {0:?}")]
+    DuplicateTitles(Vec<String>),
+}

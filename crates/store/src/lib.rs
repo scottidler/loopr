@@ -5,7 +5,9 @@
 mod error;
 mod plans;
 mod store;
+mod works;
 
 pub use error::StoreError;
 pub use plans::PlansStore;
 pub use store::{Store, TASKSTORE_SUBPATH};
+pub use works::WorksStore;

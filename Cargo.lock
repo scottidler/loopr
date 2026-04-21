@@ -400,7 +400,11 @@ dependencies = [
  "context",
  "domain",
  "llm",
+ "serde",
+ "serde_json",
  "store",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
