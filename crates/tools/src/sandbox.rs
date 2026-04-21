@@ -1,9 +1,9 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Deserialize, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SandboxMode {
     #[default]

@@ -12,6 +12,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use llm::LlmConfig;
+use tools::ToolsConfig;
 
 use crate::error::LooprError;
 
@@ -23,6 +24,8 @@ const CONFIG_SUBPATH: &str = ".loopr/config.yml";
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct Config {
     pub llm: LlmConfig,
+    #[serde(default, skip_serializing)]
+    pub tools: ToolsConfig,
 }
 
 impl Config {

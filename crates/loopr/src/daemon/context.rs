@@ -9,11 +9,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use tokio::sync::{Notify, broadcast};
+use uuid::Uuid;
 
+use domain::WorkId;
 use ipc::DaemonEvent;
 use llm::AnthropicClient;
 use store::Store;
 use telemetry::RunId;
+use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 
 /// Capacity of the daemon's event broadcast channel. Stage 4 never sends
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
@@ -69,15 +72,49 @@ pub struct DaemonContext {
     /// pass `&*ctx.llm` as the `&L` where `L: LlmClient`; the Arc
     /// deref produces `&AnthropicClient`, which implements the trait.
     pub llm: Arc<AnthropicClient>,
+    /// Process-wide lane router. Enforces per-lane concurrency caps via
+    /// tokio semaphores; wraps `Local`-lane Commands with bwrap when
+    /// posture + detection allow. Shared into every `ToolContext` via
+    /// `Arc` (not a trait-object handle; `LaneRouter` is a concrete type
+    /// per the v5 no-`dyn`-for-DI rule).
+    pub router: Arc<LaneRouter>,
+    /// Base-plus-target bash denylist. Base patterns come from
+    /// `BashDenylist::with_base()`; target-level patterns extend it from
+    /// `.loopr/config.yml tools.bash-denylist-extend`.
+    pub bash_denylist: Arc<BashDenylist>,
+    /// Path patterns denied to Read/Write/Edit/Grep/Glob. Defaults (`.env`,
+    /// `.key`, `.pem`, `credentials`, `secret`) get extended by
+    /// `tools.path-deny-patterns` in the config.
+    pub path_deny_patterns: Vec<String>,
+    /// Sandbox posture. Recorded here for `tool_context()` to mirror into
+    /// every built `ToolContext`. The daemon itself read this out of
+    /// `config.tools.sandbox` at startup and used it to construct the
+    /// router; we keep a copy so the ToolContext doesn't have to go
+    /// through `router.sandbox_mode()` on every build.
+    pub sandbox: SandboxMode,
 }
 
 impl DaemonContext {
     /// Construct a new context. All fields are set once at daemon startup;
     /// nothing mutable is exposed except the `shutting_down` atomic.
-    /// Takes an already-opened `Store` and a pre-built `AnthropicClient`;
-    /// opening / building is async / fallible and happens in
-    /// `run_active_daemon` before this constructor.
-    pub fn new(target: PathBuf, run_id: RunId, pid: u32, store: Store, llm: Arc<AnthropicClient>) -> Self {
+    /// Takes an already-opened `Store`, a pre-built `AnthropicClient`, and
+    /// already-built tool infrastructure (`LaneRouter`, `BashDenylist`,
+    /// `path_deny_patterns`, `SandboxMode`). Router construction can fail
+    /// when `SandboxMode::Required` + no bwrap; that failure happens in
+    /// `run_active_daemon` before this constructor, so this function is
+    /// infallible.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target: PathBuf,
+        run_id: RunId,
+        pid: u32,
+        store: Store,
+        llm: Arc<AnthropicClient>,
+        router: Arc<LaneRouter>,
+        bash_denylist: Arc<BashDenylist>,
+        path_deny_patterns: Vec<String>,
+        sandbox: SandboxMode,
+    ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         Self {
             target,
@@ -89,6 +126,39 @@ impl DaemonContext {
             shutdown_notify: Arc::new(Notify::new()),
             store,
             llm,
+            router,
+            bash_denylist,
+            path_deny_patterns,
+            sandbox,
+        }
+    }
+
+    /// Build a per-invocation `ToolContext` for one tool call.
+    ///
+    /// The persist base for overflow output is
+    /// `<target>/.loopr/runs/<run-id>/work/<work-id>/`. The ralph loop
+    /// creates these directories on first use; the tool subprocess spawner
+    /// calls `create_dir_all` before writing.
+    ///
+    /// Stage 7's implementer design doc consumes this helper; Phase 4 wires
+    /// it up so the `tools` crate has a live caller even before the agent
+    /// loop lands.
+    pub fn tool_context(&self, work_id: &WorkId, invocation_id: Uuid) -> ToolContext {
+        let persist_base = self
+            .target
+            .join(".loopr")
+            .join("runs")
+            .join(self.run_id.as_str())
+            .join("work")
+            .join(work_id.as_ref());
+        ToolContext {
+            working_dir: self.target.clone(),
+            router: self.router.clone(),
+            sandbox: self.sandbox,
+            path_deny_patterns: self.path_deny_patterns.clone(),
+            bash_denylist: self.bash_denylist.clone(),
+            persist_base: Some(persist_base),
+            invocation_id: Some(invocation_id),
         }
     }
 }

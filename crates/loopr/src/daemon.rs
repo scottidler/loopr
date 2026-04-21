@@ -32,6 +32,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use llm::AnthropicClient;
 use telemetry::RunId;
+use tools::{BashDenylist, LaneRouter};
 
 use crate::config::{Config, resolve_api_key};
 use crate::error::LooprError;
@@ -237,12 +238,41 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
         .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
 
+    // Build the tool infrastructure BEFORE DaemonContext::new. LaneRouter::new
+    // is fallible when `sandbox: required` and bwrap is not functional on
+    // this host; surface that as a daemon startup failure with an actionable
+    // message so the client sees the recovery path (install bubblewrap, or
+    // downgrade `.loopr/config.yml tools.sandbox` to `preferred`).
+    let sandbox = config.tools.sandbox;
+    let router = Arc::new(LaneRouter::new(sandbox).map_err(|e| {
+        LooprError::DaemonStartup(format!(
+            "tool lane router: {e}. Install bubblewrap (`apt install bubblewrap`) or set \
+             `.loopr/config.yml`: `tools: {{ sandbox: preferred }}`."
+        ))
+    })?);
+    let mut bash_denylist = BashDenylist::with_base();
+    bash_denylist.extend_from(&config.tools);
+    let bash_denylist = Arc::new(bash_denylist);
+
+    // Path-deny patterns: defaults + target extensions. These apply to every
+    // file-touching tool (Read/Write/Edit/Grep/Glob) regardless of sandbox
+    // posture.
+    let mut path_deny_patterns: Vec<String> = [".env", ".key", ".pem", "credentials", "secret"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    path_deny_patterns.extend(config.tools.path_deny_patterns.iter().cloned());
+
     let ctx = Arc::new(DaemonContext::new(
         target.clone(),
         run_id,
         pid,
         store,
         Arc::new(anthropic),
+        router,
+        bash_denylist,
+        path_deny_patterns,
+        sandbox,
     ));
 
     tracing::info!(

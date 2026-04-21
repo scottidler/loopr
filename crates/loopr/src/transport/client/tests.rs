@@ -14,6 +14,7 @@ use ipc::{PROTOCOL_VERSION, RpcError, StatusResult};
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
+use tools::{BashDenylist, LaneRouter, SandboxMode};
 
 use super::*;
 use crate::daemon::DaemonContext;
@@ -41,6 +42,8 @@ async fn env_mutex() -> MutexGuard<'static, ()> {
 async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
     let store = Store::open(&target).await.unwrap();
     let (events, _) = broadcast::channel(16);
+    let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
+    let bash_denylist = Arc::new(BashDenylist::with_base());
     Arc::new(DaemonContext {
         target,
         run_id: RunId::parse("20260419-000000").unwrap(),
@@ -51,6 +54,10 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         shutdown_notify: Arc::new(Notify::new()),
         store,
         llm: dummy_llm(),
+        router,
+        bash_denylist,
+        path_deny_patterns: Vec::new(),
+        sandbox: SandboxMode::Off,
     })
 }
 

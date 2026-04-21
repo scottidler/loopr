@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::sandbox::SandboxMode;
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct ToolsConfig {
     pub sandbox: SandboxMode,
@@ -10,7 +10,7 @@ pub struct ToolsConfig {
     pub bash_denylist_extend: Vec<DenyEntryConfig>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DenyEntryConfig {
     pub tokens: Vec<String>,

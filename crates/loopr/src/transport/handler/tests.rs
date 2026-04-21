@@ -13,6 +13,7 @@ use ipc::{
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
+use tools::{BashDenylist, LaneRouter, SandboxMode};
 
 use super::*;
 use crate::daemon::DaemonContext;
@@ -37,6 +38,8 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
     let td = TempDir::new().unwrap();
     let store = Store::open(td.path()).await.unwrap();
     let (events, _) = broadcast::channel(16);
+    let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
+    let bash_denylist = Arc::new(BashDenylist::with_base());
     let ctx = Arc::new(DaemonContext {
         target: td.path().to_path_buf(),
         run_id: RunId::parse("20260419-000000").unwrap(),
@@ -47,6 +50,10 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
         shutdown_notify: Arc::new(Notify::new()),
         store,
         llm: dummy_anthropic(),
+        router,
+        bash_denylist,
+        path_deny_patterns: Vec::new(),
+        sandbox: SandboxMode::Off,
     });
     (td, ctx)
 }

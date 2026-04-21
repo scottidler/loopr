@@ -90,3 +90,33 @@ fn resolve_api_key_falls_back_to_placeholder_when_unset() {
     let key = resolve_api_key(&llm);
     assert_eq!(key, PLACEHOLDER_API_KEY);
 }
+
+#[test]
+fn config_load_parses_tools_section() {
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = r#"
+tools:
+  sandbox: preferred
+  path-deny-patterns:
+    - "secret.txt"
+  bash-denylist-extend:
+    - tokens: ["./deploy.sh"]
+      reason: "deploys are a human action"
+"#;
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.tools.sandbox, tools::SandboxMode::Preferred);
+    assert_eq!(cfg.tools.path_deny_patterns, vec!["secret.txt"]);
+    assert_eq!(cfg.tools.bash_denylist_extend.len(), 1);
+    assert_eq!(cfg.tools.bash_denylist_extend[0].tokens, vec!["./deploy.sh"]);
+}
+
+#[test]
+fn config_tools_default_is_required_sandbox() {
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.tools.sandbox, tools::SandboxMode::Required);
+}
