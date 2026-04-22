@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use llm::LlmConfig;
 use tools::ToolsConfig;
+use worktree::WorktreeConfig;
 
 use crate::error::LooprError;
 
@@ -26,6 +27,8 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default, skip_serializing)]
     pub tools: ToolsConfig,
+    #[serde(default)]
+    pub worktree: WorktreeConfig,
 }
 
 impl Config {
@@ -33,16 +36,36 @@ impl Config {
     /// `Default::default()` so Stage 6's "no config, just env vars"
     /// path works out of the box. Parse errors surface as
     /// `LooprError::DaemonStartup`.
+    ///
+    /// After deserializing, env-var overrides are applied so operators can
+    /// tweak policy without editing the config file. Precedence at this
+    /// layer is **ENV > config > default**; the CLI override (`--worktree-
+    /// cleanup`) is higher-precedence and applied by the caller after load.
+    /// The full precedence is **CLI > ENV > config > default** per the
+    /// design doc.
     pub fn load(target: &Path) -> Result<Self, LooprError> {
         let path = target.join(CONFIG_SUBPATH);
-        if !path.exists() {
-            return Ok(Self::default());
+        let mut config: Self = if path.exists() {
+            let body = fs::read_to_string(&path)
+                .map_err(|e| LooprError::DaemonStartup(format!("read {}: {e}", path.display())))?;
+            serde_yaml::from_str(&body)
+                .map_err(|e| LooprError::DaemonStartup(format!("parse {}: {e}", path.display())))?
+        } else {
+            Self::default()
+        };
+
+        if let Ok(value) = std::env::var(WORKTREE_CLEANUP_ENV) {
+            let parsed: worktree::AttemptCleanupPolicy = serde_yaml::from_str(value.trim())
+                .map_err(|e| LooprError::DaemonStartup(format!("invalid {WORKTREE_CLEANUP_ENV}={value:?}: {e}")))?;
+            config.worktree.cleanup_policy = parsed;
         }
-        let body = fs::read_to_string(&path)
-            .map_err(|e| LooprError::DaemonStartup(format!("read {}: {e}", path.display())))?;
-        serde_yaml::from_str(&body).map_err(|e| LooprError::DaemonStartup(format!("parse {}: {e}", path.display())))
+
+        Ok(config)
     }
 }
+
+/// Environment variable that overrides the worktree cleanup policy.
+pub const WORKTREE_CLEANUP_ENV: &str = "LOOPR_WORKTREE_CLEANUP_POLICY";
 
 /// Resolve the API key for the configured LLM. Env-only in Stage 6:
 /// reads the env var named by `config.llm.api_key_env`. When the env

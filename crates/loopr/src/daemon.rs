@@ -22,6 +22,7 @@
 pub(crate) mod context;
 pub(crate) mod fork;
 pub(crate) mod sentinel;
+pub(crate) mod startup;
 
 use std::path::{Path, PathBuf};
 use std::process;
@@ -227,6 +228,28 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     let store = store::Store::open(&target)
         .await
         .map_err(|e| LooprError::DaemonStartup(format!("store open: {e}")))?;
+
+    // Install `.git/info/exclude` patterns once per boot. Idempotent; safe to
+    // call on every start. Failure here is non-fatal — a missing `.git/info/`
+    // (non-git target) means we couldn't be managing worktrees anyway, and
+    // the guard layer (`crate::guard`) has already rejected non-git targets.
+    if let Err(e) = worktree::ensure_loopr_excludes(&target) {
+        tracing::warn!(error = %e, "daemon startup: ensure_loopr_excludes failed (non-fatal)");
+    }
+
+    // Hygiene sweep: clean up worktrees left behind by a previous daemon
+    // crash, log orphans. See `daemon::startup::reconcile` for the Stage 7
+    // follow-up on mutating non-terminal Work records to `CrashInterrupted`.
+    // Runs BEFORE the accept loop binds so no coordinator session can race
+    // with this pass.
+    let report = startup::reconcile(&target, &store).await?;
+    tracing::info!(
+        cleaned = report.cleaned,
+        orphans = report.orphans_logged,
+        carried_forward = report.carried_forward,
+        foreign = report.foreign_skipped,
+        "daemon.startup.reconcile.complete"
+    );
 
     // Load top-level Config (composes each stage's config) and build the
     // process-wide AnthropicClient. Config missing from `.loopr/config.yml`

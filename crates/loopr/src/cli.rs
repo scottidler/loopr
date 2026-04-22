@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use worktree::AttemptCleanupPolicy;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "loopr",
@@ -24,6 +26,16 @@ pub struct Cli {
     ///   --log-level off                             (silence everything)
     #[arg(short = 'l', long = "log-level", global = true, value_name = "DIRECTIVE")]
     pub log_level: Option<String>,
+
+    /// When the coordinator cleans up per-attempt worktrees. Overrides
+    /// `.loopr/config.yml` and `LOOPR_WORKTREE_CLEANUP_POLICY`.
+    ///
+    /// - immediate: clean on Bundle rejection (smallest disk; no forensics)
+    /// - on-work-terminal: sweep prior attempts when Work reaches Done/Abandoned (DEFAULT)
+    /// - on-run-end: keep everything until the run ends, then sweep
+    /// - never: strict debug-only; leaks memory + FDs on long-uptime daemons
+    #[arg(long = "worktree-cleanup", global = true, value_name = "POLICY")]
+    pub worktree_cleanup: Option<AttemptCleanupPolicy>,
 
     #[command(subcommand)]
     pub command: Command,
