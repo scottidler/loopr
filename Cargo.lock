@@ -1094,6 +1094,9 @@ version = "0.5.27"
 dependencies = [
  "domain",
  "store",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
  "worktree",
 ]
 

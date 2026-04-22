@@ -195,53 +195,84 @@ where
     // Phase 2: git sequence (serialize against the working tree)
     let _git_guard = deps.git_lock.lock().await;
 
+    // Phase 2 prologue: transition every Accepted Bundle to Integrating.
+    // This is a single OCC write per Bundle, BEFORE any git operation.
+    // Bundles already in Integrating (crash-recovery re-entry) skip
+    // the transition. After this prologue, every in-memory
+    // `bundle_states[i]` carries the Integrating status + fresh
+    // updated_at; Phase 2's merge loop and Phase 3's commit path use
+    // `bundle_states` instead of the caller's input slice.
+    //
+    // Phase 2 prologue may partially succeed if a later Bundle's OCC
+    // write fails. Bundles transitioned to Integrating before that
+    // failure stay Integrating on disk; the daemon's retry sees them
+    // and the crash-recovery path resolves them (ancestry check falls
+    // through to normal merge since no merge landed).
+    let mut bundle_states: Vec<Bundle> = Vec::with_capacity(bundles.len());
+    for b in bundles {
+        match b.status {
+            BundleStatus::Accepted => {
+                let next = transition_bundle_returning(&deps.bundle_sink, b, BundleStatus::Integrating).await?;
+                bundle_states.push(next);
+            }
+            BundleStatus::Integrating => {
+                // Crash-recovery: already Integrating on disk.
+                bundle_states.push(b.clone());
+            }
+            _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating bundles"),
+        }
+    }
+
     git::checkout(&deps.target, &integ_branch, deps.config.git_timeout).await?;
     let pre_merge_sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
 
     let mut outcomes: Vec<(BundleId, MergeOutcome)> = Vec::with_capacity(bundles.len());
 
-    for b in bundles {
-        // Empty-branch guard applies to both the normal merge path
-        // and the crash-recovery adopt path: if the branch has no
-        // commits, there is nothing to merge OR adopt.
-        if let Err(err) =
-            git::assert_nontrivial_branch(&deps.target, b.id.as_ref(), &b.branch_name, deps.config.git_timeout).await
-        {
-            return fail_all(bundles, &pre_merge_sha, deps, err).await;
+    for b in &bundle_states {
+        // After the Phase 2 prologue, every `b` here is Integrating.
+        let head_commit = match b.head_commit.as_deref() {
+            Some(sha) => sha,
+            None => {
+                return fail_all(
+                    &bundle_states,
+                    &pre_merge_sha,
+                    deps,
+                    IntegrationError::Git(format!("bundle {} has no head_commit", b.id)),
+                )
+                .await;
+            }
+        };
+
+        // Empty-branch guard: if the Bundle's head_commit IS the
+        // integration branch's pre-call HEAD, the branch has no
+        // commits beyond the merge base. This check runs BEFORE the
+        // ancestor idempotency check so we can distinguish "branch
+        // has nothing to offer" (EmptyBranch) from "prior call's
+        // merge already landed this branch's commits" (AdoptedExisting).
+        // Can't use `merge-base HEAD <branch>` here: when a prior
+        // call merged the branch, merge-base HEAD <branch> == branch,
+        // which would falsely trip EmptyBranch on crash-recovery.
+        if head_commit == pre_merge_sha {
+            return fail_all(
+                &bundle_states,
+                &pre_merge_sha,
+                deps,
+                IntegrationError::EmptyBranch {
+                    bundle_id: b.id.as_ref().to_string(),
+                    branch: b.branch_name.clone(),
+                },
+            )
+            .await;
         }
 
-        match b.status {
-            BundleStatus::Integrating => {
-                // Crash-recovery: is this Bundle's head_commit already
-                // an ancestor of the integration branch's HEAD?
-                let head_commit = match b.head_commit.as_deref() {
-                    Some(sha) => sha,
-                    None => {
-                        // Integrating bundle with no head_commit is a
-                        // wiring bug; treat as Git error.
-                        return fail_all(
-                            bundles,
-                            &pre_merge_sha,
-                            deps,
-                            IntegrationError::Git(format!("bundle {} is Integrating but has no head_commit", b.id)),
-                        )
-                        .await;
-                    }
-                };
-                let already_merged =
-                    git::is_ancestor(&deps.target, head_commit, "HEAD", deps.config.git_timeout).await?;
-                if already_merged {
-                    let sha = git::merge_commit_sha_for(&deps.target, head_commit, deps.config.git_timeout).await?;
-                    outcomes.push((b.id.clone(), MergeOutcome::AdoptedExisting { sha }));
-                    continue;
-                }
-                // Fall through to the normal merge path: the prior
-                // call died before its merge completed.
-            }
-            BundleStatus::Accepted => {
-                // Normal path below.
-            }
-            _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating bundles"),
+        // Idempotency check: is this Bundle's head_commit already an
+        // ancestor of the integration branch's HEAD? Only true on the
+        // crash-recovery path (a prior call merged before dying).
+        let already_merged = git::is_ancestor(&deps.target, head_commit, "HEAD", deps.config.git_timeout).await?;
+        if already_merged {
+            let sha = git::merge_commit_sha_for(&deps.target, head_commit, deps.config.git_timeout).await?;
+            outcomes.push((b.id.clone(), MergeOutcome::AdoptedExisting { sha }));
+            continue;
         }
 
         match git::merge_no_ff(&deps.target, &b.branch_name, deps.config.git_timeout).await? {
@@ -251,7 +282,7 @@ where
             Err(stderr) => {
                 git::merge_abort(&deps.target, deps.config.git_timeout).await;
                 git::reset_hard(&deps.target, &pre_merge_sha, deps.config.git_timeout).await?;
-                let kind = classify_conflict(b, bundles);
+                let kind = classify_conflict(b, &bundle_states);
                 let err = match kind {
                     ConflictKind::Structural { files, peer_bundle_ids } => IntegrationError::ConflictStructural {
                         bundle_id: b.id.as_ref().to_string(),
@@ -264,11 +295,9 @@ where
                         stderr,
                     },
                 };
-                // After rollback: every Bundle in the slice transitions
-                // to IntegrationFailed in one batch (including Bundles
-                // that were `Integrating` on entry - they transition
-                // from Integrating to IntegrationFailed).
-                return fail_all_without_reset(bundles, deps, err).await;
+                // After rollback: every Integrating Bundle in the
+                // slice transitions to IntegrationFailed in one batch.
+                return fail_all_without_reset(&bundle_states, deps, err).await;
             }
         }
     }
@@ -304,8 +333,11 @@ where
     };
 
     // Transition every successfully-merged Bundle to Merged.
+    // Sources from `bundle_states` (the post-prologue Integrating
+    // Bundles), not the input slice, so OCC expected_updated_at
+    // matches the on-disk state.
     for (bundle_id, _) in &outcomes {
-        let bundle = bundles
+        let bundle = bundle_states
             .iter()
             .find(|b| &b.id == bundle_id)
             .expect("outcome refers to a Bundle from the input slice");
@@ -377,12 +409,25 @@ async fn transition_bundle<U: BundleUpdateSink>(
     bundle: &Bundle,
     target: BundleStatus,
 ) -> Result<(), IntegrationError> {
+    let _ = transition_bundle_returning(sink, bundle, target).await?;
+    Ok(())
+}
+
+/// Transition a Bundle and return the mutated clone with its fresh
+/// `updated_at`. Used by the Phase 2 prologue so subsequent Phase 3
+/// writes have the correct OCC expected-version.
+async fn transition_bundle_returning<U: BundleUpdateSink>(
+    sink: &U,
+    bundle: &Bundle,
+    target: BundleStatus,
+) -> Result<Bundle, IntegrationError> {
     let mut clone = bundle.clone();
     let expected = clone.updated_at;
     clone
         .transition(target, Role::Integrator)
         .map_err(|e| IntegrationError::Transition(e.to_string()))?;
-    sink.update(clone, expected).await.map_err(Into::into)
+    sink.update(clone.clone(), expected).await?;
+    Ok(clone)
 }
 
 /// On git-sequence failure: roll git back to `pre_merge_sha`, then

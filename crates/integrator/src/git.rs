@@ -56,41 +56,6 @@ pub(crate) async fn rev_parse_head(target: &Path, git_timeout: Duration) -> Resu
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Check that `bundle_branch` has commits beyond the merge base with
-/// `HEAD`. Returns `Err(EmptyBranch)` when `merge-base HEAD <branch>`
-/// equals `rev-parse <branch>` - in that case `git merge --no-ff`
-/// would exit 0 ("Already up to date") with no merge commit.
-pub(crate) async fn assert_nontrivial_branch(
-    target: &Path,
-    bundle_id: &str,
-    branch: &str,
-    git_timeout: Duration,
-) -> Result<(), IntegrationError> {
-    let base = run_git(target, &["merge-base", "HEAD", branch], git_timeout).await?;
-    let head = run_git(target, &["rev-parse", branch], git_timeout).await?;
-    if !base.status.success() {
-        return Err(IntegrationError::Git(format!(
-            "git merge-base HEAD {branch} failed: {}",
-            String::from_utf8_lossy(&base.stderr)
-        )));
-    }
-    if !head.status.success() {
-        return Err(IntegrationError::Git(format!(
-            "git rev-parse {branch} failed: {}",
-            String::from_utf8_lossy(&head.stderr)
-        )));
-    }
-    let base_sha = String::from_utf8_lossy(&base.stdout).trim().to_string();
-    let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
-    if base_sha == head_sha {
-        return Err(IntegrationError::EmptyBranch {
-            bundle_id: bundle_id.to_string(),
-            branch: branch.to_string(),
-        });
-    }
-    Ok(())
-}
-
 /// Ancestry check via `git merge-base --is-ancestor <commit> <ref>`.
 /// Exit 0 = `commit` is an ancestor of `ref`, exit 1 = not an
 /// ancestor, any other exit is a git failure.
