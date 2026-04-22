@@ -9,4 +9,6 @@ license.workspace = true
 [dependencies]
 domain = { path = "../domain" }
 store = { path = "../store" }
+thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = ["process", "sync"] }
 worktree = { path = "../worktree" }
