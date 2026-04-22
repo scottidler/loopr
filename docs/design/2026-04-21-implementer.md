@@ -2,7 +2,7 @@
 
 **Author:** Claude (with Scott)
 **Date:** 2026-04-21
-**Status:** Draft
+**Status:** Implemented
 **Crates touched:** `domain`, `store`, `context`, `agents`, `llm` (cross-cutting; lives in top-level `docs/design/` per project rules).
 
 ## Summary
