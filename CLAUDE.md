@@ -10,9 +10,9 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 
 - **Architectural shape (vision):** [docs/vision.md](docs/vision.md)
 - **Roadmap (what's built, what's next):** [docs/roadmap.md](docs/roadmap.md)
-- **Top-level docs rules:** [docs/CLAUDE.md](docs/CLAUDE.md)
+- **Docs rules:** [docs/CLAUDE.md](docs/CLAUDE.md)
 - **Per-crate scope rules:** `crates/<name>/CLAUDE.md`
-- **Per-crate design docs:** `crates/<name>/docs/`
+- **All design docs:** [docs/design/](docs/design/) (flat; no per-crate design-doc dirs)
 - **Workspace CI:** `./.otto.yml` (run `otto ci` at repo root)
 - **Per-crate CI:** `crates/<name>/.otto.yml` (run `otto ci` inside the crate dir)
 

@@ -42,11 +42,10 @@ Subprocess output (e.g., `cargo test`, `npm install`) can exceed the `ipc` crate
 - **Preferred approach:** chunked multi-message IPC. `tools` captures output, emits it as a sequence of `DaemonEvent::ToolOutputChunk { tool_invocation_id, seq, text }` events where each chunk stays well under the 1 MiB cap. Clients reassemble on the other side.
 - **Fallback if chunking is too complex:** truncate at N KB with head+tail summary sent over IPC; full output dumped to `.loopr/runs/<run-id>/work/<work-id>/<tool-invocation-id>.log` for reference.
 
-Decide in the Stage 7 design doc (`crates/tools/docs/design/tool-registry.md`). User preference is chunked multi-message; raise on the design doc review if that becomes impractical.
+Decide in the Stage 7 design doc (`docs/design/2026-04-21-tool-registry.md`). User preference is chunked multi-message; raise on the design doc review if that becomes impractical.
 
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): "Security" section covers the lane model and sandbox policy
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

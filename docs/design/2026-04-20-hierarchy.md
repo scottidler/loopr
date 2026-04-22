@@ -643,7 +643,7 @@ shim they exercise.
   design; this doc mirrors structure and test strategy.
 - [`docs/design/2026-04-20-fsm-macro.md`](../../../../docs/design/2026-04-20-fsm-macro.md) —
   `#[derive(Fsm)]` contract.
-- [`crates/derive/docs/design/2026-04-20-record-macro.md`](../../../derive/docs/design/2026-04-20-record-macro.md)
+- [`crates/derive/docs/design/2026-04-20-record-macro.md`](./2026-04-20-record-macro.md)
   — `#[derive(Record)]` contract.
 - `~/repos/scottidler/loopr/src/domain/work.rs` — v3's `Work`, the
   structural baseline.

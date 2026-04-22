@@ -10,7 +10,7 @@
 
 Introduce a `LlmClient` trait and one concrete `AnthropicClient` implementation in `crates/llm/`. The trait exposes a single buffered, non-streaming `complete_with_tool` method; the Anthropic backend talks to the Messages API with `tool_choice` locked to a caller-supplied tool schema. Errors surface as a typed `LlmError` enum that distinguishes `Retryable` from `Fatal` so callers implement retry policy without string-matching error messages. Streaming, multi-turn, and model-tier resolution are Stage 7+ concerns and are explicitly out of scope.
 
-This is the second of three Stage 6 design docs; [`hierarchy.md`](../../../domain/docs/design/2026-04-20-hierarchy.md) shipped the `Work` record, and `plan-then-decompose.md` will follow to wire the decomposer's call to this trait into `loopr plan`.
+This is the second of three Stage 6 design docs; [`hierarchy.md`](./2026-04-20-hierarchy.md) shipped the `Work` record, and `plan-then-decompose.md` will follow to wire the decomposer's call to this trait into `loopr plan`.
 
 ## Problem Statement
 

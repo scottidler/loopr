@@ -35,5 +35,4 @@ The dep is declared in the root `[workspace.dependencies]` block as a git source
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): architectural shape, "Target Repo Layout" for how `domain` types land on disk via `store`
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

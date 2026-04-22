@@ -45,5 +45,4 @@ Design doc: [`docs/design/2026-04-21-worktree-lifecycle.md`](../../docs/design/2
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): "worktree" crate contract (amended 2026-04-21, a1/a2/a3/a4/a5)
 - [../../docs/design/2026-04-21-worktree-lifecycle.md](../../docs/design/2026-04-21-worktree-lifecycle.md): this crate's Stage 7 design doc
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

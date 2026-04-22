@@ -32,5 +32,4 @@ This crate orchestrates. It does not implement any pipeline stage. If you catch 
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): architectural shape
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

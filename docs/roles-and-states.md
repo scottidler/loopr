@@ -214,7 +214,7 @@ fn run_director(event: &Event, deps: &Deps<...>) -> Result<Action>;
 ## The Two FSMs
 
 Only `PlanStatus` has shipped. `WorkStatus` is designed in
-[`crates/domain/docs/design/2026-04-20-hierarchy.md`](../crates/domain/docs/design/2026-04-20-hierarchy.md)
+[`crates/domain/docs/design/2026-04-20-hierarchy.md`](design/2026-04-20-hierarchy.md)
 and is about to land in Stage 6. `Spec`, `Phase`, `Tick`, and `Bundle`
 are deferred and will gain their own status enums when their records
 are introduced.
@@ -423,9 +423,9 @@ Guidelines for future stages:
   distinction between LLM-calling and non-LLM crates.
 - [`crates/domain/CLAUDE.md`](../crates/domain/CLAUDE.md): scope
   rules for the crate where the FSMs live.
-- [`crates/domain/docs/design/2026-04-20-hierarchy.md`](../crates/domain/docs/design/2026-04-20-hierarchy.md):
+- [`crates/domain/docs/design/2026-04-20-hierarchy.md`](design/2026-04-20-hierarchy.md):
   `WorkStatus` design, the source for the 10-state table above.
-- [`crates/domain/docs/design/2026-04-20-fsm-macro.md`](../crates/domain/docs/design/2026-04-20-fsm-macro.md):
+- [`crates/domain/docs/design/2026-04-20-fsm-macro.md`](design/2026-04-20-fsm-macro.md):
   `#[derive(Fsm)]` contract.
 - [`crates/domain/src/role.rs`](../crates/domain/src/role.rs):
   canonical `Role` enum.

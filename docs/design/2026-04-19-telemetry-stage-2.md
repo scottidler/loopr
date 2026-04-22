@@ -817,7 +817,7 @@ The corresponding `logs::handle_tail` / `handle_runs` signatures each take `excl
 - [`docs/vision.md`](../../../../docs/vision.md) §Observability, §telemetry ABI, §Models and Budgets (env var naming)
 - [`docs/roadmap.md`](../../../../docs/roadmap.md) §Stage 2 (to be amended alongside this doc)
 - [`crates/telemetry/CLAUDE.md`](../../CLAUDE.md) §In scope, §Out of scope, §Dependencies
-- [`crates/loopr/docs/design/2026-04-19-cli-skeleton.md`](../../../loopr/docs/design/2026-04-19-cli-skeleton.md) — Stage 1; `--log-level` is its missing flag
+- [`crates/loopr/docs/design/2026-04-19-cli-skeleton.md`](./2026-04-19-cli-skeleton.md) — Stage 1; `--log-level` is its missing flag
 - `rules/rust.md` §Logging — flag-configured level, file target under `~/.local/share/<project>/logs/` (v5 deliberately departs: `.loopr/runs/<id>/loopr.log` per-run, not per-machine)
 - `tracing-subscriber` docs: <https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/>
 - `tracing-appender::non_blocking`: <https://docs.rs/tracing-appender/0.2/tracing_appender/non_blocking/>

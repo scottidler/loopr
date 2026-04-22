@@ -18,7 +18,7 @@
 
 Introduce a `decompose<L: LlmClient>(plan, target, llm) -> Result<Vec<Work>, DecomposerError>` function in `crates/decomposer/`. It builds a prompt (template + parent Plan goal + workspace file tree from `git ls-files`), calls the just-shipped `LlmClient::complete_with_tool` with a `submit_decomposition` tool schema, resolves title-based sibling dependencies to `WorkId`s server-side, detects cycles, and returns a `Vec<Work>` ready for batch-persist. A single retry-with-error-in-prompt covers any LLM failure; zero children bails loudly. The daemon's `plan.create` handler calls `decompose()` between persisting the `Plan` and returning, and persists the resulting `Work`s via `Store::works().create_many(...)` — which lands in this doc because `store` does not yet expose `works()`.
 
-This is the third and final Stage 6 design doc; [`hierarchy.md`](../../../domain/docs/design/2026-04-20-hierarchy.md) shipped the `Work` record, [`llm-client.md`](../../../llm/docs/design/2026-04-20-llm-client.md) shipped the `LlmClient` trait + Anthropic backend, and this doc wires them into `loopr plan`. Shipping it satisfies Stage 6's exit criterion: `loopr plan "Add --version flag to a Rust CLI"` produces at least one `Work` persisted to `.loopr/taskstore/works.jsonl`.
+This is the third and final Stage 6 design doc; [`hierarchy.md`](./2026-04-20-hierarchy.md) shipped the `Work` record, [`llm-client.md`](./2026-04-20-llm-client.md) shipped the `LlmClient` trait + Anthropic backend, and this doc wires them into `loopr plan`. Shipping it satisfies Stage 6's exit criterion: `loopr plan "Add --version flag to a Rust CLI"` produces at least one `Work` persisted to `.loopr/taskstore/works.jsonl`.
 
 ## Problem Statement
 
@@ -591,8 +591,8 @@ Unit + integration tests, no network:
 ## References
 
 - [Scope memo](../../../../docs/design/2026-04-20-stage-6-scope.md) — decisions locked; this doc references D6, D7 (refined by Architect round 2 below), D8, D9, D10, A+1, A+2, A+3, U+1-U+5 by row.
-- [Hierarchy design doc](../../../domain/docs/design/2026-04-20-hierarchy.md) — `Work` record shape, `WorkStatus` FSM, `AcceptanceCriteria`.
-- [LlmClient design doc](../../../llm/docs/design/2026-04-20-llm-client.md) — the trait + backend this doc's decomposer calls.
+- [Hierarchy design doc](./2026-04-20-hierarchy.md) — `Work` record shape, `WorkStatus` FSM, `AcceptanceCriteria`.
+- [LlmClient design doc](./2026-04-20-llm-client.md) — the trait + backend this doc's decomposer calls.
 - [Roadmap](../../../../docs/roadmap.md) — Stage 6 entry at line 93, plan-then-decompose.md spec at line 102, exit criterion at line 106.
 - [`crates/decomposer/CLAUDE.md`](../../CLAUDE.md) — in-scope/out-of-scope rules for this crate.
 - [`crates/store/CLAUDE.md`](../../../store/CLAUDE.md) — why `WorksStore` lives in `store` rather than `decomposer`.

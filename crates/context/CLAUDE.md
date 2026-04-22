@@ -34,5 +34,4 @@ Notably does NOT depend on `llm` — `context` produces ready-to-send Messages; 
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): "Prompts" section for the three-layer override model and themed directory structure
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

@@ -36,5 +36,4 @@ The Round 1 Architect critique — "domain should not depend on an I/O-bound per
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): architectural shape, "Target Repo Layout" section
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

@@ -32,5 +32,4 @@ The v3/v4 lesson that motivates this crate: observability bolted on late is obse
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
 - [../../docs/vision.md](../../docs/vision.md): architectural shape, Observability section
 - [../../docs/roadmap.md](../../docs/roadmap.md): Stage 2 is where this crate's first design docs get written
-- [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)

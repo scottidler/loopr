@@ -829,7 +829,7 @@ Items surfaced by Stage 4 that are intentionally not addressed here. Each is lin
 
 - [`docs/vision.md`](../../../../docs/vision.md) §ipc (lines 179-196), §loopr (lines 191-198), §Target Repo Layout (lines 270-300), §Worktree crash recovery (line 303; informs the general "reconcile on startup" ethos).
 - [`docs/roadmap.md`](../../../../docs/roadmap.md) §Stage 4.
-- [`crates/ipc/docs/design/2026-04-19-protocol.md`](../../../ipc/docs/design/2026-04-19-protocol.md) — Stage 3's shipped protocol; the `Method` exhaustiveness contract, handshake ordering, parse-error closing contract are all codified there and enforced here.
+- [`crates/ipc/docs/design/2026-04-19-protocol.md`](./2026-04-19-protocol.md) — Stage 3's shipped protocol; the `Method` exhaustiveness contract, handshake ordering, parse-error closing contract are all codified there and enforced here.
 - [`crates/loopr/CLAUDE.md`](../../CLAUDE.md) §In scope (IPC transport is in this crate).
 - [`docs/design/2026-04-19-telemetry-stage-2.md`](../../../../docs/design/2026-04-19-telemetry-stage-2.md) — format precedent for consolidating roadmap-listed two-doc stages into one.
 - v4 reference: `~/repos/scottidler/loopr-v4/src/daemon.rs` — double-fork lifecycle, pid/version files, silent-restart on version drift.
