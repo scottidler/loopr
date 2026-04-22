@@ -286,6 +286,10 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         .collect();
     path_deny_patterns.extend(config.tools.path_deny_patterns.iter().cloned());
 
+    let context_builder = Arc::new(::context::InlineContextBuilder::new());
+    let implementer_config = ::agents::ImplementerConfig::default();
+    let worktree_cleanup_policy = config.worktree.cleanup_policy;
+
     let ctx = Arc::new(DaemonContext::new(
         target.clone(),
         run_id,
@@ -296,6 +300,9 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         bash_denylist,
         path_deny_patterns,
         sandbox,
+        context_builder,
+        implementer_config,
+        worktree_cleanup_policy,
     ));
 
     tracing::info!(

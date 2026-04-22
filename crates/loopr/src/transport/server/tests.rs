@@ -2,22 +2,23 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use tokio::sync::{Notify, broadcast};
 use tokio::time::timeout;
 use tokio_util::codec::{Framed, LinesCodec};
 
+use agents::ImplementerConfig;
+use context::InlineContextBuilder;
 use ipc::{DaemonRequest, DaemonResponse, HandshakeParams, PROTOCOL_VERSION};
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
 use tempfile::TempDir;
 use tools::{BashDenylist, LaneRouter, SandboxMode};
+use worktree::AttemptCleanupPolicy;
 
 use super::*;
 
@@ -31,24 +32,22 @@ fn dummy_llm() -> Arc<AnthropicClient> {
 
 async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
     let store = Store::open(&target).await.unwrap();
-    let (events, _) = broadcast::channel(16);
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
-    Arc::new(DaemonContext {
+    Arc::new(DaemonContext::new(
         target,
-        run_id: RunId::parse("20260419-000000").unwrap(),
-        started_at: chrono::Local::now(),
-        pid: std::process::id(),
-        events,
-        shutting_down: Arc::new(AtomicBool::new(false)),
-        shutdown_notify: Arc::new(Notify::new()),
+        RunId::parse("20260419-000000").unwrap(),
+        std::process::id(),
         store,
-        llm: dummy_llm(),
+        dummy_llm(),
         router,
         bash_denylist,
-        path_deny_patterns: Vec::new(),
-        sandbox: SandboxMode::Off,
-    })
+        Vec::new(),
+        SandboxMode::Off,
+        Arc::new(InlineContextBuilder::new()),
+        ImplementerConfig::default(),
+        AttemptCleanupPolicy::default(),
+    ))
 }
 
 /// Spawn an accept loop, connect as a client, drive a handshake +

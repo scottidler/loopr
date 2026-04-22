@@ -1,11 +1,11 @@
 #![allow(clippy::unwrap_used)]
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use tempfile::TempDir;
-use tokio::sync::{Notify, broadcast};
 
+use agents::ImplementerConfig;
+use context::InlineContextBuilder;
 use ipc::{
     DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, PlanListResult, RpcError,
     StatusResult,
@@ -14,6 +14,7 @@ use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter, SandboxMode};
+use worktree::AttemptCleanupPolicy;
 
 use super::*;
 use crate::daemon::DaemonContext;
@@ -37,24 +38,22 @@ fn dummy_anthropic() -> Arc<AnthropicClient> {
 async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
     let td = TempDir::new().unwrap();
     let store = Store::open(td.path()).await.unwrap();
-    let (events, _) = broadcast::channel(16);
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
-    let ctx = Arc::new(DaemonContext {
-        target: td.path().to_path_buf(),
-        run_id: RunId::parse("20260419-000000").unwrap(),
-        started_at: chrono::Local::now(),
-        pid: 12345,
-        events,
-        shutting_down: Arc::new(AtomicBool::new(false)),
-        shutdown_notify: Arc::new(Notify::new()),
+    let ctx = Arc::new(DaemonContext::new(
+        td.path().to_path_buf(),
+        RunId::parse("20260419-000000").unwrap(),
+        12345,
         store,
-        llm: dummy_anthropic(),
+        dummy_anthropic(),
         router,
         bash_denylist,
-        path_deny_patterns: Vec::new(),
-        sandbox: SandboxMode::Off,
-    });
+        Vec::new(),
+        SandboxMode::Off,
+        Arc::new(InlineContextBuilder::new()),
+        ImplementerConfig::default(),
+        AttemptCleanupPolicy::default(),
+    ));
     (td, ctx)
 }
 

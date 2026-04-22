@@ -153,6 +153,20 @@ async fn persists_works_jsonl_under_loopr_taskstore() {
 }
 
 #[tokio::test]
+async fn update_round_trips_status_change() {
+    let (_dir, store, plan) = fresh_store_with_plan().await;
+    let mut work = sample_work(&plan, "to-update");
+    let id = work.id.clone();
+    store.works().create(work.clone()).await.expect("create");
+
+    work.status = WorkStatus::Blocked;
+    store.works().update(work).await.expect("update");
+
+    let got = store.works().get(&id).await.expect("get after update");
+    assert_eq!(got.status, WorkStatus::Blocked);
+}
+
+#[tokio::test]
 async fn serde_roundtrip_across_statuses() {
     let (_dir, store, plan) = fresh_store_with_plan().await;
     let cases = [

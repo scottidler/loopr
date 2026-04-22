@@ -3,18 +3,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use tempfile::TempDir;
-use tokio::sync::{Mutex, MutexGuard, Notify, broadcast};
+use tokio::sync::{Mutex, MutexGuard};
 use tokio::time::timeout;
 
+use agents::ImplementerConfig;
+use context::InlineContextBuilder;
 use ipc::{PROTOCOL_VERSION, RpcError, StatusResult};
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter, SandboxMode};
+use worktree::AttemptCleanupPolicy;
 
 use super::*;
 use crate::daemon::DaemonContext;
@@ -41,24 +43,22 @@ async fn env_mutex() -> MutexGuard<'static, ()> {
 
 async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
     let store = Store::open(&target).await.unwrap();
-    let (events, _) = broadcast::channel(16);
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
-    Arc::new(DaemonContext {
+    Arc::new(DaemonContext::new(
         target,
-        run_id: RunId::parse("20260419-000000").unwrap(),
-        started_at: chrono::Local::now(),
-        pid: std::process::id(),
-        events,
-        shutting_down: Arc::new(AtomicBool::new(false)),
-        shutdown_notify: Arc::new(Notify::new()),
+        RunId::parse("20260419-000000").unwrap(),
+        std::process::id(),
         store,
-        llm: dummy_llm(),
+        dummy_llm(),
         router,
         bash_denylist,
-        path_deny_patterns: Vec::new(),
-        sandbox: SandboxMode::Off,
-    })
+        Vec::new(),
+        SandboxMode::Off,
+        Arc::new(InlineContextBuilder::new()),
+        ImplementerConfig::default(),
+        AttemptCleanupPolicy::default(),
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

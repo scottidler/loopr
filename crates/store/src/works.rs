@@ -66,4 +66,14 @@ impl<'a> WorksStore<'a> {
     pub async fn list(&self) -> Result<Vec<Work>, StoreError> {
         Ok(self.inner.list::<Work>(&[]).await?)
     }
+
+    /// Persist a status / field change on an existing Work. Delegates to
+    /// `AsyncStore::update` which rewrites the JSONL line and refreshes
+    /// the SQLite cache row. The Stage-7 wiring requires this so
+    /// implementer-error transitions (Blocked / Failed) survive daemon
+    /// restart; without it the daemon re-dispatches failing Works forever.
+    pub async fn update(&self, work: Work) -> Result<(), StoreError> {
+        self.inner.update(work).await?;
+        Ok(())
+    }
 }

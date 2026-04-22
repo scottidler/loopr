@@ -8,15 +8,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
+use agents::ImplementerConfig;
+use context::InlineContextBuilder;
 use domain::WorkId;
 use ipc::DaemonEvent;
 use llm::AnthropicClient;
 use store::Store;
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
+use worktree::AttemptCleanupPolicy;
 
 /// Capacity of the daemon's event broadcast channel. Stage 4 never sends
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
@@ -92,6 +96,26 @@ pub struct DaemonContext {
     /// router; we keep a copy so the ToolContext doesn't have to go
     /// through `router.sandbox_mode()` on every build.
     pub sandbox: SandboxMode,
+    /// Prompt assembly. Shared by every implementer invocation; the
+    /// inline impl is stateless. Arc'd into `agents::implementer::Deps`
+    /// per Work.
+    pub context_builder: Arc<InlineContextBuilder>,
+    /// Configuration for the Implementer ralph loop (max_iterations,
+    /// max_requeries, max_repeat_action, max_parse_failures). Cloned
+    /// per Work.
+    pub implementer_config: ImplementerConfig,
+    /// Post-Work worktree disposal policy. Read from config at startup;
+    /// each `spawn_implementer_for_work` consults it after
+    /// `run_implementer` returns to decide whether to destroy the
+    /// worktree immediately, defer to run-end, or leak on purpose for
+    /// debugging.
+    pub worktree_cleanup_policy: AttemptCleanupPolicy,
+    /// In-flight Implementer tasks. Drained on shutdown with a soft
+    /// timeout + abort_all fallback; adds a third holder of the
+    /// `Arc<DaemonContext>` clone (alongside accept-loop + signal-
+    /// watcher) that MUST release before `Arc::try_unwrap` reclaims
+    /// the Store for `.close().await`.
+    pub implementer_tasks: Mutex<JoinSet<()>>,
 }
 
 impl DaemonContext {
@@ -114,6 +138,9 @@ impl DaemonContext {
         bash_denylist: Arc<BashDenylist>,
         path_deny_patterns: Vec<String>,
         sandbox: SandboxMode,
+        context_builder: Arc<InlineContextBuilder>,
+        implementer_config: ImplementerConfig,
+        worktree_cleanup_policy: AttemptCleanupPolicy,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         Self {
@@ -130,6 +157,10 @@ impl DaemonContext {
             bash_denylist,
             path_deny_patterns,
             sandbox,
+            context_builder,
+            implementer_config,
+            worktree_cleanup_policy,
+            implementer_tasks: Mutex::new(JoinSet::new()),
         }
     }
 
