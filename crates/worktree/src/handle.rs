@@ -9,15 +9,18 @@
 //!
 //! The `consumed` flag prevents double-cleanup when a handle that's been
 //! explicitly `.cleanup()`'d then hits Drop at scope exit.
-//!
-//! Phase 1: construction stubbed to `unimplemented!`; Phase 3 fills it in.
 
 use std::path::{Path, PathBuf};
 
 use domain::WorkId;
 
 use crate::error::WorktreeError;
-use crate::ops;
+use crate::ops::{self, CreateOutcome};
+
+/// Upper bound on the internal seq-retry loop. In practice a Work tops out
+/// well under 10 attempts; 1000 is defensive against a stuck loop consuming
+/// the full machine-side retry budget.
+const MAX_SEQ: u32 = 1000;
 
 pub struct Worktree {
     path: PathBuf,
@@ -54,8 +57,55 @@ impl Worktree {
         Ok(())
     }
 
-    /// Internal constructor used by `Worktree::create` (Phase 3). Public-in-
-    /// crate so tests in sibling modules can fabricate handles with custom
+    /// Provision a fresh worktree + branch for `work_id`. The seq suffix is
+    /// allocated internally by looping from 1 and retrying on git's
+    /// "already exists" class of errors (locale-stable via `LC_ALL=C` in
+    /// `ops::git_cmd`).
+    ///
+    /// Callers pass an already-resolved `base_sha` (not a ref) — the
+    /// coordinator in `loopr` resolves it in repo context, NEVER inside a
+    /// worktree, because `HEAD` inside a worktree resolves to the worktree's
+    /// own branch tip rather than the intended base (D10; v4
+    /// commit `120c29b`).
+    ///
+    /// `git worktree prune` runs ONCE at entry (D9). It is NOT called inside
+    /// the retry loop: pruning mid-loop would create new race conditions.
+    pub fn create(
+        repo_path: &Path,
+        worktree_root: &Path,
+        work_id: WorkId,
+        base_sha: &str,
+    ) -> Result<Self, WorktreeError> {
+        std::fs::create_dir_all(worktree_root)?;
+
+        // D9: clear crashed-session registrations left behind under
+        // $GIT_DIR/worktrees/. Non-fatal; logs-only on failure.
+        ops::prune(repo_path)?;
+
+        for seq in 1..=MAX_SEQ {
+            match ops::try_create_at_seq(repo_path, worktree_root, &work_id, seq, base_sha)? {
+                CreateOutcome::Created { path, branch } => {
+                    verify_branch(&path, &branch)?;
+                    return Ok(Self {
+                        path,
+                        branch,
+                        work_id,
+                        seq,
+                        repo_path: repo_path.to_path_buf(),
+                        consumed: false,
+                    });
+                }
+                CreateOutcome::SeqTaken => continue,
+            }
+        }
+
+        Err(WorktreeError::SeqAllocExhausted {
+            attempts: MAX_SEQ,
+            dir: worktree_root.to_path_buf(),
+        })
+    }
+
+    /// Test-only constructor. Lets tests fabricate a handle with arbitrary
     /// `consumed` state without running the real git invocation.
     #[cfg(test)]
     pub(crate) fn from_parts(
@@ -75,18 +125,21 @@ impl Worktree {
             consumed,
         }
     }
+}
 
-    /// Placeholder for Phase 3. The real body loops `seq` from 1 and retries on
-    /// git's "already exists" class of errors.
-    pub fn create(
-        repo_path: &Path,
-        worktree_root: &Path,
-        work_id: WorkId,
-        base_sha: &str,
-    ) -> Result<Self, WorktreeError> {
-        let _ = (repo_path, worktree_root, work_id, base_sha);
-        unimplemented!("Worktree::create body lands in Phase 3")
+/// Post-create defensive check: inside the freshly-created worktree, the
+/// current branch must match what we asked for. Ported from v4
+/// manager.rs:122-132 — a failed branch creation could still produce a
+/// worktree on the wrong branch if git's internal state is corrupted.
+fn verify_branch(path: &Path, expected: &str) -> Result<(), WorktreeError> {
+    let actual = ops::show_current_branch(path)?;
+    if actual != expected {
+        return Err(WorktreeError::GitCommand(format!(
+            "worktree branch mismatch: expected {expected:?}, found {actual:?} at {}",
+            path.display()
+        )));
     }
+    Ok(())
 }
 
 impl Drop for Worktree {
