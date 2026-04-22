@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use crate::bundles::BundlesStore;
 use crate::error::StoreError;
 use crate::plans::PlansStore;
+use crate::ticks::TicksStore;
 use crate::works::WorksStore;
 
 /// Path of the taskstore directory relative to the target repo root.
@@ -29,6 +30,17 @@ pub struct Store {
     /// Mutex local to the handle would serialize nothing between two
     /// `.bundles().update(...)` calls.
     bundle_update_lock: Mutex<()>,
+    /// Intra-daemon serializer for `TicksStore::create`'s duplicate-
+    /// detection read-check-write. Without it, two concurrent
+    /// `integrate` calls in the crash-recovery path could both see
+    /// empty `list_by_plan_id` and both append, producing two Ticks
+    /// for one merge. Cross-process protection is not in scope
+    /// (single-daemon-per-target by `.loopr/daemon.pid`).
+    ///
+    /// Same placement rationale as `bundle_update_lock`: the lock
+    /// lives on `Store`, not inside the `TicksStore<'a>` handle,
+    /// because `.ticks()` returns a fresh handle on each call.
+    tick_lock: Mutex<()>,
 }
 
 impl Store {
@@ -48,6 +60,7 @@ impl Store {
         Ok(Self {
             inner,
             bundle_update_lock: Mutex::new(()),
+            tick_lock: Mutex::new(()),
         })
     }
 
@@ -67,6 +80,14 @@ impl Store {
     /// all callers of the same `Store`, not just within one handle.
     pub fn bundles(&self) -> BundlesStore<'_> {
         BundlesStore::new(&self.inner, &self.bundle_update_lock)
+    }
+
+    /// Typed accessor for Tick records. Borrowed, zero-cost handle.
+    /// The handle borrows the parent `Store`'s tick lock so
+    /// `create(tick)` duplicate-detection serializes across all
+    /// callers of the same `Store`.
+    pub fn ticks(&self) -> TicksStore<'_> {
+        TicksStore::new(&self.inner, &self.tick_lock)
     }
 
     /// Graceful async shutdown. Drops the writer queue, awaits the writer

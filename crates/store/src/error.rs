@@ -1,3 +1,4 @@
+use domain::{BundleId, PlanId, TickId};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -29,6 +30,19 @@ pub enum StoreError {
     /// strictly more information, so no `NotFound` was added.
     #[error("stale record: expected updated_at={expected}, actual={actual}")]
     Stale { expected: i64, actual: i64 },
+
+    /// `TicksStore::create` uniqueness failure. Raised when an incoming
+    /// Tick's `(plan_id, bundles-as-set)` matches a Tick already
+    /// persisted for that Plan. Carries `tick_id` so the Integrator's
+    /// crash-recovery path can resolve the existing Tick with one
+    /// `TicksStore::get(tick_id)` rather than a second
+    /// `list_by_plan_id` scan.
+    #[error("duplicate tick: existing tick_id={tick_id} for plan_id={plan_id} with bundles={bundles:?}")]
+    DuplicateTick {
+        tick_id: TickId,
+        plan_id: PlanId,
+        bundles: Vec<BundleId>,
+    },
 }
 
 impl From<taskstore_async::Error> for StoreError {

@@ -17,7 +17,11 @@ pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_i
 pub use lifeguard::{Decision, Lifeguard, canonical_hash};
 pub use parse::{ParseError, parse_actions, parse_one};
 pub use reviewer::{
-    BundleUpdateError, BundleUpdateSink, ParseError as ReviewerParseError, ReviewerDeps, ReviewerError,
-    VERIFICATION_CAP, git_show, parse_verdict, read_file_contents, render_issue_summary, run_reviewer,
-    strip_commit_header, truncate_diff,
+    ParseError as ReviewerParseError, ReviewerDeps, ReviewerError, VERIFICATION_CAP, git_show, parse_verdict,
+    read_file_contents, render_issue_summary, run_reviewer, strip_commit_header, truncate_diff,
 };
+// `BundleUpdateSink` / `BundleUpdateError` were relocated to `store` per
+// docs/design/2026-04-22-integrator.md (Phase 1c cross-doc reconciliation).
+// Consumers should import from `store` directly: `use store::{BundleUpdateSink,
+// BundleUpdateError}`. The Reviewer continues to function at the same trait
+// shape under the new module path.

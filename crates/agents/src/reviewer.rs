@@ -25,7 +25,6 @@
 //!   `ParseError::Schema`, consumed by the parse-retry loop. This is
 //!   belt-and-suspenders with the system prompt.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -35,6 +34,7 @@ use tracing::{debug, info, warn};
 use context::ContextBuilder;
 use domain::{Bundle, BundleStatus, ReviewIssue, Role, Verdict, Work};
 use llm::{ChatMessage, LlmClient};
+use store::{BundleUpdateError, BundleUpdateSink};
 
 use crate::config::ReviewerConfig;
 
@@ -42,72 +42,6 @@ use crate::config::ReviewerConfig;
 /// lives in the return value; `Bundle.verification` is a scannable
 /// one-liner / capped summary.
 pub const VERIFICATION_CAP: usize = 8192;
-
-// ---------------------------------------------------------------------------
-// Sink trait for store writes
-// ---------------------------------------------------------------------------
-
-/// Minimal Bundle-update interface for the Reviewer. Mirrors
-/// `BundleSink` from the Implementer (single-method trait so per-role
-/// test fakes stay tiny). Passes the OCC `expected_updated_at`
-/// snapshot the Reviewer took before mutating the clone.
-#[allow(clippy::manual_async_fn)]
-pub trait BundleUpdateSink: Send + Sync {
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a;
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum BundleUpdateError {
-    #[error("bundle update failed: {0}")]
-    Update(String),
-    /// OCC version-check failure from the underlying store. The
-    /// daemon (Stage 8 wiring) is expected to match on this variant
-    /// specifically and drop the losing Verdict silently rather than
-    /// escalate.
-    #[error("stale bundle: expected updated_at={expected}, actual={actual}")]
-    Stale { expected: i64, actual: i64 },
-}
-
-/// Real `BundleUpdateSink` backed by `store::Store`. Delegates to
-/// `BundlesStore::update` which holds the intra-daemon OCC Mutex;
-/// `StoreError::Stale` is specifically preserved as
-/// `BundleUpdateError::Stale` so downstream matching works.
-impl BundleUpdateSink for store::Store {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move {
-            match self.bundles().update(bundle, expected_updated_at).await {
-                Ok(()) => Ok(()),
-                Err(store::StoreError::Stale { expected, actual }) => {
-                    Err(BundleUpdateError::Stale { expected, actual })
-                }
-                Err(other) => Err(BundleUpdateError::Update(other.to_string())),
-            }
-        }
-    }
-}
-
-/// Forwarding impl for any reference to a `BundleUpdateSink`. Lets
-/// the daemon build `ReviewerDeps { store: &self.store, .. }` without
-/// cloning the `Store` (not `Clone`).
-impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for &B {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move { (*self).update(bundle, expected_updated_at).await }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Errors

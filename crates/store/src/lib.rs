@@ -6,10 +6,12 @@ mod bundles;
 mod error;
 mod plans;
 mod store;
+mod ticks;
 mod works;
 
-pub use bundles::BundlesStore;
+pub use bundles::{BundleUpdateError, BundleUpdateSink, BundlesStore};
 pub use error::StoreError;
 pub use plans::PlansStore;
 pub use store::{Store, TASKSTORE_SUBPATH};
+pub use ticks::TicksStore;
 pub use works::WorksStore;

@@ -191,6 +191,13 @@ fn map_store_error(err: StoreError) -> RpcError {
         StoreError::Stale { expected, actual } => {
             RpcError::InvalidRequest(format!("stale record: expected updated_at={expected}, actual={actual}"))
         }
+        StoreError::DuplicateTick {
+            tick_id,
+            plan_id,
+            bundles,
+        } => RpcError::InvalidRequest(format!(
+            "duplicate tick: existing tick_id={tick_id} for plan_id={plan_id} with bundles={bundles:?}"
+        )),
     }
 }
 

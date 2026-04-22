@@ -11,9 +11,10 @@ use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, Verdict, Work, WorkId};
 use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
 
+use store::{BundleUpdateError, BundleUpdateSink};
+
 use super::{
-    BundleUpdateError, BundleUpdateSink, ReviewerDeps, ReviewerError, parse_verdict, render_issue_summary,
-    run_reviewer, strip_commit_header, truncate_diff,
+    ReviewerDeps, ReviewerError, parse_verdict, render_issue_summary, run_reviewer, strip_commit_header, truncate_diff,
 };
 use crate::config::ReviewerConfig;
 

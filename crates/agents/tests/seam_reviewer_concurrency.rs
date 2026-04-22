@@ -14,11 +14,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Barrier;
 
-use agents::{BundleUpdateError, ReviewerConfig, ReviewerDeps, ReviewerError, run_reviewer};
+use agents::{ReviewerConfig, ReviewerDeps, ReviewerError, run_reviewer};
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, Role, Work};
 use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
-use store::Store;
+use store::{BundleUpdateError, Store};
 
 // Gated fake LLM: both tasks block on a shared barrier after entering
 // `complete_free`, then proceed together. This forces both tasks to

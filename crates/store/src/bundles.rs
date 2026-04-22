@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
@@ -107,6 +108,74 @@ impl<'a> BundlesStore<'a> {
         }
         self.inner.update(bundle).await?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `BundleUpdateSink` trait + impls
+//
+// The agent-side view of `BundlesStore::update`. Lives in `store` (not
+// `agents`) so that `integrator` can consume it without pulling `agents`
+// (which transitively pulls `llm`, breaking the integrator's Cargo-graph-
+// mechanical `llm`-free invariant). Relocated from `crates/agents/src/reviewer.rs`
+// per docs/design/2026-04-22-integrator.md; the Reviewer doc's design is
+// unchanged at the trait's shape, only its module path.
+// ---------------------------------------------------------------------------
+
+/// Minimal Bundle-update interface. Single-method trait so per-role
+/// test fakes stay tiny. Passes the OCC `expected_updated_at` snapshot
+/// the caller took before mutating its clone.
+#[allow(clippy::manual_async_fn)]
+pub trait BundleUpdateSink: Send + Sync {
+    fn update<'a>(
+        &'a self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BundleUpdateError {
+    #[error("bundle update failed: {0}")]
+    Update(String),
+    /// OCC version-check failure from the underlying store. Callers
+    /// are expected to match on this variant specifically (Reviewer
+    /// drops the losing Verdict silently; Integrator routes to retry).
+    #[error("stale bundle: expected updated_at={expected}, actual={actual}")]
+    Stale { expected: i64, actual: i64 },
+}
+
+/// Real `BundleUpdateSink` backed by `store::Store`. Delegates to
+/// `BundlesStore::update` which holds the intra-daemon OCC Mutex;
+/// `StoreError::Stale` is specifically preserved as
+/// `BundleUpdateError::Stale` so downstream matching works.
+impl BundleUpdateSink for crate::Store {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(
+        &'a self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
+        async move {
+            match self.bundles().update(bundle, expected_updated_at).await {
+                Ok(()) => Ok(()),
+                Err(StoreError::Stale { expected, actual }) => Err(BundleUpdateError::Stale { expected, actual }),
+                Err(other) => Err(BundleUpdateError::Update(other.to_string())),
+            }
+        }
+    }
+}
+
+/// Forwarding impl for any reference to a `BundleUpdateSink`. Lets
+/// callers build deps with a borrowed `Store` without cloning.
+impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for &B {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(
+        &'a self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
+        async move { (*self).update(bundle, expected_updated_at).await }
     }
 }
 

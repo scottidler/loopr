@@ -14,14 +14,11 @@ use std::sync::Mutex;
 
 use tempfile::TempDir;
 
-use agents::{
-    BundleUpdateSink, Deps, ImplementerConfig, ReviewerConfig, ReviewerDeps, ToolExecutor, run_implementer,
-    run_reviewer,
-};
+use agents::{Deps, ImplementerConfig, ReviewerConfig, ReviewerDeps, ToolExecutor, run_implementer, run_reviewer};
 use context::{InlineContextBuilder, StateSummary};
 use domain::{AcceptanceCriteria, BundleStatus, Role, Verdict, Work};
 use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
-use store::Store;
+use store::{BundleUpdateSink, Store};
 use worktree::Worktree;
 
 // ---------------------------------------------------------------------------

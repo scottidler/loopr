@@ -170,3 +170,45 @@ fn bundle_id_display_matches_as_ref() {
     let id = BundleId::new();
     assert_eq!(id.to_string(), id.as_ref());
 }
+
+#[test]
+fn tick_id_new_has_prefix() {
+    let id = TickId::new();
+    assert!(
+        id.as_ref().starts_with("tk-"),
+        "TickId::new should produce tk-prefixed id: {id}"
+    );
+    assert_eq!(TickId::prefix(), "tk");
+}
+
+#[test]
+fn tick_id_serde_roundtrip() {
+    let id = TickId::new();
+    let json = serde_json::to_string(&id).unwrap();
+    let back: TickId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, back);
+}
+
+#[test]
+fn tick_id_serde_wire_form_is_bare_string() {
+    let id = TickId::new();
+    let json = serde_json::to_string(&id).unwrap();
+    assert!(
+        json.starts_with('"') && json.ends_with('"'),
+        "expected bare JSON string, got: {json}"
+    );
+    assert!(!json.starts_with('['), "wire form must not be a JSON array: {json}");
+}
+
+#[test]
+fn tick_id_from_str_roundtrip() {
+    let original = "tk-k7m2p";
+    let id = TickId::from_str(original).unwrap();
+    assert_eq!(id.as_ref(), original);
+}
+
+#[test]
+fn tick_id_display_matches_as_ref() {
+    let id = TickId::new();
+    assert_eq!(id.to_string(), id.as_ref());
+}
