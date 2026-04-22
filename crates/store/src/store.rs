@@ -2,6 +2,7 @@ use std::path::Path;
 
 use taskstore_async::{AsyncStore, OpenOptions};
 
+use crate::bundles::BundlesStore;
 use crate::error::StoreError;
 use crate::plans::PlansStore;
 use crate::works::WorksStore;
@@ -42,6 +43,11 @@ impl Store {
     /// Typed accessor for Work records. Borrowed, zero-cost handle.
     pub fn works(&self) -> WorksStore<'_> {
         WorksStore::new(&self.inner)
+    }
+
+    /// Typed accessor for Bundle records. Borrowed, zero-cost handle.
+    pub fn bundles(&self) -> BundlesStore<'_> {
+        BundlesStore::new(&self.inner)
     }
 
     /// Graceful async shutdown. Drops the writer queue, awaits the writer

@@ -119,6 +119,7 @@ macro_rules! id_type {
 
 id_type!(PlanId, "pl");
 id_type!(WorkId, "wk");
+id_type!(BundleId, "bd");
 
 #[cfg(test)]
 mod tests;
