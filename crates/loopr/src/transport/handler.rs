@@ -188,6 +188,9 @@ fn map_store_error(err: StoreError) -> RpcError {
         StoreError::Io(msg) => RpcError::Internal(format!("store io: {msg}")),
         StoreError::Corruption(msg) => RpcError::Internal(format!("store corruption: {msg}")),
         StoreError::Serde(msg) => RpcError::Internal(format!("store serde: {msg}")),
+        StoreError::Stale { expected, actual } => {
+            RpcError::InvalidRequest(format!("stale record: expected updated_at={expected}, actual={actual}"))
+        }
     }
 }
 

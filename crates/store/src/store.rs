@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use taskstore_async::{AsyncStore, OpenOptions};
+use tokio::sync::Mutex;
 
 use crate::bundles::BundlesStore;
 use crate::error::StoreError;
@@ -16,6 +17,18 @@ pub const TASKSTORE_SUBPATH: &str = ".loopr/taskstore";
 
 pub struct Store {
     inner: AsyncStore,
+    /// Intra-daemon OCC serializer for `BundlesStore::update`. The
+    /// Bundle update path is (read-current, compare-updated_at,
+    /// write); the daemon can have multiple Reviewer tasks racing on
+    /// the same Bundle (Stage 8 wiring), so the read-check-write must
+    /// be atomic under one daemon. Cross-process protection is not in
+    /// scope (single-daemon-per-target by `.loopr/daemon.pid`).
+    ///
+    /// The lock lives on `Store` (not inside `BundlesStore<'a>`)
+    /// because `.bundles()` returns a fresh handle on each call; a
+    /// Mutex local to the handle would serialize nothing between two
+    /// `.bundles().update(...)` calls.
+    bundle_update_lock: Mutex<()>,
 }
 
 impl Store {
@@ -32,7 +45,10 @@ impl Store {
     pub async fn open(target: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = target.as_ref().join(TASKSTORE_SUBPATH);
         let inner = AsyncStore::open_at(path, OpenOptions::default()).await?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            bundle_update_lock: Mutex::new(()),
+        })
     }
 
     /// Typed accessor for Plan records. Borrowed, zero-cost handle.
@@ -46,8 +62,11 @@ impl Store {
     }
 
     /// Typed accessor for Bundle records. Borrowed, zero-cost handle.
+    /// The handle borrows the parent `Store`'s OCC mutex so
+    /// `update(bundle, expected_updated_at)` calls serialize across
+    /// all callers of the same `Store`, not just within one handle.
     pub fn bundles(&self) -> BundlesStore<'_> {
-        BundlesStore::new(&self.inner)
+        BundlesStore::new(&self.inner, &self.bundle_update_lock)
     }
 
     /// Graceful async shutdown. Drops the writer queue, awaits the writer

@@ -17,6 +17,13 @@ pub enum StoreError {
 
     #[error("serde failure at store boundary: {0}")]
     Serde(String),
+
+    /// OCC version-check failure. Raised by `BundlesStore::update` when
+    /// the Bundle on disk has a newer `updated_at` than the version the
+    /// caller snapshotted before mutating. The caller is expected to
+    /// re-fetch and decide whether to retry or drop the write.
+    #[error("stale record: expected updated_at={expected}, actual={actual}")]
+    Stale { expected: i64, actual: i64 },
 }
 
 impl From<taskstore_async::Error> for StoreError {

@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
+use tokio::sync::Mutex;
 
 use domain::{Bundle, BundleId, WorkId};
 
@@ -8,11 +9,12 @@ use crate::error::StoreError;
 
 pub struct BundlesStore<'a> {
     inner: &'a AsyncStore,
+    update_lock: &'a Mutex<()>,
 }
 
 impl<'a> BundlesStore<'a> {
-    pub(crate) fn new(inner: &'a AsyncStore) -> Self {
-        Self { inner }
+    pub(crate) fn new(inner: &'a AsyncStore, update_lock: &'a Mutex<()>) -> Self {
+        Self { inner, update_lock }
     }
 
     /// Persist a new Bundle. Errors with `AlreadyExists` if a bundle
@@ -62,4 +64,51 @@ impl<'a> BundlesStore<'a> {
         };
         Ok(self.inner.list::<Bundle>(&[filter]).await?)
     }
+
+    /// Persist a status / field change on an existing Bundle with
+    /// intra-daemon optimistic concurrency control.
+    ///
+    /// Sequence under the lock:
+    ///
+    /// 1. acquire `update_lock`,
+    /// 2. read the current Bundle by id; missing id -> `RecordNotFound`,
+    /// 3. compare the on-disk `updated_at` to `expected_updated_at`;
+    ///    mismatch -> `StoreError::Stale { expected, actual }`,
+    /// 4. write the new Bundle via `AsyncStore::update`,
+    /// 5. drop the lock.
+    ///
+    /// This closes the race where two Reviewer tasks in one daemon
+    /// both read a Bundle, both mutate (in memory), and both write:
+    /// the first winner commits, the second winner sees the updated
+    /// `updated_at` and returns `Stale` without clobbering the first
+    /// winner's `verification` + status.
+    ///
+    /// Cross-process OCC is not in scope. Loopr's threat model is
+    /// single-daemon-per-target (`.loopr/daemon.pid` lockfile) plus
+    /// never-push; multi-daemon or external-writer OCC would need an
+    /// upstream `taskstore-async::update_if` CAS primitive, which is
+    /// deferred.
+    pub async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), StoreError> {
+        let _guard = self.update_lock.lock().await;
+        let id_str = bundle.id.as_ref().to_string();
+        let current = self
+            .inner
+            .get::<Bundle>(&id_str)
+            .await?
+            .ok_or(StoreError::RecordNotFound {
+                collection: "bundles",
+                id: id_str,
+            })?;
+        if current.updated_at != expected_updated_at {
+            return Err(StoreError::Stale {
+                expected: expected_updated_at,
+                actual: current.updated_at,
+            });
+        }
+        self.inner.update(bundle).await?;
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+mod tests;
