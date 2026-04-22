@@ -1,22 +1,32 @@
 //! `InlineContextBuilder`: the Stage-7 `ContextBuilder` impl.
 //!
 //! Inline string rendering — no handlebars, no `.pmt` file loading.
-//! The three-layer template-override chain documented in
-//! `crates/context/CLAUDE.md` lands when there's a second call site
-//! that needs it. For now, one builder, one format, one code path.
+//!
+//! TODO(pmt-migration): The three-layer template-override chain
+//! documented in `crates/context/CLAUDE.md` (`.loopr/prompts/` ->
+//! `~/.config/loopr/prompts/` -> `include_dir!()`-baked defaults) plus
+//! handlebars-rust is the committed end state. It lands in a separate
+//! design doc (see the Open Questions section of
+//! `docs/design/2026-04-22-reviewer.md`). Both the Implementer's
+//! `render_system_prompt` constant and the Reviewer's
+//! `REVIEWER_SYSTEM_PROMPT` migrate together. Not forgotten.
 
 use std::fmt::Write;
 use std::path::Path;
 
-use domain::Work;
+use domain::{Bundle, Work};
 use tools::ToolSchema;
 
-use crate::{AssembledContext, ContextBuilder, ContextError, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
+use crate::reviewer::render_reviewer_user_message;
+use crate::{
+    AssembledContext, ContextBuilder, ContextError, ITERATION_SUMMARY_CAP, IterationSummary, REVIEWER_SYSTEM_PROMPT,
+    StateSummary,
+};
 
 /// Rough tokens-per-char estimate (English text averages ~4 chars
 /// per token; we use 4 as the divisor for a generous-side estimate
 /// that errs toward undercounting).
-const CHARS_PER_TOKEN: usize = 4;
+pub(crate) const CHARS_PER_TOKEN: usize = 4;
 
 /// Inline string-rendering `ContextBuilder`. Produces deterministic
 /// output; takes nothing from disk; thread-safe by being stateless.
@@ -41,6 +51,23 @@ impl ContextBuilder for InlineContextBuilder {
     ) -> Result<AssembledContext, ContextError> {
         let system_prompt = render_system_prompt(tool_schemas);
         let user_message = render_user_message(work, worktree_path, history, state, iteration);
+        let token_estimate = (system_prompt.len() + user_message.len()) / CHARS_PER_TOKEN;
+        Ok(AssembledContext {
+            system_prompt,
+            user_message,
+            token_estimate,
+        })
+    }
+
+    fn build_for_reviewer(
+        &self,
+        bundle: &Bundle,
+        work: &Work,
+        diff: &str,
+        noop_files: Option<&[(String, String)]>,
+    ) -> Result<AssembledContext, ContextError> {
+        let system_prompt = REVIEWER_SYSTEM_PROMPT.to_string();
+        let user_message = render_reviewer_user_message(bundle, work, diff, noop_files);
         let token_estimate = (system_prompt.len() + user_message.len()) / CHARS_PER_TOKEN;
         Ok(AssembledContext {
             system_prompt,

@@ -11,12 +11,14 @@
 //! whichever LLM backend is in use.
 
 mod implementer;
+mod reviewer;
 
 pub use implementer::InlineContextBuilder;
+pub use reviewer::REVIEWER_SYSTEM_PROMPT;
 
 use std::path::Path;
 
-use domain::Work;
+use domain::{Bundle, Work};
 use tools::ToolSchema;
 
 /// The output of a successful context assembly. Ready to hand to
@@ -56,9 +58,9 @@ pub enum ContextError {
     Assembly(String),
 }
 
-/// Single entry point for prompt assembly. One method per role/stage
-/// (Stage 7 ships the Implementer method; Reviewer/Director land
-/// in Stage 8+ without re-shaping the trait).
+/// Single entry point for prompt assembly. One method per role/stage.
+/// Stage 7 added `build_for_implementer`; Stage 8 (this trait
+/// extension) adds `build_for_reviewer`.
 pub trait ContextBuilder: Send + Sync {
     /// Assemble the Implementer's system + user prompts for one
     /// iteration. `tool_schemas` comes from `tools::ToolSchema`
@@ -73,6 +75,23 @@ pub trait ContextBuilder: Send + Sync {
         history: &[IterationSummary],
         state: &StateSummary,
         iteration: u32,
+    ) -> Result<AssembledContext, ContextError>;
+
+    /// Assemble the Reviewer's system + user prompts for a single
+    /// turn. `diff: &str` is pre-extracted (header stripped,
+    /// truncated); `noop_files: Option<&[(String, String)]>` is
+    /// pre-read for noop Bundles with aggregate + per-file caps
+    /// already applied. `None` renders the `Diff` section; `Some`
+    /// renders the `File Contents` section. No I/O happens here
+    /// (per `context/CLAUDE.md`'s pure-prompt-assembly rule); all
+    /// git-show and file-read calls live upstream in
+    /// `agents::reviewer`.
+    fn build_for_reviewer(
+        &self,
+        bundle: &Bundle,
+        work: &Work,
+        diff: &str,
+        noop_files: Option<&[(String, String)]>,
     ) -> Result<AssembledContext, ContextError>;
 }
 
@@ -90,5 +109,15 @@ impl<C: ContextBuilder + ?Sized> ContextBuilder for std::sync::Arc<C> {
         iteration: u32,
     ) -> Result<AssembledContext, ContextError> {
         (**self).build_for_implementer(work, worktree_path, tool_schemas, history, state, iteration)
+    }
+
+    fn build_for_reviewer(
+        &self,
+        bundle: &Bundle,
+        work: &Work,
+        diff: &str,
+        noop_files: Option<&[(String, String)]>,
+    ) -> Result<AssembledContext, ContextError> {
+        (**self).build_for_reviewer(bundle, work, diff, noop_files)
     }
 }
