@@ -5,6 +5,8 @@
 //! that by adding an arm for `Method::PlanCreate`; the exhaustive match
 //! is the mechanism that forces the pair.
 
+use std::sync::Arc;
+
 use tracing::{info, warn};
 
 use ipc::{
@@ -28,7 +30,7 @@ pub enum HandshakeState {
 /// Dispatch a single request to the correct handler. Returns the
 /// `DaemonResponse` to be sent back on the wire. Does not perform I/O
 /// beyond reading `ctx` fields and allocating the response.
-pub async fn dispatch(req: &DaemonRequest, state: &mut HandshakeState, ctx: &DaemonContext) -> DaemonResponse {
+pub async fn dispatch(req: &DaemonRequest, state: &mut HandshakeState, ctx: &Arc<DaemonContext>) -> DaemonResponse {
     let method = match Method::try_from(req) {
         Ok(m) => m,
         Err(rpc_err) => {
@@ -89,7 +91,7 @@ fn handle_handshake(id: u64, params: HandshakeParams, state: &mut HandshakeState
     }
 }
 
-fn handle_status(id: u64, ctx: &DaemonContext) -> DaemonResponse {
+fn handle_status(id: u64, ctx: &Arc<DaemonContext>) -> DaemonResponse {
     // Stage 4 has no records to count; active_plans / active_works are
     // hardcoded zeros. Stage 5+ reads from taskstore via a new dep.
     let result = StatusResult {
@@ -104,7 +106,7 @@ fn handle_status(id: u64, ctx: &DaemonContext) -> DaemonResponse {
     }
 }
 
-async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &DaemonContext) -> DaemonResponse {
+async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &Arc<DaemonContext>) -> DaemonResponse {
     let plan = domain::Plan::new(params.goal);
     let plan_snapshot = plan.clone();
     if let Err(e) = ctx.store.plans().create(plan.clone()).await {
@@ -119,9 +121,18 @@ async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &DaemonConte
     match decomposer::decompose(&plan_snapshot, &ctx.target, &*ctx.llm).await {
         Ok(works) => {
             let count = works.len();
-            match ctx.store.works().create_many(works).await {
+            match ctx.store.works().create_many(works.clone()).await {
                 Ok(ids) => {
-                    info!(request_id = id, plan_id = %plan_snapshot.id, work_count = count, ids = ?ids, "plan.create decomposed + persisted")
+                    info!(request_id = id, plan_id = %plan_snapshot.id, work_count = count, ids = ?ids, "plan.create decomposed + persisted");
+                    // Stage 7 wiring: spawn one Implementer task per Work
+                    // into the daemon-owned JoinSet. The JoinSet is
+                    // drained at shutdown (see daemon_main) before
+                    // Arc::try_unwrap on DaemonContext reclaims the Store.
+                    let mut tasks = ctx.implementer_tasks.lock().await;
+                    for work in works {
+                        let task_ctx = Arc::clone(ctx);
+                        tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                    }
                 }
                 Err(e) => warn!(
                     request_id = id,
@@ -148,7 +159,7 @@ async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &DaemonConte
     }
 }
 
-async fn handle_plan_list(id: u64, ctx: &DaemonContext) -> DaemonResponse {
+async fn handle_plan_list(id: u64, ctx: &Arc<DaemonContext>) -> DaemonResponse {
     match ctx.store.plans().list().await {
         Ok(plans) => {
             let result = PlanListResult { plans };

@@ -54,6 +54,39 @@ pub const DAEMON_VERSION: &str = env!("GIT_DESCRIBE");
 /// observes the watcher's `Arc<DaemonContext>` clone as already-dropped.
 pub const WATCHER_JOIN_TIMEOUT_SECS: u64 = 2;
 
+/// Soft timeout for draining in-flight Implementer tasks at shutdown.
+/// Tasks still running after this are `abort_all`'d so the daemon can
+/// reach `Arc::try_unwrap(ctx)`. Chosen to be long enough that typical
+/// implementer iterations (LLM call ~ a few seconds, tool call ~ sub-
+/// second) can complete, short enough that an unresponsive daemon can
+/// still be terminated in bounded time.
+pub const IMPLEMENTER_DRAIN_TIMEOUT_SECS: u64 = 30;
+
+/// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
+/// budget. On timeout, `abort_all()` remaining tasks — their
+/// `Arc<DaemonContext>` clones release as the abort handles fire.
+async fn drain_implementer_tasks(ctx: &Arc<DaemonContext>) {
+    let mut tasks = ctx.implementer_tasks.lock().await;
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len();
+    tracing::info!(count = n, "draining implementer tasks");
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(IMPLEMENTER_DRAIN_TIMEOUT_SECS), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_secs = IMPLEMENTER_DRAIN_TIMEOUT_SECS,
+            remaining = tasks.len(),
+            "implementer task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
 /// Unconditional parent-side entry: fork a daemon, wait (briefly) for its
 /// socket to appear, return. Invoked by `loopr daemon start` (background
 /// mode) and by `ensure_daemon_if_needed` when it decides a fork is needed.
@@ -332,6 +365,13 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // per-connection handlers and drain it before returning (see
     // `crate::transport::server::accept_loop`).
     let accept_result = crate::transport::server::accept_loop(listener, ctx.clone()).await;
+
+    // Stage 7 wiring: drain in-flight Implementer tasks. Each task holds
+    // an `Arc<DaemonContext>` clone (the `self: Arc<Self>` parameter of
+    // `spawn_implementer_for_work`); they MUST complete before
+    // `Arc::try_unwrap` below, or the Store falls back to its sync
+    // Drop which can panic on the tokio runtime.
+    drain_implementer_tasks(&ctx).await;
 
     // Wait for the signal watcher to finish so its `Arc<DaemonContext>`
     // clone drops. Bounded by WATCHER_JOIN_TIMEOUT_SECS in case the
