@@ -305,3 +305,63 @@ fn parse_numstat_empty_input() {
     use super::parse_numstat;
     assert_eq!(parse_numstat(""), 0);
 }
+
+// ---------------------------------------------------------------
+// RealTools seam tests (Stage 7 wiring doc, Phase 1)
+// ---------------------------------------------------------------
+
+use std::sync::Arc;
+
+use tools::{BashDenylist, LaneRouter, SandboxMode};
+
+use crate::dispatch::RealTools;
+
+fn make_real_tools() -> RealTools {
+    let router = Arc::new(LaneRouter::new(SandboxMode::Off).expect("router init"));
+    let denylist = Arc::new(BashDenylist::with_base());
+    RealTools::new(router, SandboxMode::Off, denylist, vec![], None)
+}
+
+#[tokio::test]
+async fn real_tools_read_returns_file_contents_as_json() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("hello.txt");
+    std::fs::write(&file_path, "hello world\n").unwrap();
+
+    let rt = make_real_tools();
+    let input = json!({ "path": "hello.txt" });
+    let output = rt.execute("read", &input, dir.path()).await.unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_str(&output).expect("output is JSON");
+    let content = parsed.get("content").and_then(|v| v.as_str()).unwrap();
+    // Read tool prepends line numbers cat-n style; assert the source text is present.
+    assert!(
+        content.contains("hello world"),
+        "content missing source text: {content:?}"
+    );
+    let lines_total = parsed.get("lines_total").and_then(|v| v.as_u64()).unwrap();
+    assert_eq!(lines_total, 1);
+}
+
+#[tokio::test]
+async fn real_tools_read_missing_file_returns_error() {
+    let dir = TempDir::new().unwrap();
+    let rt = make_real_tools();
+    let input = json!({ "path": "does-not-exist.txt" });
+    let result = rt.execute("read", &input, dir.path()).await;
+    match result {
+        Err(DispatchError::Tool(msg)) => {
+            assert!(!msg.is_empty(), "error message should be populated");
+        }
+        other => panic!("expected Err(DispatchError::Tool), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn real_tools_unknown_tool_name_returns_error() {
+    let dir = TempDir::new().unwrap();
+    let rt = make_real_tools();
+    let input = json!({});
+    let result = rt.execute("not-a-real-tool", &input, dir.path()).await;
+    assert!(matches!(result, Err(DispatchError::Tool(_))));
+}

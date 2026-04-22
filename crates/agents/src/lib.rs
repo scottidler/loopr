@@ -10,7 +10,7 @@ mod parse;
 
 pub use action::AgentAction;
 pub use config::ImplementerConfig;
-pub use dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action};
+pub use dispatch::{ActionResult, DispatchError, RealTools, ToolExecutor, dispatch_action};
 pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
 pub use lifeguard::{Lifeguard, Verdict, canonical_hash};
 pub use parse::{ParseError, parse_actions, parse_one};

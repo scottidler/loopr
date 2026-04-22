@@ -10,13 +10,15 @@
 //! testable without a full taskstore.
 
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use tokio::process::Command;
 use tracing::{debug, warn};
 
 use domain::Bundle;
+use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::Worktree;
 
 use crate::action::AgentAction;
@@ -255,6 +257,66 @@ async fn run_git(path: &Path, args: &[&str]) -> Result<(), DispatchError> {
         )));
     }
     Ok(())
+}
+
+/// Production implementation of `ToolExecutor`. Thin adapter: builds a
+/// `tools::ToolContext` per invocation and forwards to `tools::dispatch`.
+/// All shared state (router, sandbox posture, denylist) is Arc'd in from
+/// the owning `DaemonContext`.
+///
+/// Per-Work instance: each Work's implementer gets its own `RealTools`
+/// with that Work's `persist_base` so overflow-output files land under
+/// `.loopr/runs/<run-id>/work/<work-id>/`.
+pub struct RealTools {
+    router: Arc<LaneRouter>,
+    sandbox: SandboxMode,
+    bash_denylist: Arc<BashDenylist>,
+    path_deny_patterns: Vec<String>,
+    persist_base: Option<PathBuf>,
+}
+
+impl RealTools {
+    pub fn new(
+        router: Arc<LaneRouter>,
+        sandbox: SandboxMode,
+        bash_denylist: Arc<BashDenylist>,
+        path_deny_patterns: Vec<String>,
+        persist_base: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            router,
+            sandbox,
+            bash_denylist,
+            path_deny_patterns,
+            persist_base,
+        }
+    }
+}
+
+impl ToolExecutor for RealTools {
+    #[allow(clippy::manual_async_fn)]
+    fn execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        input: &'a serde_json::Value,
+        working_dir: &'a Path,
+    ) -> impl Future<Output = Result<String, DispatchError>> + Send + 'a {
+        async move {
+            let ctx = ToolContext {
+                working_dir: working_dir.to_path_buf(),
+                router: self.router.clone(),
+                sandbox: self.sandbox,
+                path_deny_patterns: self.path_deny_patterns.clone(),
+                bash_denylist: self.bash_denylist.clone(),
+                persist_base: self.persist_base.clone(),
+                invocation_id: Some(uuid::Uuid::now_v7()),
+            };
+            let value = tools::dispatch(tool_name, input.clone(), &ctx)
+                .await
+                .map_err(|e| DispatchError::Tool(e.to_string()))?;
+            Ok(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
+        }
+    }
 }
 
 #[cfg(test)]
