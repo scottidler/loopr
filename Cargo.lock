@@ -9,8 +9,14 @@ dependencies = [
  "context",
  "domain",
  "llm",
+ "serde",
+ "serde_json",
  "store",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
  "tools",
+ "tracing",
  "worktree",
 ]
 

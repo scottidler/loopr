@@ -28,6 +28,7 @@ pub struct Worktree {
     work_id: WorkId,
     seq: u32,
     repo_path: PathBuf,
+    base_sha: String,
     consumed: bool,
 }
 
@@ -46,6 +47,13 @@ impl Worktree {
 
     pub fn seq(&self) -> u32 {
         self.seq
+    }
+
+    /// The commit SHA the worktree was branched from. Preserved for
+    /// downstream diff operations (e.g., Implementer's
+    /// `loc_changed = git diff --numstat <base_sha>..HEAD`).
+    pub fn base_sha(&self) -> &str {
+        &self.base_sha
     }
 
     /// Explicit cleanup. Removes the worktree (`git worktree remove --force`)
@@ -92,6 +100,7 @@ impl Worktree {
                         work_id,
                         seq,
                         repo_path: repo_path.to_path_buf(),
+                        base_sha: base_sha.to_string(),
                         consumed: false,
                     });
                 }
@@ -122,6 +131,7 @@ impl Worktree {
             work_id,
             seq,
             repo_path,
+            base_sha: String::new(),
             consumed,
         }
     }

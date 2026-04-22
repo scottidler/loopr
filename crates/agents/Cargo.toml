@@ -13,3 +13,11 @@ llm = { path = "../llm" }
 tools = { path = "../tools" }
 worktree = { path = "../worktree" }
 context = { path = "../context" }
+serde_json.workspace = true
+tracing.workspace = true
+thiserror = "2.0.18"
+serde = { workspace = true, features = ["derive"] }
+tokio = { version = "1.52.1", features = ["process", "fs", "macros", "rt"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
