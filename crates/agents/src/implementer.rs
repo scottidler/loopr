@@ -28,7 +28,7 @@ use worktree::Worktree;
 
 use crate::config::ImplementerConfig;
 use crate::dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action};
-use crate::lifeguard::{Lifeguard, Verdict};
+use crate::lifeguard::{Decision, Lifeguard};
 use crate::parse::{parse_actions, parse_one};
 
 /// Minimal store-write interface. Abstracting just the
@@ -156,7 +156,7 @@ where
                     )));
                     let requeries_used = (messages.len() - 1) / 2;
                     if requeries_used as u32 >= deps.config.max_requeries {
-                        if let Verdict::Escalate(reason) = lifeguard.record_parse_failure() {
+                        if let Decision::Escalate(reason) = lifeguard.record_parse_failure() {
                             return Err(ImplementerError::EscalationNeeded(reason));
                         }
                         break Vec::new();
@@ -178,7 +178,7 @@ where
         let mut summaries: Vec<String> = Vec::new();
         let mut broke_loop = false;
         for action in actions {
-            if let Verdict::Escalate(reason) = lifeguard.check_action(&action) {
+            if let Decision::Escalate(reason) = lifeguard.check_action(&action) {
                 return Err(ImplementerError::EscalationNeeded(reason));
             }
             let result = dispatch_action(action.clone(), worktree, &deps.tools).await?;

@@ -1,9 +1,8 @@
-//! `ImplementerConfig`: flat knob bag for the Implementer loop.
+//! Agent-role configs.
 //!
-//! One struct, no trait, no nested substructs. The design doc
-//! alternative (`RetryStrategy` trait with `MaxAttemptsRetry` as the
-//! default impl) was rejected: one concrete shape, no runtime-swap
-//! point, no reason for the indirection.
+//! `ImplementerConfig` (Stage 7) and `ReviewerConfig` (Stage 8) live
+//! side by side; `AgentsConfig` composes both. Flat knob bags, no
+//! trait, no nested substructs.
 
 #[derive(Debug, Clone)]
 pub struct ImplementerConfig {
@@ -45,4 +44,43 @@ impl Default for ImplementerConfig {
             max_force_propose_file_size_bytes: 10 * 1024 * 1024,
         }
     }
+}
+
+/// Knob bag for the Reviewer agent. One LLM turn per invocation with
+/// a bounded parse-retry sub-loop; no outer iterations, so there is
+/// no `max_iterations` analog.
+#[derive(Debug, Clone)]
+pub struct ReviewerConfig {
+    /// Maximum LLM re-prompts within the parse-retry sub-loop for a
+    /// single `run_reviewer` invocation. Strict-greater-than check:
+    /// the first call is "free"; the (N+1)th parse failure triggers
+    /// escalation. Default 3 -> up to 4 total completions.
+    pub max_requeries: u32,
+    /// Maximum aggregate bytes of diff content rendered into the user
+    /// message. Larger diffs are truncated with an explicit marker;
+    /// the prompt guides the LLM to prefer `change_requested` when
+    /// the visible portion alone doesn't demonstrate the AC are met.
+    pub diff_byte_cap: usize,
+    /// Maximum aggregate bytes of file-content rendered for noop
+    /// bundles across ALL files in `bundle.paths`. Per-file cap is
+    /// `noop_files_byte_cap / paths.len().max(1)`, floor 2048.
+    pub noop_files_byte_cap: usize,
+}
+
+impl Default for ReviewerConfig {
+    fn default() -> Self {
+        Self {
+            max_requeries: 3,
+            diff_byte_cap: 64 * 1024,
+            noop_files_byte_cap: 64 * 1024,
+        }
+    }
+}
+
+/// Composes every role-level agent config. The top-level loopr
+/// `Config` embeds `agents: AgentsConfig`.
+#[derive(Debug, Clone, Default)]
+pub struct AgentsConfig {
+    pub implementer: ImplementerConfig,
+    pub reviewer: ReviewerConfig,
 }

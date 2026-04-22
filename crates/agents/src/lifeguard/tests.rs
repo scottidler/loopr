@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use super::{Lifeguard, Verdict, canonical_hash};
+use super::{Decision, Lifeguard, canonical_hash};
 use crate::action::AgentAction;
 
 fn bash_action(command: &str) -> AgentAction {
@@ -16,41 +16,41 @@ fn bash_action(command: &str) -> AgentAction {
 fn single_action_does_not_escalate() {
     let mut lg = Lifeguard::new(3, 5);
     let a = AgentAction::Done { message: "ok".into() };
-    assert!(matches!(lg.check_action(&a), Verdict::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
 }
 
 #[test]
 fn repeated_action_escalates_after_max_repeat() {
     let mut lg = Lifeguard::new(3, 5);
     let a = bash_action("ls");
-    assert!(matches!(lg.check_action(&a), Verdict::Continue));
-    assert!(matches!(lg.check_action(&a), Verdict::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
     // Third occurrence trips max_repeat=3.
     match lg.check_action(&a) {
-        Verdict::Escalate(reason) => assert!(reason.contains("repeated 3 times")),
-        Verdict::Continue => panic!("expected escalate at 3rd occurrence"),
+        Decision::Escalate(reason) => assert!(reason.contains("repeated 3 times")),
+        Decision::Continue => panic!("expected escalate at 3rd occurrence"),
     }
 }
 
 #[test]
 fn different_actions_do_not_escalate() {
     let mut lg = Lifeguard::new(3, 5);
-    assert!(matches!(lg.check_action(&bash_action("ls")), Verdict::Continue));
-    assert!(matches!(lg.check_action(&bash_action("pwd")), Verdict::Continue));
-    assert!(matches!(lg.check_action(&bash_action("echo")), Verdict::Continue));
+    assert!(matches!(lg.check_action(&bash_action("ls")), Decision::Continue));
+    assert!(matches!(lg.check_action(&bash_action("pwd")), Decision::Continue));
+    assert!(matches!(lg.check_action(&bash_action("echo")), Decision::Continue));
     // Even though we hit 3 total actions, each is unique; no escalation.
 }
 
 #[test]
 fn parse_failure_escalates_at_max() {
     let mut lg = Lifeguard::new(3, 5);
-    assert!(matches!(lg.record_parse_failure(), Verdict::Continue));
-    assert!(matches!(lg.record_parse_failure(), Verdict::Continue));
-    assert!(matches!(lg.record_parse_failure(), Verdict::Continue));
-    assert!(matches!(lg.record_parse_failure(), Verdict::Continue));
+    assert!(matches!(lg.record_parse_failure(), Decision::Continue));
+    assert!(matches!(lg.record_parse_failure(), Decision::Continue));
+    assert!(matches!(lg.record_parse_failure(), Decision::Continue));
+    assert!(matches!(lg.record_parse_failure(), Decision::Continue));
     match lg.record_parse_failure() {
-        Verdict::Escalate(reason) => assert!(reason.contains("5 consecutive")),
-        Verdict::Continue => panic!("expected escalate on 5th parse failure"),
+        Decision::Escalate(reason) => assert!(reason.contains("5 consecutive")),
+        Decision::Continue => panic!("expected escalate on 5th parse failure"),
     }
 }
 
@@ -63,10 +63,10 @@ fn reset_parse_failures_clears_counter() {
     lg.reset_parse_failures();
     // After reset, we need 5 more failures to escalate.
     for _ in 0..4 {
-        assert!(matches!(lg.record_parse_failure(), Verdict::Continue));
+        assert!(matches!(lg.record_parse_failure(), Decision::Continue));
     }
     // 5th after reset should escalate.
-    assert!(matches!(lg.record_parse_failure(), Verdict::Escalate(_)));
+    assert!(matches!(lg.record_parse_failure(), Decision::Escalate(_)));
 }
 
 // ---------------------------------------------------------------------------
@@ -148,10 +148,10 @@ fn repeated_action_dedup_works_across_key_reorderings() {
         tool: "bash".into(),
         input: json!({ "command": "ls", "timeout": 30 }),
     };
-    assert!(matches!(lg.check_action(&a), Verdict::Continue));
-    assert!(matches!(lg.check_action(&b), Verdict::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(matches!(lg.check_action(&b), Decision::Continue));
     match lg.check_action(&c) {
-        Verdict::Escalate(_) => {}
-        Verdict::Continue => panic!("expected escalate: a/b/c differ only in key order"),
+        Decision::Escalate(_) => {}
+        Decision::Continue => panic!("expected escalate: a/b/c differ only in key order"),
     }
 }

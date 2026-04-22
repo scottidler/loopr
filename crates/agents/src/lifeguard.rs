@@ -31,7 +31,7 @@ use serde_json::Value;
 use crate::action::AgentAction;
 
 #[derive(Debug, Clone)]
-pub enum Verdict {
+pub enum Decision {
     Continue,
     Escalate(String),
 }
@@ -59,34 +59,34 @@ impl Lifeguard {
     /// this is the same hash as the last recorded action and the
     /// count has hit `max_repeat`, return Escalate. Otherwise
     /// Continue.
-    pub fn check_action(&mut self, action: &AgentAction) -> Verdict {
+    pub fn check_action(&mut self, action: &AgentAction) -> Decision {
         let hash = canonical_hash(action);
         let count = self.action_counts.entry(hash).or_insert(0);
         *count += 1;
         let my_count = *count;
         self.last_hash = Some(hash);
         if my_count >= self.max_repeat {
-            return Verdict::Escalate(format!(
+            return Decision::Escalate(format!(
                 "same action repeated {my_count} times (max_repeat={})",
                 self.max_repeat
             ));
         }
-        Verdict::Continue
+        Decision::Continue
     }
 
     /// Called when the self-correction sub-loop exhausts its
     /// requery budget without producing a parseable response.
     /// Returns Escalate once `max_parse_failures` consecutive
     /// iterations have done so.
-    pub fn record_parse_failure(&mut self) -> Verdict {
+    pub fn record_parse_failure(&mut self) -> Decision {
         self.consecutive_parse_failures += 1;
         if self.consecutive_parse_failures >= self.max_parse_failures {
-            Verdict::Escalate(format!(
+            Decision::Escalate(format!(
                 "LLM produced unparseable output for {} consecutive iterations (max_parse_failures={})",
                 self.consecutive_parse_failures, self.max_parse_failures
             ))
         } else {
-            Verdict::Continue
+            Decision::Continue
         }
     }
 
