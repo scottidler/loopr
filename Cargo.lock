@@ -3427,8 +3427,14 @@ dependencies = [
 name = "worktree"
 version = "0.5.22"
 dependencies = [
+ "clap",
  "domain",
+ "serde",
+ "serde_yaml",
  "telemetry",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

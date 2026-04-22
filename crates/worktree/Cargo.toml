@@ -7,5 +7,13 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
 domain = { path = "../domain" }
+serde = { workspace = true, features = ["derive"] }
 telemetry = { path = "../telemetry" }
+thiserror = "2.0.18"
+tracing.workspace = true
+
+[dev-dependencies]
+serde_yaml.workspace = true
+tempfile = "3.27.0"

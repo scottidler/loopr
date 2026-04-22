@@ -128,13 +128,17 @@ The subprocess and capability layer. Tools are agent-callable capabilities with 
 
 ### worktree
 
-Sibling git worktree lifecycle and crash-safe registry.
+Flat-interior per-attempt git worktree lifecycle. Infrastructure-only: exposes primitives, does not orchestrate Work-state transitions.
 
-- `Worktree::create(target, work_id) -> Result<Worktree>` — provisions `<target-parent>/<target-name>-work-<work-id>/` on branch `loopr/wk-<work-id>`.
-- `Drop` cleans up on the happy path.
-- `.loopr/worktree-registry.jsonl` — append on create, mark terminal on cleanup.
-- `reconcile(target) -> Result<()>` — daemon-startup routine: reads registry, checks each entry against git state, removes orphaned worktrees, deletes orphaned `loopr/wk-*` branches. Required because `Drop` does not execute on SIGTERM / SIGKILL / power loss.
-- Internal git invocations via `std::process::Command` directly; `worktree` does NOT go through the `tools` crate (infrastructure, not an LLM-facing tool).
+- `Worktree::create(repo_path, worktree_root, work_id, base_sha) -> Result<Worktree>` — provisions `<target>/.loopr/worktrees/<work-id>-<seq>/` on branch `loopr/wk-<work-id>-<seq>`. `seq` is allocated internally via EEXIST-retry using git's own "already exists" stderr phrases (with `LC_ALL=C` forced for locale stability).
+- `Worktree::cleanup(self)` — explicit cleanup: removes the worktree, **keeps the branch** (integrator still needs it to merge). `Drop` is a crash-safety net only; routine cleanup uses explicit `.cleanup()` inside `tokio::task::spawn_blocking` so the synchronous `git worktree remove` doesn't starve the tokio executor.
+- `worktree::delete_branch(repo_path, branch)` — integrator calls after a Tick publishes; idempotent on missing.
+- `worktree::list(repo_path, worktree_root)`, `parse_branch(branch) -> Option<(WorkId, u32)>`, `cleanup_at(repo_path, path)`, `ensure_loopr_excludes(repo_path)` — primitives consumed by the `loopr`-binary reconcile routine.
+- `AttemptCleanupPolicy` enum — `Immediate`/`OnWorkTerminal`/`OnRunEnd`/`Never`, default `OnWorkTerminal`. Exposed via `.loopr/config.yml` + ENV + CLI.
+- Internal git invocations via `std::process::Command` directly; `worktree` does NOT go through the `tools` crate (infrastructure, not an LLM-facing tool). **No registry file** — git's own worktree registry (`git worktree list --porcelain`) + the `loopr/wk-*` branch prefix + TaskStore is a complete, race-free reconcile path.
+- **Reconcile is NOT in this crate.** Crash recovery lives in the `loopr` binary (`loopr::daemon::startup::reconcile`) because it requires joining git state with TaskStore + `Work`-FSM mutations; `worktree` stays infrastructure-only. See "Worktree crash recovery" below.
+
+Amended 2026-04-21 (a1/a2/a3/a4/a5); see Amendments section and `docs/design/2026-04-21-worktree-lifecycle.md` for the full rationale.
 
 ### decomposer
 
@@ -288,9 +292,10 @@ Loopr operates on **other** repos, not on itself. When pointed at a target, it m
 │   ├── config.yml                per-repo loopr overrides (local only, NOT committed)
 │   ├── socket                    Unix domain socket for daemon<->client IPC (NOT committed)
 │   ├── daemon.pid                PID lockfile, one daemon per target (NOT committed)
-│   └── worktree-registry.jsonl   list of active agent worktrees (NOT committed)
-├── .gitattributes                committed; sets taskstore merge driver on .loopr/taskstore/*.jsonl
-└── (sibling worktrees outside the target, not inside .loopr/)
+│   └── worktrees/                per-attempt agent worktrees (NOT committed; <work-id>-<seq>)
+│       ├── wi-042-1/             first attempt for wi-042 (branch loopr/wk-wi-042-1)
+│       └── wi-042-2/             second attempt (first was rejected)
+└── .gitattributes                committed; sets taskstore merge driver on .loopr/taskstore/*.jsonl
 ```
 
 Commit boundary runs **inside** `.loopr/`: `taskstore/` is committed (truth), everything else under `.loopr/` is transient and excluded via `.git/info/exclude`. The excludes pattern keeps `.loopr/taskstore/` in git while ignoring `.loopr/runs/`, `.loopr/socket`, `.loopr/daemon.pid`, etc.
@@ -299,19 +304,24 @@ Commit boundary runs **inside** `.loopr/`: `taskstore/` is committed (truth), ev
 
 - **One top-level folder to reason about.** Every loopr-created file lives under a single `.loopr/` at the target root. Grep, ignore rules, permissions, and tab-completion all benefit.
 - **`.loopr/taskstore/`** holds the truth (Plan/Spec/Phase/Work/Bundle/Tick records as JSONL). Committed so collaborators share state; taskstore's git merge driver resolves concurrent edits by timestamp.
-- **Transient siblings under `.loopr/`** (logs, socket, pid, config, worktree registry) are ephemeral, machine-local, never committed. The target's `.git/info/exclude` carries the ignore patterns rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`.
-- **Sibling worktrees** (v3/v4 pattern) live outside the target repo entirely, typically at `<target-parent>/<target-name>-work-<work-id>/`. Git's ignore rules inside the worktree don't accidentally exclude files the agent writes. Only a registry of active worktrees lives inside `.loopr/`.
+- **Transient siblings under `.loopr/`** (logs, socket, pid, config, per-attempt worktrees) are ephemeral, machine-local, never committed. The target's `.git/info/exclude` carries the ignore patterns rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`. Patterns: `.loopr/runs/`, `.loopr/worktrees/`, `.loopr/socket`, `.loopr/daemon.pid`, `.loopr/config.yml`.
+- **Per-attempt worktrees** (amended 2026-04-21; see a1 below) live at `.loopr/worktrees/<work-id>-<seq>/` — flat, inside the target, with a unique path-basename per attempt. Flat (not nested under `runs/<run-id>/`) because `git worktree add` derives the `$GIT_DIR/worktrees/<name>/` internal-registry folder name from the path basename; duplicate basenames don't hard-collide but trigger non-deterministic git-internal auto-suffixing that breaks reverse-mapping to our domain IDs. Provenance (which run created an attempt) is carried on the `Work` record in TaskStore, not in the filesystem path.
 - **Upstream enablement.** `taskstore 0.5.0` split `open` into `open()` (default `$CWD/.taskstore/`) and `open_at(path, opts)` (exact path). The nested layout is consumer-controlled; `store::Store::open` passes `<target>/.loopr/taskstore/` to `open_at`.
 
 ### Worktree crash recovery
 
-`Drop` guards clean up worktrees on the happy path but do not execute on SIGTERM, SIGKILL, or power loss. `worktree::reconcile(target)` runs at daemon startup and handles ungraceful shutdown:
+`Drop` guards clean up worktrees on the happy path but do not execute on SIGTERM, SIGKILL, or power loss. `loopr::daemon::startup::reconcile(target, store, live_sessions)` runs at daemon startup — **in the `loopr` binary, not in the `worktree` crate** (amended 2026-04-21, a3; the join between git state and Work-FSM transitions is orchestration, and `worktree` stays infrastructure-only). The routine:
 
-1. Read `.loopr/worktree-registry.jsonl`.
-2. For each entry, inspect git state: does the `loopr/wk-<work-id>` branch exist? Is the worktree path present on disk? Is the associated `Work` record in a terminal state in the TaskStore?
-3. For entries whose `Work` is terminal (done or abandoned) but whose worktree still exists: remove the worktree (`git worktree remove`) and delete the branch (`git branch -D loopr/wk-<id>`). Mark the registry entry terminal.
-4. For entries whose `Work` is still non-terminal but was in flight when the daemon died: mark the `Work` record as `FailureReason::CrashInterrupted`, decide per retry strategy whether to retry with a fresh worktree or abandon.
-5. Orphaned `loopr/wk-*` branches not in the registry (manual cleanup failures, registry corruption) are reported but not deleted automatically; human resolves.
+1. `worktree::list(target, target.join(".loopr/worktrees"))` → `Vec<WorktreeInfo>` from `git worktree list --porcelain`, filtered by path prefix.
+2. For each entry: `parse_branch(&info.branch)` → `(work_id, seq)` or skip (not a `loopr/wk-*` branch).
+3. Join with TaskStore: `store.get_work(&work_id)` → `Some(work)` or log orphan and skip. Join with the daemon's in-memory `LiveSessions` map to check whether a coordinator is actively handling this `work_id`.
+4. Dispose:
+   - Work is terminal (`Done` / `Abandoned`): `worktree::cleanup_at(target, &info.path)`; if `Done`, also `worktree::delete_branch(target, &info.branch)` as belt-and-suspenders (integrator should have done it).
+   - Work is non-terminal AND no live session: `store.mark_crash_interrupted(&work_id)`; leave worktree + branch for next attempt's disposal logic.
+   - Work is non-terminal AND live session: noop, the session is handling it.
+5. Orphaned `loopr/wk-*` branches with no corresponding worktree (manual cleanup drift, user intervention) are reported but not auto-deleted; human resolves.
+
+No `.loopr/worktree-registry.jsonl` is read or written (amended 2026-04-21, a2; the file was redundant with git's own registry and added append-locking / corruption surface with no load-bearing value). Git's registry + the `loopr/wk-*` branch prefix + TaskStore is a complete three-way join.
 
 Without this reconciliation, orphaned worktrees accumulate on disk and orphaned branches clutter the target's git history. Required by v5's reactive-daemon model; absent in v3/v4.
 
@@ -636,10 +646,28 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **`agents` dependency injection:** `Deps<L, T, W, S, C>` struct pattern (one generic parameter bundles all trait bounds) instead of spreading generics across every function signature. Mitigates the Architect Round 3 ergonomic concern while respecting `rules/rust.md`'s no-`dyn` rule.
 - **`LOOPR_` env var prefix (restored):** env vars are `LOOPR_<KEY>` (all caps, hyphens to underscores). Earlier bare-ALL_CAPS decision reversed after Architect Round 3 flagged subprocess env inheritance as a correctness hazard: `tools` spawns cargo/npm/bash, which inherit loopr's environment, so unprefixed `LOG_LEVEL` would pollute child processes.
 - **IPC framing:** NDJSON via `tokio_util::codec::LinesCodec` with 1 MiB max line; JSON-RPC-style envelope (`id`/`method`/`params`, `id`/`result`/`error`, unsolicited `event`/`data`); error codes `-32601`/`-32602`/`-32603` standard + `-32000`–`-32005` loopr-specific. All verbatim from v3/v4. See "ipc" ABI section.
-- **Worktree crash recovery:** daemon startup routine `worktree::reconcile(target)` reads registry, reconciles against git state, cleans orphans, marks crashed Works as `FailureReason::CrashInterrupted`. See "Worktree crash recovery" subsection.
+- **Worktree crash recovery:** daemon startup routine `loopr::daemon::startup::reconcile(target, store, live_sessions)` joins `git worktree list --porcelain` + `loopr/wk-<id>-<seq>` branch-name parse + TaskStore, cleans orphans, marks crashed Works as `FailureReason::CrashInterrupted`. See "Worktree crash recovery" subsection. Amended 2026-04-21 (a2/a3): registry JSONL removed; reconcile moved from `worktree` crate to `loopr` binary.
 - **Taskstore merge-driver limitation:** inherited from `taskstore`; documented here, full write-up in `~/repos/scottidler/taskstore/docs/merge-driver-limitation.md`. Mitigation is cultural (never merge `.loopr/taskstore/*` via cloud UIs).
 - **Upstream `taskstore-traits` split** — shipped. `scottidler/taskstore` is now a two-crate workspace (release `v0.3.0`): `taskstore-traits v0.1.0` holds `Record`/`IndexValue`/`Filter`/`FilterOp` with only `serde` as a dep; full `taskstore` re-exports them and layers on the Store engine. loopr-v5 wires both as git deps in `[workspace.dependencies]`; `domain` pulls trait-only, `store` pulls the full crate. `domain`'s transitive-dep purity is now structurally enforced.
 - **Inter-crate Cargo-level dep wiring** — was pending at Round 3 review (`[dependencies]` blocks were empty); landed in the follow-up commit that declares `path = "../..."` deps for every internal edge of the 13-crate graph. No longer open after that commit.
 
 **Open:**
 - New questions get added here when they surface.
+
+## Amendments
+
+This section logs post-publication amendments to the vision. Each entry is dated, identifies which section(s) above were edited, names the design doc that drove the change, and summarizes the rationale. Amendments are applied in-place to the sections above — this log exists so the history of decisions is scannable without `git log`-archaeology. A design doc that amends the vision MUST add an entry here.
+
+Convention: each amendment gets an `aN` identifier (a1, a2, a3, ...) that the in-text amendment callouts reference. IDs are append-only and monotonic across all amendment dates.
+
+### 2026-04-21 — Worktree lifecycle (Stage 7)
+
+Design doc: [`docs/design/2026-04-21-worktree-lifecycle.md`](design/2026-04-21-worktree-lifecycle.md)
+Reviewed by: Architect R1 (pre-draft) + R2 (post-draft).
+Sections edited: "worktree" crate contract, Target Repo Layout tree, Rationale for nesting taskstore, Worktree crash recovery, Closed Open Questions.
+
+- **a1 — Worktree layout: sibling → flat interior.** Was `<target-parent>/<target-name>-work-<work-id>/`. Now `<target>/.loopr/worktrees/<work-id>-<seq>/`. Why: sibling paths fail in CI checkout layouts, containers, and read-only parent mounts; break atomic cleanup when the target is deleted; pollute the user's workspace namespace. Flat interior is collision-safe with git's internal worktree registry (which auto-disambiguates by path basename in non-deterministic ways when duplicates appear).
+- **a2 — `.loopr/worktree-registry.jsonl` removed.** Git's own worktree registry (`git worktree list --porcelain`) + `loopr/wk-*` branch-name prefix + TaskStore is a complete, race-free reconcile path. The JSONL added a third source of truth with append-locking (`fcntl`/`fs2`), partial-write corruption recovery, and fold-forward terminal-marking semantics — all to surface data git already exposes structurally.
+- **a3 — Reconcile moved from `worktree` crate to `loopr` binary.** Was `worktree::reconcile(target)`. Now `loopr::daemon::startup::reconcile(target, store, live_sessions)`. Why: reconcile joins git state with TaskStore + `Work`-FSM mutations + live-session map; that's cross-crate orchestration, which is the `loopr` binary's job. `worktree` stays infrastructure-only (primitives: `list`, `cleanup_at`, `delete_branch`, `parse_branch`, `ensure_loopr_excludes`).
+- **a4 — Per-attempt fresh worktree with monotonic `<seq>`.** New: every Work attempt gets its own worktree at `<work-id>-<seq>/` on branch `loopr/wk-<work-id>-<seq>`. Seq is allocated internally by `Worktree::create` via an EEXIST-retry loop using git's own "already exists" stderr phrases (`LC_ALL=C` forced for locale stability; exit code 128 explicitly NOT used as a retry signal). No branch reuse, no rebase-on-retry, no commit preservation. v4's "NO-OP loop" retry trauma (commits `0ce1226` → `120c29b`) is made structurally impossible because there is no reused branch to carry rejected commits forward.
+- **a5 — `AttemptCleanupPolicy` enum.** New: four variants (`Immediate` / `OnWorkTerminal` / `OnRunEnd` / `Never`), default `OnWorkTerminal`, exposed via config.yml + ENV (`LOOPR_WORKTREE_CLEANUP_POLICY`) + CLI (`--worktree-cleanup`), precedence CLI > ENV > config > default. Debugging-oriented toggle for "why did the implementer produce garbage" investigations: flip to `OnRunEnd` or `Never` to preserve the forensic artifact without a code change. `Never` is strict debug-only — it leaks memory + file descriptors on long-uptime daemons and requires a restart to clear accumulated state.

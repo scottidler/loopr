@@ -1,36 +1,49 @@
 # worktree
 
-Sibling git worktree lifecycle. Creates worktrees under `<target-parent>/<target-name>-work-<work-id>/` outside the target repo, maintains the registry under `.loopr/worktree-registry.jsonl` inside it, and cleans up on completion or at daemon startup after an ungraceful shutdown.
+Flat-interior per-attempt git worktree lifecycle. Infrastructure-only: primitives, not orchestration.
+
+Every Work attempt gets a fresh worktree at `<target>/.loopr/worktrees/<work-id>-<seq>/` on branch `loopr/wk-<work-id>-<seq>`. Seq is monotonic per `(work-id)`, allocated internally by `Worktree::create` via an EEXIST-retry loop against git's own "already exists" stderr phrases (with `LC_ALL=C` forced for locale stability). No branch reuse across attempts; no rebase-on-retry; no commit preservation.
 
 ## In scope
 
-- `Worktree` struct: handle to a live worktree with guaranteed cleanup on `Drop` (happy path)
-- `create(target_path, work_id)` → `Result<Worktree>` — provisions a sibling worktree on branch `loopr/wk-<work-id>`
-- Registry: append to `<target>/.loopr/worktree-registry.jsonl` on create; mark entries terminal on successful cleanup
-- **Crash recovery on daemon startup:** read the registry, reconcile each entry against git state (branch exists? worktree path exists? Work record in terminal state?), clean up orphans, delete orphaned `loopr/wk-*` branches
-- Internal git invocations via `std::process::Command` (`git worktree add`, `git worktree remove`, `git branch -D`) — does NOT go through the `tools` crate (worktree is infrastructure, not an LLM-facing tool)
-- Config: `WorktreeConfig` composed into the top-level `Config` by `loopr`
+- `Worktree` RAII handle: owns `path` / `branch` / `work_id` / `seq` / `repo_path` / `consumed`. `Drop` is a crash safety net; routine cleanup is explicit `.cleanup()` inside `tokio::task::spawn_blocking` (sync `git worktree remove` must not starve the tokio executor).
+- `Worktree::create(repo_path, worktree_root, work_id, base_sha)` — provisions the worktree + branch; caller passes a pre-resolved base SHA (D10: resolved in repo context, never inside the worktree).
+- `Worktree::cleanup(self)` — removes the worktree, **keeps the branch** (integrator merges it later).
+- `worktree::delete_branch(repo_path, branch)` — integrator calls this after a Tick publishes; idempotent.
+- `worktree::list(repo_path, worktree_root)` — parses `git worktree list --porcelain`, filtered to paths under `worktree_root`.
+- `worktree::cleanup_at(repo_path, path)` — free function for reconcile when no handle exists.
+- `worktree::parse_branch(branch) -> Option<(WorkId, u32)>` — strict parser for `loopr/wk-<work-id>-<seq>`.
+- `worktree::ensure_loopr_excludes(repo_path)` — idempotent append to `.git/info/exclude` with `# loopr-managed` marker.
+- `WorktreeConfig { cleanup_policy }` + `AttemptCleanupPolicy` enum (`Immediate` / `OnWorkTerminal` / `OnRunEnd` / `Never`; default `OnWorkTerminal`). Composed into top-level `Config` by `loopr`.
+- Internal git invocations via `std::process::Command` directly; `worktree` does NOT go through the `tools` crate (infrastructure, not an LLM-facing tool).
 
 ## Out of scope
 
+- **Crash-recovery reconciliation.** Lives in the `loopr` binary (`loopr::daemon::startup::reconcile`) because it joins git state with TaskStore + `Work`-FSM mutations + live-session map. `worktree` exposes the primitives; `loopr` orchestrates.
+- **No registry file.** Git's own worktree registry (`git worktree list --porcelain`) + the `loopr/wk-*` branch prefix + TaskStore is a complete, race-free reconcile path. The vision's prior `.loopr/worktree-registry.jsonl` was redundant state with its own locking / corruption surface.
+- **No sibling-path layout.** Vision's prior `<target-parent>/<target-name>-work-<work-id>/` broke deployment (CI, containers, read-only parent mounts, atomic-cleanup) without adding value beyond what `ensure_loopr_excludes` already covers.
+- **No `Worktree::refresh` (rebase onto new tick).** v4's API dropped: a retry spawns a new worktree at the current integration tip at seq+1.
 - Tool execution inside the worktree — that's `tools`. Tools receive a worktree handle and run commands inside it.
-- LLM calls — that's `llm`
-- Branch naming conventions beyond `loopr/wk-<work-id>` — plan integration branches (`loopr/plan-<plan-id>`) are owned by `integrator`
-- Push/pull operations — loopr's push policy is "never" (see vision.md "Git Posture")
+- LLM calls — that's `llm`.
+- Branch naming conventions beyond `loopr/wk-<work-id>-<seq>`. Plan integration branches (`loopr/plan-<plan-id>`) are owned by `integrator`.
+- Push/pull operations — loopr's push policy is "never" (see `docs/vision.md` "Git Posture").
 
 ## Rule
 
-`Drop` handles the happy path. Crash recovery — the daemon startup reconciliation — handles SIGTERM, SIGKILL, and power loss. Both paths are required; without startup reconciliation, orphaned worktrees accumulate over time and eat disk.
+`Drop` is a safety net, not the routine cleanup mechanism. The coordinator in `loopr` dictates *when* to clean based on `AttemptCleanupPolicy` and executes `.cleanup()` inside `tokio::task::spawn_blocking`. The Round 1 Architect finding — "Drop guards do not execute on SIGTERM, SIGKILL, or power loss" — is addressed by `loopr::daemon::startup::reconcile`, which runs ONCE at daemon startup before the IPC listener accepts.
 
-The Architect's Round 1 finding — "Drop guards do not execute on SIGTERM, SIGKILL, or power loss" — is addressed by the registry + startup reconciliation pattern documented here and in `docs/vision.md`.
+Seq allocation is atomic via git's own "branch/path already exists" errors as the EEXIST-equivalent. No separate claim-then-create step; git's refcount on branch creation is the serialization primitive.
+
+Design doc: [`docs/design/2026-04-21-worktree-lifecycle.md`](../../docs/design/2026-04-21-worktree-lifecycle.md) (cross-cutting; lives at repo root because it also touches the `loopr` binary).
 
 ## Dependencies
 
-`domain` (for `WorkId` and related types), `telemetry` (for span emission), workspace-shared (`serde`, `eyre`). Added via `cargo add`.
+`domain` (for `WorkId`), `telemetry` (for span emission), workspace-shared (`serde`, `thiserror`, `clap`, `tracing`). Added via `cargo add`.
 
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
-- [../../docs/vision.md](../../docs/vision.md): "Target Repo Layout" and crash-recovery subsection
+- [../../docs/vision.md](../../docs/vision.md): "worktree" crate contract (amended 2026-04-21, a1/a2/a3/a4/a5)
+- [../../docs/design/2026-04-21-worktree-lifecycle.md](../../docs/design/2026-04-21-worktree-lifecycle.md): this crate's Stage 7 design doc
 - [docs/CLAUDE.md](docs/CLAUDE.md): where this crate's design docs go
 - [.otto.yml](.otto.yml): scoped CI for this crate (`otto ci` inside this dir)
