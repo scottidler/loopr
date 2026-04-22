@@ -2,8 +2,8 @@
 
 **Author:** Claude (with Scott)
 **Date:** 2026-04-21
-**Status:** Draft
-**Review Passes Completed:** 5/5 + Architect R1 + R2
+**Status:** Implemented
+**Review Passes Completed:** 5/5 + Architect R1 + R2 + R3 (implementation audit)
 **Crates touched:** `worktree`, `loopr` (cross-cutting; lives at repo-root `docs/design/` per `docs/CLAUDE.md`).
 
 ## Summary

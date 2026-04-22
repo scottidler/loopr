@@ -192,3 +192,33 @@ fn create_base_sha_becomes_worktree_head() {
 
     wt.cleanup().unwrap();
 }
+
+#[test]
+fn concurrent_creates_for_same_work_id_all_get_distinct_seqs() {
+    // 10 threads race to create worktrees for the same work_id.
+    // Git's internal serialization of `worktree add` + the SeqTaken retry
+    // loop must produce 10 distinct seq values without any error.
+    use std::sync::Arc;
+    use std::thread;
+
+    let tmp = Arc::new(tempfile::tempdir().unwrap());
+    let repo = Arc::new(tmp.path().join("repo"));
+    std::fs::create_dir(repo.as_ref()).unwrap();
+    let sha = Arc::new(seed_repo(&repo));
+    let wt_root = Arc::new(repo.join(".loopr").join("worktrees"));
+
+    const THREADS: u32 = 10;
+    let handles: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let repo = Arc::clone(&repo);
+            let wt_root = Arc::clone(&wt_root);
+            let sha = Arc::clone(&sha);
+            thread::spawn(move || Worktree::create(&repo, &wt_root, wk("wk-seqtest"), &sha).unwrap())
+        })
+        .collect();
+
+    let mut seqs: Vec<u32> = handles.into_iter().map(|h| h.join().unwrap().seq()).collect();
+    seqs.sort_unstable();
+    // All 10 succeed; seqs are contiguous 1..=10 (no gaps, no duplicates).
+    assert_eq!(seqs, (1..=THREADS).collect::<Vec<_>>());
+}
