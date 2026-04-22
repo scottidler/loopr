@@ -173,6 +173,7 @@ Not scheduled. Earn each when a real run fails for lack of it. Cross-reference `
 - **Graph memory for record recall** (Cersei's Grafeo pattern). Indexed lookups at μs scale vs. LLM-based rank.
 - **LLM response cache** at `~/.local/share/loopr/llm-cache/`. Cross-repo prompt-hash dedup.
 - **Global runs-index** at `~/.local/share/loopr/runs-index.jsonl`. Cross-repo index enabling `loopr runs list --all`.
+- **`.pmt`-file prompt migration** for every role's system prompt. Moves the current inline Rust constants (`context::implementer::render_system_prompt`, `context::REVIEWER_SYSTEM_PROMPT`, and whatever decomposer/researcher/director add) to `.pmt` files resolved through the three-layer override chain `.loopr/prompts/` → `~/.config/loopr/prompts/` → baked-in via `include_dir!()`, with handlebars-rust as the templating engine. Committed in principle by `crates/context/CLAUDE.md` and vision.md "Prompts" section; deferred in practice until real-run signal makes "edit prompt, cargo install, rerun" painful enough to earn the handlebars + loader + init-seeding subsystem. Motivating signal: you are iterating prompts across ≥2 targets and recompiling to tweak a word feels like a bug. Tracked per-role with `TODO(pmt-migration)` markers in the source. See the last Open Question in [design/2026-04-22-reviewer.md](design/2026-04-22-reviewer.md).
 
 ---
 
