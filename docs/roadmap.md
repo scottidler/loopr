@@ -127,10 +127,11 @@
 **Goal:** Reviewer agent reads Bundle, produces Verdict. Approved Bundles go through the Integrator (deterministic, non-LLM) which merges into the integration branch and produces a Tick.
 
 **Design docs:**
-- `crates/agents/docs/design/reviewer.md` — reviewer ralph loop, verdict types, rejection handling.
-- `crates/integrator/docs/design/integrate.md` — merge strategy, conflict surface as typed errors, Tick production.
+- [`docs/design/2026-04-22-reviewer.md`](design/2026-04-22-reviewer.md) — Reviewer ralph loop (single turn + parse retry), typed `Verdict` with structured `ReviewIssue` reasons, OCC-aware `BundlesStore::update`, `build_for_reviewer` prompt assembly. **Implemented** 2026-04-22.
+- Stage 8 wiring capstone — how the daemon connects Implementer -> Coordinator triage -> Reviewer -> Integrator (design doc not yet written).
+- Integrator — merge strategy, conflict surface as typed errors, Tick production (design doc not yet written).
 
-**Crates touched:** `agents`, `integrator`.
+**Crates touched:** `agents`, `domain`, `store`, `context`, later `integrator`.
 
 **Exit criterion:** on the toy target, an approved Bundle lands on the integration branch and produces a Tick record.
 
