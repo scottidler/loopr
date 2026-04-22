@@ -60,6 +60,18 @@ impl BundleSink for store::Store {
     }
 }
 
+/// Forwarding `BundleSink` for any reference to a `BundleSink`. Lets the
+/// daemon build `Deps { bundles: &self.store, .. }` without cloning the
+/// Store (which isn't `Clone`) or wrapping it in `Arc` (which would
+/// conflict with the Store shutdown contract requiring unique ownership
+/// at `Arc::try_unwrap` time).
+impl<B: BundleSink + ?Sized> BundleSink for &B {
+    #[allow(clippy::manual_async_fn)]
+    fn persist<'a>(&'a self, bundle: Bundle) -> impl Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a {
+        async move { (*self).persist(bundle).await }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ImplementerError {
     #[error("escalation needed: {0}")]

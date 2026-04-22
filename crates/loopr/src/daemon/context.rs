@@ -8,19 +8,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinSet;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use agents::ImplementerConfig;
-use context::InlineContextBuilder;
-use domain::WorkId;
+use agents::{Deps, ImplementerConfig, ImplementerError, RealTools, run_implementer};
+use context::{InlineContextBuilder, StateSummary};
+use domain::{Work, WorkId, WorkStatus};
 use ipc::DaemonEvent;
 use llm::AnthropicClient;
 use store::Store;
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
-use worktree::AttemptCleanupPolicy;
+use worktree::{AttemptCleanupPolicy, Worktree};
 
 /// Capacity of the daemon's event broadcast channel. Stage 4 never sends
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
@@ -174,6 +176,105 @@ impl DaemonContext {
     /// Stage 7's implementer design doc consumes this helper; Phase 4 wires
     /// it up so the `tools` crate has a live caller even before the agent
     /// loop lands.
+    /// Drive one Work through the Implementer loop inside its own
+    /// worktree, persisting the resulting Bundle (happy path) or
+    /// transitioning the Work record to `Blocked` (error path).
+    ///
+    /// Takes `Arc<Self>` so the method body can be moved into a
+    /// `tokio::spawn` task owned by `self.implementer_tasks`. All
+    /// inputs to `run_implementer` are assembled from this context:
+    /// LLM client, tool registry, Store as BundleSink, context builder,
+    /// and config. The worktree is sandboxed at
+    /// `<target>/.loopr/worktrees/<work-id>-<seq>/`.
+    ///
+    /// Sync git and worktree ops run inside `tokio::task::spawn_blocking`
+    /// per vision.md:134 so they don't starve the tokio reactor.
+    ///
+    /// Cleanup honors `AttemptCleanupPolicy`. The worktree's branch is
+    /// always retained regardless of cleanup policy (vision.md:135 —
+    /// Stage 8 Integrator will merge it).
+    #[tracing::instrument(level = "info", skip_all, fields(work_id = %work.id, run_id = %self.run_id))]
+    pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
+        let base_sha = match rev_parse_head(&self.target).await {
+            Ok(sha) => sha,
+            Err(e) => {
+                error!(error = %e, "base_sha lookup failed; Work remains Pending");
+                return;
+            }
+        };
+
+        let worktree_root = self.target.join(".loopr").join("worktrees");
+        let persist_base = self
+            .target
+            .join(".loopr")
+            .join("runs")
+            .join(self.run_id.as_str())
+            .join("work")
+            .join(work.id.as_ref());
+        let _ = std::fs::create_dir_all(&persist_base);
+
+        let target = self.target.clone();
+        let root = worktree_root.clone();
+        let wid = work.id.clone();
+        let base = base_sha.clone();
+        let worktree = match tokio::task::spawn_blocking(move || Worktree::create(&target, &root, wid, &base)).await {
+            Ok(Ok(wt)) => wt,
+            Ok(Err(e)) => {
+                error!(error = %e, "Worktree::create failed");
+                mark_blocked(&self.store, &mut work).await;
+                return;
+            }
+            Err(e) => {
+                error!(error = %e, "spawn_blocking join error on Worktree::create");
+                return;
+            }
+        };
+
+        let tools = RealTools::new(
+            self.router.clone(),
+            self.sandbox,
+            self.bash_denylist.clone(),
+            self.path_deny_patterns.clone(),
+            Some(persist_base),
+        );
+        let tool_schemas = ::tools::all_schemas();
+
+        let deps = Deps {
+            llm: Arc::clone(&self.llm),
+            tools,
+            bundles: &self.store,
+            context: Arc::clone(&self.context_builder),
+            config: self.implementer_config.clone(),
+            tool_schemas,
+            state: StateSummary::default(),
+        };
+
+        let result = run_implementer(&work, &worktree, &deps).await;
+        match result {
+            Ok(bundle) => {
+                info!(bundle_id = %bundle.id, "implementer produced bundle");
+            }
+            Err(ImplementerError::EscalationNeeded(reason)) => {
+                warn!(%reason, "implementer escalated; marking Work Blocked");
+                mark_blocked(&self.store, &mut work).await;
+            }
+            Err(other) => {
+                error!(error = %other, "implementer error; marking Work Blocked");
+                mark_blocked(&self.store, &mut work).await;
+            }
+        }
+
+        match self.worktree_cleanup_policy {
+            AttemptCleanupPolicy::Immediate | AttemptCleanupPolicy::OnWorkTerminal => {
+                let _ = tokio::task::spawn_blocking(move || worktree.cleanup()).await;
+            }
+            AttemptCleanupPolicy::OnRunEnd => {}
+            AttemptCleanupPolicy::Never => {
+                warn!("AttemptCleanupPolicy::Never — leaking worktree (debug only)");
+            }
+        }
+    }
+
     pub fn tool_context(&self, work_id: &WorkId, invocation_id: Uuid) -> ToolContext {
         let persist_base = self
             .target
@@ -191,5 +292,34 @@ impl DaemonContext {
             persist_base: Some(persist_base),
             invocation_id: Some(invocation_id),
         }
+    }
+}
+
+/// Resolve the current HEAD commit of the target repo. Async via
+/// `tokio::process::Command` so git subprocess spawning doesn't
+/// block the tokio reactor.
+async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Error> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git rev-parse HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Transition a Work to `Blocked` and persist via `WorksStore::update`.
+/// Failure to persist is logged but not propagated; the spawn task
+/// completes regardless so the daemon's shutdown drain sees it done.
+async fn mark_blocked(store: &Store, work: &mut Work) {
+    work.status = WorkStatus::Blocked;
+    if let Err(e) = store.works().update(work.clone()).await {
+        error!(error = %e, work_id = %work.id, "failed to persist Work.status=Blocked");
     }
 }

@@ -56,3 +56,25 @@ pub trait LlmClient {
         messages: &'a [ChatMessage],
     ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a;
 }
+
+/// Forwarding impl for `Arc<L>` so daemon code can build
+/// `agents::Deps { llm: Arc::clone(&ctx.llm), .. }` without
+/// unwrapping or cloning the underlying client.
+impl<L: LlmClient + ?Sized> LlmClient for std::sync::Arc<L> {
+    fn complete_with_tool<'a>(
+        &'a self,
+        system: &'a str,
+        user: &'a str,
+        tool: ToolSchema,
+    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+        (**self).complete_with_tool(system, user, tool)
+    }
+
+    fn complete_free<'a>(
+        &'a self,
+        system: &'a str,
+        messages: &'a [ChatMessage],
+    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
+        (**self).complete_free(system, messages)
+    }
+}

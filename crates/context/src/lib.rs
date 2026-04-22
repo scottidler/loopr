@@ -75,3 +75,20 @@ pub trait ContextBuilder: Send + Sync {
         iteration: u32,
     ) -> Result<AssembledContext, ContextError>;
 }
+
+/// Forwarding impl for `Arc<C>` so daemon code can hand an
+/// `Arc`-shared builder to `agents::implementer::Deps` without
+/// cloning or unwrapping.
+impl<C: ContextBuilder + ?Sized> ContextBuilder for std::sync::Arc<C> {
+    fn build_for_implementer(
+        &self,
+        work: &Work,
+        worktree_path: &Path,
+        tool_schemas: &[ToolSchema],
+        history: &[IterationSummary],
+        state: &StateSummary,
+        iteration: u32,
+    ) -> Result<AssembledContext, ContextError> {
+        (**self).build_for_implementer(work, worktree_path, tool_schemas, history, state, iteration)
+    }
+}
