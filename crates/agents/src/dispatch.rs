@@ -56,6 +56,7 @@ pub enum ActionResult {
 /// Minimal tool-execution abstraction. The real registry lives in
 /// `tools`; this trait is what the Implementer sees. Keeps
 /// `agents::dispatch_action` testable with fakes.
+#[allow(clippy::manual_async_fn)]
 pub trait ToolExecutor: Send + Sync {
     fn execute<'a>(
         &'a self,

@@ -19,6 +19,7 @@ struct FakeTools {
 }
 
 impl ToolExecutor for FakeTools {
+    #[allow(clippy::manual_async_fn)]
     fn execute<'a>(
         &'a self,
         tool_name: &'a str,
