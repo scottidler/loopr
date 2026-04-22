@@ -16,11 +16,11 @@
 use std::future::Future;
 
 use crate::error::LlmError;
+use crate::message::ChatMessage;
 use crate::tool::{ToolCall, ToolSchema};
 
-/// Swappable LLM backend. Stage 6 surface is intentionally small: one
-/// method, one response shape. Implementations MUST be cancel-safe at
-/// the boundary: callers may drop the returned future without leaking
+/// Swappable LLM backend. Implementations MUST be cancel-safe at the
+/// boundary: callers may drop the returned future without leaking
 /// state.
 #[allow(clippy::manual_async_fn)] // explicit `+ Send` bound required for tokio::spawn (design doc Alt 2)
 pub trait LlmClient {
@@ -37,4 +37,22 @@ pub trait LlmClient {
         user: &'a str,
         tool: ToolSchema,
     ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a;
+
+    /// Send a free-form multi-turn completion. No `tool_choice`, no
+    /// `tools`: the model replies with plain text (possibly JSON, at
+    /// the caller's request inside the prompt). Used by the
+    /// Implementer's self-correction sub-loop, where parse failures
+    /// append `(assistant: raw, user: error)` pairs to `messages` and
+    /// the next call sees the full conversation.
+    ///
+    /// Contract: the last message in `messages` MUST have
+    /// `role = "user"` (Anthropic's Messages API requires the turn
+    /// list to end with user). The returned `String` is the first
+    /// `{"type": "text"}` content block from the response; thinking
+    /// blocks are discarded by the backend.
+    fn complete_free<'a>(
+        &'a self,
+        system: &'a str,
+        messages: &'a [ChatMessage],
+    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a;
 }

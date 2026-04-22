@@ -5,7 +5,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use domain::Plan;
-use llm::{FatalReason, LlmClient, LlmError, ToolCall, ToolSchema};
+use llm::{ChatMessage, FatalReason, LlmClient, LlmError, ToolCall, ToolSchema};
 
 use crate::error::DecomposerError;
 
@@ -40,6 +40,17 @@ impl LlmClient for MockLlmClient {
                 panic!("MockLlmClient: response queue exhausted");
             }
             q.remove(0)
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn complete_free<'a>(
+        &'a self,
+        _system: &'a str,
+        _messages: &'a [ChatMessage],
+    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send + 'a {
+        async move {
+            panic!("MockLlmClient in decomposer tests does not implement complete_free");
         }
     }
 }

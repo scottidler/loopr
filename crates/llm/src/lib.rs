@@ -11,10 +11,12 @@ mod anthropic;
 mod client;
 mod config;
 mod error;
+mod message;
 mod tool;
 
 pub use anthropic::AnthropicClient;
 pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
+pub use message::ChatMessage;
 pub use tool::{ToolCall, ToolSchema};

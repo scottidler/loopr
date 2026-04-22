@@ -11,3 +11,7 @@ domain = { path = "../domain" }
 store = { path = "../store" }
 tools = { path = "../tools" }
 telemetry = { path = "../telemetry" }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+serde_json.workspace = true

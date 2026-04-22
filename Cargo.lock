@@ -316,8 +316,10 @@ name = "context"
 version = "0.5.23"
 dependencies = [
  "domain",
+ "serde_json",
  "store",
  "telemetry",
+ "thiserror 2.0.18",
  "tools",
 ]
 

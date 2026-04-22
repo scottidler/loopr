@@ -19,6 +19,7 @@ use tracing::{debug, info_span, warn};
 use crate::client::LlmClient;
 use crate::config::LlmConfig;
 use crate::error::{FatalReason, LlmError};
+use crate::message::ChatMessage;
 use crate::tool::{ToolCall, ToolSchema};
 
 /// Maximum bytes of `system` / `user` prompt to emit as a span field.
@@ -125,6 +126,17 @@ struct ToolChoiceWire<'a> {
     name: &'a str,
 }
 
+/// Request-body shape for `complete_free`. No `tools`, no
+/// `tool_choice`: the model replies with plain content blocks.
+#[derive(Serialize)]
+struct AnthropicFreeRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    temperature: f32,
+    system: &'a str,
+    messages: Vec<AnthropicMessage<'a>>,
+}
+
 impl LlmClient for AnthropicClient {
     #[allow(clippy::manual_async_fn)] // explicit `+ Send` required; see trait
     fn complete_with_tool<'a>(
@@ -173,9 +185,88 @@ impl LlmClient for AnthropicClient {
             result
         }
     }
+
+    #[allow(clippy::manual_async_fn)]
+    fn complete_free<'a>(
+        &'a self,
+        system: &'a str,
+        messages: &'a [ChatMessage],
+    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
+        async move {
+            let last_user_preview = messages
+                .last()
+                .map(|m| truncate_preview(&m.content))
+                .unwrap_or_default();
+            let span = info_span!(
+                "llm.anthropic.free",
+                model = %self.config.model,
+                system_len = system.len(),
+                message_count = messages.len(),
+                system_preview = %truncate_preview(system),
+                last_user_preview = %last_user_preview,
+                duration_ms = tracing::field::Empty,
+                outcome = tracing::field::Empty,
+            );
+            let _enter = span.enter();
+            let started = Instant::now();
+
+            let result = self.send_free_request(system, messages).await;
+
+            let elapsed = started.elapsed().as_millis() as u64;
+            span.record("duration_ms", elapsed);
+            match &result {
+                Ok(_) => {
+                    span.record("outcome", "ok");
+                    debug!("llm.anthropic.free call succeeded");
+                }
+                Err(LlmError::Retryable { reason }) => {
+                    span.record("outcome", "retryable");
+                    warn!(reason = %reason, "llm.anthropic.free call failed (retryable)");
+                }
+                Err(LlmError::Fatal { reason }) => {
+                    span.record("outcome", "fatal");
+                    warn!(reason = ?reason, "llm.anthropic.free call failed (fatal)");
+                }
+            }
+            result
+        }
+    }
 }
 
 impl AnthropicClient {
+    async fn send_free_request(&self, system: &str, messages: &[ChatMessage]) -> Result<String, LlmError> {
+        let url = format!("{}/v1/messages", self.config.api_base_url);
+        let wire_messages: Vec<AnthropicMessage<'_>> = messages
+            .iter()
+            .map(|m| AnthropicMessage {
+                role: &m.role,
+                content: &m.content,
+            })
+            .collect();
+        let body = AnthropicFreeRequest {
+            model: &self.config.model,
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+            system,
+            messages: wire_messages,
+        };
+
+        let response = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(reqwest_err_to_llm_error)?;
+
+        let status = response.status();
+        let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
+            reason: format!("failed to read response body: {e}"),
+        })?;
+
+        classify_free_response(status, &body_bytes, self.config.max_tokens)
+    }
+
     async fn send_request(&self, system: &str, user: &str, tool: &ToolSchema) -> Result<ToolCall, LlmError> {
         let url = format!("{}/v1/messages", self.config.api_base_url);
         let body = AnthropicRequest {
@@ -327,6 +418,84 @@ fn classify_response(
             reason: FatalReason::BadRequest(format!("HTTP {code}: {body_text}")),
         }),
     }
+}
+
+fn classify_free_response(status: reqwest::StatusCode, body: &[u8], max_tokens: u32) -> Result<String, LlmError> {
+    if status.is_success() {
+        let parsed: Value = serde_json::from_slice(body).map_err(|_| LlmError::Retryable {
+            reason: "non-JSON response body".into(),
+        })?;
+        return extract_text_block(&parsed, max_tokens);
+    }
+
+    let body_text = String::from_utf8_lossy(body).to_string();
+    let code = status.as_u16();
+    match code {
+        401 | 403 => Err(LlmError::Fatal {
+            reason: FatalReason::Auth(body_text),
+        }),
+        408 | 429 | 500..=599 => Err(LlmError::Retryable {
+            reason: format!("HTTP {code}: {body_text}"),
+        }),
+        400 => Err(LlmError::Fatal {
+            reason: FatalReason::BadRequest(body_text),
+        }),
+        _ => Err(LlmError::Fatal {
+            reason: FatalReason::BadRequest(format!("HTTP {code}: {body_text}")),
+        }),
+    }
+}
+
+/// Extract the first `{"type": "text"}` content block from a
+/// Messages-API response. Thinking blocks (`{"type": "thinking"}`)
+/// are skipped at debug level; they appear when the model's
+/// extended-thinking mode is enabled upstream and we do not surface
+/// that content to the Implementer.
+fn extract_text_block(response: &Value, max_tokens: u32) -> Result<String, LlmError> {
+    if response.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
+        let used = response
+            .get("usage")
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
+        return Err(LlmError::Fatal {
+            reason: FatalReason::ContextExhausted {
+                used,
+                limit: max_tokens,
+            },
+        });
+    }
+
+    let content = response
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| LlmError::Fatal {
+            reason: FatalReason::SchemaValidation("response missing `content` array".into()),
+        })?;
+
+    for block in content {
+        let kind = block.get("type").and_then(Value::as_str);
+        match kind {
+            Some("text") => {
+                let text = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| LlmError::Fatal {
+                        reason: FatalReason::SchemaValidation("text block missing `text` field".into()),
+                    })?;
+                return Ok(text.to_string());
+            }
+            Some("thinking") => {
+                debug!("llm.anthropic.free: thinking block discarded");
+                continue;
+            }
+            _ => continue,
+        }
+    }
+
+    Err(LlmError::Fatal {
+        reason: FatalReason::SchemaValidation("no text content block in response".into()),
+    })
 }
 
 fn extract_tool_call(response: &Value, expected_tool_name: &str, max_tokens: u32) -> Result<ToolCall, LlmError> {
