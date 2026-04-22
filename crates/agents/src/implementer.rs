@@ -21,7 +21,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use context::{ContextBuilder, IterationSummary, StateSummary};
+use context::{ContextBuilder, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
 use domain::{Bundle, BundleId, Work};
 use llm::{ChatMessage, LlmClient};
 use worktree::Worktree;
@@ -30,12 +30,6 @@ use crate::config::ImplementerConfig;
 use crate::dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action};
 use crate::lifeguard::{Lifeguard, Verdict};
 use crate::parse::{parse_actions, parse_one};
-
-/// Maximum characters retained in an iteration summary. Matches
-/// `context::ITERATION_SUMMARY_CAP` conceptually; duplicated here
-/// so the Implementer owns its own bound without reaching into
-/// `context` internals.
-const ITERATION_SUMMARY_CAP: usize = 4000;
 
 /// Minimal store-write interface. Abstracting just the
 /// `Bundle`-create surface (not the full `Store`) keeps the
