@@ -11,6 +11,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use agents::AgentsConfig;
 use llm::LlmConfig;
 use tools::ToolsConfig;
 use worktree::WorktreeConfig;
@@ -29,6 +30,13 @@ pub struct Config {
     pub tools: ToolsConfig,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    /// Per-role agent knobs: `agents.implementer.*` and
+    /// `agents.reviewer.*` on disk. Stage 8 wiring capstone will
+    /// thread these through the daemon so `ImplementerConfig::default()`
+    /// and `ReviewerConfig::default()` call sites become
+    /// `ctx.config.agents.implementer.clone()` etc.
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 impl Config {

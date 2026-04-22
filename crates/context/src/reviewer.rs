@@ -107,6 +107,17 @@ Respond now with exactly one JSON object matching the Verdict schema."#;
 /// Render the Reviewer's user-message body. All I/O (git show, file
 /// reads, truncation) must already have been done by the caller;
 /// this function is a pure string assembler.
+///
+/// TODO(hierarchy): The Reviewer design doc template includes
+/// `## Plan` / `## Spec` / `## Phase` sections above `## Work`, but
+/// `Spec` and `Phase` do not yet exist as record types in `domain`
+/// (see `crates/domain/src/lib.rs`: only `Plan`, `Work`, `Bundle`).
+/// When those records land (scheduled for a later hierarchy stage),
+/// this function's signature gains `plan: &Plan`, `spec: &Spec`,
+/// `phase: &Phase` and the rendering grows the upstream-goal
+/// sections. Audit-flagged by Architect R2 (2026-04-22); the design
+/// doc's implicit forward reference is acknowledged as a doc update
+/// when those records land.
 pub(crate) fn render_reviewer_user_message(
     bundle: &Bundle,
     work: &Work,

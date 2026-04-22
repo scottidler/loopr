@@ -2,9 +2,14 @@
 //!
 //! `ImplementerConfig` (Stage 7) and `ReviewerConfig` (Stage 8) live
 //! side by side; `AgentsConfig` composes both. Flat knob bags, no
-//! trait, no nested substructs.
+//! trait, no nested substructs. Keys on disk are kebab-case (see
+//! `#[serde(rename_all = "kebab-case")]`) per the project naming
+//! convention; Rust field names remain snake_case.
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct ImplementerConfig {
     /// Hard upper bound on outer loop iterations per Work. Hitting
     /// this triggers the force-propose path (or its guard-escalate
@@ -49,7 +54,8 @@ impl Default for ImplementerConfig {
 /// Knob bag for the Reviewer agent. One LLM turn per invocation with
 /// a bounded parse-retry sub-loop; no outer iterations, so there is
 /// no `max_iterations` analog.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct ReviewerConfig {
     /// Maximum LLM re-prompts within the parse-retry sub-loop for a
     /// single `run_reviewer` invocation. Strict-greater-than check:
@@ -79,7 +85,8 @@ impl Default for ReviewerConfig {
 
 /// Composes every role-level agent config. The top-level loopr
 /// `Config` embeds `agents: AgentsConfig`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct AgentsConfig {
     pub implementer: ImplementerConfig,
     pub reviewer: ReviewerConfig,

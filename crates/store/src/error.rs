@@ -22,6 +22,11 @@ pub enum StoreError {
     /// the Bundle on disk has a newer `updated_at` than the version the
     /// caller snapshotted before mutating. The caller is expected to
     /// re-fetch and decide whether to retry or drop the write.
+    ///
+    /// Note on naming: the Reviewer design doc (2026-04-22) sketched a
+    /// sibling `NotFound(String)` variant here; the existing
+    /// `RecordNotFound { collection, id }` covers that case with
+    /// strictly more information, so no `NotFound` was added.
     #[error("stale record: expected updated_at={expected}, actual={actual}")]
     Stale { expected: i64, actual: i64 },
 }
