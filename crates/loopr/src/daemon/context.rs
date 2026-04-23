@@ -23,7 +23,7 @@ use context::{InlineContextBuilder, StateSummary};
 use domain::{Bundle, BundleStatus, Plan, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
 use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
-use llm::AnthropicClient;
+use llm::LlmClient;
 use store::{BundleUpdateError, Store};
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
@@ -46,7 +46,7 @@ pub const INTEGRATOR_BACKOFF: &[Duration] = &[
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
 pub const EVENTS_CAPACITY: usize = 64;
 
-pub struct DaemonContext {
+pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     pub target: PathBuf,
     pub run_id: RunId,
     pub started_at: chrono::DateTime<chrono::Local>,
@@ -90,12 +90,13 @@ pub struct DaemonContext {
     /// short timeout after the accept loop returns, specifically to make
     /// this contract hold.
     pub store: Store,
-    /// Handle to the process-wide Anthropic client. Built once at
-    /// daemon startup from `LlmConfig` + env-resolved API key and
-    /// shared across handler tasks via `Arc`. Decompose call sites
-    /// pass `&*ctx.llm` as the `&L` where `L: LlmClient`; the Arc
-    /// deref produces `&AnthropicClient`, which implements the trait.
-    pub llm: Arc<AnthropicClient>,
+    /// Handle to the process-wide LLM client. Built once at daemon
+    /// startup and shared across handler tasks via `Arc`. Generic on
+    /// `L: LlmClient` so production can instantiate with
+    /// `AnthropicClient` and tests can instantiate with a stub.
+    /// Decompose call sites pass `&*ctx.llm` as the `&L`; the Arc
+    /// deref produces `&L`, which implements the trait.
+    pub llm: Arc<L>,
     /// Process-wide lane router. Enforces per-lane concurrency caps via
     /// tokio semaphores; wraps `Local`-lane Commands with bwrap when
     /// posture + detection allow. Shared into every `ToolContext` via
@@ -157,10 +158,10 @@ pub struct DaemonContext {
     pub integrator_tasks: Mutex<JoinSet<()>>,
 }
 
-impl DaemonContext {
+impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Construct a new context. All fields are set once at daemon startup;
     /// nothing mutable is exposed except the `shutting_down` atomic.
-    /// Takes an already-opened `Store`, a pre-built `AnthropicClient`, and
+    /// Takes an already-opened `Store`, a pre-built LLM client, and
     /// already-built tool infrastructure (`LaneRouter`, `BashDenylist`,
     /// `path_deny_patterns`, `SandboxMode`). Router construction can fail
     /// when `SandboxMode::Required` + no bwrap; that failure happens in
@@ -172,7 +173,7 @@ impl DaemonContext {
         run_id: RunId,
         pid: u32,
         store: Store,
-        llm: Arc<AnthropicClient>,
+        llm: Arc<L>,
         router: Arc<LaneRouter>,
         bash_denylist: Arc<BashDenylist>,
         path_deny_patterns: Vec<String>,

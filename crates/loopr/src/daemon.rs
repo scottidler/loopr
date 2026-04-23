@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use tokio::signal::unix::{SignalKind, signal};
 
-use llm::AnthropicClient;
+use llm::{AnthropicClient, LlmClient};
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter};
 
@@ -78,7 +78,7 @@ pub const INTEGRATOR_DRAIN_TIMEOUT_SECS: u64 = 15;
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
-async fn drain_implementer_tasks(ctx: &Arc<DaemonContext>) {
+async fn drain_implementer_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
     let mut tasks = ctx.implementer_tasks.lock().await;
     if tasks.is_empty() {
         return;
@@ -103,7 +103,7 @@ async fn drain_implementer_tasks(ctx: &Arc<DaemonContext>) {
 /// Drain `ctx.reviewer_tasks` with `REVIEWER_DRAIN_TIMEOUT_SECS` budget.
 /// Runs AFTER `drain_implementer_tasks` so any in-flight Implementer has
 /// a chance to enqueue its Reviewer before the Reviewer pool drains.
-async fn drain_reviewer_tasks(ctx: &Arc<DaemonContext>) {
+async fn drain_reviewer_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
     let mut tasks = ctx.reviewer_tasks.lock().await;
     if tasks.is_empty() {
         return;
@@ -128,7 +128,7 @@ async fn drain_reviewer_tasks(ctx: &Arc<DaemonContext>) {
 /// Drain `ctx.integrator_tasks` with `INTEGRATOR_DRAIN_TIMEOUT_SECS`
 /// budget. Runs AFTER `drain_reviewer_tasks` so a Reviewer that just
 /// reached Accept can enqueue its Integrator before the pool drains.
-async fn drain_integrator_tasks(ctx: &Arc<DaemonContext>) {
+async fn drain_integrator_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
     let mut tasks = ctx.integrator_tasks.lock().await;
     if tasks.is_empty() {
         return;
@@ -484,7 +484,9 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
 /// Returns the spawned `JoinHandle` so `run_active_daemon` can await it
 /// during shutdown and release the watcher's `Arc<DaemonContext>` clone
 /// before `Arc::try_unwrap`.
-fn spawn_signal_watcher(ctx: Arc<DaemonContext>) -> tokio::task::JoinHandle<()> {
+fn spawn_signal_watcher<L: LlmClient + Send + Sync + 'static>(
+    ctx: Arc<DaemonContext<L>>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut term = match signal(SignalKind::terminate()) {
             Ok(s) => s,

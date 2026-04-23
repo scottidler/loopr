@@ -22,6 +22,8 @@ use tracing::{Instrument, info, warn};
 
 use ipc::{DaemonResponse, RpcError, decode_request_line};
 
+use llm::LlmClient;
+
 use crate::daemon::DaemonContext;
 use crate::error::LooprError;
 use crate::transport::handler::{self, HandshakeState};
@@ -55,7 +57,10 @@ pub fn bind_listener(socket: &Path) -> Result<UnixListener, LooprError> {
 /// `abort_all`'d and reaped. Either path guarantees that by the time
 /// this function returns, every spawned handler has released its
 /// `Arc<DaemonContext>` clone.
-pub async fn accept_loop(listener: UnixListener, ctx: Arc<DaemonContext>) -> Result<(), LooprError> {
+pub async fn accept_loop<L>(listener: UnixListener, ctx: Arc<DaemonContext<L>>) -> Result<(), LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     let mut handlers: JoinSet<()> = JoinSet::new();
 
     loop {
@@ -137,7 +142,10 @@ pub async fn accept_loop(listener: UnixListener, ctx: Arc<DaemonContext>) -> Res
 /// already-terminated output would produce a double newline on the wire.
 /// See §API Design note "Note on `ipc::encode_line` vs. `serde_json::
 /// to_string` + `framed.send`" in the Stage 4 design doc.
-pub async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
+pub async fn handle_client<L>(stream: UnixStream, ctx: Arc<DaemonContext<L>>)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
     let mut event_rx = ctx.events.subscribe();
     let mut state = HandshakeState::Pending;

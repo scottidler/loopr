@@ -41,7 +41,7 @@ async fn env_mutex() -> MutexGuard<'static, ()> {
     M.get_or_init(|| Mutex::new(())).lock().await
 }
 
-async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
+async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
     let store = Store::open(&target).await.unwrap();
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());

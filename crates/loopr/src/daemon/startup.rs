@@ -35,6 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use domain::{BundleStatus, Role, WorkStatus};
+use llm::LlmClient;
 use store::Store;
 
 use crate::daemon::context::{DaemonContext, transition_and_persist_bundle};
@@ -62,7 +63,10 @@ pub struct ReconcileReport {
     pub bundles_terminal: usize,
 }
 
-pub async fn reconcile(ctx: &Arc<DaemonContext>) -> Result<ReconcileReport, LooprError> {
+pub async fn reconcile<L>(ctx: &Arc<DaemonContext<L>>) -> Result<ReconcileReport, LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     let mut report = sweep_worktrees(&ctx.target, &ctx.store).await?;
 
     // Stage 8 wiring capstone: Bundle-FSM sweep. Re-enqueue Bundles
@@ -170,7 +174,10 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
 /// in-place here (not inside `spawn_integrator_for_bundle`) because the
 /// Integrator's pre-flight rejects anything that is not already at
 /// `Accepted` or `Integrating`.
-async fn sweep_bundles(ctx: &Arc<DaemonContext>, report: &mut ReconcileReport) -> Result<(), LooprError> {
+async fn sweep_bundles<L>(ctx: &Arc<DaemonContext<L>>, report: &mut ReconcileReport) -> Result<(), LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     let bundles = match ctx.store.bundles().list().await {
         Ok(b) => b,
         Err(e) => {

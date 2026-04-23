@@ -13,6 +13,7 @@ use ipc::{
     DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams,
     PlanCreateResult, PlanListResult, RpcError, StatusResult,
 };
+use llm::LlmClient;
 use store::StoreError;
 
 use crate::daemon::{DAEMON_VERSION, DaemonContext};
@@ -30,7 +31,10 @@ pub enum HandshakeState {
 /// Dispatch a single request to the correct handler. Returns the
 /// `DaemonResponse` to be sent back on the wire. Does not perform I/O
 /// beyond reading `ctx` fields and allocating the response.
-pub async fn dispatch(req: &DaemonRequest, state: &mut HandshakeState, ctx: &Arc<DaemonContext>) -> DaemonResponse {
+pub async fn dispatch<L>(req: &DaemonRequest, state: &mut HandshakeState, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     let method = match Method::try_from(req) {
         Ok(m) => m,
         Err(rpc_err) => {
@@ -91,7 +95,7 @@ fn handle_handshake(id: u64, params: HandshakeParams, state: &mut HandshakeState
     }
 }
 
-fn handle_status(id: u64, ctx: &Arc<DaemonContext>) -> DaemonResponse {
+fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse {
     // Stage 4 has no records to count; active_plans / active_works are
     // hardcoded zeros. Stage 5+ reads from taskstore via a new dep.
     let result = StatusResult {
@@ -106,7 +110,10 @@ fn handle_status(id: u64, ctx: &Arc<DaemonContext>) -> DaemonResponse {
     }
 }
 
-async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &Arc<DaemonContext>) -> DaemonResponse {
+async fn handle_plan_create<L>(id: u64, params: PlanCreateParams, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     // Stage 8 wiring: construct Plan first (generates PlanId in memory) so
     // we have the branch name before any store write. Then create the
     // integration branch BEFORE persisting anything; if git fails we bail
@@ -173,7 +180,10 @@ async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &Arc<DaemonC
     }
 }
 
-async fn handle_plan_list(id: u64, ctx: &Arc<DaemonContext>) -> DaemonResponse {
+async fn handle_plan_list<L: LlmClient + Send + Sync + 'static>(
+    id: u64,
+    ctx: &Arc<DaemonContext<L>>,
+) -> DaemonResponse {
     match ctx.store.plans().list().await {
         Ok(plans) => {
             let result = PlanListResult { plans };

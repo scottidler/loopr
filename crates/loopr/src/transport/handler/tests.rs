@@ -35,7 +35,7 @@ fn dummy_anthropic() -> Arc<AnthropicClient> {
 /// Test context backed by a real `Store` rooted at a `TempDir`. Callers
 /// keep the `TempDir` alive for the life of the test so the store's
 /// on-disk files outlive its in-process operations.
-async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
+async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
     let td = TempDir::new().unwrap();
     init_git_repo(td.path());
     let store = Store::open(td.path()).await.unwrap();
