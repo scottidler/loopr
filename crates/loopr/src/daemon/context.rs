@@ -709,6 +709,33 @@ pub(crate) async fn transition_and_persist_work(
         .map_err(|e| format!("works().update: {e}"))
 }
 
+/// Mirror of `transition_and_persist_work` for `Bundle` records.
+/// Uses the OCC-aware `BundlesStore::update` with the pre-transition
+/// `updated_at` as `expected_updated_at`. Consumed by
+/// `sweep_bundles` to transition `Reviewed -> Accepted` during
+/// crash-recovery (the Reviewer already fired that transition on the
+/// happy path, so this helper exists for the reconcile path only).
+#[allow(dead_code)]
+pub(crate) async fn transition_and_persist_bundle(
+    store: &Store,
+    bundle: &mut Bundle,
+    target: BundleStatus,
+    role: Role,
+) -> Result<(), String> {
+    let expected = bundle.updated_at;
+    let result = bundle
+        .transition(target, role)
+        .map_err(|e| format!("fsm transition rejected: {e}"))?;
+    if result == domain::Transition::Unchanged {
+        return Ok(());
+    }
+    store
+        .bundles()
+        .update(bundle.clone(), expected)
+        .await
+        .map_err(|e| format!("bundles().update: {e}"))
+}
+
 /// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
 /// the Integrator spawn's `Active -> Complete` check once every sibling
 /// Work is terminal.

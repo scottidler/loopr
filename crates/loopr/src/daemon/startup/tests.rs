@@ -63,7 +63,7 @@ async fn setup() -> (tempfile::TempDir, std::path::PathBuf, Store) {
 #[tokio::test]
 async fn reconcile_on_empty_target_is_noop() {
     let (_tmp, repo, store) = setup().await;
-    let report = reconcile(&repo, &store).await.unwrap();
+    let report = sweep_worktrees(&repo, &store).await.unwrap();
     assert_eq!(report, ReconcileReport::default());
 }
 
@@ -92,7 +92,7 @@ async fn reconcile_cleans_terminal_done_worktree_and_deletes_branch() {
     work.status = WorkStatus::Done;
     store.works().create(work).await.unwrap();
 
-    let report = reconcile(&repo, &store).await.unwrap();
+    let report = sweep_worktrees(&repo, &store).await.unwrap();
     assert_eq!(report.cleaned, 1, "terminal Done worktree should be cleaned");
     assert_eq!(report.orphans_logged, 0);
     assert_eq!(report.carried_forward, 0);
@@ -130,7 +130,7 @@ async fn reconcile_carries_forward_non_terminal_worktree() {
     work.status = WorkStatus::InProgress;
     store.works().create(work).await.unwrap();
 
-    let report = reconcile(&repo, &store).await.unwrap();
+    let report = sweep_worktrees(&repo, &store).await.unwrap();
     assert_eq!(report.cleaned, 0);
     assert_eq!(report.carried_forward, 1);
     assert!(path.exists(), "non-terminal worktree must survive reconcile");
@@ -147,7 +147,7 @@ async fn reconcile_logs_orphan_when_store_has_no_work_record() {
     std::mem::forget(wt);
 
     // NOTE: no Work record created in store → orphan.
-    let report = reconcile(&repo, &store).await.unwrap();
+    let report = sweep_worktrees(&repo, &store).await.unwrap();
     assert_eq!(report.orphans_logged, 1);
     assert_eq!(report.cleaned, 0);
     assert_eq!(report.carried_forward, 0);
@@ -178,7 +178,7 @@ async fn reconcile_skips_foreign_branch_under_worktree_root() {
         .unwrap();
     assert!(status.success());
 
-    let report = reconcile(&repo, &store).await.unwrap();
+    let report = sweep_worktrees(&repo, &store).await.unwrap();
     assert_eq!(report.foreign_skipped, 1);
     assert_eq!(report.cleaned, 0);
     assert!(foreign_path.exists(), "foreign worktree must NOT be cleaned");

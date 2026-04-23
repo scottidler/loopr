@@ -32,10 +32,12 @@
 //! attempts concurrently.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use domain::WorkStatus;
+use domain::{BundleStatus, Role, WorkStatus};
 use store::Store;
 
+use crate::daemon::context::{DaemonContext, transition_and_persist_bundle};
 use crate::error::LooprError;
 
 /// Summary of one reconcile pass, returned so the daemon can log it and
@@ -50,9 +52,43 @@ pub struct ReconcileReport {
     pub carried_forward: usize,
     /// Entries whose branch name did not match the `loopr/wk-*` shape.
     pub foreign_skipped: usize,
+    /// Stage 8 wiring capstone: Bundles at `Proposed` / `Triaged` re-enqueued
+    /// for the Reviewer stage.
+    pub reviewers_requeued: usize,
+    /// Stage 8 wiring capstone: Bundles at `Reviewed` / `Accepted` /
+    /// `Integrating` re-enqueued for the Integrator stage.
+    pub integrators_requeued: usize,
+    /// Stage 8 wiring capstone: Bundles already terminal; noop.
+    pub bundles_terminal: usize,
 }
 
-pub async fn reconcile(target: &Path, store: &Store) -> Result<ReconcileReport, LooprError> {
+pub async fn reconcile(ctx: &Arc<DaemonContext>) -> Result<ReconcileReport, LooprError> {
+    let mut report = sweep_worktrees(&ctx.target, &ctx.store).await?;
+
+    // Stage 8 wiring capstone: Bundle-FSM sweep. Re-enqueue Bundles
+    // stranded at intermediate statuses for the correct next stage.
+    // Runs AFTER worktree hygiene and BEFORE `accept_loop` binds, so no
+    // handler can race with the spawned tasks.
+    sweep_bundles(ctx, &mut report).await?;
+
+    tracing::info!(
+        cleaned = report.cleaned,
+        orphans = report.orphans_logged,
+        carried_forward = report.carried_forward,
+        foreign = report.foreign_skipped,
+        reviewers_requeued = report.reviewers_requeued,
+        integrators_requeued = report.integrators_requeued,
+        bundles_terminal = report.bundles_terminal,
+        "reconcile: pass complete"
+    );
+    Ok(report)
+}
+
+/// Stage 7 worktree hygiene pass. Extracted from `reconcile` in Stage 8
+/// so existing unit tests can exercise it without constructing a full
+/// `DaemonContext`. Pure worktree/TaskStore logic; no task-spawn side
+/// effects. `reconcile` calls this then `sweep_bundles`.
+pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileReport, LooprError> {
     let worktree_root = target.join(".loopr").join("worktrees");
 
     // Empty target (no worktrees yet) is the steady state for a fresh daemon
@@ -123,14 +159,82 @@ pub async fn reconcile(target: &Path, store: &Store) -> Result<ReconcileReport, 
         }
     }
 
-    tracing::info!(
-        cleaned = report.cleaned,
-        orphans = report.orphans_logged,
-        carried_forward = report.carried_forward,
-        foreign = report.foreign_skipped,
-        "reconcile: pass complete"
-    );
     Ok(report)
+}
+
+/// Enumerate persisted Bundles and re-enqueue each intermediate-state
+/// Bundle into the correct daemon JoinSet. Terminal statuses noop.
+///
+/// A re-entry from `Reviewed` or `Accepted` requires a Coordinator
+/// transition before the Integrator can consume the Bundle; we run it
+/// in-place here (not inside `spawn_integrator_for_bundle`) because the
+/// Integrator's pre-flight rejects anything that is not already at
+/// `Accepted` or `Integrating`.
+async fn sweep_bundles(ctx: &Arc<DaemonContext>, report: &mut ReconcileReport) -> Result<(), LooprError> {
+    let bundles = match ctx.store.bundles().list().await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "sweep_bundles: bundles().list() failed; skipping sweep");
+            return Ok(());
+        }
+    };
+
+    for bundle in bundles {
+        match bundle.status {
+            BundleStatus::Proposed | BundleStatus::Triaged => {
+                let reviewer_ctx = Arc::clone(ctx);
+                let mut rts = ctx.reviewer_tasks.lock().await;
+                rts.spawn(reviewer_ctx.spawn_reviewer_for_bundle(bundle.clone()));
+                tracing::info!(
+                    bundle_id = %bundle.id,
+                    status = ?bundle.status,
+                    "sweep_bundles: requeued reviewer"
+                );
+                report.reviewers_requeued += 1;
+            }
+            BundleStatus::Reviewed => {
+                // Coordinator transitions Reviewed -> Accepted in place so
+                // the Integrator's pre-flight accepts the Bundle.
+                let mut b = bundle.clone();
+                if let Err(e) =
+                    transition_and_persist_bundle(&ctx.store, &mut b, BundleStatus::Accepted, Role::Coordinator).await
+                {
+                    tracing::warn!(
+                        bundle_id = %bundle.id,
+                        error = %e,
+                        "sweep_bundles: Reviewed -> Accepted transition failed; skipping"
+                    );
+                    continue;
+                }
+                let integrator_ctx = Arc::clone(ctx);
+                let mut its = ctx.integrator_tasks.lock().await;
+                its.spawn(integrator_ctx.spawn_integrator_for_bundle(b));
+                tracing::info!(
+                    bundle_id = %bundle.id,
+                    "sweep_bundles: Reviewed -> Accepted, requeued integrator"
+                );
+                report.integrators_requeued += 1;
+            }
+            BundleStatus::Accepted | BundleStatus::Integrating => {
+                let integrator_ctx = Arc::clone(ctx);
+                let mut its = ctx.integrator_tasks.lock().await;
+                its.spawn(integrator_ctx.spawn_integrator_for_bundle(bundle.clone()));
+                tracing::info!(
+                    bundle_id = %bundle.id,
+                    status = ?bundle.status,
+                    "sweep_bundles: requeued integrator"
+                );
+                report.integrators_requeued += 1;
+            }
+            BundleStatus::Merged
+            | BundleStatus::Rejected
+            | BundleStatus::IntegrationFailed
+            | BundleStatus::Superseded => {
+                report.bundles_terminal += 1;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

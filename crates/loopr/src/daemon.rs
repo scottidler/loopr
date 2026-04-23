@@ -407,7 +407,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // the existing body still takes only `&target` + `&store`.
     // Runs BEFORE the accept loop binds so no coordinator session can race
     // with this pass.
-    let report = startup::reconcile(&target, &ctx.store).await?;
+    let report = startup::reconcile(&ctx).await?;
     tracing::info!(
         cleaned = report.cleaned,
         orphans = report.orphans_logged,
