@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use tokio::sync::{Mutex, MutexGuard};
 use tokio::time::timeout;
 
-use agents::ImplementerConfig;
+use agents::{ImplementerConfig, ReviewerConfig};
 use context::InlineContextBuilder;
 use ipc::{PROTOCOL_VERSION, RpcError, StatusResult};
 use llm::{AnthropicClient, LlmConfig};
@@ -57,6 +57,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         SandboxMode::Off,
         Arc::new(InlineContextBuilder::new()),
         ImplementerConfig::default(),
+        ReviewerConfig::default(),
         AttemptCleanupPolicy::default(),
     ))
 }

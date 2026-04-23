@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use agents::ImplementerConfig;
+use agents::{ImplementerConfig, ReviewerConfig};
 use context::InlineContextBuilder;
 use ipc::{
     DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, PlanListResult, RpcError,
@@ -53,6 +53,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
         SandboxMode::Off,
         Arc::new(InlineContextBuilder::new()),
         ImplementerConfig::default(),
+        ReviewerConfig::default(),
         AttemptCleanupPolicy::default(),
     ));
     (td, ctx)

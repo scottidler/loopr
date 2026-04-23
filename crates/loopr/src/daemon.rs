@@ -63,6 +63,11 @@ pub const WATCHER_JOIN_TIMEOUT_SECS: u64 = 2;
 /// still be terminated in bounded time.
 pub const IMPLEMENTER_DRAIN_TIMEOUT_SECS: u64 = 30;
 
+/// Soft timeout for draining in-flight Reviewer tasks at shutdown.
+/// Reviewer is a single LLM turn plus a bounded parse-retry sub-loop;
+/// usually finishes within the Anthropic streaming window (~10-30s).
+pub const REVIEWER_DRAIN_TIMEOUT_SECS: u64 = 30;
+
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
@@ -82,6 +87,31 @@ async fn drain_implementer_tasks(ctx: &Arc<DaemonContext>) {
             timeout_secs = IMPLEMENTER_DRAIN_TIMEOUT_SECS,
             remaining = tasks.len(),
             "implementer task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Drain `ctx.reviewer_tasks` with `REVIEWER_DRAIN_TIMEOUT_SECS` budget.
+/// Runs AFTER `drain_implementer_tasks` so any in-flight Implementer has
+/// a chance to enqueue its Reviewer before the Reviewer pool drains.
+async fn drain_reviewer_tasks(ctx: &Arc<DaemonContext>) {
+    let mut tasks = ctx.reviewer_tasks.lock().await;
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len();
+    tracing::info!(count = n, "draining reviewer tasks");
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(REVIEWER_DRAIN_TIMEOUT_SECS), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_secs = REVIEWER_DRAIN_TIMEOUT_SECS,
+            remaining = tasks.len(),
+            "reviewer task drain timed out; aborting remainder"
         );
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
@@ -308,6 +338,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
 
     let context_builder = Arc::new(::context::InlineContextBuilder::new());
     let implementer_config = ::agents::ImplementerConfig::default();
+    let reviewer_config = ::agents::ReviewerConfig::default();
     let worktree_cleanup_policy = config.worktree.cleanup_policy;
 
     let ctx = Arc::new(DaemonContext::new(
@@ -322,6 +353,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         sandbox,
         context_builder,
         implementer_config,
+        reviewer_config,
         worktree_cleanup_policy,
     ));
 
@@ -377,6 +409,11 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // `Arc::try_unwrap` below, or the Store falls back to its sync
     // Drop which can panic on the tokio runtime.
     drain_implementer_tasks(&ctx).await;
+
+    // Stage 8 wiring: drain Reviewer tasks AFTER Implementer tasks so a
+    // successful Implementer on the wire can enqueue its Reviewer into
+    // the pool before the Reviewer drain begins.
+    drain_reviewer_tasks(&ctx).await;
 
     // Wait for the signal watcher to finish so its `Arc<DaemonContext>`
     // clone drops. Bounded by WATCHER_JOIN_TIMEOUT_SECS in case the

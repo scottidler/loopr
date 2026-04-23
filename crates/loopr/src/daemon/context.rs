@@ -11,12 +11,15 @@ use std::sync::atomic::AtomicBool;
 use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use agents::{Deps, ImplementerConfig, ImplementerError, RealTools, run_implementer};
+use agents::{
+    Deps, ImplementerConfig, ImplementerError, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError, run_implementer,
+    run_reviewer,
+};
 use context::{InlineContextBuilder, StateSummary};
-use domain::{Plan, PlanStatus, Role, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleStatus, Plan, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
 use ipc::DaemonEvent;
 use llm::AnthropicClient;
 use store::Store;
@@ -106,6 +109,9 @@ pub struct DaemonContext {
     /// max_requeries, max_repeat_action, max_parse_failures). Cloned
     /// per Work.
     pub implementer_config: ImplementerConfig,
+    /// Configuration for the Reviewer single-turn loop (max_requeries,
+    /// diff_byte_cap, noop_files_byte_cap). Cloned per Bundle.
+    pub reviewer_config: ReviewerConfig,
     /// Post-Work worktree disposal policy. Read from config at startup;
     /// each `spawn_implementer_for_work` consults it after
     /// `run_implementer` returns to decide whether to destroy the
@@ -118,6 +124,10 @@ pub struct DaemonContext {
     /// watcher) that MUST release before `Arc::try_unwrap` reclaims
     /// the Store for `.close().await`.
     pub implementer_tasks: Mutex<JoinSet<()>>,
+    /// In-flight Reviewer tasks. Stage 8 wiring capstone: drained AFTER
+    /// `implementer_tasks` at shutdown so in-flight Implementers can
+    /// enqueue their Reviewer before the Reviewer drain begins.
+    pub reviewer_tasks: Mutex<JoinSet<()>>,
 }
 
 impl DaemonContext {
@@ -142,6 +152,7 @@ impl DaemonContext {
         sandbox: SandboxMode,
         context_builder: Arc<InlineContextBuilder>,
         implementer_config: ImplementerConfig,
+        reviewer_config: ReviewerConfig,
         worktree_cleanup_policy: AttemptCleanupPolicy,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
@@ -161,8 +172,10 @@ impl DaemonContext {
             sandbox,
             context_builder,
             implementer_config,
+            reviewer_config,
             worktree_cleanup_policy,
             implementer_tasks: Mutex::new(JoinSet::new()),
+            reviewer_tasks: Mutex::new(JoinSet::new()),
         }
     }
 
@@ -285,8 +298,14 @@ impl DaemonContext {
                 {
                     error!(error = %e, "InProgress -> InReview transition failed after successful implementer");
                 }
-                // Phase 2 will spawn a Reviewer task here. For now the
-                // Bundle is persisted and the Work is InReview.
+                // Stage 8 Phase 2 handoff: spawn a Reviewer task for this
+                // Bundle. Shutdown-guard: if the daemon is winding down, skip
+                // the spawn so the reviewer-tasks drain does not race.
+                if !self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    let reviewer_ctx = Arc::clone(&self);
+                    let mut rts = self.reviewer_tasks.lock().await;
+                    rts.spawn(reviewer_ctx.spawn_reviewer_for_bundle(bundle));
+                }
             }
             Err(ImplementerError::EscalationNeeded(reason)) => {
                 warn!(%reason, "implementer escalated; marking Work Blocked");
@@ -309,6 +328,144 @@ impl DaemonContext {
             AttemptCleanupPolicy::OnRunEnd => {}
             AttemptCleanupPolicy::Never => {
                 warn!("AttemptCleanupPolicy::Never — leaking worktree (debug only)");
+            }
+        }
+    }
+
+    /// Review a persisted Bundle. Triages `Proposed -> Triaged`, repairs
+    /// the Work status if reconcile surfaced it at `InProgress`, runs the
+    /// Reviewer LLM turn, and routes the Verdict. On `Accept` the Bundle
+    /// transitions `Reviewed -> Accepted`; Phase 3 spawns the Integrator
+    /// from that branch. On `ChangeRequested` / `Reject` / Err, the Work
+    /// transitions to `Blocked` via the new one-step override edge and
+    /// no further stage runs (first-gate: no Director, no re-implementer).
+    ///
+    /// Shutdown-aware: early-returns if the daemon is winding down, so a
+    /// signal arriving during reviewer dispatch does not spawn a task that
+    /// will never drain. Per `CLAUDE.md` agents crate rule, every
+    /// orchestration decision (triage, verdict routing, next-stage spawn)
+    /// lives here, not in `agents::reviewer`.
+    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, run_id = %self.run_id))]
+    pub async fn spawn_reviewer_for_bundle(self: Arc<Self>, mut bundle: Bundle) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+            debug!("shutdown in progress; skipping reviewer spawn");
+            return;
+        }
+
+        // Step 1: triage Proposed -> Triaged. OCC-aware; a second triage
+        // of the same Bundle (reconcile + Implementer hand-off racing)
+        // returns Stale and we exit cleanly.
+        let expected = bundle.updated_at;
+        if let Err(e) = bundle.transition(BundleStatus::Triaged, Role::Coordinator) {
+            error!(error = %e, "bundle Proposed -> Triaged transition rejected by FSM; skipping");
+            return;
+        }
+        if let Err(e) = self.store.bundles().update(bundle.clone(), expected).await {
+            warn!(error = %e, "triage OCC update failed (another task beat us?); skipping");
+            return;
+        }
+
+        // Step 2: load Work.
+        let mut work = match self.store.works().get(&bundle.work_id).await {
+            Ok(w) => w,
+            Err(e) => {
+                error!(error = %e, "work lookup failed during review; skipping");
+                return;
+            }
+        };
+
+        // Step 3: Work state repair BEFORE run_reviewer. If reconcile
+        // spawned us against a Bundle whose Implementer crashed before
+        // firing InProgress -> InReview, pull the Work up now so the
+        // store is consistent for the full review window.
+        match work.status {
+            WorkStatus::InReview => {}
+            WorkStatus::InProgress => {
+                if let Err(e) = transition_and_persist_work(
+                    &self.store,
+                    &mut work,
+                    WorkStatus::InReview,
+                    Role::Coordinator,
+                    true, // override
+                )
+                .await
+                {
+                    error!(error = %e, work_status = ?work.status, "InProgress -> InReview repair failed");
+                    return;
+                }
+            }
+            other => {
+                warn!(?other, "unexpected Work status at reviewer entry; skipping");
+                return;
+            }
+        }
+
+        // Step 4: build ReviewerDeps.
+        let deps = ReviewerDeps {
+            llm: Arc::clone(&self.llm),
+            store: &self.store,
+            context: Arc::clone(&self.context_builder),
+            config: self.reviewer_config.clone(),
+            target: self.target.clone(),
+        };
+
+        // Step 5: single LLM turn (plus bounded parse-retry inside run_reviewer).
+        let verdict = match run_reviewer(&bundle, &work, &deps).await {
+            Ok(v) => v,
+            Err(ReviewerError::EscalationNeeded(reason)) => {
+                warn!(%reason, "reviewer escalated; marking Work Blocked");
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
+                        .await;
+                return;
+            }
+            Err(other) => {
+                error!(error = %other, "reviewer error; marking Work Blocked");
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
+                        .await;
+                return;
+            }
+        };
+
+        // Step 6: route Verdict.
+        match verdict {
+            Verdict::Accept { summary } => {
+                info!(summary = %summary, "reviewer accepted bundle");
+                // Re-read Bundle: run_reviewer transitioned it to Reviewed
+                // internally (via OCC on a clone) so our local copy is
+                // stale. Fresh read gives us the new updated_at snapshot.
+                let mut reviewed_bundle = match self.store.bundles().get(&bundle.id).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!(error = %e, "bundle re-read after Accept failed");
+                        return;
+                    }
+                };
+                let expected = reviewed_bundle.updated_at;
+                if let Err(e) = reviewed_bundle.transition(BundleStatus::Accepted, Role::Coordinator) {
+                    error!(error = %e, "Reviewed -> Accepted transition rejected by FSM");
+                    return;
+                }
+                if let Err(e) = self.store.bundles().update(reviewed_bundle.clone(), expected).await {
+                    warn!(error = %e, "Reviewed -> Accepted OCC update failed");
+                    return;
+                }
+                // Phase 3 will spawn an Integrator task here. For now the
+                // Bundle is Accepted and the Work is InReview, awaiting
+                // integrator dispatch.
+            }
+            Verdict::ChangeRequested { summary, reasons } => {
+                warn!(summary = %summary, reason_count = reasons.len(), "reviewer requested changes; Work -> Blocked");
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
+                        .await;
+            }
+            Verdict::Reject { reason } => {
+                warn!(reason = %reason, "reviewer rejected bundle; Work -> Blocked");
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
+                        .await;
             }
         }
     }
