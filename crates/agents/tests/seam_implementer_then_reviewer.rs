@@ -10,49 +10,15 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::sync::Mutex;
 
 use tempfile::TempDir;
 
 use agents::{Deps, ImplementerConfig, ReviewerConfig, ReviewerDeps, ToolExecutor, run_implementer, run_reviewer};
 use context::{InlineContextBuilder, StateSummary};
 use domain::{AcceptanceCriteria, BundleStatus, Role, Verdict, Work};
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
+use llm::ScriptedLlm;
 use store::{BundleUpdateSink, Store};
 use worktree::Worktree;
-
-// ---------------------------------------------------------------------------
-// Per-task scripted LLMs
-// ---------------------------------------------------------------------------
-
-struct ScriptedLlm {
-    responses: Mutex<Vec<String>>,
-}
-
-impl LlmClient for ScriptedLlm {
-    #[allow(clippy::manual_async_fn)]
-    fn complete_with_tool<'a>(
-        &'a self,
-        _system: &'a str,
-        _user: &'a str,
-        _tool: LlmToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
-        async move { panic!("unused") }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        _system: &'a str,
-        _messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
-        async move {
-            let mut q = self.responses.lock().unwrap();
-            assert!(!q.is_empty(), "scripted llm exhausted");
-            Ok(q.remove(0))
-        }
-    }
-}
 
 struct NoopTools;
 
@@ -123,11 +89,10 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &base_sha).unwrap();
 
     // Stage 7: Implementer emits a propose_bundle immediately.
-    let impl_llm = ScriptedLlm {
-        responses: Mutex::new(vec![
-            r#"[{"type":"propose_bundle","claims":["work is done"]}]"#.to_string(),
-        ]),
-    };
+    let impl_llm = ScriptedLlm::new();
+    impl_llm.queue_free(Ok(
+        r#"[{"type":"propose_bundle","claims":["work is done"]}]"#.to_string()
+    ));
     let impl_deps = Deps {
         llm: impl_llm,
         tools: NoopTools,
@@ -154,9 +119,8 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     assert_eq!(triaged_bundle.status, BundleStatus::Triaged);
 
     // Stage 8: Reviewer accepts.
-    let rev_llm = ScriptedLlm {
-        responses: Mutex::new(vec![r#"{"kind":"accept","summary":"work completes"}"#.to_string()]),
-    };
+    let rev_llm = ScriptedLlm::new();
+    rev_llm.queue_free(Ok(r#"{"kind":"accept","summary":"work completes"}"#.to_string()));
     let rev_deps = ReviewerDeps {
         llm: rev_llm,
         store: &store,

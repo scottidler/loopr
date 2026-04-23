@@ -1,0 +1,179 @@
+//! Scripted `LlmClient` stub for tests.
+//!
+//! Centralized here so tests across `agents`, `decomposer`, and `loopr`
+//! share one implementation. Gated behind the `stub` cargo feature so the
+//! production `loopr` binary never links it.
+//!
+//! Queues live behind `Arc<Mutex<_>>` and the struct is `Clone`: a test
+//! can clone the stub BEFORE handing it to a daemon or agent and retain a
+//! probe for post-run assertions (e.g. assert the queue was fully drained).
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+use crate::client::LlmClient;
+use crate::error::LlmError;
+use crate::message::ChatMessage;
+use crate::tool::{ToolCall, ToolSchema};
+
+#[derive(Clone, Default)]
+pub struct ScriptedLlm {
+    tool_responses: Arc<Mutex<VecDeque<Result<ToolCall, LlmError>>>>,
+    free_responses: Arc<Mutex<VecDeque<Result<String, LlmError>>>>,
+}
+
+impl ScriptedLlm {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn queue_tool(&self, result: Result<ToolCall, LlmError>) {
+        self.tool_responses
+            .lock()
+            .expect("tool_responses lock")
+            .push_back(result);
+    }
+
+    pub fn queue_free(&self, result: Result<String, LlmError>) {
+        self.free_responses
+            .lock()
+            .expect("free_responses lock")
+            .push_back(result);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        let (t, f) = self.remaining();
+        t == 0 && f == 0
+    }
+
+    pub fn remaining(&self) -> (usize, usize) {
+        let t = self.tool_responses.lock().expect("tool_responses lock").len();
+        let f = self.free_responses.lock().expect("free_responses lock").len();
+        (t, f)
+    }
+}
+
+impl LlmClient for ScriptedLlm {
+    #[allow(clippy::manual_async_fn)]
+    fn complete_with_tool<'a>(
+        &'a self,
+        _system: &'a str,
+        _user: &'a str,
+        _tool: ToolSchema,
+    ) -> impl std::future::Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+        async move {
+            let popped = self.tool_responses.lock().expect("tool_responses lock").pop_front();
+            match popped {
+                Some(r) => r,
+                None => {
+                    let (t, f) = self.remaining();
+                    panic!(
+                        "ScriptedLlm: complete_with_tool called with empty queue (tool remaining: {t}, free remaining: {f})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn complete_free<'a>(
+        &'a self,
+        _system: &'a str,
+        _messages: &'a [ChatMessage],
+    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send + 'a {
+        async move {
+            let popped = self.free_responses.lock().expect("free_responses lock").pop_front();
+            match popped {
+                Some(r) => r,
+                None => {
+                    let (t, f) = self.remaining();
+                    panic!(
+                        "ScriptedLlm: complete_free called with empty queue (tool remaining: {t}, free remaining: {f})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::FatalReason;
+    use serde_json::json;
+
+    fn tool_call(input: serde_json::Value) -> ToolCall {
+        ToolCall {
+            tool_name: "test_tool".to_string(),
+            input,
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_with_tool_pops_from_queue_in_order() {
+        let stub = ScriptedLlm::new();
+        stub.queue_tool(Ok(tool_call(json!({"i": 1}))));
+        stub.queue_tool(Ok(tool_call(json!({"i": 2}))));
+
+        let schema = ToolSchema {
+            name: "test_tool".to_string(),
+            description: "".to_string(),
+            input_schema: json!({}),
+        };
+        let first = stub.complete_with_tool("", "", schema.clone()).await.unwrap();
+        assert_eq!(first.input, json!({"i": 1}));
+        let second = stub.complete_with_tool("", "", schema).await.unwrap();
+        assert_eq!(second.input, json!({"i": 2}));
+        assert!(stub.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_free_pops_from_queue_in_order() {
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Ok("first".to_string()));
+        stub.queue_free(Ok("second".to_string()));
+
+        assert_eq!(stub.complete_free("", &[]).await.unwrap(), "first");
+        assert_eq!(stub.complete_free("", &[]).await.unwrap(), "second");
+        assert!(stub.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clone_shares_queue_state() {
+        let stub = ScriptedLlm::new();
+        let probe = stub.clone();
+        stub.queue_free(Ok("hello".to_string()));
+        assert_eq!(probe.remaining(), (0, 1));
+        assert_eq!(stub.complete_free("", &[]).await.unwrap(), "hello");
+        assert!(probe.is_empty());
+    }
+
+    #[tokio::test]
+    async fn errors_propagate() {
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Err(LlmError::Retryable {
+            reason: "transient".to_string(),
+        }));
+        stub.queue_tool(Err(LlmError::Fatal {
+            reason: FatalReason::SchemaValidation("bad".to_string()),
+        }));
+
+        let free_err = stub.complete_free("", &[]).await.unwrap_err();
+        assert!(matches!(free_err, LlmError::Retryable { .. }));
+
+        let schema = ToolSchema {
+            name: "t".to_string(),
+            description: "".to_string(),
+            input_schema: json!({}),
+        };
+        let tool_err = stub.complete_with_tool("", "", schema).await.unwrap_err();
+        assert!(matches!(tool_err, LlmError::Fatal { .. }));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "complete_free called with empty queue")]
+    async fn complete_free_panics_when_empty() {
+        let stub = ScriptedLlm::new();
+        let _ = stub.complete_free("", &[]).await;
+    }
+}

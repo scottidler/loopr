@@ -1,59 +1,12 @@
 use std::path::Path;
-use std::sync::Mutex;
 
 use serde_json::json;
 use tempfile::TempDir;
 
 use domain::Plan;
-use llm::{ChatMessage, FatalReason, LlmClient, LlmError, ToolCall, ToolSchema};
+use llm::{FatalReason, LlmError, ScriptedLlm, ToolCall};
 
 use crate::error::DecomposerError;
-
-/// In-process `LlmClient` stand-in for unit tests. Holds a queue of
-/// canned `Result<ToolCall, LlmError>` responses served in call order.
-/// Each call to `complete_with_tool` pops the front of the queue;
-/// calling with an empty queue panics loudly so the test fails
-/// rather than hanging.
-struct MockLlmClient {
-    responses: Mutex<Vec<Result<ToolCall, LlmError>>>,
-}
-
-impl MockLlmClient {
-    fn new(responses: Vec<Result<ToolCall, LlmError>>) -> Self {
-        Self {
-            responses: Mutex::new(responses),
-        }
-    }
-}
-
-impl LlmClient for MockLlmClient {
-    #[allow(clippy::manual_async_fn)] // explicit `+ Send` bound required by the trait
-    fn complete_with_tool<'a>(
-        &'a self,
-        _system: &'a str,
-        _user: &'a str,
-        _tool: ToolSchema,
-    ) -> impl std::future::Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
-        async move {
-            let mut q = self.responses.lock().expect("mock response queue lock");
-            if q.is_empty() {
-                panic!("MockLlmClient: response queue exhausted");
-            }
-            q.remove(0)
-        }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        _system: &'a str,
-        _messages: &'a [ChatMessage],
-    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send + 'a {
-        async move {
-            panic!("MockLlmClient in decomposer tests does not implement complete_free");
-        }
-    }
-}
 
 fn tool_call(input: serde_json::Value) -> ToolCall {
     ToolCall {
@@ -87,7 +40,10 @@ async fn run_decompose(
     target: &Path,
 ) -> Result<Vec<domain::Work>, DecomposerError> {
     let plan = fresh_plan("decompose me");
-    let llm = MockLlmClient::new(responses);
+    let llm = ScriptedLlm::new();
+    for r in responses {
+        llm.queue_tool(r);
+    }
     super::decompose(&plan, target, &llm).await
 }
 
@@ -364,7 +320,8 @@ async fn every_work_has_parent_id_equal_to_plan_id() {
         ]
     }));
     let plan = fresh_plan("roots");
-    let llm = MockLlmClient::new(vec![ok(response)]);
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response));
     let works = super::decompose(&plan, dir.path(), &llm).await.expect("ok");
     for w in &works {
         assert_eq!(w.parent_id, plan.id);

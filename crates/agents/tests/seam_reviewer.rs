@@ -5,51 +5,16 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::sync::Mutex;
 
 use tempfile::TempDir;
 
 use agents::{ReviewerConfig, ReviewerDeps, run_reviewer};
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, Role, Verdict, Work};
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
+use llm::ScriptedLlm;
 use store::Store;
-
-// ---------------------------------------------------------------------------
-// Fake LLM
-// ---------------------------------------------------------------------------
-
-struct ScriptedLlm {
-    responses: Mutex<Vec<String>>,
-}
-
-impl LlmClient for ScriptedLlm {
-    #[allow(clippy::manual_async_fn)]
-    fn complete_with_tool<'a>(
-        &'a self,
-        _system: &'a str,
-        _user: &'a str,
-        _tool: LlmToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
-        async move { panic!("seam test: complete_with_tool unused") }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        _system: &'a str,
-        _messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
-        async move {
-            let mut q = self.responses.lock().unwrap();
-            assert!(!q.is_empty(), "scripted llm exhausted");
-            Ok(q.remove(0))
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Git helpers
@@ -120,11 +85,10 @@ async fn full_roundtrip_accept_verdict_persists_reviewed_bundle() {
     store.bundles().create(bundle.clone()).await.unwrap();
 
     // Fake LLM returning an accept verdict.
-    let llm = ScriptedLlm {
-        responses: Mutex::new(vec![
-            r#"{"kind":"accept","summary":"AC met: hello returns 42"}"#.to_string(),
-        ]),
-    };
+    let llm = ScriptedLlm::new();
+    llm.queue_free(Ok(
+        r#"{"kind":"accept","summary":"AC met: hello returns 42"}"#.to_string()
+    ));
 
     let deps = ReviewerDeps {
         llm,
@@ -181,11 +145,10 @@ async fn change_requested_verdict_persists_rejected_bundle() {
     bundle.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
     store.bundles().create(bundle.clone()).await.unwrap();
 
-    let llm = ScriptedLlm {
-        responses: Mutex::new(vec![
-            r#"{"kind":"change_requested","summary":"AC says 99 not 42","reasons":[{"severity":"error","file":"src.rs","line":1,"message":"returns 42 not 99"}]}"#.to_string(),
-        ]),
-    };
+    let llm = ScriptedLlm::new();
+    llm.queue_free(Ok(
+        r#"{"kind":"change_requested","summary":"AC says 99 not 42","reasons":[{"severity":"error","file":"src.rs","line":1,"message":"returns 42 not 99"}]}"#.to_string(),
+    ));
 
     let deps = ReviewerDeps {
         llm,

@@ -6,6 +6,11 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 
+[features]
+# Test-only scripted `LlmClient` stub. Consumed by `agents`, `decomposer`,
+# and `loopr`'s integration tests; never enabled in production `[dependencies]`.
+stub = []
+
 [dependencies]
 domain = { path = "../domain" }
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "http2"] }

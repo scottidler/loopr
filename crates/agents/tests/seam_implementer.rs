@@ -14,38 +14,9 @@ use tempfile::TempDir;
 use agents::{Deps, ImplementerConfig, ToolExecutor, run_implementer};
 use context::{InlineContextBuilder, StateSummary};
 use domain::Work;
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
+use llm::ScriptedLlm;
 use store::Store;
 use worktree::Worktree;
-
-struct ScriptedLlm {
-    responses: Mutex<Vec<String>>,
-}
-
-impl LlmClient for ScriptedLlm {
-    #[allow(clippy::manual_async_fn)]
-    fn complete_with_tool<'a>(
-        &'a self,
-        _system: &'a str,
-        _user: &'a str,
-        _tool: LlmToolSchema,
-    ) -> impl std::future::Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
-        async move { panic!("seam test: complete_with_tool unused") }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        _system: &'a str,
-        _messages: &'a [ChatMessage],
-    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send + 'a {
-        async move {
-            let mut q = self.responses.lock().unwrap();
-            assert!(!q.is_empty(), "scripted llm exhausted");
-            Ok(q.remove(0))
-        }
-    }
-}
 
 struct RecordedTools {
     calls: Mutex<Vec<(String, serde_json::Value)>>,
@@ -113,12 +84,11 @@ async fn full_roundtrip_bundle_persists_in_real_store() {
     let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &base_sha).unwrap();
 
     // Fake LLM with a 2-step script.
-    let llm = ScriptedLlm {
-        responses: Mutex::new(vec![
-            r#"[{"type":"run_tool","tool":"bash","input":{"command":"echo hi"}}]"#.to_string(),
-            r#"[{"type":"propose_bundle","claims":["did a thing"]}]"#.to_string(),
-        ]),
-    };
+    let llm = ScriptedLlm::new();
+    llm.queue_free(Ok(
+        r#"[{"type":"run_tool","tool":"bash","input":{"command":"echo hi"}}]"#.to_string(),
+    ));
+    llm.queue_free(Ok(r#"[{"type":"propose_bundle","claims":["did a thing"]}]"#.to_string()));
 
     let tools = RecordedTools {
         calls: Mutex::new(Vec::new()),

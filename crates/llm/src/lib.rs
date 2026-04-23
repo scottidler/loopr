@@ -14,9 +14,15 @@ mod error;
 mod message;
 mod tool;
 
+#[cfg(feature = "stub")]
+mod stub;
+
 pub use anthropic::AnthropicClient;
 pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
 pub use message::ChatMessage;
 pub use tool::{ToolCall, ToolSchema};
+
+#[cfg(feature = "stub")]
+pub use stub::ScriptedLlm;
