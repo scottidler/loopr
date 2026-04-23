@@ -2,8 +2,9 @@
 
 **Author:** Claude (with Scott)
 **Date:** 2026-04-22
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5 (self-review) + Architect R1 folded (2026-04-22)
+**Shipped in:** v0.5.X (tag to be added on release)
 **Crates touched:** `loopr` (primary), `domain` (one FSM-edge addition: `WorkStatus: InReview => Blocked by Coordinator` in the overrides table), `store` (one new accessor: `WorksStore::list_by_parent_id`), `integrator` (consumer), `agents` (consumer).
 
 ## Summary
