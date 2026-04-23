@@ -49,5 +49,6 @@ futures-util = { version = "0.3.32", features = ["sink"] }
 [dev-dependencies]
 assert_cmd = "2.2.1"
 libc = "0.2.185"
+llm = { path = "../llm", features = ["stub"] }
 predicates = "3.1.4"
 tempfile = "3.27.0"

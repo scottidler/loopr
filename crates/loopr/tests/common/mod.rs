@@ -6,6 +6,8 @@
 #![allow(dead_code)]
 #![allow(clippy::unwrap_used)]
 
+pub mod harness;
+
 use std::path::Path;
 use std::process::Command;
 

@@ -22,6 +22,7 @@
 pub(crate) mod context;
 pub(crate) mod fork;
 pub(crate) mod git;
+pub mod handle;
 pub(crate) mod sentinel;
 pub(crate) mod startup;
 
@@ -40,6 +41,7 @@ use crate::config::{Config, resolve_api_key};
 use crate::error::LooprError;
 
 pub use context::DaemonContext;
+pub use handle::DaemonHandle;
 
 /// `GIT_DESCRIBE` of the running binary. Written to
 /// `.loopr/daemon.version` on startup so clients can detect version drift.
