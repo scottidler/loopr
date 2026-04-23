@@ -68,6 +68,13 @@ pub const IMPLEMENTER_DRAIN_TIMEOUT_SECS: u64 = 30;
 /// usually finishes within the Anthropic streaming window (~10-30s).
 pub const REVIEWER_DRAIN_TIMEOUT_SECS: u64 = 30;
 
+/// Soft timeout for draining in-flight Integrator tasks at shutdown.
+/// Integrator is non-LLM (git only); typical path is sub-second. The
+/// retry loop's worst case is ~12.6s of backoff, but shutdown cuts the
+/// backoff sleep via shutdown_notify, so this budget is a ceiling, not
+/// an expected wait.
+pub const INTEGRATOR_DRAIN_TIMEOUT_SECS: u64 = 15;
+
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
@@ -112,6 +119,31 @@ async fn drain_reviewer_tasks(ctx: &Arc<DaemonContext>) {
             timeout_secs = REVIEWER_DRAIN_TIMEOUT_SECS,
             remaining = tasks.len(),
             "reviewer task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Drain `ctx.integrator_tasks` with `INTEGRATOR_DRAIN_TIMEOUT_SECS`
+/// budget. Runs AFTER `drain_reviewer_tasks` so a Reviewer that just
+/// reached Accept can enqueue its Integrator before the pool drains.
+async fn drain_integrator_tasks(ctx: &Arc<DaemonContext>) {
+    let mut tasks = ctx.integrator_tasks.lock().await;
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len();
+    tracing::info!(count = n, "draining integrator tasks");
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(INTEGRATOR_DRAIN_TIMEOUT_SECS), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_secs = INTEGRATOR_DRAIN_TIMEOUT_SECS,
+            remaining = tasks.len(),
+            "integrator task drain timed out; aborting remainder"
         );
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
@@ -339,6 +371,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     let context_builder = Arc::new(::context::InlineContextBuilder::new());
     let implementer_config = ::agents::ImplementerConfig::default();
     let reviewer_config = ::agents::ReviewerConfig::default();
+    let integrator_config = ::integrator::IntegratorConfig::default();
     let worktree_cleanup_policy = config.worktree.cleanup_policy;
 
     let ctx = Arc::new(DaemonContext::new(
@@ -354,6 +387,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         context_builder,
         implementer_config,
         reviewer_config,
+        integrator_config,
         worktree_cleanup_policy,
     ));
 
@@ -414,6 +448,11 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // successful Implementer on the wire can enqueue its Reviewer into
     // the pool before the Reviewer drain begins.
     drain_reviewer_tasks(&ctx).await;
+
+    // Stage 8 wiring: drain Integrator tasks AFTER Reviewer tasks so an
+    // in-flight Reviewer with an Accept verdict can enqueue its
+    // Integrator before the pool drains.
+    drain_integrator_tasks(&ctx).await;
 
     // Wait for the signal watcher to finish so its `Arc<DaemonContext>`
     // clone drops. Bounded by WATCHER_JOIN_TIMEOUT_SECS in case the

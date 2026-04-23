@@ -58,6 +58,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext> {
         Arc::new(InlineContextBuilder::new()),
         ImplementerConfig::default(),
         ReviewerConfig::default(),
+        integrator::IntegratorConfig::default(),
         AttemptCleanupPolicy::default(),
     ))
 }

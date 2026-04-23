@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, broadcast};
@@ -20,12 +21,26 @@ use agents::{
 };
 use context::{InlineContextBuilder, StateSummary};
 use domain::{Bundle, BundleStatus, Plan, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
+use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
 use llm::AnthropicClient;
-use store::Store;
+use store::{BundleUpdateError, Store};
 use telemetry::RunId;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::{AttemptCleanupPolicy, Worktree};
+
+/// Exponential backoff schedule for Integrator retries on transient
+/// errors (`IntegrationError::Update(Stale)` or `Store(_)`). Five
+/// attempts total; Integrator doc mandates a circuit-breaker cap.
+/// Selected to cover typical OCC-race windows without starving
+/// shutdown signals.
+pub const INTEGRATOR_BACKOFF: &[Duration] = &[
+    Duration::from_millis(100),
+    Duration::from_millis(500),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(5),
+];
 
 /// Capacity of the daemon's event broadcast channel. Stage 4 never sends
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
@@ -112,6 +127,14 @@ pub struct DaemonContext {
     /// Configuration for the Reviewer single-turn loop (max_requeries,
     /// diff_byte_cap, noop_files_byte_cap). Cloned per Bundle.
     pub reviewer_config: ReviewerConfig,
+    /// Configuration for the Integrator (git_timeout, allow_multi_bundle).
+    /// Cloned per Bundle-integration.
+    pub integrator_config: IntegratorConfig,
+    /// Intra-daemon working-tree serializer. Shared into every
+    /// `IntegratorDeps` so two concurrent `integrate` calls on the same
+    /// target do not race on `git checkout` / `git merge`. First gate:
+    /// one active integration per daemon; the lock is rarely contended.
+    pub git_lock: Arc<Mutex<()>>,
     /// Post-Work worktree disposal policy. Read from config at startup;
     /// each `spawn_implementer_for_work` consults it after
     /// `run_implementer` returns to decide whether to destroy the
@@ -128,6 +151,10 @@ pub struct DaemonContext {
     /// `implementer_tasks` at shutdown so in-flight Implementers can
     /// enqueue their Reviewer before the Reviewer drain begins.
     pub reviewer_tasks: Mutex<JoinSet<()>>,
+    /// In-flight Integrator tasks. Drained AFTER `reviewer_tasks` at
+    /// shutdown so in-flight Reviewers with an Accept verdict can
+    /// enqueue their Integrator before the Integrator drain begins.
+    pub integrator_tasks: Mutex<JoinSet<()>>,
 }
 
 impl DaemonContext {
@@ -153,6 +180,7 @@ impl DaemonContext {
         context_builder: Arc<InlineContextBuilder>,
         implementer_config: ImplementerConfig,
         reviewer_config: ReviewerConfig,
+        integrator_config: IntegratorConfig,
         worktree_cleanup_policy: AttemptCleanupPolicy,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
@@ -173,9 +201,12 @@ impl DaemonContext {
             context_builder,
             implementer_config,
             reviewer_config,
+            integrator_config,
+            git_lock: Arc::new(Mutex::new(())),
             worktree_cleanup_policy,
             implementer_tasks: Mutex::new(JoinSet::new()),
             reviewer_tasks: Mutex::new(JoinSet::new()),
+            integrator_tasks: Mutex::new(JoinSet::new()),
         }
     }
 
@@ -451,9 +482,14 @@ impl DaemonContext {
                     warn!(error = %e, "Reviewed -> Accepted OCC update failed");
                     return;
                 }
-                // Phase 3 will spawn an Integrator task here. For now the
-                // Bundle is Accepted and the Work is InReview, awaiting
-                // integrator dispatch.
+                // Stage 8 Phase 3 handoff: spawn Integrator task for the
+                // Accepted Bundle. Shutdown-guard so a signal arriving here
+                // does not spawn a task that will never drain.
+                if !self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    let integrator_ctx = Arc::clone(&self);
+                    let mut its = self.integrator_tasks.lock().await;
+                    its.spawn(integrator_ctx.spawn_integrator_for_bundle(reviewed_bundle));
+                }
             }
             Verdict::ChangeRequested { summary, reasons } => {
                 warn!(summary = %summary, reason_count = reasons.len(), "reviewer requested changes; Work -> Blocked");
@@ -463,6 +499,138 @@ impl DaemonContext {
             }
             Verdict::Reject { reason } => {
                 warn!(reason = %reason, "reviewer rejected bundle; Work -> Blocked");
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
+                        .await;
+            }
+        }
+    }
+
+    /// Integrate an Accepted Bundle onto the Plan's integration branch
+    /// and produce a Tick. Retries on transient errors with the
+    /// `INTEGRATOR_BACKOFF` schedule, capped at 5 attempts total.
+    ///
+    /// Integrator doc contract: a Bundle at `Integrating` on `integrate`
+    /// return is NOT a terminal failure; the daemon re-enqueues it.
+    /// This method honors that by treating `Update(Stale)` and `Store`
+    /// errors as retryable, and any other IntegrationError variant as
+    /// terminal (no retry; Work -> Blocked).
+    ///
+    /// Shutdown-aware: shutdown_notify cuts the backoff sleep so a Ctrl-C
+    /// during a retry does not block the daemon for 12.6s.
+    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, run_id = %self.run_id))]
+    pub async fn spawn_integrator_for_bundle(self: Arc<Self>, bundle: Bundle) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+            debug!("shutdown in progress; skipping integrator spawn");
+            return;
+        }
+
+        // Load Work + Plan. Both failures are non-retryable (records
+        // fundamentally missing), so we log and return.
+        let mut work = match self.store.works().get(&bundle.work_id).await {
+            Ok(w) => w,
+            Err(e) => {
+                error!(error = %e, "work lookup failed during integrate; skipping");
+                return;
+            }
+        };
+        let plan = match self.store.plans().get(&work.parent_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                error!(error = %e, "plan lookup failed during integrate; skipping");
+                return;
+            }
+        };
+
+        let deps = IntegratorDeps {
+            bundle_sink: &self.store,
+            works: &self.store,
+            ticks: &self.store,
+            config: self.integrator_config.clone(),
+            target: self.target.clone(),
+            git_lock: Arc::clone(&self.git_lock),
+        };
+
+        // Retry loop with circuit breaker. `attempt` is 0-indexed into
+        // INTEGRATOR_BACKOFF; each iteration either integrates or sleeps
+        // the corresponding backoff then tries again.
+        let outcome: Result<domain::Tick, IntegrationError> = 'retry: {
+            for (attempt, &backoff) in INTEGRATOR_BACKOFF.iter().enumerate() {
+                match integrate(std::slice::from_ref(&bundle), &plan, &deps).await {
+                    Ok(tick) => break 'retry Ok(tick),
+                    Err(IntegrationError::Update(BundleUpdateError::Stale { .. }))
+                    | Err(IntegrationError::Store(_))
+                        if attempt + 1 < INTEGRATOR_BACKOFF.len() =>
+                    {
+                        warn!(
+                            attempt = attempt + 1,
+                            total_attempts = INTEGRATOR_BACKOFF.len(),
+                            backoff_ms = backoff.as_millis(),
+                            "integrator retryable error; backing off"
+                        );
+                        // Respect shutdown during backoff; select against
+                        // the notify waker so a SIGTERM does not block.
+                        tokio::select! {
+                            _ = tokio::time::sleep(backoff) => {}
+                            _ = self.shutdown_notify.notified() => {
+                                warn!("shutdown during integrator backoff; abandoning retry");
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => break 'retry Err(e),
+                }
+            }
+            // Fell off the end of the schedule with all attempts retryable.
+            // Circuit-break.
+            Err(IntegrationError::Git(
+                "integrator circuit breaker tripped: 5 retryable-error attempts exhausted".into(),
+            ))
+        };
+
+        match outcome {
+            Ok(tick) => {
+                info!(tick_id = %tick.id, integration_sha = %tick.integration_sha, "integration succeeded");
+                // Work: InReview -> Integrated -> Done.
+                if let Err(e) =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Integrated, Role::Integrator, false)
+                        .await
+                {
+                    error!(error = %e, "InReview -> Integrated transition failed after Tick persisted");
+                    return;
+                }
+                if let Err(e) =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Done, Role::Coordinator, false)
+                        .await
+                {
+                    error!(error = %e, "Integrated -> Done transition failed after Tick persisted");
+                    return;
+                }
+                // Plan-level completion check: if every sibling Work is
+                // terminal with at least one Done, fire Plan:
+                // Active -> Complete. Best-effort; log + continue on Err.
+                let mut plan_mut = plan.clone();
+                if let Ok(siblings) = self.store.works().list_by_parent_id(&plan_mut.id).await {
+                    let all_terminal = !siblings.is_empty() && siblings.iter().all(|w| w.status.is_terminal());
+                    let any_done = siblings.iter().any(|w| w.status == WorkStatus::Done);
+                    if all_terminal && any_done {
+                        match transition_and_persist_plan(
+                            &self.store,
+                            &mut plan_mut,
+                            PlanStatus::Complete,
+                            Role::Coordinator,
+                        )
+                        .await
+                        {
+                            Ok(()) => info!(plan_id = %plan_mut.id, "plan Active -> Complete"),
+                            Err(e) => warn!(error = %e, "plan Active -> Complete transition failed (non-fatal)"),
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "integrator terminal; marking Work Blocked");
+                // One-step via the Phase 1 InReview -> Blocked override.
                 let _ =
                     transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
                         .await;

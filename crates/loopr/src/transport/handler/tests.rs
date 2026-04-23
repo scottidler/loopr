@@ -54,6 +54,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
         Arc::new(InlineContextBuilder::new()),
         ImplementerConfig::default(),
         ReviewerConfig::default(),
+        integrator::IntegratorConfig::default(),
         AttemptCleanupPolicy::default(),
     ));
     (td, ctx)
