@@ -318,6 +318,40 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     let _guard = telemetry::init(&target, &run_id, &directive)
         .map_err(|e| LooprError::DaemonStartup(format!("telemetry init: {e}")))?;
 
+    // Load top-level Config (composes each stage's config) and build the
+    // process-wide AnthropicClient. Config missing from `.loopr/config.yml`
+    // falls back to defaults; API key missing from env falls back to a
+    // placeholder that keeps the daemon booting but makes real LLM calls
+    // fail with 401. See `crate::config` for the degradation contract.
+    let config = Config::load(&target)?;
+    let api_key = resolve_api_key(&config.llm);
+    let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
+        .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
+
+    let ctx = build_context(target, run_id, pid, anthropic, config).await?;
+    serve(ctx).await
+}
+
+/// Construct a `DaemonContext<L>` ready for `serve` / `serve_core`. This
+/// is the test-reachable entry point for the pipeline: tests call it with
+/// a stub `L` and a `Config::default()`, skipping `Config::load` and the
+/// production `AnthropicClient` construction.
+///
+/// Side effects (all contained to this function, mirror `run_active_daemon`'s
+/// historical behavior): opens the per-target `Store`, installs
+/// `.git/info/exclude` patterns, builds `LaneRouter` + `BashDenylist` +
+/// `path_deny_patterns` from config, runs the startup reconcile sweep.
+/// Fails if the Store cannot open or the lane router fails sandbox detection.
+pub async fn build_context<L>(
+    target: PathBuf,
+    run_id: RunId,
+    pid: u32,
+    llm: L,
+    config: Config,
+) -> Result<Arc<DaemonContext<L>>, LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     // Open the per-target store AFTER telemetry init so open errors land
     // in the daemon's run log, and BEFORE `DaemonContext::new` because the
     // context owns the store for the duration of the active phase.
@@ -332,16 +366,6 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     if let Err(e) = worktree::ensure_loopr_excludes(&target) {
         tracing::warn!(error = %e, "daemon startup: ensure_loopr_excludes failed (non-fatal)");
     }
-
-    // Load top-level Config (composes each stage's config) and build the
-    // process-wide AnthropicClient. Config missing from `.loopr/config.yml`
-    // falls back to defaults; API key missing from env falls back to a
-    // placeholder that keeps the daemon booting but makes real LLM calls
-    // fail with 401. See `crate::config` for the degradation contract.
-    let config = Config::load(&target)?;
-    let api_key = resolve_api_key(&config.llm);
-    let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
-        .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
 
     // Build the tool infrastructure BEFORE DaemonContext::new. LaneRouter::new
     // is fallible when `sandbox: required` and bwrap is not functional on
@@ -379,7 +403,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         run_id,
         pid,
         store,
-        Arc::new(anthropic),
+        Arc::new(llm),
         router,
         bash_denylist,
         path_deny_patterns,
@@ -399,14 +423,8 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     );
 
     // Hygiene sweep: clean up worktrees left behind by a previous daemon
-    // crash, log orphans. Moved here from pre-Config::load per Stage 8 wiring
-    // capstone (design doc 2026-04-22-stage-8-wiring.md). Phase 4 extends this
-    // sweep to enqueue Reviewer / Integrator tasks for intermediate-state
-    // Bundles and requires `&ctx` to spawn into the JoinSets; Phase 1 already
-    // moves the call here so the ordering change is explicit, even though
-    // the existing body still takes only `&target` + `&store`.
-    // Runs BEFORE the accept loop binds so no coordinator session can race
-    // with this pass.
+    // crash, log orphans. Runs BEFORE the accept loop binds so no
+    // coordinator session can race with this pass.
     let report = startup::reconcile(&ctx).await?;
     tracing::info!(
         cleaned = report.cleaned,
@@ -416,21 +434,36 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         "daemon.startup.reconcile.complete"
     );
 
+    Ok(ctx)
+}
+
+/// Pipeline body. Binds the IPC socket, runs the accept loop, drains the
+/// three task pools, and returns the `Arc<DaemonContext<L>>` for the caller
+/// to close.
+///
+/// NO signal handlers installed — shutdown is driven exclusively by
+/// `ctx.shutting_down` + `ctx.shutdown_notify`. Test harness calls this
+/// directly without a signal watcher.
+///
+/// Returns the Arc so `Arc::try_unwrap` + `store.close().await` happen at
+/// the outer layer, AFTER the caller has joined any other Arc holders
+/// (e.g. production's signal watcher). Closing the store inside this
+/// function would deterministically fail `try_unwrap` when production's
+/// watcher still holds a clone.
+pub async fn serve_core<L>(ctx: Arc<DaemonContext<L>>) -> Result<Arc<DaemonContext<L>>, LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     // Unconditionally remove any stale socket file before bind. The PID
     // lock we already hold is the authority; a lingering socket file on
     // disk is just a side-effect of a previous ungraceful exit.
-    let socket = sentinel::socket_path(&target);
+    let socket = sentinel::socket_path(&ctx.target);
     if socket.exists() {
         std::fs::remove_file(&socket)
             .map_err(|e| LooprError::DaemonStartup(format!("remove stale socket {}: {e}", socket.display())))?;
     }
 
     let listener = crate::transport::server::bind_listener(&socket)?;
-
-    // Signal-watcher task. Awaits SIGTERM/SIGINT as async values; sets
-    // shutting_down + notify_waiters on first signal. No POSIX
-    // signal-handler-safety concerns.
-    let watcher_handle = spawn_signal_watcher(ctx.clone());
 
     // Phase 4: real accept loop. Upgraded at Stage 5 to hold a JoinSet of
     // per-connection handlers and drain it before returning (see
@@ -440,7 +473,7 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // Stage 7 wiring: drain in-flight Implementer tasks. Each task holds
     // an `Arc<DaemonContext>` clone (the `self: Arc<Self>` parameter of
     // `spawn_implementer_for_work`); they MUST complete before
-    // `Arc::try_unwrap` below, or the Store falls back to its sync
+    // `Arc::try_unwrap` in the caller, or the Store falls back to its sync
     // Drop which can panic on the tokio runtime.
     drain_implementer_tasks(&ctx).await;
 
@@ -453,6 +486,25 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
     // in-flight Reviewer with an Accept verdict can enqueue its
     // Integrator before the pool drains.
     drain_integrator_tasks(&ctx).await;
+
+    accept_result?;
+    Ok(ctx)
+}
+
+/// Production wrapper around `serve_core`: installs the SIGTERM/SIGINT
+/// watcher, calls `serve_core`, joins the watcher so its `Arc<DaemonContext>`
+/// clone drops, then `try_unwrap`s + `store.close().await`s. Not used by
+/// tests (would collide with the test runner's signal handlers).
+pub async fn serve<L>(ctx: Arc<DaemonContext<L>>) -> Result<(), LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    // Signal-watcher task. Awaits SIGTERM/SIGINT as async values; sets
+    // shutting_down + notify_waiters on first signal. No POSIX
+    // signal-handler-safety concerns.
+    let watcher_handle = spawn_signal_watcher(ctx.clone());
+
+    let ctx = serve_core(ctx).await?;
 
     // Wait for the signal watcher to finish so its `Arc<DaemonContext>`
     // clone drops. Bounded by WATCHER_JOIN_TIMEOUT_SECS in case the
@@ -475,7 +527,6 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         }
     }
 
-    accept_result?;
     Ok(())
 }
 
