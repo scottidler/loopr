@@ -11,6 +11,9 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+mod common;
+use common::init_git_repo;
+
 fn loopr() -> Command {
     Command::cargo_bin("loopr").unwrap()
 }
@@ -109,7 +112,10 @@ fn plan_on_tempdir_creates_and_prints_plan() {
     // Stage 5: tempdir with no pre-existing .loopr marker. The resolver
     // falls through, the guard passes, the daemon auto-forks, the store
     // opens under .loopr/taskstore/, and plan.create returns the record.
+    // Stage 8 wiring adds a git-init requirement because handle_plan_create
+    // now creates an integration branch before persisting the Plan.
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     let output = loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
@@ -128,6 +134,7 @@ fn plan_on_tempdir_creates_and_prints_plan() {
 #[test]
 fn list_plans_shows_created_plans_in_order() {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     // Create two plans via the binary so the test exercises the full
     // round-trip (client -> daemon -> store -> client) for both ends.
     loopr()
@@ -255,6 +262,8 @@ fn run_plan(target: &std::path::Path) {
     // harness tests care about run-dir layout and subscriber behavior,
     // not the subcommand's exit code; we just need a successful client
     // invocation to exercise the telemetry pipeline.
+    // Stage 8 wiring requires a git-initialized target for plan.create.
+    init_git_repo(target);
     loopr()
         .args(["-C", target.to_str().unwrap(), "plan", "x"])
         .assert()
@@ -410,6 +419,7 @@ fn log_level_gate_suppresses_debug_at_info_default() {
 #[test]
 fn log_level_debug_emits_debug_events() {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     loopr()
         .args(["-C", td.path().to_str().unwrap(), "--log-level", "debug", "plan", "x"])
         .assert()
@@ -428,6 +438,7 @@ fn log_level_debug_emits_debug_events() {
 #[test]
 fn log_level_via_env_var() {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     loopr()
         .env("LOOPR_LOG_LEVEL", "debug")
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
@@ -451,6 +462,7 @@ fn console_layer_gated_on_tty() {
     // Stage 5: `plan` now succeeds and prints the plan to stdout; stderr
     // should be empty of the invocation span regardless.
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     let assertion = loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()

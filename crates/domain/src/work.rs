@@ -70,6 +70,7 @@ use crate::{FsmError, Role, Transition};
         InProgress => Ready    by (Coordinator),
         InProgress => InReview by (Coordinator),
         InReview   => Ready    by (Coordinator),
+        InReview   => Blocked  by (Coordinator),
     ),
 )]
 pub enum WorkStatus {

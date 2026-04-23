@@ -167,6 +167,54 @@ async fn update_round_trips_status_change() {
 }
 
 #[tokio::test]
+async fn list_by_parent_id_filters_correctly() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = Store::open(dir.path()).await.expect("open");
+    let plan_a = Plan::new("plan a".to_string());
+    let plan_b = Plan::new("plan b".to_string());
+    store.plans().create(plan_a.clone()).await.expect("create a");
+    store.plans().create(plan_b.clone()).await.expect("create b");
+
+    store.works().create(sample_work(&plan_a, "a1")).await.expect("a1");
+    store.works().create(sample_work(&plan_a, "a2")).await.expect("a2");
+    store.works().create(sample_work(&plan_a, "a3")).await.expect("a3");
+    store.works().create(sample_work(&plan_b, "b1")).await.expect("b1");
+    store.works().create(sample_work(&plan_b, "b2")).await.expect("b2");
+
+    let a_works = store
+        .works()
+        .list_by_parent_id(&plan_a.id)
+        .await
+        .expect("list_by_parent_id a");
+    assert_eq!(a_works.len(), 3, "plan_a has three works");
+    for w in &a_works {
+        assert_eq!(w.parent_id, plan_a.id);
+    }
+
+    let b_works = store
+        .works()
+        .list_by_parent_id(&plan_b.id)
+        .await
+        .expect("list_by_parent_id b");
+    assert_eq!(b_works.len(), 2, "plan_b has two works");
+    for w in &b_works {
+        assert_eq!(w.parent_id, plan_b.id);
+    }
+}
+
+#[tokio::test]
+async fn list_by_parent_id_empty_for_unknown_plan() {
+    let (_dir, store, _plan) = fresh_store_with_plan().await;
+    let other_plan = Plan::new("never persisted".to_string());
+    let works = store
+        .works()
+        .list_by_parent_id(&other_plan.id)
+        .await
+        .expect("list_by_parent_id empty");
+    assert!(works.is_empty());
+}
+
+#[tokio::test]
 async fn serde_roundtrip_across_statuses() {
     let (_dir, store, plan) = fresh_store_with_plan().await;
     let cases = [

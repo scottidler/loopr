@@ -107,8 +107,22 @@ fn handle_status(id: u64, ctx: &Arc<DaemonContext>) -> DaemonResponse {
 }
 
 async fn handle_plan_create(id: u64, params: PlanCreateParams, ctx: &Arc<DaemonContext>) -> DaemonResponse {
+    // Stage 8 wiring: construct Plan first (generates PlanId in memory) so
+    // we have the branch name before any store write. Then create the
+    // integration branch BEFORE persisting anything; if git fails we bail
+    // without leaving orphan Plan/Work records on disk. Plan::new births
+    // PlanStatus::Active, so no Draft->Active transition is needed here.
     let plan = domain::Plan::new(params.goal);
     let plan_snapshot = plan.clone();
+
+    if let Err(e) = crate::daemon::git::ensure_integration_branch(&ctx.target, &plan.id).await {
+        warn!(request_id = id, plan_id = %plan.id, error = %e, "plan.create failed at integration-branch creation");
+        return DaemonResponse::err(
+            id,
+            RpcError::Internal(format!("integration branch creation failed: {e}")),
+        );
+    }
+
     if let Err(e) = ctx.store.plans().create(plan.clone()).await {
         warn!(request_id = id, error = %e, "plan.create failed at store");
         return DaemonResponse::err(id, map_store_error(e));

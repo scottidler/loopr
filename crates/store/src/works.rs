@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
-use taskstore_async::AsyncStore;
+use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 
-use domain::{Work, WorkId};
+use domain::{PlanId, Work, WorkId};
 
 use crate::error::StoreError;
 
@@ -65,6 +65,22 @@ impl<'a> WorksStore<'a> {
     /// descending; callers should not depend on order beyond that contract.
     pub async fn list(&self) -> Result<Vec<Work>, StoreError> {
         Ok(self.inner.list::<Work>(&[]).await?)
+    }
+
+    /// Return every Work whose `parent_id == plan_id`. Backed by the SQLite
+    /// index on `parent_id` (`#[record(indexed)]` on the struct field).
+    /// Ordered by `updated_at` descending per `AsyncStore::list`'s contract.
+    /// Consumed by the Stage 8 wiring capstone's Plan-level completion check
+    /// in `spawn_integrator_for_bundle`: after a successful integration,
+    /// enumerate sibling Works to decide whether the parent Plan can
+    /// transition to `Complete`.
+    pub async fn list_by_parent_id(&self, plan_id: &PlanId) -> Result<Vec<Work>, StoreError> {
+        let filter = Filter {
+            field: "parent_id".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(plan_id.to_string()),
+        };
+        Ok(self.inner.list::<Work>(&[filter]).await?)
     }
 
     /// Persist a status / field change on an existing Work. Delegates to

@@ -37,6 +37,7 @@ fn dummy_anthropic() -> Arc<AnthropicClient> {
 /// on-disk files outlive its in-process operations.
 async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     let store = Store::open(td.path()).await.unwrap();
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
@@ -55,6 +56,32 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext>) {
         AttemptCleanupPolicy::default(),
     ));
     (td, ctx)
+}
+
+/// Initialize a git repo at `path` with a single empty commit so HEAD
+/// exists. `handle_plan_create` calls `ensure_integration_branch`, which
+/// needs a valid HEAD to branch from; a bare tempdir has neither.
+fn init_git_repo(path: &std::path::Path) {
+    use std::process::Command;
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "test"]);
+    run(&["config", "commit.gpgsign", "false"]);
+    run(&["config", "tag.gpgsign", "false"]);
+    run(&["commit", "--allow-empty", "-q", "-m", "initial"]);
 }
 
 fn handshake_req(id: u64, version: u32) -> DaemonRequest {

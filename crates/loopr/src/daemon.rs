@@ -21,6 +21,7 @@
 
 pub(crate) mod context;
 pub(crate) mod fork;
+pub(crate) mod git;
 pub(crate) mod sentinel;
 pub(crate) mod startup;
 
@@ -270,20 +271,6 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         tracing::warn!(error = %e, "daemon startup: ensure_loopr_excludes failed (non-fatal)");
     }
 
-    // Hygiene sweep: clean up worktrees left behind by a previous daemon
-    // crash, log orphans. See `daemon::startup::reconcile` for the Stage 7
-    // follow-up on mutating non-terminal Work records to `CrashInterrupted`.
-    // Runs BEFORE the accept loop binds so no coordinator session can race
-    // with this pass.
-    let report = startup::reconcile(&target, &store).await?;
-    tracing::info!(
-        cleaned = report.cleaned,
-        orphans = report.orphans_logged,
-        carried_forward = report.carried_forward,
-        foreign = report.foreign_skipped,
-        "daemon.startup.reconcile.complete"
-    );
-
     // Load top-level Config (composes each stage's config) and build the
     // process-wide AnthropicClient. Config missing from `.loopr/config.yml`
     // falls back to defaults; API key missing from env falls back to a
@@ -343,6 +330,24 @@ async fn run_active_daemon(target: PathBuf, run_id: RunId, pid: u32) -> Result<(
         run_id = %ctx.run_id,
         pid = ctx.pid,
         "daemon.started"
+    );
+
+    // Hygiene sweep: clean up worktrees left behind by a previous daemon
+    // crash, log orphans. Moved here from pre-Config::load per Stage 8 wiring
+    // capstone (design doc 2026-04-22-stage-8-wiring.md). Phase 4 extends this
+    // sweep to enqueue Reviewer / Integrator tasks for intermediate-state
+    // Bundles and requires `&ctx` to spawn into the JoinSets; Phase 1 already
+    // moves the call here so the ordering change is explicit, even though
+    // the existing body still takes only `&target` + `&store`.
+    // Runs BEFORE the accept loop binds so no coordinator session can race
+    // with this pass.
+    let report = startup::reconcile(&target, &ctx.store).await?;
+    tracing::info!(
+        cleaned = report.cleaned,
+        orphans = report.orphans_logged,
+        carried_forward = report.carried_forward,
+        foreign = report.foreign_skipped,
+        "daemon.startup.reconcile.complete"
     );
 
     // Unconditionally remove any stale socket file before bind. The PID

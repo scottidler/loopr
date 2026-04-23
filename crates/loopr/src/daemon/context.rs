@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use agents::{Deps, ImplementerConfig, ImplementerError, RealTools, run_implementer};
 use context::{InlineContextBuilder, StateSummary};
-use domain::{Work, WorkId, WorkStatus};
+use domain::{Plan, PlanStatus, Role, Work, WorkId, WorkStatus};
 use ipc::DaemonEvent;
 use llm::AnthropicClient;
 use store::Store;
@@ -195,10 +195,28 @@ impl DaemonContext {
     /// Stage 8 Integrator will merge it).
     #[tracing::instrument(level = "info", skip_all, fields(work_id = %work.id, run_id = %self.run_id))]
     pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
+        // Advance Work through the pipeline-start transitions via the FSM.
+        // Guarded: reconcile or a prior call may have advanced us already.
+        if work.status == WorkStatus::Pending
+            && let Err(e) =
+                transition_and_persist_work(&self.store, &mut work, WorkStatus::Ready, Role::Coordinator, false).await
+        {
+            error!(error = %e, "Pending -> Ready transition failed; abandoning task");
+            return;
+        }
+        if work.status == WorkStatus::Ready
+            && let Err(e) =
+                transition_and_persist_work(&self.store, &mut work, WorkStatus::InProgress, Role::Coordinator, false)
+                    .await
+        {
+            error!(error = %e, "Ready -> InProgress transition failed; abandoning task");
+            return;
+        }
+
         let base_sha = match rev_parse_head(&self.target).await {
             Ok(sha) => sha,
             Err(e) => {
-                error!(error = %e, "base_sha lookup failed; Work remains Pending");
+                error!(error = %e, "base_sha lookup failed; Work remains InProgress");
                 return;
             }
         };
@@ -221,7 +239,9 @@ impl DaemonContext {
             Ok(Ok(wt)) => wt,
             Ok(Err(e)) => {
                 error!(error = %e, "Worktree::create failed");
-                mark_blocked(&self.store, &mut work).await;
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, false)
+                        .await;
                 return;
             }
             Err(e) => {
@@ -253,14 +273,32 @@ impl DaemonContext {
         match result {
             Ok(bundle) => {
                 info!(bundle_id = %bundle.id, "implementer produced bundle");
+                // `Role::Implementer` as identifier: daemon fires the FSM
+                // transition on the Implementer's behalf once `run_implementer`
+                // returns Ok. The FSM's authored-edge table lists this as
+                // `InProgress -> InReview by (Implementer)`, which is exactly
+                // the semantic we want; the "Role as identifier" invariant
+                // from the Reviewer doc generalizes here.
+                if let Err(e) =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::InReview, Role::Implementer, false)
+                        .await
+                {
+                    error!(error = %e, "InProgress -> InReview transition failed after successful implementer");
+                }
+                // Phase 2 will spawn a Reviewer task here. For now the
+                // Bundle is persisted and the Work is InReview.
             }
             Err(ImplementerError::EscalationNeeded(reason)) => {
                 warn!(%reason, "implementer escalated; marking Work Blocked");
-                mark_blocked(&self.store, &mut work).await;
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, false)
+                        .await;
             }
             Err(other) => {
                 error!(error = %other, "implementer error; marking Work Blocked");
-                mark_blocked(&self.store, &mut work).await;
+                let _ =
+                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, false)
+                        .await;
             }
         }
 
@@ -314,12 +352,57 @@ async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Err
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Transition a Work to `Blocked` and persist via `WorksStore::update`.
-/// Failure to persist is logged but not propagated; the spawn task
-/// completes regardless so the daemon's shutdown drain sees it done.
-async fn mark_blocked(store: &Store, work: &mut Work) {
-    work.status = WorkStatus::Blocked;
-    if let Err(e) = store.works().update(work.clone()).await {
-        error!(error = %e, work_id = %work.id, "failed to persist Work.status=Blocked");
+/// Transition a Work via the FSM (transition or override) and persist via
+/// `WorksStore::update`. Returns Err if the FSM rejects the transition or
+/// if persistence fails; the caller logs and decides whether to continue.
+///
+/// Stage 8 wiring capstone replaced the Stage 7 `mark_blocked` function,
+/// which mutated `work.status = ...` by raw assignment and bypassed the
+/// FSM entirely. Every Work-state change in the pipeline flows through
+/// this helper.
+pub(crate) async fn transition_and_persist_work(
+    store: &Store,
+    work: &mut Work,
+    target: WorkStatus,
+    role: Role,
+    override_: bool,
+) -> Result<(), String> {
+    let result = if override_ {
+        work.override_status(target, role)
+            .map_err(|e| format!("fsm override rejected: {e}"))?
+    } else {
+        work.transition(target, role)
+            .map_err(|e| format!("fsm transition rejected: {e}"))?
+    };
+    if result == domain::Transition::Unchanged {
+        return Ok(());
     }
+    store
+        .works()
+        .update(work.clone())
+        .await
+        .map_err(|e| format!("works().update: {e}"))
+}
+
+/// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
+/// the Integrator spawn's `Active -> Complete` check once every sibling
+/// Work is terminal.
+#[allow(dead_code)]
+pub(crate) async fn transition_and_persist_plan(
+    store: &Store,
+    plan: &mut Plan,
+    target: PlanStatus,
+    role: Role,
+) -> Result<(), String> {
+    let result = plan
+        .transition(target, role)
+        .map_err(|e| format!("fsm transition rejected: {e}"))?;
+    if result == domain::Transition::Unchanged {
+        return Ok(());
+    }
+    store
+        .plans()
+        .update(plan.clone())
+        .await
+        .map_err(|e| format!("plans().update: {e}"))
 }

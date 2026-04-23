@@ -61,4 +61,16 @@ impl<'a> PlansStore<'a> {
     pub async fn list(&self) -> Result<Vec<Plan>, StoreError> {
         Ok(self.inner.list::<Plan>(&[]).await?)
     }
+
+    /// Persist a status / field change on an existing Plan. Delegates to
+    /// `AsyncStore::update`, which rewrites the JSONL line and refreshes the
+    /// SQLite cache row. Consumed by the Stage 8 wiring capstone's Integrator
+    /// spawn: after every child Work under a Plan is terminal with at least
+    /// one Done, the Coordinator fires `Active -> Complete` via this method.
+    /// Mirrors `WorksStore::update` (blind-write, no OCC); Plans have no
+    /// concurrent-writer race in the single-daemon-per-target threat model.
+    pub async fn update(&self, plan: Plan) -> Result<(), StoreError> {
+        self.inner.update(plan).await?;
+        Ok(())
+    }
 }

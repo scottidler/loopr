@@ -14,6 +14,9 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+mod common;
+use common::init_git_repo;
+
 fn loopr() -> Command {
     Command::cargo_bin("loopr").unwrap()
 }
@@ -239,6 +242,7 @@ fn ac8_daemon_stop_no_daemon_prints_message() {
 #[test]
 fn ac9_plan_auto_forks_daemon_and_creates_plan() {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     loopr()
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
@@ -254,6 +258,7 @@ fn ac9_plan_auto_forks_daemon_and_creates_plan() {
 #[test]
 fn ac10_plan_reuses_running_daemon() {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
 
@@ -313,6 +318,7 @@ fn ac12_stale_pid_triggers_cleanup_and_fresh_fork() {
 #[test]
 fn ac13_version_mismatch_triggers_silent_restart() {
     let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
     // Overwrite the version file with a bogus value so the next client
