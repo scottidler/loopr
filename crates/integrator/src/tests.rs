@@ -225,6 +225,13 @@ struct FakeTicks;
 
 impl TickSink for FakeTicks {
     #[allow(clippy::manual_async_fn)]
+    fn get<'a>(
+        &'a self,
+        _tick_id: &'a domain::TickId,
+    ) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a {
+        async move { Ok(None) }
+    }
+    #[allow(clippy::manual_async_fn)]
     fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a {
         async move { Ok(tick) }
     }

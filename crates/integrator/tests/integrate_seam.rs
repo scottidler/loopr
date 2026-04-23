@@ -434,20 +434,21 @@ async fn crash_recovery_a_merge_landed_tick_landed_merged_write_lost() {
     git(&repo, &["checkout", "-q", "main"]);
 
     // integrate sees: Integrating bundle + ancestry=true + Tick already exists.
-    // Expected: Store(DuplicateTick { tick_id, .. }) bubbles.
-    //
-    // Design-level the Integrator would adopt-via-get, but the TickSink
-    // trait does not expose `get`; the daemon must resolve the
-    // existing Tick from the TickId in the error. This pins that
-    // contract at the seam.
+    // Expected: Integrator resolves the existing Tick via
+    // TickSink::get, completes the Merged transition, returns
+    // Ok(existing_tick). This honors the design's Crash-recovery
+    // invariant (a): "Phase 3 transitions the Bundle to Merged and
+    // the call succeeds."
     let deps = deps_for(&store, &repo);
-    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
-    match result {
-        Err(IntegrationError::Store(store::StoreError::DuplicateTick { tick_id, .. })) => {
-            assert_eq!(tick_id, pre_existing_tick.id);
-        }
-        other => panic!("expected Store(DuplicateTick), got {other:?}"),
-    }
+    let tick = integrate(std::slice::from_ref(&bundle), &plan, &deps).await.unwrap();
+    assert_eq!(tick.id, pre_existing_tick.id, "must return the pre-existing Tick");
+
+    let final_bundle = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(
+        final_bundle.status,
+        BundleStatus::Merged,
+        "Bundle must be transitioned to Merged after DuplicateTick resolution"
+    );
 
     store.close().await.unwrap();
 }

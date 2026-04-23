@@ -2,12 +2,12 @@
 //! that both touch README.md; first merges, second conflicts on
 //! README.md. Requires `allow_multi_bundle = true`.
 //!
-//! EXPECTED DIVERGENCE: FSM says every Bundle in the slice is
-//! IntegrationFailed after rollback, while git's integration branch
-//! has been reset to pre_merge_sha (so the first Bundle's merge is
-//! rolled out). This test locks in first-gate behavior under the
-//! multi-Bundle guard. Multi-Bundle rollback design doc must
-//! reconcile; do not "fix" by changing Bundle FSM here.
+//! The batched-commit invariant (store writes deferred until the full
+//! git sequence succeeds) means the Store and git agree after
+//! rollback: git is reset to `pre_merge_sha` (first Bundle's merge
+//! rolled out), and EVERY Bundle in the slice is IntegrationFailed in
+//! the Store. No FSM-git divergence. This was the original motivation
+//! for the Phase 2/Phase 3 split in the design doc.
 
 #![allow(clippy::unwrap_used)]
 
@@ -158,11 +158,14 @@ async fn structural_conflict_two_bundles_touching_readme() {
         "integration branch must be reset to pre_merge_sha; git rolled back both merges"
     );
 
-    // EXPECTED DIVERGENCE: both Bundles are IntegrationFailed in the
-    // store, but the FIRST Bundle's merge was rolled out of git. This
-    // is the first-gate behavior gated by `allow_multi_bundle` being
-    // an earned feature. Multi-Bundle rollback design doc must
-    // reconcile; do not "fix" by changing Bundle FSM here.
+    // Batched-commit invariant: store and git agree. Both Bundles are
+    // IntegrationFailed in the store; git has reset to pre_merge_sha
+    // (verified above); bundle_a was never observed at status
+    // `Merged` in the store because the `Merged` transition is
+    // batched in Phase 3 and only runs when the full git sequence
+    // succeeds. If bundle_a had been observed at `Merged` mid-loop,
+    // that would be the FSM-git divergence the design doc set out
+    // to eliminate.
     let a_final = store.bundles().get(&bundle_a.id).await.unwrap();
     let b_final = store.bundles().get(&bundle_b.id).await.unwrap();
     assert_eq!(a_final.status, BundleStatus::IntegrationFailed);

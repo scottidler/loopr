@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, Work};
+use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, TickId, Work};
 use store::{BundleUpdateSink, StoreError};
 
 pub use config::IntegratorConfig;
@@ -39,13 +39,16 @@ pub trait WorkLookup: Send + Sync {
     fn get<'a>(&'a self, work_id: &'a str) -> impl Future<Output = Result<Option<Work>, StoreError>> + Send + 'a;
 }
 
-/// Append-only `Tick` persistence. The Integrator calls `create` in
-/// Phase 3 after the git sequence succeeds. On a duplicate
-/// `(plan_id, bundles-as-set)`, the store returns
-/// `StoreError::DuplicateTick { tick_id, .. }` and the Integrator
-/// promotes to a no-op on the crash-recovery path.
+/// Append-only `Tick` persistence plus read-back. The Integrator
+/// calls `create` in Phase 3 after the git sequence succeeds. On a
+/// duplicate `(plan_id, bundles-as-set)`, the store returns
+/// `StoreError::DuplicateTick { tick_id, .. }`; the Integrator then
+/// calls `get(tick_id)` to resolve the existing Tick so it can
+/// return `Ok(existing_tick)` to the daemon after completing the
+/// `Merged` transitions.
 pub trait TickSink: Send + Sync {
     fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a;
+    fn get<'a>(&'a self, tick_id: &'a TickId) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a;
 }
 
 // Real impls backed by `store::Store`.
@@ -82,12 +85,26 @@ impl TickSink for store::Store {
     fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a {
         async move { self.ticks().create(tick).await }
     }
+    #[allow(clippy::manual_async_fn)]
+    fn get<'a>(&'a self, tick_id: &'a TickId) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a {
+        async move {
+            match self.ticks().get(tick_id).await {
+                Ok(t) => Ok(Some(t)),
+                Err(StoreError::RecordNotFound { .. }) => Ok(None),
+                Err(other) => Err(other),
+            }
+        }
+    }
 }
 
 impl<T: TickSink + ?Sized> TickSink for &T {
     #[allow(clippy::manual_async_fn)]
     fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a {
         async move { (*self).create(tick).await }
+    }
+    #[allow(clippy::manual_async_fn)]
+    fn get<'a>(&'a self, tick_id: &'a TickId) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a {
+        async move { (*self).get(tick_id).await }
     }
 }
 
@@ -228,8 +245,18 @@ where
 
     let mut outcomes: Vec<(BundleId, MergeOutcome)> = Vec::with_capacity(bundles.len());
 
-    for b in &bundle_states {
-        // After the Phase 2 prologue, every `b` here is Integrating.
+    // The per-Bundle loop routes on the ORIGINAL bundle status
+    // (from the input slice), not the post-prologue `bundle_states`.
+    // A bundle that entered Accepted is a fresh integration whose
+    // branch cannot already be merged; one that entered Integrating
+    // is a crash-recovery re-entry whose branch MAY already be merged.
+    // Architect R2 finding: routing on bundle_states (all Integrating
+    // after prologue) and using `head_commit == pre_merge_sha` as
+    // the empty-branch check is unsound when the integration branch
+    // advances between Bundle creation and its integration - the
+    // naive equality bypasses the guard and a later is_ancestor +
+    // merge_commit_sha_for silently grabs the wrong merge commit.
+    for (b_original, b) in bundles.iter().zip(bundle_states.iter()) {
         let head_commit = match b.head_commit.as_deref() {
             Some(sha) => sha,
             None => {
@@ -243,36 +270,46 @@ where
             }
         };
 
-        // Empty-branch guard: if the Bundle's head_commit IS the
-        // integration branch's pre-call HEAD, the branch has no
-        // commits beyond the merge base. This check runs BEFORE the
-        // ancestor idempotency check so we can distinguish "branch
-        // has nothing to offer" (EmptyBranch) from "prior call's
-        // merge already landed this branch's commits" (AdoptedExisting).
-        // Can't use `merge-base HEAD <branch>` here: when a prior
-        // call merged the branch, merge-base HEAD <branch> == branch,
-        // which would falsely trip EmptyBranch on crash-recovery.
-        if head_commit == pre_merge_sha {
-            return fail_all(
-                &bundle_states,
-                &pre_merge_sha,
-                deps,
-                IntegrationError::EmptyBranch {
-                    bundle_id: b.id.as_ref().to_string(),
-                    branch: b.branch_name.clone(),
-                },
-            )
-            .await;
-        }
-
-        // Idempotency check: is this Bundle's head_commit already an
-        // ancestor of the integration branch's HEAD? Only true on the
-        // crash-recovery path (a prior call merged before dying).
-        let already_merged = git::is_ancestor(&deps.target, head_commit, "HEAD", deps.config.git_timeout).await?;
-        if already_merged {
-            let sha = git::merge_commit_sha_for(&deps.target, head_commit, deps.config.git_timeout).await?;
-            outcomes.push((b.id.clone(), MergeOutcome::AdoptedExisting { sha }));
-            continue;
+        match b_original.status {
+            BundleStatus::Accepted => {
+                // Fresh integration: the branch cannot be already-
+                // merged into the integration branch (nothing else
+                // writes to loopr/plan-<id> in first gate). Use the
+                // standard merge-base check to detect an empty branch;
+                // it cannot falsely trip here.
+                if let Err(err) =
+                    git::assert_nontrivial_branch(&deps.target, b.id.as_ref(), &b.branch_name, deps.config.git_timeout)
+                        .await
+                {
+                    return fail_all(&bundle_states, &pre_merge_sha, deps, err).await;
+                }
+                // No ancestry check: if Accepted, the branch has never
+                // been merged, so is_ancestor is guaranteed false.
+            }
+            BundleStatus::Integrating => {
+                // Crash-recovery re-entry: a prior call may have
+                // already merged this Bundle's head_commit. Ancestry
+                // check first, so an already-merged branch adopts
+                // cleanly instead of falsely tripping EmptyBranch
+                // (a merged branch has `merge-base HEAD branch == branch`).
+                let already_merged =
+                    git::is_ancestor(&deps.target, head_commit, "HEAD", deps.config.git_timeout).await?;
+                if already_merged {
+                    let sha = git::merge_commit_sha_for(&deps.target, head_commit, deps.config.git_timeout).await?;
+                    outcomes.push((b.id.clone(), MergeOutcome::AdoptedExisting { sha }));
+                    continue;
+                }
+                // Branch not merged; check for empty branch. Safe to
+                // use the merge-base check here because we just ruled
+                // out already-merged.
+                if let Err(err) =
+                    git::assert_nontrivial_branch(&deps.target, b.id.as_ref(), &b.branch_name, deps.config.git_timeout)
+                        .await
+                {
+                    return fail_all(&bundle_states, &pre_merge_sha, deps, err).await;
+                }
+            }
+            _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating bundles"),
         }
 
         match git::merge_no_ff(&deps.target, &b.branch_name, deps.config.git_timeout).await? {
@@ -317,17 +354,25 @@ where
     let tick = match deps.ticks.create(tick).await {
         Ok(t) => t,
         Err(StoreError::DuplicateTick { tick_id, .. }) => {
-            // Resolve via `ticks.get(tick_id)` - one extra indexed
-            // lookup, payload carries the id so no scan required.
-            // The `TickSink` trait does not expose `get`; the daemon
-            // that owns `Store` can resolve through `store.ticks().get()`.
-            // For `TickSink`-only deps, we return an error describing
-            // the need; production always uses `store::Store`.
-            return Err(IntegrationError::Store(StoreError::DuplicateTick {
-                tick_id,
-                plan_id: plan.id.clone(),
-                bundles: outcomes.iter().map(|(id, _)| id.clone()).collect(),
-            }));
+            // Crash-recovery case (a): a prior call wrote this Tick
+            // before dying. Resolve the existing Tick via
+            // `ticks.get(tick_id)` and continue to the Merged
+            // transitions. The design doc's crash-recovery invariant
+            // mandates `Ok(existing_tick)` rather than bubbling the
+            // DuplicateTick error.
+            match deps.ticks.get(&tick_id).await? {
+                Some(existing) => existing,
+                None => {
+                    // DuplicateTick promised an id that TicksStore no
+                    // longer resolves: store corruption or race. Bubble
+                    // as Git/Store error; the daemon's worktree-crash-
+                    // recovery pass at restart owns diagnosis.
+                    return Err(IntegrationError::Store(StoreError::RecordNotFound {
+                        collection: "ticks",
+                        id: tick_id.to_string(),
+                    }));
+                }
+            }
         }
         Err(other) => return Err(IntegrationError::Store(other)),
     };

@@ -2,8 +2,8 @@
 
 **Author:** Claude (with Scott)
 **Date:** 2026-04-22
-**Status:** Draft
-**Review Passes Completed:** 5/5 self-review + Architect R1 folded (2026-04-22): batched-commit transactional boundary, crash-recovery idempotency via `git merge-base --is-ancestor`, `TicksStore::create` duplicate detection, `id_type!`-based `TickId`, accurate Phase 2 crate-deps shopping list + Architect R1b folded (2026-04-22): `--reverse` on `merge_commit_sha_for`, `tick_lock` on `TicksStore`, `DuplicateTick` carries `TickId`, wiring-retry contract promoted to Invariant
+**Status:** Implemented
+**Review Passes Completed:** 5/5 self-review + Architect R1 folded (2026-04-22): batched-commit transactional boundary, crash-recovery idempotency via `git merge-base --is-ancestor`, `TicksStore::create` duplicate detection, `id_type!`-based `TickId`, accurate Phase 2 crate-deps shopping list + Architect R1b folded (2026-04-22): `--reverse` on `merge_commit_sha_for`, `tick_lock` on `TicksStore`, `DuplicateTick` carries `TickId`, wiring-retry contract promoted to Invariant + Architect R2 post-implementation audit folded (2026-04-22): Loop Contract updated to show Phase 2 prologue, empty-branch check routed on original status, `DuplicateTick` now resolved to `Ok(existing_tick)` via `TickSink::get`, `EXPECTED DIVERGENCE` test comment corrected
 **Crates touched:** `domain`, `store`, `agents`, `integrator`. Scoped to the Integrator contract and the `Tick` data model, plus a one-shot relocation of `BundleUpdateSink` / `BundleUpdateError` from `agents` to `store` (see "Cross-doc reconciliation" below). Daemon wiring (how an Accepted Bundle reaches an Integrator task, how a Tick triggers follow-on Work transitions, how a structural conflict drives recovery) is out of scope and lives in the Stage 8 wiring capstone.
 
 ## Cross-doc reconciliation
@@ -107,46 +107,68 @@ integrate(bundles, plan, deps):
      if !git::verify_branch(&deps.target, &integ_branch)? -> Err(IntegrationBranchMissing)
 
   //
-  // Phase 2: Git sequence (no store writes)
+  // Phase 2: Git sequence
   //
   4. let _guard = deps.git_lock.lock().await
 
-  5. git::checkout(&deps.target, &integ_branch)?
+  // Phase 2 prologue: every Accepted Bundle is transitioned to
+  // Integrating in a single OCC write BEFORE any git operation.
+  // Required because the Bundle FSM has only
+  //   Accepted -> Integrating by (Integrator)
+  //   Integrating -> Merged by (Integrator)
+  //   Integrating -> IntegrationFailed by (Integrator)
+  // and no direct Accepted -> Merged / Accepted -> IntegrationFailed
+  // transitions. The prologue also satisfies the crash-recovery
+  // invariant: a crash between the prologue and Phase 3 leaves the
+  // Bundle in Integrating on disk, which is the re-entry signal the
+  // retry contract honors. `bundle_states[i]` carries the mutated
+  // clone with fresh updated_at; the rest of Phase 2 and Phase 3 use
+  // `bundle_states` for OCC, while routing decisions consult the
+  // ORIGINAL status from `bundles[i]`.
+  5. let mut bundle_states: Vec<Bundle> = Vec::new()
+     for b in bundles:
+       match b.status {
+         Accepted    => bundle_states.push(transition_bundle(sink, b, Integrating))
+         Integrating => bundle_states.push(b.clone())  // crash-recovery re-entry
+         _           => unreachable!()
+       }
+
+  6. git::checkout(&deps.target, &integ_branch)?
      let pre_merge_sha = git::rev_parse_head(&deps.target)?
 
-  6. // For each Bundle, either (a) merge now, or (b) detect that a
-     // prior crashed call already landed the merge and adopt its SHA.
-     // Bundles in `Integrating` get the idempotency check; Bundles in
-     // `Accepted` take the normal merge path.
-     //
-     // `outcomes: Vec<(BundleId, MergeOutcome)>` tracks what happened
-     // for each Bundle; nothing is written to the store yet.
+  7. // Per-Bundle loop. `b_original` is from the caller's input slice
+     // (carries the ORIGINAL status so we can route); `b` is from
+     // `bundle_states` (post-prologue, used for OCC and classify).
      let mut outcomes: Vec<(BundleId, MergeOutcome)> = Vec::new()
 
-     for b in bundles:
-       // Empty-branch guard applies to both paths.
-       if let Err(e @ EmptyBranch { .. }) = git::assert_nontrivial_branch(&deps.target, &b.branch_name):
-         return fail_all(&deps, bundles, &outcomes, &pre_merge_sha, e).await
-
-       match b.status {
+     for (b_original, b) in bundles.iter().zip(bundle_states.iter()):
+       match b_original.status {
+         Accepted => {
+           // Fresh integration: branch CANNOT be already-merged
+           // (nothing else writes to loopr/plan-<id>). Safe to use
+           // `merge-base HEAD branch == rev-parse branch` to detect
+           // empty branch.
+           if let Err(e @ EmptyBranch) = git::assert_nontrivial_branch(&b.branch_name):
+             return fail_all(&deps, &bundle_states, &pre_merge_sha, e).await
+         }
          Integrating => {
-           // Idempotency check: is this Bundle's head_commit already an
-           // ancestor of the integration branch's HEAD? If yes, the
-           // prior crashed call landed the merge; adopt its SHA and
-           // skip the merge. If no, the prior call died before the
-           // merge completed; fall through to the normal merge path.
-           if git::is_ancestor(&deps.target, &b.head_commit, "HEAD")? {
-             let sha = git::merge_commit_sha_for(&deps.target, &b.head_commit)?
+           // Crash-recovery re-entry: the branch MAY already be
+           // merged. Ancestry check first, so an already-merged
+           // branch adopts cleanly instead of falsely tripping
+           // EmptyBranch (a merged branch has `merge-base HEAD branch
+           // == branch`).
+           if git::is_ancestor(&b.head_commit, "HEAD")? {
+             let sha = git::merge_commit_sha_for(&b.head_commit)?  // uses --reverse
              outcomes.push((b.id, MergeOutcome::AdoptedExisting { sha }))
              continue
            }
-           // else: fall through to AttemptMerge below.
+           // Not already merged; safe to use merge-base now.
+           if let Err(e @ EmptyBranch) = git::assert_nontrivial_branch(&b.branch_name):
+             return fail_all(&deps, &bundle_states, &pre_merge_sha, e).await
          }
-         Accepted => {} // fall through
-         _ => unreachable!() // pre-flight rejected above
+         _ => unreachable!()
        }
 
-       // Normal merge path.
        match git::merge_no_ff(&deps.target, &b.branch_name) {
          Ok(sha) => {
            outcomes.push((b.id, MergeOutcome::NewMerge { sha }))
@@ -154,42 +176,48 @@ integrate(bundles, plan, deps):
          Err(stderr) => {
            git::merge_abort(&deps.target)  // best-effort
            git::reset_hard(&deps.target, &pre_merge_sha)?
-           let kind = classify_conflict(b, bundles)
+           let kind = classify_conflict(b, &bundle_states)
            let err = match kind {
              Structural { files, peers } => ConflictStructural { .. },
              Retryable                   => ConflictRetryable { stderr, .. },
            }
-           return fail_all(&deps, bundles, &outcomes, &pre_merge_sha, err).await
+           return fail_all_without_reset(&deps, &bundle_states, err).await
          }
        }
 
-  7. let integration_sha = git::rev_parse_head(&deps.target)?
+  8. let integration_sha = git::rev_parse_head(&deps.target)?
 
   //
   // Phase 3: Commit (batched store writes)
   //
   // Git has fully succeeded. Now and only now do we write to the store.
-  // A failure inside this phase is a rare persistence error that leaves
-  // git advanced and the store behind; recovery semantics below address
-  // the corresponding crash case (merge landed, Tick not yet written).
   //
-  8. // Persist the Tick FIRST: a pre-existing Tick on retry means the
-     // prior call landed the merge AND wrote the Tick; we just
-     // short-circuit. Tick persistence happens before any Merged
-     // transition so that any subsequent call can recognize
-     // "merge landed + Tick exists" by querying TicksStore.
+  9. // Persist the Tick FIRST. A pre-existing Tick on retry
+     // (crash-recovery case (a)) returns DuplicateTick; resolve the
+     // existing Tick via ticks.get(tick_id), then continue to the
+     // Merged transitions. Must not bubble DuplicateTick - the
+     // crash-recovery invariant mandates Ok(existing_tick).
      let tick = Tick::new(
        plan.id, bundle_ids(bundles), integ_branch, integration_sha,
        outcomes.iter().map(|(_, o)| o.sha()).collect(),
      )
-     deps.ticks.create(&tick).await?
+     let tick = match deps.ticks.create(tick).await {
+       Ok(t) => t,
+       Err(DuplicateTick { tick_id, .. }) => {
+         deps.ticks.get(&tick_id).await?
+           .ok_or(RecordNotFound { collection: "ticks", id: tick_id })?
+       }
+       Err(other) => return Err(other.into()),
+     }
 
      // Transition every Bundle that was merged (new or adopted) to Merged.
+     // Source from `bundle_states` so OCC `expected_updated_at` matches
+     // the on-disk state (post-prologue).
      for (bundle_id, _) in &outcomes:
-       let b = lookup_in_slice(bundles, bundle_id)
+       let b = lookup_in_slice(&bundle_states, bundle_id)
        transition_bundle(&deps.bundle_sink, b, Merged, Role::Integrator).await?
 
-  9. Ok(tick)
+  10. Ok(tick)
 ```
 
 Helpers:
@@ -628,7 +656,7 @@ Unit tests use fakes for speed and determinism; seam tests exercise the real `to
 
 - `crates/integrator/tests/integrate_conflict_retryable.rs`: contrive a merge failure with no structural overlap. (Shape: integration branch has commit A; bundle branch was created from an unrelated initial commit B and adds `other.txt`; `git merge --no-ff` without `--allow-unrelated-histories` fails textually.) Assert `ConflictRetryable { stderr, .. }`; Bundle is `IntegrationFailed`; integration branch reset to pre_merge_sha (verified by `git rev-parse HEAD`).
 
-- `crates/integrator/tests/integrate_conflict_structural.rs`: multi-Bundle structural conflict. Requires `allow_multi_bundle = true` locally for the test's `IntegratorConfig`, exercising the code path that multi-Bundle earns. Two Bundles whose `paths` both include `README.md`; first merges; second conflicts on `README.md`. Assert `ConflictStructural { files: ["README.md"], peer_bundle_ids: [<first id>] }`; the integration branch is reset to pre_merge_sha (rollback crosses both merges, which is the multi-Bundle rollback divergence called out in Invariants and covered properly by the future multi-Bundle design). First Bundle's on-disk status is `Merged`, second is `IntegrationFailed`. A test-file-level comment must read `// EXPECTED DIVERGENCE: FSM says first Bundle is Merged, git has rolled back. Multi-Bundle rollback design doc must reconcile; do not "fix" by changing Bundle FSM here.` so a future reader does not "repair" the divergence without the prerequisite design work.
+- `crates/integrator/tests/integrate_conflict_structural.rs`: multi-Bundle structural conflict. Requires `allow_multi_bundle = true` locally for the test's `IntegratorConfig`, exercising the code path that multi-Bundle earns. Two Bundles whose `paths` both include `README.md`; first merges; second conflicts on `README.md`. Assert `ConflictStructural { files: ["README.md"], peer_bundle_ids: [<first id>] }`; the integration branch is reset to `pre_merge_sha`; every Bundle in the slice is `IntegrationFailed` in the store (the batched-commit invariant ensures no Bundle is ever observed at `Merged` during a partial-failure sequence, so there is no FSM-git divergence to reconcile).
 
 ### Phase 5: Architect review (design + post-impl) + doc close-out
 **Model:** opus
@@ -826,3 +854,19 @@ All must be true before the doc is marked Implemented:
   - `merge_bundle_branches` (line 1636): empty-branch detection via `merge-base` + `rev-parse`, `--no-ff` rationale, `merge --abort` cleanup
   - Pre-merge SHA capture + `reset --hard` rollback (lines 622, 637-646)
 - `loopr-v4/src/daemon/handlers/integrator.rs`: v4 prior art (`handle_integrator_validate` + `handle_integrator_publish` split; v5 collapses to a single `integrate` call since validation is deferred)
+
+## Post-Implementation Notes
+
+### 2026-04-22: Architect R2 audit — four findings folded
+
+Post-implementation audit (Architect R2, Implementation Audit mode) surfaced four findings that were folded in one commit after the Phase 1-4 code landed. All four were legitimate; all four are fixed in the shipped code.
+
+**Finding 1 (defensible addition):** The Loop Contract's original pseudo-code said "Phase 2: Git sequence (no store writes)," yet the crash-recovery invariant required Bundles to exist on disk as `Integrating` for re-entry to work. The implementation introduced a Phase 2 prologue that transitions every `Accepted` Bundle to `Integrating` in one OCC write *before* any git op. The design doc's Loop Contract has been updated to show the prologue explicitly; the prologue is the correct expansion of the invariant, not a deviation.
+
+**Finding 2 (correctness bug):** Initial implementation routed the per-Bundle loop on `bundle_states` (all `Integrating` after prologue) and used `head_commit == pre_merge_sha` as the empty-branch check. Architect noted this is unsound when the integration branch advances between Bundle creation and integration: the naive equality bypasses the guard, `is_ancestor` returns true on the resulting ancestor, and `merge_commit_sha_for` silently adopts the *wrong* merge commit. Fixed by routing on the ORIGINAL bundle status (from the caller's input slice). `Accepted` on entry uses the merge-base-based `assert_nontrivial_branch` (safe because the branch cannot be already-merged); `Integrating` on entry runs `is_ancestor` first (adopt or fall-through), then `assert_nontrivial_branch` only in the fall-through arm.
+
+**Finding 3 (invariant violation):** Initial implementation bubbled `StoreError::DuplicateTick` back to the caller rather than resolving the existing Tick. The design's crash-recovery invariant case (a) mandated `Ok(existing_tick)` with the Bundle transitioned to `Merged`. Fixed by extending the `TickSink` trait with `get(tick_id) -> Option<Tick>`, resolving the existing Tick on `DuplicateTick`, and completing the Phase 3 `Merged` transitions. The corresponding seam test `crash_recovery_a_merge_landed_tick_landed_merged_write_lost` now asserts `Ok(existing_tick)` and `BundleStatus::Merged`.
+
+**Finding 4 (doc/comment paradox):** The "EXPECTED DIVERGENCE" commentary on the structural-conflict seam test claimed both Bundles were `IntegrationFailed` in the store while the first's merge was rolled out of git — a logical contradiction (if the Store says `IntegrationFailed` and git rolled back, store and git agree; there is no divergence). The batched-commit Phase 3 prevents any `Merged` from ever landing if the sequence fails, so the Bundle is never observed at `Merged` in the store. Test comments and design-doc wording updated to state this positively: batched-commit prevented the divergence.
+
+### Shipped in: v0.5.X (tag to be added on release)

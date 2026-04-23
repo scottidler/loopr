@@ -128,8 +128,8 @@
 
 **Design docs:**
 - [`docs/design/2026-04-22-reviewer.md`](design/2026-04-22-reviewer.md) — Reviewer ralph loop (single turn + parse retry), typed `Verdict` with structured `ReviewIssue` reasons, OCC-aware `BundlesStore::update`, `build_for_reviewer` prompt assembly. **Implemented** 2026-04-22.
-- Stage 8 wiring capstone — how the daemon connects Implementer -> Coordinator triage -> Reviewer -> Integrator (design doc not yet written).
-- Integrator — merge strategy, conflict surface as typed errors, Tick production (design doc not yet written).
+- [`docs/design/2026-04-22-integrator.md`](design/2026-04-22-integrator.md) — Integrator deterministic non-LLM merge path: pre-flight + Phase 2 git sequence with Phase 2 prologue (`Accepted -> Integrating`) + Phase 3 batched commit. Tick record in `domain`, `TicksStore` with `DuplicateTick` detection, crash-recovery via `Integrating` re-entry + `git merge-base --is-ancestor`. Validation deferred. **Implemented** 2026-04-22.
+- Stage 8 wiring capstone — how the daemon connects Implementer -> Coordinator triage -> Reviewer -> Integrator, and honors the "retry Integrating Bundles" contract from the Integrator design (design doc not yet written).
 
 **Crates touched:** `agents`, `domain`, `store`, `context`, later `integrator`.
 
