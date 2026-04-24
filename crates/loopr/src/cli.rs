@@ -59,36 +59,10 @@ pub enum Command {
         goal: String,
     },
 
-    /// Decompose an existing Plan into a Work DAG. [Stage 6]
-    Decompose {
-        /// Plan ID to decompose.
-        plan_id: String,
-    },
-
-    /// Run agents against ready Work items. [Stage 7]
-    Execute {
-        /// Restrict to a specific Work ID.
-        #[arg(long)]
-        work_id: Option<String>,
-    },
-
-    /// Integrate accepted Bundles into the integration branch. [Stage 8]
-    Integrate,
-
     /// Daemon lifecycle (start, stop, status). [Stage 4]
     Daemon {
         #[command(subcommand)]
         cmd: DaemonCmd,
-    },
-
-    /// Score a completed run from its taskstore directory. [Stage 9 body; stub parses now]
-    Score {
-        /// Directory containing the run's taskstore JSONL files.
-        #[arg(long, short)]
-        dir: PathBuf,
-        /// Duration of the run in seconds (for reporting).
-        #[arg(long, default_value_t = 0)]
-        duration_secs: u64,
     },
 
     /// Inspect run logs. [Stage 2 body; stub parses now]
@@ -96,36 +70,23 @@ pub enum Command {
         #[command(subcommand)]
         cmd: LogsCmd,
     },
-
-    /// List records of a given kind. [Stage 5]
-    List {
-        /// One of: plans, specs, phases, works, bundles, ticks.
-        kind: String,
-    },
 }
 
 impl Command {
-    /// Stable string label for telemetry and error reporting. Matches the
-    /// `StageUnimplemented.subcommand` labels from `cli-skeleton.md` - one
-    /// source of truth for subcommand naming.
+    /// Stable string label for telemetry and error reporting.
     pub fn label(&self) -> &'static str {
         match self {
             Command::Init => "init",
             Command::Plan { .. } => "plan",
-            Command::Decompose { .. } => "decompose",
-            Command::Execute { .. } => "execute",
-            Command::Integrate => "integrate",
             Command::Daemon { cmd } => match cmd {
                 DaemonCmd::Start { .. } => "daemon-start",
                 DaemonCmd::Stop => "daemon-stop",
                 DaemonCmd::Status => "daemon-status",
             },
-            Command::Score { .. } => "score",
             Command::Logs { cmd } => match cmd {
                 LogsCmd::Tail { .. } => "logs-tail",
                 LogsCmd::Runs => "logs-runs",
             },
-            Command::List { .. } => "list",
         }
     }
 }

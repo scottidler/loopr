@@ -37,57 +37,6 @@ fn run_init_returns_stage_5() {
 // not in a pure unit test. The unit-level coverage moves to the per-
 // function coverage of `daemon_stop` / `daemon_status` below.
 
-#[test]
-fn run_decompose_returns_stage_6() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "decompose", "plan-1"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 6,
-            subcommand: "decompose"
-        }
-    ));
-}
-
-#[test]
-fn run_execute_returns_stage_7() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "execute"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 7,
-            subcommand: "execute"
-        }
-    ));
-}
-
-#[test]
-fn run_integrate_returns_stage_8() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "integrate"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 8,
-            subcommand: "integrate"
-        }
-    ));
-}
-
 // `run_daemon_start_returns_stage_4` was removed at Stage 4 Phase 3:
 // `daemon start` (background) is now handled by `lib::run`'s pre-
 // telemetry fork hoist and never reaches `dispatch`. The background-fork
@@ -112,23 +61,6 @@ fn run_daemon_status_on_empty_target_prints_no_daemon() {
 }
 
 #[test]
-fn run_score_returns_stage_9() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "score", "--dir", "/tmp/run"]),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        LooprError::StageUnimplemented {
-            stage: 9,
-            subcommand: "score"
-        }
-    ));
-}
-
-#[test]
 fn run_logs_tail_on_empty_target_errors_no_runs_found() {
     let td = tempfile::TempDir::new().unwrap();
     let err = dispatch(td.path(), &stub_run_id(), parse_cmd(&["loopr", "logs", "tail"])).unwrap_err();
@@ -143,41 +75,6 @@ fn run_logs_runs_on_empty_target_succeeds_with_no_output() {
     let td = tempfile::TempDir::new().unwrap();
     // list_runs on a target with no .loopr/runs returns empty vec -> Ok(())
     dispatch(td.path(), &stub_run_id(), parse_cmd(&["loopr", "logs", "runs"])).unwrap();
-}
-
-#[test]
-fn run_list_unknown_kind_errors_via_client_io() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
-        &stub_run_id(),
-        parse_cmd(&["loopr", "list", "bogus"]),
-    )
-    .unwrap_err();
-    match err {
-        LooprError::ClientIo(msg) => assert!(msg.contains("unknown list kind"), "msg: {msg}"),
-        other => panic!("expected ClientIo for unknown list kind, got {other:?}"),
-    }
-}
-
-#[test]
-fn run_list_unwired_kinds_return_stage_unimplemented() {
-    for (kind, expected_stage) in [("specs", 6), ("phases", 6), ("works", 6), ("bundles", 7), ("ticks", 7)] {
-        let err = dispatch(
-            std::path::Path::new("/tmp"),
-            &stub_run_id(),
-            parse_cmd(&["loopr", "list", kind]),
-        )
-        .unwrap_err();
-        match err {
-            LooprError::StageUnimplemented {
-                stage,
-                subcommand: "list",
-            } => {
-                assert_eq!(stage, expected_stage, "stage for kind={kind}");
-            }
-            other => panic!("expected StageUnimplemented for kind={kind}, got {other:?}"),
-        }
-    }
 }
 
 // ---------- resolve_log_directive ----------

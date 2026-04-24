@@ -19,8 +19,8 @@ fn loopr() -> Command {
 }
 
 /// Stage 4 Phase 3+ hook: client commands that need a daemon (plan,
-/// decompose, execute, integrate, daemon status) auto-fork one on first
-/// use. That leaves a background process alive past the end of the test,
+/// daemon status, and later list/show) auto-fork one on first use.
+/// That leaves a background process alive past the end of the test,
 /// which leaks state into the next test and prevents the `TempDir` from
 /// cleaning up (the daemon holds the log directory open).
 ///
@@ -84,18 +84,8 @@ fn version_prints_something_sensible() {
 }
 
 #[test]
-fn help_lists_all_stage_subcommands() {
-    let expected_subcommands = [
-        "init",
-        "plan",
-        "decompose",
-        "execute",
-        "integrate",
-        "daemon",
-        "score",
-        "logs",
-        "list",
-    ];
+fn help_lists_surviving_subcommands() {
+    let expected_subcommands = ["init", "plan", "daemon", "logs"];
     let mut cmd = loopr();
     let output = cmd.arg("--help").assert().success();
     let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
@@ -127,45 +117,6 @@ fn plan_on_tempdir_creates_and_prints_plan() {
     );
     assert!(stdout.contains("goal:"), "stdout prints the goal line: {stdout}");
     assert!(stdout.contains("  x"), "stdout echoes the goal text: {stdout}");
-
-    stop_daemon(td.path());
-}
-
-#[test]
-fn list_plans_shows_created_plans_in_order() {
-    let td = TempDir::new().unwrap();
-    init_git_repo(td.path());
-    // Create two plans via the binary so the test exercises the full
-    // round-trip (client -> daemon -> store -> client) for both ends.
-    loopr()
-        .args(["-C", td.path().to_str().unwrap(), "plan", "first"])
-        .assert()
-        .success();
-    loopr()
-        .args(["-C", td.path().to_str().unwrap(), "plan", "second"])
-        .assert()
-        .success();
-
-    let output = loopr()
-        .args(["-C", td.path().to_str().unwrap(), "list", "plans"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
-    assert!(stdout.contains("first"), "first plan in list: {stdout}");
-    assert!(stdout.contains("second"), "second plan in list: {stdout}");
-    assert!(stdout.contains("pl-"), "list shows the Plan id prefix (pl-): {stdout}");
-
-    stop_daemon(td.path());
-}
-
-#[test]
-fn list_unknown_kind_errors_cleanly() {
-    let td = TempDir::new().unwrap();
-    loopr()
-        .args(["-C", td.path().to_str().unwrap(), "list", "bogus"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("unknown list kind"));
 
     stop_daemon(td.path());
 }
@@ -242,16 +193,6 @@ fn daemon_start_forks_daemon_and_writes_sentinels() {
     while Instant::now() < deadline && loopr_dir.join("daemon.pid").exists() {
         std::thread::sleep(Duration::from_millis(50));
     }
-}
-
-#[test]
-fn score_returns_stage_9() {
-    let td = TempDir::new().unwrap();
-    loopr()
-        .args(["-C", td.path().to_str().unwrap(), "score", "--dir", "/tmp/run"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Stage 9"));
 }
 
 // ---------- Stage 2 smoke tests ----------

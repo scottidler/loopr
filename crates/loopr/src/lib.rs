@@ -78,12 +78,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                 .map_err(|e| LooprError::DaemonStartup(format!("runtime build: {e}")))?;
             return rt.block_on(daemon::daemon_main(effective));
         }
-        Command::Plan { .. }
-        | Command::Decompose { .. }
-        | Command::Execute { .. }
-        | Command::Integrate
-        | Command::List { .. }
-        | Command::Daemon { cmd: DaemonCmd::Status } => {
+        Command::Plan { .. } | Command::Daemon { cmd: DaemonCmd::Status } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
             daemon::ensure_daemon_if_needed(&effective)?;
@@ -152,18 +147,6 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             subcommand: "init",
         }),
         Command::Plan { goal } => plan_command(target, goal),
-        Command::Decompose { .. } => Err(LooprError::StageUnimplemented {
-            stage: 6,
-            subcommand: "decompose",
-        }),
-        Command::Execute { .. } => Err(LooprError::StageUnimplemented {
-            stage: 7,
-            subcommand: "execute",
-        }),
-        Command::Integrate => Err(LooprError::StageUnimplemented {
-            stage: 8,
-            subcommand: "integrate",
-        }),
         Command::Daemon { cmd } => match cmd {
             // `Start` is handled above in `run` (pre-telemetry); it never
             // reaches `dispatch`.
@@ -174,10 +157,6 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             DaemonCmd::Stop => daemon_stop(target),
             DaemonCmd::Status => daemon_status(target),
         },
-        Command::Score { .. } => Err(LooprError::StageUnimplemented {
-            stage: 9,
-            subcommand: "score",
-        }),
         Command::Logs { cmd } => match cmd {
             // `logs` subcommands pass the current run_id as the `exclude`
             // parameter so the query doesn't return its own in-flight run
@@ -186,7 +165,6 @@ fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Resul
             LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(run_id)),
             LogsCmd::Runs => logs::handle_runs(target, Some(run_id)),
         },
-        Command::List { kind } => list_command(target, kind),
     }
 }
 
@@ -278,57 +256,6 @@ fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
         println!("plan:   {}", result.plan.id);
         println!("goal:   {}", result.plan.goal);
         println!("status: {}", result.plan.status);
-        Ok(())
-    })
-}
-
-/// `loopr list <kind>` dispatcher. Stage 5 wires only `plans`; the other
-/// kinds return `StageUnimplemented` until their stage lands, and an
-/// unrecognized kind is reported as a client-side error rather than
-/// silently swallowed.
-fn list_command(target: &Path, kind: String) -> Result<(), LooprError> {
-    match kind.as_str() {
-        "plans" => list_plans(target),
-        "specs" | "phases" | "works" => Err(LooprError::StageUnimplemented {
-            stage: 6,
-            subcommand: "list",
-        }),
-        "bundles" | "ticks" => Err(LooprError::StageUnimplemented {
-            stage: 7,
-            subcommand: "list",
-        }),
-        other => Err(LooprError::ClientIo(format!(
-            "unknown list kind: {other} (expected one of: plans, specs, phases, works, bundles, ticks)"
-        ))),
-    }
-}
-
-fn list_plans(target: &Path) -> Result<(), LooprError> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
-    rt.block_on(async {
-        let mut client = transport::connect_or_wait(target).await?;
-        client.handshake().await?;
-        let (resp, _events) = client
-            .request(ipc::MethodName::PlanList, serde_json::Value::Null)
-            .await?;
-        if let Some(err) = resp.error {
-            return Err(LooprError::Rpc(err));
-        }
-        let result_value = resp
-            .result
-            .ok_or_else(|| LooprError::ClientIo("plan.list response missing result".into()))?;
-        let result: ipc::PlanListResult =
-            serde_json::from_value(result_value).map_err(|e| LooprError::ClientIo(format!("decode plan.list: {e}")))?;
-        if result.plans.is_empty() {
-            println!("no plans");
-        } else {
-            for plan in &result.plans {
-                println!("{}  {:<10}  {}", plan.id, plan.status, plan.goal);
-            }
-        }
         Ok(())
     })
 }

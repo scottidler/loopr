@@ -27,39 +27,6 @@ fn test_cli_parses_plan() {
 }
 
 #[test]
-fn test_cli_parses_decompose() {
-    let cli = Cli::parse_from(["loopr", "decompose", "plan-123"]);
-    match cli.command {
-        Command::Decompose { plan_id } => assert_eq!(plan_id, "plan-123"),
-        _ => panic!("expected Decompose"),
-    }
-}
-
-#[test]
-fn test_cli_parses_execute_bare() {
-    let cli = Cli::parse_from(["loopr", "execute"]);
-    match cli.command {
-        Command::Execute { work_id } => assert!(work_id.is_none()),
-        _ => panic!("expected Execute"),
-    }
-}
-
-#[test]
-fn test_cli_parses_execute_with_work_id() {
-    let cli = Cli::parse_from(["loopr", "execute", "--work-id", "wi-1"]);
-    match cli.command {
-        Command::Execute { work_id } => assert_eq!(work_id.as_deref(), Some("wi-1")),
-        _ => panic!("expected Execute with work_id"),
-    }
-}
-
-#[test]
-fn test_cli_parses_integrate() {
-    let cli = Cli::parse_from(["loopr", "integrate"]);
-    assert!(matches!(cli.command, Command::Integrate));
-}
-
-#[test]
 fn test_cli_parses_daemon_start() {
     let cli = Cli::parse_from(["loopr", "daemon", "start"]);
     match cli.command {
@@ -98,30 +65,6 @@ fn test_cli_parses_daemon_status() {
 }
 
 #[test]
-fn test_cli_parses_score() {
-    let cli = Cli::parse_from(["loopr", "score", "--dir", "/tmp/run1"]);
-    match cli.command {
-        Command::Score { dir, duration_secs } => {
-            assert_eq!(dir, PathBuf::from("/tmp/run1"));
-            assert_eq!(duration_secs, 0);
-        }
-        _ => panic!("expected Score"),
-    }
-}
-
-#[test]
-fn test_cli_parses_score_with_duration() {
-    let cli = Cli::parse_from(["loopr", "score", "-d", "/tmp/run1", "--duration-secs", "120"]);
-    match cli.command {
-        Command::Score { dir, duration_secs } => {
-            assert_eq!(dir, PathBuf::from("/tmp/run1"));
-            assert_eq!(duration_secs, 120);
-        }
-        _ => panic!("expected Score with duration"),
-    }
-}
-
-#[test]
 fn test_cli_parses_logs_tail() {
     let cli = Cli::parse_from(["loopr", "logs", "tail"]);
     match cli.command {
@@ -151,15 +94,6 @@ fn test_cli_parses_logs_tail_with_lines() {
 fn test_cli_parses_logs_runs() {
     let cli = Cli::parse_from(["loopr", "logs", "runs"]);
     assert!(matches!(cli.command, Command::Logs { cmd: LogsCmd::Runs }));
-}
-
-#[test]
-fn test_cli_parses_list() {
-    let cli = Cli::parse_from(["loopr", "list", "plans"]);
-    match cli.command {
-        Command::List { kind } => assert_eq!(kind, "plans"),
-        _ => panic!("expected List"),
-    }
 }
 
 #[test]
@@ -211,16 +145,11 @@ fn test_command_label_covers_every_variant() {
     let cases = [
         (&["loopr", "init"][..], "init"),
         (&["loopr", "plan", "x"][..], "plan"),
-        (&["loopr", "decompose", "p1"][..], "decompose"),
-        (&["loopr", "execute"][..], "execute"),
-        (&["loopr", "integrate"][..], "integrate"),
         (&["loopr", "daemon", "start"][..], "daemon-start"),
         (&["loopr", "daemon", "stop"][..], "daemon-stop"),
         (&["loopr", "daemon", "status"][..], "daemon-status"),
-        (&["loopr", "score", "--dir", "/tmp/run"][..], "score"),
         (&["loopr", "logs", "tail"][..], "logs-tail"),
         (&["loopr", "logs", "runs"][..], "logs-runs"),
-        (&["loopr", "list", "plans"][..], "list"),
     ];
     for (argv, expected) in cases {
         let cli = Cli::parse_from(argv);
