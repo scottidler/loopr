@@ -12,6 +12,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt};
 use crate::fanout::WorkFanoutLayer;
 use crate::process::ProcessId;
 use crate::session::SessionId;
+use crate::session_fanout::SessionFanoutLayer;
 use crate::xdg;
 
 /// Newtype wrapper that makes `Arc<Mutex<LineWriter<File>>>` usable as a
@@ -74,6 +75,7 @@ pub struct Guard {
     json_writer: SharedWriter,
     pretty_writer: SharedWriter,
     fanout_cache: Arc<dashmap::DashMap<String, SharedWriter>>,
+    session_fanout_cache: Arc<Mutex<lru::LruCache<String, SharedWriter>>>,
 }
 
 impl Drop for Guard {
@@ -87,6 +89,13 @@ impl Drop for Guard {
         for entry in self.fanout_cache.iter() {
             if let Ok(mut w) = entry.value().0.lock() {
                 let _ = w.flush();
+            }
+        }
+        if let Ok(cache) = self.session_fanout_cache.lock() {
+            for (_id, writer) in cache.iter() {
+                if let Ok(mut w) = writer.0.lock() {
+                    let _ = w.flush();
+                }
             }
         }
     }
@@ -143,6 +152,11 @@ pub fn init(
             source: io::Error::other(e.to_string()),
         })?;
 
+    let xdg_root = xdg::xdg_root().map_err(|e| TelemetryInitError::DirCreate {
+        path: std::path::PathBuf::from(format!("xdg_root: {e}")),
+        source: io::Error::other(e.to_string()),
+    })?;
+
     let json_path = run_dir.join("events.log");
     let pretty_path = run_dir.join("loopr.log");
     let json_file = open_append(&json_path)?;
@@ -154,12 +168,16 @@ pub fn init(
     let fanout = WorkFanoutLayer::new(&run_dir);
     let fanout_cache = fanout.cache_handle();
 
+    let session_fanout = SessionFanoutLayer::new(xdg_root, target_slug.to_string());
+    let session_fanout_cache = session_fanout.cache_handle();
+
     compose(
         directive,
         &console_directive,
         json_writer.clone(),
         pretty_writer.clone(),
         fanout,
+        session_fanout,
         io::stderr().is_terminal(),
     )?;
 
@@ -167,6 +185,7 @@ pub fn init(
         json_writer,
         pretty_writer,
         fanout_cache,
+        session_fanout_cache,
     })
 }
 
@@ -196,6 +215,7 @@ fn compose(
     json_writer: SharedWriter,
     pretty_writer: SharedWriter,
     fanout: WorkFanoutLayer,
+    session_fanout: SessionFanoutLayer,
     stderr_is_tty: bool,
 ) -> Result<(), TelemetryInitError> {
     // `directive` has been validated by `init` (or constructed directly in
@@ -231,6 +251,7 @@ fn compose(
         .with(pretty_layer)
         .with(console_layer)
         .with(fanout.with_filter(parse_validated(directive)))
+        .with(session_fanout.with_filter(parse_validated(directive)))
         .try_init()
         .map_err(|_| TelemetryInitError::AlreadyInitialized)?;
     Ok(())

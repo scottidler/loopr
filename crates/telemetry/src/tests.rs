@@ -474,3 +474,191 @@ fn fanout_same_work_id_reuses_file() {
 // either (a) mutate process-global env (race-prone in parallel test
 // runs) or (b) introduce an injection parameter that has no production
 // use. Prefer the integration coverage.
+
+// ---------- SessionFanoutLayer ----------
+//
+// The layer composes a `SessionFanoutLayer` with a local subscriber via
+// `with_default`, mirroring the WorkFanoutLayer test strategy so these
+// tests never call `telemetry::init` (global subscriber state).
+
+fn compose_session_fanout(
+    xdg_root: &Path,
+    target_slug: &str,
+) -> (
+    impl tracing::Subscriber,
+    std::sync::Arc<std::sync::Mutex<lru::LruCache<String, SharedWriter>>>,
+) {
+    compose_session_fanout_with_cap(xdg_root, target_slug, 16)
+}
+
+fn compose_session_fanout_with_cap(
+    xdg_root: &Path,
+    target_slug: &str,
+    cap: usize,
+) -> (
+    impl tracing::Subscriber,
+    std::sync::Arc<std::sync::Mutex<lru::LruCache<String, SharedWriter>>>,
+) {
+    let layer = SessionFanoutLayer::with_capacity(xdg_root.to_path_buf(), target_slug.to_string(), cap);
+    let cache = layer.cache_handle();
+    let subscriber = tracing_subscriber::registry().with(layer.with_filter(EnvFilter::new("info")));
+    (subscriber, cache)
+}
+
+fn flush_session_cache(cache: &std::sync::Arc<std::sync::Mutex<lru::LruCache<String, SharedWriter>>>) {
+    let cache = cache.lock().unwrap();
+    for (_id, writer) in cache.iter() {
+        let _ = writer.0.lock().unwrap().flush();
+    }
+}
+
+fn session_fanout_path(xdg_root: &Path, target_slug: &str, session_id: &str) -> std::path::PathBuf {
+    xdg_root
+        .join("sessions")
+        .join(session_id)
+        .join("targets")
+        .join(target_slug)
+        .join("session-fanout.log")
+}
+
+#[test]
+fn session_fanout_writes_per_session_file_on_session_id() {
+    let td = TempDir::new().unwrap();
+    let (sub, cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    tracing::subscriber::with_default(sub, || {
+        let span = info_span!("loopr.invocation", session_id = "20260424-150000");
+        let _enter = span.enter();
+        tracing::info!("hello session");
+    });
+    flush_session_cache(&cache);
+    let log = session_fanout_path(td.path(), "-home-test-repo", "20260424-150000");
+    assert!(log.is_file(), "per-session log at {}", log.display());
+    let body = fs::read_to_string(&log).unwrap();
+    assert!(body.contains("hello session"), "body: {body}");
+}
+
+#[test]
+fn session_fanout_writes_per_session_file_on_client_session_id_recorded_post_creation() {
+    // Mirrors the daemon's `ipc.connection` span: created without a
+    // session, `client_session_id` recorded after handshake. Requires
+    // the layer's `on_record` hook.
+    let td = TempDir::new().unwrap();
+    let (sub, cache) = compose_session_fanout(td.path(), "-home-daemon-repo");
+    tracing::subscriber::with_default(sub, || {
+        let span = info_span!(
+            "ipc.connection",
+            conn_id = "00000000-0000-0000-0000-000000000000",
+            client_session_id = tracing::field::Empty,
+        );
+        let _enter = span.enter();
+        // No session_id carried yet -> the event's routing falls through.
+        tracing::info!("pre-handshake");
+        span.record("client_session_id", "20260424-160000");
+        tracing::info!("post-handshake");
+    });
+    flush_session_cache(&cache);
+    let log = session_fanout_path(td.path(), "-home-daemon-repo", "20260424-160000");
+    assert!(log.is_file(), "per-session log at {}", log.display());
+    let body = fs::read_to_string(&log).unwrap();
+    assert!(body.contains("post-handshake"), "post-handshake event recorded: {body}");
+    assert!(
+        !body.contains("pre-handshake"),
+        "pre-handshake event should not be attributed (no session yet): {body}"
+    );
+}
+
+#[test]
+fn session_fanout_no_session_id_creates_no_file() {
+    let td = TempDir::new().unwrap();
+    let (sub, _cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    tracing::subscriber::with_default(sub, || {
+        tracing::info!("no session id");
+    });
+    assert!(
+        !td.path().join("sessions").exists(),
+        "no sessions dir without session_id: {}",
+        td.path().display()
+    );
+}
+
+#[test]
+fn session_fanout_two_session_ids_get_two_files() {
+    let td = TempDir::new().unwrap();
+    let (sub, cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    tracing::subscriber::with_default(sub, || {
+        let s1 = info_span!("loopr.invocation", session_id = "20260424-150000");
+        s1.in_scope(|| tracing::info!("for A"));
+        let s2 = info_span!("loopr.invocation", session_id = "20260424-170000");
+        s2.in_scope(|| tracing::info!("for B"));
+    });
+    flush_session_cache(&cache);
+    let a = session_fanout_path(td.path(), "-home-test-repo", "20260424-150000");
+    let b = session_fanout_path(td.path(), "-home-test-repo", "20260424-170000");
+    assert!(a.is_file(), "A: {}", a.display());
+    assert!(b.is_file(), "B: {}", b.display());
+    assert!(fs::read_to_string(&a).unwrap().contains("for A"));
+    assert!(fs::read_to_string(&b).unwrap().contains("for B"));
+}
+
+#[test]
+fn session_fanout_same_session_id_reuses_writer() {
+    let td = TempDir::new().unwrap();
+    let (sub, cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    tracing::subscriber::with_default(sub, || {
+        let span = info_span!("loopr.invocation", session_id = "20260424-150000");
+        span.in_scope(|| {
+            tracing::info!("first");
+            tracing::info!("second");
+        });
+    });
+    flush_session_cache(&cache);
+    let cache_size = cache.lock().unwrap().len();
+    assert_eq!(cache_size, 1, "cache has exactly one writer");
+    let log = session_fanout_path(td.path(), "-home-test-repo", "20260424-150000");
+    let body = fs::read_to_string(&log).unwrap();
+    let count = body.matches("first").count() + body.matches("second").count();
+    assert_eq!(count, 2, "both events in one file: {body}");
+}
+
+#[test]
+fn session_fanout_lru_evicts_oldest_when_cap_exceeded() {
+    let td = TempDir::new().unwrap();
+    // Cap of 2 so the third session evicts the first.
+    let (sub, cache) = compose_session_fanout_with_cap(td.path(), "-home-test-repo", 2);
+    tracing::subscriber::with_default(sub, || {
+        for i in 1..=3 {
+            let sid = format!("20260424-15000{i}");
+            let span = info_span!("loopr.invocation", session_id = sid.as_str());
+            span.in_scope(|| tracing::info!("event for {}", sid));
+        }
+    });
+    flush_session_cache(&cache);
+    // Cache capped at 2; oldest (first session) evicted but file still exists.
+    let cache_size = cache.lock().unwrap().len();
+    assert_eq!(cache_size, 2, "cache capped at 2: size={cache_size}");
+    for i in 1..=3 {
+        let sid = format!("20260424-15000{i}");
+        let log = session_fanout_path(td.path(), "-home-test-repo", &sid);
+        assert!(log.is_file(), "log for {sid} at {}", log.display());
+    }
+}
+
+#[test]
+fn session_fanout_evicted_session_reopens_on_next_event() {
+    let td = TempDir::new().unwrap();
+    let (sub, cache) = compose_session_fanout_with_cap(td.path(), "-home-test-repo", 1);
+    tracing::subscriber::with_default(sub, || {
+        let s1 = info_span!("loopr.invocation", session_id = "20260424-150001");
+        s1.in_scope(|| tracing::info!("first for 1"));
+        let s2 = info_span!("loopr.invocation", session_id = "20260424-150002");
+        s2.in_scope(|| tracing::info!("first for 2"));
+        // session 1 evicted. Emit again under it; must re-open and append.
+        let s1_again = info_span!("loopr.invocation", session_id = "20260424-150001");
+        s1_again.in_scope(|| tracing::info!("second for 1"));
+    });
+    flush_session_cache(&cache);
+    let log1 = session_fanout_path(td.path(), "-home-test-repo", "20260424-150001");
+    let body1 = fs::read_to_string(&log1).unwrap();
+    assert!(body1.contains("first for 1"), "first-1 survives: {body1}");
+    assert!(body1.contains("second for 1"), "second-1 appended: {body1}");
+}
