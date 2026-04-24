@@ -19,17 +19,20 @@ const MAX_ALLOC_RETRIES: u32 = 1000;
 pub struct SessionId(String);
 
 impl SessionId {
-    /// Atomically allocate a new SessionId by claiming a `.loopr/runs/<id>/`
+    /// Atomically allocate a new SessionId by claiming an `<anchor>/<id>/`
     /// directory via `std::fs::create_dir`. The EEXIST errno is the collision
     /// signal: on EEXIST we bump the suffix and retry, starting at `-2`. The
     /// winning invocation is the one whose `create_dir` succeeded, which
-    /// guarantees atomicity across concurrent loopr processes on the same
-    /// target.
-    pub fn allocate(runs_dir: &Path) -> Result<Self, SessionIdAllocError> {
+    /// guarantees atomicity across concurrent loopr processes sharing the
+    /// same `anchor` dir.
+    ///
+    /// The `anchor` is `<xdg>/loopr/sessions/` as of Phase 5; callers in
+    /// `loopr::session` compose it before invoking.
+    pub fn allocate(anchor: &Path) -> Result<Self, SessionIdAllocError> {
         let base = Local::now().format("%Y%m%d-%H%M%S").to_string();
         for attempt in 1..=MAX_ALLOC_RETRIES {
             let candidate = if attempt == 1 { base.clone() } else { format!("{base}-{attempt}") };
-            let path = runs_dir.join(&candidate);
+            let path = anchor.join(&candidate);
             match std::fs::create_dir(&path) {
                 Ok(()) => return Ok(SessionId(candidate)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -37,7 +40,7 @@ impl SessionId {
             }
         }
         Err(SessionIdAllocError::MaxRetries {
-            path: runs_dir.to_path_buf(),
+            path: anchor.to_path_buf(),
         })
     }
 

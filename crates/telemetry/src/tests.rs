@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -466,108 +466,11 @@ fn fanout_same_work_id_reuses_file() {
 }
 
 // ---------- Query ----------
-
-#[test]
-fn list_sessions_returns_newest_first() {
-    let td = TempDir::new().unwrap();
-    let runs_dir = td.path().join(".loopr").join("runs");
-    fs::create_dir_all(&runs_dir).unwrap();
-    for name in ["20260418-120000", "20260419-090000", "20260419-120000-2"] {
-        fs::create_dir(runs_dir.join(name)).unwrap();
-    }
-    let entries = list_sessions(td.path(), None).unwrap();
-    let names: Vec<&str> = entries.iter().map(|e| e.session_id.as_str()).collect();
-    assert_eq!(names, vec!["20260419-120000-2", "20260419-090000", "20260418-120000"]);
-}
-
-#[test]
-fn list_sessions_skips_invalid_dirnames() {
-    let td = TempDir::new().unwrap();
-    let runs_dir = td.path().join(".loopr").join("runs");
-    fs::create_dir_all(&runs_dir).unwrap();
-    fs::create_dir(runs_dir.join("20260419-090000")).unwrap();
-    fs::create_dir(runs_dir.join("garbage")).unwrap();
-    File::create(runs_dir.join("stray.txt")).unwrap();
-    let entries = list_sessions(td.path(), None).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].session_id.as_str(), "20260419-090000");
-}
-
-#[test]
-fn list_sessions_empty_returns_empty() {
-    let td = TempDir::new().unwrap();
-    let entries = list_sessions(td.path(), None).unwrap();
-    assert!(entries.is_empty());
-}
-
-#[test]
-fn tail_latest_session_returns_last_n_lines() {
-    let td = TempDir::new().unwrap();
-    let runs_dir = td.path().join(".loopr").join("runs");
-    let run_dir = runs_dir.join("20260419-120000");
-    fs::create_dir_all(&run_dir).unwrap();
-    let mut body = String::new();
-    for i in 1..=20 {
-        body.push_str(&format!("line {i}\n"));
-    }
-    fs::write(run_dir.join("loopr.log"), body).unwrap();
-    let tail = tail_latest_session(td.path(), 5, None).unwrap();
-    let lines: Vec<&str> = tail.lines().collect();
-    assert_eq!(lines, vec!["line 16", "line 17", "line 18", "line 19", "line 20"]);
-}
-
-#[test]
-fn tail_latest_session_no_runs_returns_err() {
-    let td = TempDir::new().unwrap();
-    match tail_latest_session(td.path(), 10, None) {
-        Err(QueryError::NoRunsFound { .. }) => {}
-        other => panic!("expected NoRunsFound, got {other:?}"),
-    }
-}
-
-#[test]
-fn tail_latest_session_picks_newest() {
-    let td = TempDir::new().unwrap();
-    let runs_dir = td.path().join(".loopr").join("runs");
-    let old = runs_dir.join("20260418-120000");
-    let new = runs_dir.join("20260419-120000");
-    fs::create_dir_all(&old).unwrap();
-    fs::create_dir_all(&new).unwrap();
-    fs::write(old.join("loopr.log"), "old line\n").unwrap();
-    fs::write(new.join("loopr.log"), "new line\n").unwrap();
-    let tail = tail_latest_session(td.path(), 10, None).unwrap();
-    assert!(tail.contains("new line"));
-    assert!(!tail.contains("old line"));
-}
-
-#[test]
-fn list_sessions_excludes_specified_id() {
-    let td = TempDir::new().unwrap();
-    let runs_dir = td.path().join(".loopr").join("runs");
-    fs::create_dir_all(&runs_dir).unwrap();
-    fs::create_dir(runs_dir.join("20260419-120000")).unwrap();
-    fs::create_dir(runs_dir.join("20260419-130000")).unwrap();
-    let exclude = SessionId::parse("20260419-130000").unwrap();
-    let entries = list_sessions(td.path(), Some(&exclude)).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].session_id.as_str(), "20260419-120000");
-}
-
-#[test]
-fn tail_latest_session_excludes_self() {
-    let td = TempDir::new().unwrap();
-    let runs_dir = td.path().join(".loopr").join("runs");
-    let a = runs_dir.join("20260419-120000");
-    let b = runs_dir.join("20260419-130000");
-    fs::create_dir_all(&a).unwrap();
-    fs::create_dir_all(&b).unwrap();
-    fs::write(a.join("loopr.log"), "older\n").unwrap();
-    fs::write(b.join("loopr.log"), "current\n").unwrap();
-    let current = SessionId::parse("20260419-130000").unwrap();
-    let tail = tail_latest_session(td.path(), 10, Some(&current)).unwrap();
-    assert!(
-        tail.contains("older"),
-        "tail shows older run when current is excluded: {tail}"
-    );
-    assert!(!tail.contains("current"));
-}
+//
+// `list_sessions` and `tail_latest_session` depend on `$XDG_DATA_HOME`
+// via `xdg::xdg_root()`. End-to-end coverage lives in the loopr smoke
+// test suite (crates/loopr/tests/smoke.rs) where tests spawn the binary
+// with a per-test `XDG_DATA_HOME` override. Unit-level tests here would
+// either (a) mutate process-global env (race-prone in parallel test
+// runs) or (b) introduce an injection parameter that has no production
+// use. Prefer the integration coverage.

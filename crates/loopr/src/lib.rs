@@ -111,16 +111,23 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     // `rules/rust.md` forbids the leading-underscore crutch for used locals;
     // these locals ARE used - their Drop timing is the whole point.
     let directive = resolve_log_directive(cli.log_level.as_deref());
-    let runs_dir = effective.join(".loopr").join("runs");
-    std::fs::create_dir_all(&runs_dir)
-        .map_err(|e| LooprError::TelemetryInit(format!("create {}: {e}", runs_dir.display())))?;
-    let session_id = telemetry::SessionId::allocate(&runs_dir)
-        .map_err(|e| LooprError::TelemetryInit(format!("session id alloc: {e}")))?;
-    let guard =
-        telemetry::init(&effective, &session_id, &directive).map_err(|e| LooprError::TelemetryInit(e.to_string()))?;
+    let session_id = session::resolve_session_id(&effective, None)?;
+    let target_slug =
+        telemetry::target_slug(&effective).map_err(|e| LooprError::TelemetryInit(format!("target_slug: {e}")))?;
+    let process_runs_dir = telemetry::session_target_dir(&session_id, &target_slug)
+        .map_err(|e| LooprError::TelemetryInit(format!("session_target_dir: {e}")))?
+        .join("runs");
+    std::fs::create_dir_all(&process_runs_dir)
+        .map_err(|e| LooprError::TelemetryInit(format!("mkdir {}: {e}", process_runs_dir.display())))?;
+    let process_id = telemetry::ProcessId::allocate(&process_runs_dir)
+        .map_err(|e| LooprError::TelemetryInit(format!("process id alloc: {e}")))?;
+    let guard = telemetry::init(&effective, &session_id, &target_slug, &process_id, &directive)
+        .map_err(|e| LooprError::TelemetryInit(e.to_string()))?;
     let invocation = tracing::info_span!(
         "loopr.invocation",
         session_id = %session_id,
+        process_id = %process_id,
+        target_slug = %target_slug,
         subcommand = label,
     );
     let enter = invocation.enter();
@@ -137,7 +144,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let _ = &guard;
     let _ = &enter;
 
-    dispatch(&effective, &session_id, cli.output, command)
+    dispatch(&effective, &session_id, &process_id, cli.output, command)
 }
 
 /// Resolve the log-filter directive string from CLI flag > env var > default
@@ -155,6 +162,7 @@ fn resolve_log_directive(flag: Option<&str>) -> String {
 fn dispatch(
     target: &Path,
     session_id: &telemetry::SessionId,
+    process_id: &telemetry::ProcessId,
     output_format: Option<output::Format>,
     command: Command,
 ) -> Result<(), LooprError> {
@@ -180,11 +188,12 @@ fn dispatch(
             DaemonCmd::Status => daemon_status(target),
         },
         Command::Logs { cmd } => match cmd {
-            // `logs` subcommands pass the current session_id as the `exclude`
-            // parameter so the query doesn't return its own in-flight session
-            // dir (which would otherwise be newest and shadow the real
-            // target of the query).
-            LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(session_id)),
+            // `logs tail` excludes the caller's own process dir (whose
+            // `loopr.log` is currently receiving this invocation's own
+            // events and would otherwise shadow the interesting log).
+            // `logs runs` excludes the current session so past sessions
+            // are listed; current session is implicit.
+            LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(process_id)),
             LogsCmd::Runs => logs::handle_runs(target, Some(session_id)),
         },
         Command::Tui => Err(LooprError::NotYetImplemented { feature: "tui" }),

@@ -63,11 +63,11 @@ fn version_missing_does_not_match() {
 }
 
 #[test]
-fn session_id_file_roundtrip() {
+fn process_id_file_roundtrip() {
     let td = target_with_loopr_dir();
-    let p = session_id_path(td.path());
-    write_session_id(&p, "20260419-123045").unwrap();
-    assert_eq!(fs::read_to_string(&p).unwrap().trim(), "20260419-123045");
+    let p = process_id_path(td.path());
+    write_process_id(&p, "pc-abc123").unwrap();
+    assert_eq!(fs::read_to_string(&p).unwrap().trim(), "pc-abc123");
 }
 
 #[test]
@@ -75,16 +75,16 @@ fn clean_removes_all_sentinels_idempotently() {
     let td = target_with_loopr_dir();
     write_pid(&pid_path(td.path()), 7777).unwrap();
     write_version(&version_path(td.path()), "v1").unwrap();
-    write_session_id(&session_id_path(td.path()), "20260419-000000").unwrap();
+    write_process_id(&process_id_path(td.path()), "pc-test01").unwrap();
     fs::write(socket_path(td.path()), b"dummy").unwrap();
     assert!(pid_path(td.path()).exists());
     assert!(version_path(td.path()).exists());
-    assert!(session_id_path(td.path()).exists());
+    assert!(process_id_path(td.path()).exists());
     assert!(socket_path(td.path()).exists());
     clean(td.path());
     assert!(!pid_path(td.path()).exists());
     assert!(!version_path(td.path()).exists());
-    assert!(!session_id_path(td.path()).exists());
+    assert!(!process_id_path(td.path()).exists());
     assert!(!socket_path(td.path()).exists());
     // Second call: idempotent.
     clean(td.path());

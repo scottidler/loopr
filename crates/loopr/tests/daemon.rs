@@ -17,8 +17,17 @@ use tempfile::TempDir;
 mod common;
 use common::init_git_repo;
 
-fn loopr() -> Command {
-    Command::cargo_bin("loopr").unwrap()
+/// Build a `loopr` subprocess with `XDG_DATA_HOME` pointed at a
+/// test-local dir so session state doesn't pollute the real user's
+/// `~/.local/share/loopr/`.
+fn loopr(target: &Path) -> Command {
+    let mut cmd = Command::cargo_bin("loopr").unwrap();
+    cmd.env("XDG_DATA_HOME", xdg_home_for(target));
+    cmd
+}
+
+fn xdg_home_for(target: &Path) -> std::path::PathBuf {
+    target.join(".xdg")
 }
 
 fn read_pid(target: &Path) -> Option<u32> {
@@ -47,7 +56,8 @@ fn stop_daemon(target: &Path) {
 }
 
 fn start_daemon(target: &Path) {
-    loopr()
+    fs::create_dir_all(xdg_home_for(target)).unwrap();
+    loopr(target)
         .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
@@ -80,19 +90,30 @@ fn ac3_version_file_matches_git_describe() {
     stop_daemon(td.path());
 }
 
-// AC 4: `.loopr/daemon.session-id` must name an existing directory under
-// `.loopr/runs/`. Log queries rely on this pointer.
+// AC 4: `.loopr/daemon.process-id` must name an existing process dir
+// under XDG. Log queries rely on this pointer plus the active-session
+// pointer to locate the daemon's own run dir.
 #[test]
-fn ac4_session_id_file_points_to_extant_run_dir() {
+fn ac4_process_id_file_points_to_extant_run_dir() {
     let td = TempDir::new().unwrap();
     start_daemon(td.path());
 
-    let session_id = fs::read_to_string(td.path().join(".loopr").join("daemon.session-id")).unwrap();
+    let session_id = fs::read_to_string(td.path().join(".loopr").join("active-session")).unwrap();
     let session_id = session_id.trim();
-    let run_dir = td.path().join(".loopr").join("runs").join(session_id);
+    let process_id = fs::read_to_string(td.path().join(".loopr").join("daemon.process-id")).unwrap();
+    let process_id = process_id.trim();
+    let slug = td.path().to_str().unwrap().replace('/', "-");
+    let run_dir = xdg_home_for(td.path())
+        .join("loopr")
+        .join("sessions")
+        .join(session_id)
+        .join("targets")
+        .join(&slug)
+        .join("runs")
+        .join(process_id);
     assert!(
         run_dir.is_dir(),
-        "daemon.session-id ({session_id}) points to extant dir: {}",
+        "daemon.process-id ({process_id}) points to extant dir: {}",
         run_dir.display()
     );
 
@@ -100,28 +121,31 @@ fn ac4_session_id_file_points_to_extant_run_dir() {
 }
 
 // AC 5: the daemon allocates its own telemetry guard and emits at least
-// one `daemon.started` event to its run dir's events.log.
+// one `daemon.started` event to its run dir's events.log under XDG.
 #[test]
 fn ac5_daemon_emits_started_event_to_its_own_events_log() {
     let td = TempDir::new().unwrap();
     start_daemon(td.path());
 
-    let session_id = fs::read_to_string(td.path().join(".loopr").join("daemon.session-id"))
+    let session_id = fs::read_to_string(td.path().join(".loopr").join("active-session"))
         .unwrap()
         .trim()
         .to_string();
-    let events = td
-        .path()
-        .join(".loopr")
-        .join("runs")
+    let process_id = fs::read_to_string(td.path().join(".loopr").join("daemon.process-id"))
+        .unwrap()
+        .trim()
+        .to_string();
+    let slug = td.path().to_str().unwrap().replace('/', "-");
+    let run_dir = xdg_home_for(td.path())
+        .join("loopr")
+        .join("sessions")
         .join(&session_id)
-        .join("events.log");
-    let pretty = td
-        .path()
-        .join(".loopr")
+        .join("targets")
+        .join(&slug)
         .join("runs")
-        .join(&session_id)
-        .join("loopr.log");
+        .join(&process_id);
+    let events = run_dir.join("events.log");
+    let pretty = run_dir.join("loopr.log");
 
     // Give the tracing-appender a beat to flush the first event.
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -151,7 +175,7 @@ fn ac14_foreground_start_blocked_by_running_background_daemon() {
     start_daemon(td.path());
     let pid = read_pid(td.path()).unwrap();
 
-    let assertion = loopr()
+    let assertion = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "start", "--foreground"])
         .assert()
         .failure();
@@ -180,7 +204,7 @@ fn ac6_daemon_status_prints_human_readable() {
     let td = TempDir::new().unwrap();
     start_daemon(td.path());
 
-    let output = loopr()
+    let output = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "status"])
         .assert()
         .success();
@@ -201,7 +225,7 @@ fn ac7_daemon_stop_removes_sentinels() {
     start_daemon(td.path());
     let pid = read_pid(td.path()).unwrap();
 
-    loopr()
+    loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "stop"])
         .assert()
         .success();
@@ -221,8 +245,8 @@ fn ac7_daemon_stop_removes_sentinels() {
         "version file removed"
     );
     assert!(
-        !td.path().join(".loopr").join("daemon.session-id").exists(),
-        "session-id file removed"
+        !td.path().join(".loopr").join("daemon.process-id").exists(),
+        "process-id file removed"
     );
 
     // Process actually exited.
@@ -238,7 +262,7 @@ fn ac7_daemon_stop_removes_sentinels() {
 #[test]
 fn ac8_daemon_stop_no_daemon_prints_message() {
     let td = TempDir::new().unwrap();
-    loopr()
+    loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "stop"])
         .assert()
         .success()
@@ -253,7 +277,7 @@ fn ac8_daemon_stop_no_daemon_prints_message() {
 fn ac9_plan_auto_forks_daemon_and_creates_plan() {
     let td = TempDir::new().unwrap();
     init_git_repo(td.path());
-    loopr()
+    loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
         .success()
@@ -272,7 +296,7 @@ fn ac10_plan_reuses_running_daemon() {
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
 
-    loopr()
+    loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
         .success();
@@ -290,7 +314,7 @@ fn ac11_second_daemon_start_is_idempotent() {
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
 
-    let output = loopr()
+    let output = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
@@ -335,7 +359,7 @@ fn ac13_version_mismatch_triggers_silent_restart() {
     // command sees a version mismatch.
     fs::write(td.path().join(".loopr").join("daemon.version"), "not-a-real-version\n").unwrap();
 
-    loopr()
+    loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
         .assert()
         .success();
@@ -356,7 +380,7 @@ fn ac15_pid_reuse_protection_rejects_non_loopr() {
     fs::write(td.path().join(".loopr").join("daemon.pid"), "1\n").unwrap();
 
     // Use a command that triggers ensure_daemon_if_needed.
-    loopr()
+    loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "status"])
         .assert()
         .success();

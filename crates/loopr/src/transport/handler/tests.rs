@@ -12,7 +12,7 @@ use ipc::{
 };
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
-use telemetry::SessionId;
+use telemetry::{ProcessId, SessionId};
 use tools::{BashDenylist, LaneRouter, SandboxMode};
 use worktree::AttemptCleanupPolicy;
 
@@ -44,6 +44,8 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
     let ctx = Arc::new(DaemonContext::new(
         td.path().to_path_buf(),
         SessionId::parse("20260419-000000").unwrap(),
+        "-test-target".to_string(),
+        ProcessId::parse("pc-test01").unwrap(),
         12345,
         store,
         dummy_anthropic(),

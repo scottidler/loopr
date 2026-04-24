@@ -1,10 +1,10 @@
-//! Daemon process lifecycle: double-fork detachment, pid/version/session-id
+//! Daemon process lifecycle: double-fork detachment, pid/version/process-id
 //! sentinels, signal handling, run loop. Owned by the `loopr` driver crate;
 //! the `transport` module hangs off the daemon's accept loop but does not
 //! know about the fork or the pid file.
 //!
 //! Submodules: `fork` (libc double-fork primitive), `sentinel` (pid /
-//! version / session-id / socket filesystem helpers), `context` (`DaemonContext`
+//! version / process-id / socket filesystem helpers), `context` (`DaemonContext`
 //! shared state).
 //!
 //! ## Fork control flow
@@ -34,7 +34,7 @@ use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
 use llm::{AnthropicClient, LlmClient};
-use telemetry::SessionId;
+use telemetry::{ProcessId, SessionId};
 use tools::{BashDenylist, LaneRouter};
 
 use crate::config::{Config, resolve_api_key};
@@ -269,18 +269,24 @@ pub async fn daemon_main(target: PathBuf) -> Result<(), LooprError> {
     let version_file = sentinel::version_path(&target);
     sentinel::write_version(&version_file, DAEMON_VERSION)?;
 
-    // Allocate the session-id now so the sentinel file can point at it, and
-    // pass the same id into the telemetry subscriber in Phase B.
-    let runs_dir = target.join(".loopr").join("runs");
-    std::fs::create_dir_all(&runs_dir)
-        .map_err(|e| LooprError::DaemonStartup(format!("mkdir {}: {e}", runs_dir.display())))?;
-    let session_id =
-        SessionId::allocate(&runs_dir).map_err(|e| LooprError::DaemonStartup(format!("session id alloc: {e}")))?;
-    let session_id_file = sentinel::session_id_path(&target);
-    sentinel::write_session_id(&session_id_file, &session_id.to_string())?;
+    // Resolve (or allocate) this daemon's session, compute the per-target
+    // slug, and allocate this process's own id. All three are needed before
+    // telemetry::init in Phase B.
+    let session_id = crate::session::resolve_session_id(&target, None)?;
+    let target_slug =
+        telemetry::target_slug(&target).map_err(|e| LooprError::DaemonStartup(format!("target_slug: {e}")))?;
+    let process_runs_dir = telemetry::session_target_dir(&session_id, &target_slug)
+        .map_err(|e| LooprError::DaemonStartup(format!("session_target_dir: {e}")))?
+        .join("runs");
+    std::fs::create_dir_all(&process_runs_dir)
+        .map_err(|e| LooprError::DaemonStartup(format!("mkdir {}: {e}", process_runs_dir.display())))?;
+    let process_id = ProcessId::allocate(&process_runs_dir)
+        .map_err(|e| LooprError::DaemonStartup(format!("process id alloc: {e}")))?;
+    let process_id_file = sentinel::process_id_path(&target);
+    sentinel::write_process_id(&process_id_file, &process_id.to_string())?;
 
     // ---- Phase B: active-daemon (cleanup on exit) ----
-    let outcome = run_active_daemon(target.clone(), session_id, pid).await;
+    let outcome = run_active_daemon(target.clone(), session_id, target_slug, process_id, pid).await;
 
     // Normal shutdown cleanup: only runs if we're the lock winner (we
     // wouldn't have reached here otherwise).
@@ -312,13 +318,19 @@ pub async fn daemon_main(target: PathBuf) -> Result<(), LooprError> {
 ///    close and let the final `Arc::drop` invoke `Store::Drop` — the
 ///    crash-interrupt fallback path that the store is explicitly
 ///    designed to tolerate as best-effort only.
-async fn run_active_daemon(target: PathBuf, session_id: SessionId, pid: u32) -> Result<(), LooprError> {
+async fn run_active_daemon(
+    target: PathBuf,
+    session_id: SessionId,
+    target_slug: String,
+    process_id: ProcessId,
+    pid: u32,
+) -> Result<(), LooprError> {
     // Init the daemon's own telemetry subscriber. Safe because `lib::run`'s
     // pre-telemetry hoist guarantees the parent never called
     // `set_global_default`; the COW'd "already set" flag is false in the
     // grandchild's memory.
     let directive = std::env::var(telemetry::LOG_ENV_VAR).unwrap_or_else(|_| "info".to_string());
-    let _guard = telemetry::init(&target, &session_id, &directive)
+    let _guard = telemetry::init(&target, &session_id, &target_slug, &process_id, &directive)
         .map_err(|e| LooprError::DaemonStartup(format!("telemetry init: {e}")))?;
 
     // Load top-level Config (composes each stage's config) and build the
@@ -331,7 +343,7 @@ async fn run_active_daemon(target: PathBuf, session_id: SessionId, pid: u32) -> 
     let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
         .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
 
-    let ctx = build_context(target, session_id, pid, anthropic, config).await?;
+    let ctx = build_context(target, session_id, target_slug, process_id, pid, anthropic, config).await?;
     serve(ctx).await
 }
 
@@ -348,6 +360,8 @@ async fn run_active_daemon(target: PathBuf, session_id: SessionId, pid: u32) -> 
 pub async fn build_context<L>(
     target: PathBuf,
     session_id: SessionId,
+    target_slug: String,
+    process_id: ProcessId,
     pid: u32,
     llm: L,
     config: Config,
@@ -404,6 +418,8 @@ where
     let ctx = Arc::new(DaemonContext::new(
         target.clone(),
         session_id,
+        target_slug,
+        process_id,
         pid,
         store,
         Arc::new(llm),

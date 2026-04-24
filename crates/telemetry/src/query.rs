@@ -6,9 +6,12 @@ use rev_lines::RevLines;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::process::ProcessId;
 use crate::session::SessionId;
+use crate::slug::target_slug;
+use crate::xdg;
 
-/// One entry in `loopr logs runs`.
+/// One entry in `loopr logs sessions`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionEntry {
     pub session_id: SessionId,
@@ -16,22 +19,49 @@ pub struct SessionEntry {
     pub path: PathBuf,
 }
 
-/// Read the last `n` lines of `<latest-session>/loopr.log` under
-/// `<target>/.loopr/runs/`.
+/// Read the last `n` lines of the newest non-empty `loopr.log` across
+/// every process-run dir for this target under XDG.
 ///
-/// When the query is issued from inside a running invocation (i.e. `loopr
-/// logs tail` initialized its own telemetry and allocated a session-id), callers
-/// pass that id as `exclude` to keep the query from reading its own
-/// still-empty log. Other callers pass `None`.
+/// The XDG layout is:
+///   `sessions/<session-id>/targets/<slug>/runs/<process-id>/loopr.log`
 ///
-/// Returns `NoRunsFound` if the runs dir is empty, absent, or contains only
-/// the excluded session.
-pub fn tail_latest_session(target: &Path, n: usize, exclude: Option<&SessionId>) -> Result<String, QueryError> {
-    let runs = list_sessions(target, exclude)?;
-    let latest = runs.into_iter().next().ok_or_else(|| QueryError::NoRunsFound {
-        path: target.join(".loopr").join("runs"),
-    })?;
-    let log_path = latest.path.join("loopr.log");
+/// This function scans every `<process-id>/loopr.log` for the current
+/// target across every session, picks the newest non-empty file by mtime,
+/// and tails it. `exclude` is reserved for future use (the session-level
+/// exclude from the pre-XDG semantics no longer applies because daemon +
+/// clients now share a session).
+pub fn tail_latest_session(target: &Path, n: usize, exclude_process: Option<&ProcessId>) -> Result<String, QueryError> {
+    let sessions = list_sessions(target, None)?;
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in sessions {
+        let runs = entry.path.join("runs");
+        let Ok(reads) = std::fs::read_dir(&runs) else {
+            continue;
+        };
+        for de in reads.flatten() {
+            if let Some(name) = de.file_name().to_str()
+                && exclude_process.is_some_and(|p| p.as_str() == name)
+            {
+                continue;
+            }
+            let log = de.path().join("loopr.log");
+            let Ok(md) = log.metadata() else { continue };
+            if md.len() == 0 {
+                continue;
+            }
+            if let Ok(mtime) = md.modified() {
+                candidates.push((mtime, log));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    let log_path = candidates
+        .into_iter()
+        .next()
+        .map(|(_, p)| p)
+        .ok_or_else(|| QueryError::NoRunsFound {
+            path: target.to_path_buf(),
+        })?;
     let file = File::open(&log_path).map_err(|source| QueryError::Io {
         path: log_path.clone(),
         source,
@@ -45,17 +75,19 @@ pub fn tail_latest_session(target: &Path, n: usize, exclude: Option<&SessionId>)
     Ok(out)
 }
 
-/// List all session-ids under `<target>/.loopr/runs/`, newest first, with their
-/// parsed started-at timestamps. Directories whose names do not parse as
-/// valid SessionIds are skipped silently. The `exclude` parameter suppresses a
-/// caller's own in-flight session-id (see `tail_latest_session` for motivation).
+/// List all sessions that carry activity for this target, newest-first.
+/// Walks `$XDG/loopr/sessions/*/targets/<slug>/`. Directories whose names
+/// don't parse as SessionIds are skipped silently.
 pub fn list_sessions(target: &Path, exclude: Option<&SessionId>) -> Result<Vec<SessionEntry>, QueryError> {
-    let runs_dir = target.join(".loopr").join("runs");
-    if !runs_dir.exists() {
+    let sessions_root = xdg::xdg_root()
+        .map_err(|e| QueryError::XdgRoot(e.to_string()))?
+        .join("sessions");
+    if !sessions_root.exists() {
         return Ok(Vec::new());
     }
-    let read = std::fs::read_dir(&runs_dir).map_err(|source| QueryError::Io {
-        path: runs_dir.clone(),
+    let slug = target_slug(target).map_err(|e| QueryError::TargetSlug(e.to_string()))?;
+    let read = std::fs::read_dir(&sessions_root).map_err(|source| QueryError::Io {
+        path: sessions_root.clone(),
         source,
     })?;
     let mut entries: Vec<SessionEntry> = read
@@ -67,11 +99,15 @@ pub fn list_sessions(target: &Path, exclude: Option<&SessionId>) -> Result<Vec<S
             if exclude.is_some_and(|e| e == &session_id) {
                 return None;
             }
+            let target_dir = de.path().join("targets").join(&slug);
+            if !target_dir.exists() {
+                return None;
+            }
             let started_at = session_id.started_at()?;
             Some(SessionEntry {
                 session_id,
                 started_at,
-                path: de.path(),
+                path: target_dir,
             })
         })
         .collect();
@@ -85,4 +121,8 @@ pub enum QueryError {
     NoRunsFound { path: PathBuf },
     #[error("failed to read {path}: {source}", path = .path.display())]
     Io { path: PathBuf, source: io::Error },
+    #[error("xdg_root: {0}")]
+    XdgRoot(String),
+    #[error("target_slug: {0}")]
+    TargetSlug(String),
 }

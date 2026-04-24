@@ -10,7 +10,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, fmt};
 
 use crate::fanout::WorkFanoutLayer;
+use crate::process::ProcessId;
 use crate::session::SessionId;
+use crate::xdg;
 
 /// Newtype wrapper that makes `Arc<Mutex<LineWriter<File>>>` usable as a
 /// `MakeWriter` for `tracing-subscriber::fmt::Layer`. Required because:
@@ -92,9 +94,9 @@ impl Drop for Guard {
 
 /// Initialize the global tracing subscriber for this process.
 ///
-/// Creates `<target>/.loopr/runs/<session_id>/` if it does not exist, opens
-/// `events.log` and `loopr.log` there as blocking `LineWriter<File>` handles
-/// wrapped in `Arc<Mutex<_>>` via the `SharedWriter` newtype, and composes:
+/// Creates the per-process run dir under XDG at
+/// `$XDG_DATA_HOME/loopr/sessions/<session>/targets/<target_slug>/runs/<process>/`,
+/// opens `events.log` and `loopr.log` there, and composes:
 ///   1. JSON layer    -> events.log (filtered by `filter`)
 ///   2. Pretty layer  -> loopr.log  (filtered by `filter`)
 ///   3. Console layer -> stderr     (INFO and above, gated on IsTerminal)
@@ -104,20 +106,30 @@ impl Drop for Guard {
 /// fork trap (Stage 4's daemon child would inherit dead channels from a
 /// non-blocking appender initialized pre-fork).
 ///
+/// `_target` is retained as a parameter for call-site symmetry with earlier
+/// versions and for the daemon's legacy-runs-dir warning (Phase 9); the
+/// subscriber writes exclusively to XDG and does not touch the target tree.
+///
 /// Directive is an `EnvFilter`-parseable string (e.g. `"info"`,
 /// `"loopr=debug,tools=error"`, `"off"`). `init` validates it once at the top
-/// before touching the filesystem — an invalid directive surfaces as
+/// before touching the filesystem; an invalid directive surfaces as
 /// `InvalidFilter` without leaving a ghost run directory behind. Each layer
 /// then parses its own fresh `EnvFilter` from the same string (cheaper than
 /// and no less correct than `EnvFilter::Clone`, which does not exist).
-pub fn init(target: &Path, session_id: &SessionId, directive: &str) -> Result<Guard, TelemetryInitError> {
+pub fn init(
+    _target: &Path,
+    session_id: &SessionId,
+    target_slug: &str,
+    process_id: &ProcessId,
+    directive: &str,
+) -> Result<Guard, TelemetryInitError> {
     // Validate before any I/O: a bad directive must not leave a stale run dir.
     EnvFilter::try_new(directive).map_err(|e| TelemetryInitError::InvalidFilter {
         directive: directive.to_string(),
         reason: e.to_string(),
     })?;
     let console_directive = floor_at_info(directive);
-    // Validate the floored directive too — it is a straight transformation of
+    // Validate the floored directive too: it is a straight transformation of
     // `directive` and should always re-parse, but a belt-and-suspenders check
     // keeps any future `floor_at_info` regression from shipping silently.
     EnvFilter::try_new(&console_directive).map_err(|e| TelemetryInitError::InvalidFilter {
@@ -125,11 +137,11 @@ pub fn init(target: &Path, session_id: &SessionId, directive: &str) -> Result<Gu
         reason: e.to_string(),
     })?;
 
-    let run_dir = target.join(".loopr").join("runs").join(session_id.as_str());
-    std::fs::create_dir_all(&run_dir).map_err(|source| TelemetryInitError::DirCreate {
-        path: run_dir.clone(),
-        source,
-    })?;
+    let run_dir =
+        xdg::session_run_dir(session_id, target_slug, process_id).map_err(|e| TelemetryInitError::DirCreate {
+            path: std::path::PathBuf::from(format!("xdg session_run_dir: {e}")),
+            source: io::Error::other(e.to_string()),
+        })?;
 
     let json_path = run_dir.join("events.log");
     let pretty_path = run_dir.join("loopr.log");

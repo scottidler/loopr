@@ -79,12 +79,7 @@ pub fn resolve_session_id(target: &Path, flag: Option<&str>) -> Result<SessionId
             }
             PointerState::Absent => {}
         }
-        let runs_dir = target.join(".loopr").join("runs");
-        fs::create_dir_all(&runs_dir)
-            .map_err(|e| LooprError::SessionResolve(format!("mkdir {}: {e}", runs_dir.display())))?;
-        let candidate =
-            SessionId::allocate(&runs_dir).map_err(|e| LooprError::SessionResolve(format!("session id alloc: {e}")))?;
-        write_manifest(&candidate)?;
+        let candidate = allocate_new_session()?;
         match claim_pointer_exclusive(&pointer, &candidate) {
             Ok(()) => return Ok(candidate),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
@@ -201,22 +196,35 @@ fn attach_pointer(target: &Path, session_id: &SessionId) -> Result<(), LooprErro
         .map_err(|e| LooprError::SessionResolve(format!("rename {} -> {}: {e}", tmp.display(), pointer.display())))
 }
 
-/// Write `sessions/<id>/manifest.yml` to XDG with the three Phase 4 fields.
-/// `create_dir_all` is idempotent; `write` replaces an existing manifest
-/// (allocating twice is unusual but not a correctness error).
-fn write_manifest(session_id: &SessionId) -> Result<(), LooprError> {
-    let dir =
-        telemetry::session_dir(session_id).map_err(|e| LooprError::SessionResolve(format!("xdg session_dir: {e}")))?;
-    fs::create_dir_all(&dir).map_err(|e| LooprError::SessionResolve(format!("mkdir {}: {e}", dir.display())))?;
+/// Allocate a new session by atomically claiming a timestamped directory
+/// under XDG `sessions/`. The `create_dir` EEXIST race inside
+/// `SessionId::allocate` is the atomicity anchor: on collision, a `-N`
+/// suffix is appended. Writes the Phase-4 manifest inside the claimed dir
+/// before returning.
+///
+/// Phase-5 note: the claim anchor moved from `<target>/.loopr/runs/`
+/// (which no longer exists for allocation purposes) to the user-global
+/// XDG `sessions/` tree.
+fn allocate_new_session() -> Result<SessionId, LooprError> {
+    let sessions_root = telemetry::xdg_root()
+        .map_err(|e| LooprError::SessionResolve(format!("xdg_root: {e}")))?
+        .join("sessions");
+    fs::create_dir_all(&sessions_root)
+        .map_err(|e| LooprError::SessionResolve(format!("mkdir {}: {e}", sessions_root.display())))?;
+    let candidate = SessionId::allocate(&sessions_root)
+        .map_err(|e| LooprError::SessionResolve(format!("session id alloc: {e}")))?;
+    let dir = sessions_root.join(candidate.as_str());
     let manifest = SessionManifest {
-        session_id: session_id.as_str().to_string(),
+        session_id: candidate.as_str().to_string(),
         started_at: chrono::Local::now(),
         ended_at: None,
     };
     let body =
         serde_yaml::to_string(&manifest).map_err(|e| LooprError::SessionResolve(format!("serialize manifest: {e}")))?;
-    let path = dir.join("manifest.yml");
-    fs::write(&path, body).map_err(|e| LooprError::SessionResolve(format!("write {}: {e}", path.display())))
+    let manifest_path = dir.join("manifest.yml");
+    fs::write(&manifest_path, body)
+        .map_err(|e| LooprError::SessionResolve(format!("write {}: {e}", manifest_path.display())))?;
+    Ok(candidate)
 }
 
 /// Returns `true` if the session's manifest exists and has a non-null

@@ -25,7 +25,7 @@ use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
 use llm::LlmClient;
 use store::{BundleUpdateError, Store};
-use telemetry::SessionId;
+use telemetry::{ProcessId, SessionId};
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::{AttemptCleanupPolicy, Worktree};
 
@@ -49,6 +49,8 @@ pub const EVENTS_CAPACITY: usize = 64;
 pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     pub target: PathBuf,
     pub session_id: SessionId,
+    pub target_slug: String,
+    pub process_id: ProcessId,
     pub started_at: chrono::DateTime<chrono::Local>,
     pub pid: u32,
     /// Broadcast bus for `DaemonEvent`s. Stage 4 defines the channel but
@@ -171,6 +173,8 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     pub fn new(
         target: PathBuf,
         session_id: SessionId,
+        target_slug: String,
+        process_id: ProcessId,
         pid: u32,
         store: Store,
         llm: Arc<L>,
@@ -188,6 +192,8 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         Self {
             target,
             session_id,
+            target_slug,
+            process_id,
             started_at: chrono::Local::now(),
             pid,
             events,
@@ -214,7 +220,8 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Build a per-invocation `ToolContext` for one tool call.
     ///
     /// The persist base for overflow output is
-    /// `<target>/.loopr/runs/<session-id>/work/<work-id>/`. The ralph loop
+    /// `<xdg>/loopr/sessions/<session-id>/targets/<slug>/runs/<process-id>/work/<work-id>/`.
+    /// The ralph loop
     /// creates these directories on first use; the tool subprocess spawner
     /// calls `create_dir_all` before writing.
     ///
@@ -267,13 +274,13 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         };
 
         let worktree_root = self.target.join(".loopr").join("worktrees");
-        let persist_base = self
-            .target
-            .join(".loopr")
-            .join("runs")
-            .join(self.session_id.as_str())
-            .join("work")
-            .join(work.id.as_ref());
+        let persist_base = match telemetry::session_run_dir(&self.session_id, &self.target_slug, &self.process_id) {
+            Ok(run_dir) => run_dir.join("work").join(work.id.as_ref()),
+            Err(e) => {
+                error!(error = %e, "session_run_dir failed; Work remains InProgress");
+                return;
+            }
+        };
         let _ = std::fs::create_dir_all(&persist_base);
 
         let target = self.target.clone();
@@ -640,20 +647,16 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     }
 
     pub fn tool_context(&self, work_id: &WorkId, invocation_id: Uuid) -> ToolContext {
-        let persist_base = self
-            .target
-            .join(".loopr")
-            .join("runs")
-            .join(self.session_id.as_str())
-            .join("work")
-            .join(work_id.as_ref());
+        let persist_base = telemetry::session_run_dir(&self.session_id, &self.target_slug, &self.process_id)
+            .ok()
+            .map(|d| d.join("work").join(work_id.as_ref()));
         ToolContext {
             working_dir: self.target.clone(),
             router: self.router.clone(),
             sandbox: self.sandbox,
             path_deny_patterns: self.path_deny_patterns.clone(),
             bash_denylist: self.bash_denylist.clone(),
-            persist_base: Some(persist_base),
+            persist_base,
             invocation_id: Some(invocation_id),
         }
     }

@@ -14,11 +14,16 @@ fn stub_session_id() -> telemetry::SessionId {
     telemetry::SessionId::parse("20260419-000000").unwrap()
 }
 
+fn stub_process_id() -> telemetry::ProcessId {
+    telemetry::ProcessId::parse("pc-test01").unwrap()
+}
+
 #[test]
 fn run_init_returns_stage_5() {
     let err = dispatch(
         std::path::Path::new("/tmp"),
         &stub_session_id(),
+        &stub_process_id(),
         None,
         parse_cmd(&["loopr", "init"]),
     )
@@ -54,6 +59,7 @@ fn run_daemon_stop_on_empty_target_prints_no_daemon() {
     dispatch(
         td.path(),
         &stub_session_id(),
+        &stub_process_id(),
         None,
         parse_cmd(&["loopr", "daemon", "stop"]),
     )
@@ -69,6 +75,7 @@ fn run_daemon_status_on_empty_target_prints_no_daemon() {
     dispatch(
         td.path(),
         &stub_session_id(),
+        &stub_process_id(),
         None,
         parse_cmd(&["loopr", "daemon", "status"]),
     )
@@ -82,7 +89,14 @@ fn run_tui_returns_not_yet_implemented() {
     // subcommand) is normalized to Command::Tui in lib::run before
     // dispatch, so exercising it via dispatch directly is equivalent.
     let td = tempfile::TempDir::new().unwrap();
-    let err = dispatch(td.path(), &stub_session_id(), None, parse_cmd(&["loopr", "tui"])).unwrap_err();
+    let err = dispatch(
+        td.path(),
+        &stub_session_id(),
+        &stub_process_id(),
+        None,
+        parse_cmd(&["loopr", "tui"]),
+    )
+    .unwrap_err();
     match err {
         LooprError::NotYetImplemented { feature } => assert_eq!(feature, "tui"),
         other => panic!("expected NotYetImplemented, got {other:?}"),
@@ -95,6 +109,7 @@ fn run_logs_tail_on_empty_target_errors_no_runs_found() {
     let err = dispatch(
         td.path(),
         &stub_session_id(),
+        &stub_process_id(),
         None,
         parse_cmd(&["loopr", "logs", "tail"]),
     )
@@ -112,6 +127,7 @@ fn run_logs_runs_on_empty_target_succeeds_with_no_output() {
     dispatch(
         td.path(),
         &stub_session_id(),
+        &stub_process_id(),
         None,
         parse_cmd(&["loopr", "logs", "runs"]),
     )

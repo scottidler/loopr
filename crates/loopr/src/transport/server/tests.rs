@@ -15,7 +15,7 @@ use context::InlineContextBuilder;
 use ipc::{DaemonRequest, DaemonResponse, HandshakeParams, PROTOCOL_VERSION};
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
-use telemetry::SessionId;
+use telemetry::{ProcessId, SessionId};
 use tempfile::TempDir;
 use tools::{BashDenylist, LaneRouter, SandboxMode};
 use worktree::AttemptCleanupPolicy;
@@ -37,6 +37,8 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
     Arc::new(DaemonContext::new(
         target,
         SessionId::parse("20260419-000000").unwrap(),
+        "-test-target".to_string(),
+        ProcessId::parse("pc-test01").unwrap(),
         std::process::id(),
         store,
         dummy_llm(),
