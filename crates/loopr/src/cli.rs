@@ -71,6 +71,12 @@ pub enum Command {
     /// List all Ticks in the target's taskstore.
     Ticks,
 
+    /// Show a single record by ID (prefix-routed: pl-/wk-/bd-/tk-).
+    Show {
+        /// Record ID. The 2-char prefix picks the record type.
+        id: String,
+    },
+
     /// Daemon lifecycle (start, stop, status). [Stage 4]
     Daemon {
         #[command(subcommand)]
@@ -94,6 +100,7 @@ impl Command {
             Command::Works => "works",
             Command::Bundles => "bundles",
             Command::Ticks => "ticks",
+            Command::Show { .. } => "show",
             Command::Daemon { cmd } => match cmd {
                 DaemonCmd::Start { .. } => "daemon-start",
                 DaemonCmd::Stop => "daemon-stop",

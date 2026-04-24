@@ -174,6 +174,60 @@ fn plans_on_fresh_target_emits_empty_records_array() {
 }
 
 #[test]
+fn show_on_created_plan_returns_full_record() {
+    let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
+    // Create a plan and capture its id from the `plan` output.
+    let plan_out = loopr()
+        .args(["-C", td.path().to_str().unwrap(), "plan", "for-show"])
+        .assert()
+        .success();
+    let plan_stdout = String::from_utf8_lossy(&plan_out.get_output().stdout).to_string();
+    let plan_id = plan_stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("plan:   ").map(str::trim))
+        .expect("plan line in stdout")
+        .to_string();
+    assert!(plan_id.starts_with("pl-"), "expected pl- id, got {plan_id}");
+
+    // Show it via the new verb.
+    let show_out = loopr()
+        .args(["-C", td.path().to_str().unwrap(), "-o", "json", "show", &plan_id])
+        .assert()
+        .success();
+    let show_stdout = String::from_utf8_lossy(&show_out.get_output().stdout).to_string();
+    // Adjacent-tagged RecordResult: {"kind": "plan", "record": {...}}
+    assert!(show_stdout.contains("\"kind\""), "json includes tag: {show_stdout}");
+    assert!(show_stdout.contains("\"plan\""), "tag value is plan: {show_stdout}");
+    assert!(
+        show_stdout.contains("\"record\""),
+        "record object present: {show_stdout}"
+    );
+    assert!(
+        show_stdout.contains(&plan_id),
+        "record carries the plan id: {show_stdout}"
+    );
+    assert!(
+        show_stdout.contains("for-show"),
+        "record carries the plan goal: {show_stdout}"
+    );
+
+    stop_daemon(td.path());
+}
+
+#[test]
+fn show_with_unknown_prefix_errors_cleanly_without_ipc() {
+    let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
+    // No daemon started; CLI should reject the id purely on prefix check.
+    loopr()
+        .args(["-C", td.path().to_str().unwrap(), "show", "xx-abcde"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown id prefix"));
+}
+
+#[test]
 fn source_guard_blocks_target_with_sentinel() {
     let td = TempDir::new().unwrap();
     fs::write(td.path().join(".loopr-source-guard"), "").unwrap();

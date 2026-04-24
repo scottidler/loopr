@@ -11,3 +11,4 @@
 //! `rules/rust.md` §Test file placement.
 
 pub mod list;
+pub mod show;

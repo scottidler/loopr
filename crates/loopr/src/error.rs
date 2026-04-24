@@ -36,6 +36,9 @@ pub enum LooprError {
 
     #[error("daemon returned rpc error: {0}")]
     Rpc(#[from] ipc::RpcError),
+
+    #[error("unknown id prefix in `{id}`; expected one of: pl-, wk-, bd-, tk-")]
+    UnknownIdPrefix { id: String },
 }
 
 fn parent_hint(path: &Path) -> String {

@@ -84,6 +84,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         | Command::Works
         | Command::Bundles
         | Command::Ticks
+        | Command::Show { .. }
         | Command::Daemon { cmd: DaemonCmd::Status } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
@@ -162,6 +163,7 @@ fn dispatch(
         Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),
         Command::Bundles => commands::list::run(target, output_format, ipc::RecordKind::Bundle),
         Command::Ticks => commands::list::run(target, output_format, ipc::RecordKind::Tick),
+        Command::Show { id } => commands::show::run(target, output_format, id),
         Command::Daemon { cmd } => match cmd {
             // `Start` is handled above in `run` (pre-telemetry); it never
             // reaches `dispatch`.

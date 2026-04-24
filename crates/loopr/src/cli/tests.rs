@@ -51,6 +51,15 @@ fn test_cli_parses_ticks() {
 }
 
 #[test]
+fn test_cli_parses_show() {
+    let cli = Cli::parse_from(["loopr", "show", "pl-abcde"]);
+    match cli.command {
+        Command::Show { id } => assert_eq!(id, "pl-abcde"),
+        _ => panic!("expected Show"),
+    }
+}
+
+#[test]
 fn test_cli_parses_output_json_global() {
     use crate::output::Format;
     let cli = Cli::parse_from(["loopr", "--output", "json", "plans"]);
@@ -192,6 +201,7 @@ fn test_command_label_covers_every_variant() {
         (&["loopr", "works"][..], "works"),
         (&["loopr", "bundles"][..], "bundles"),
         (&["loopr", "ticks"][..], "ticks"),
+        (&["loopr", "show", "pl-abcde"][..], "show"),
         (&["loopr", "daemon", "start"][..], "daemon-start"),
         (&["loopr", "daemon", "stop"][..], "daemon-stop"),
         (&["loopr", "daemon", "status"][..], "daemon-status"),
