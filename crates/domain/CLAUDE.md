@@ -8,7 +8,7 @@ Records + FSM transition tables. The pure symbol layer of v5. No I/O, no persist
 - Const transition tables with role guards via `#[derive(Fsm)]` from `crates/derive/`
 - `Record` trait impls (the trait itself lives in `taskstore-traits`)
 - Shared enums: `Status`, `Role`, `Tier`
-- Typed IDs: `PlanId`, `WorkId`, `RunId`, `BundleId`, etc.
+- Typed IDs: `PlanId`, `WorkId`, `SessionId`, `BundleId`, etc.
 - Serde types with `deny_unknown_fields`
 - This crate's own `Config` struct (composed into the top-level `Config` by `loopr`)
 

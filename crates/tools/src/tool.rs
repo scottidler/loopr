@@ -40,7 +40,7 @@ pub struct ToolContext {
     pub path_deny_patterns: Vec<String>,
     pub bash_denylist: Arc<BashDenylist>,
     /// Base directory for persisting subprocess output when inline-truncation
-    /// fires. Agents set `Some(.loopr/runs/<run-id>/work/<work-id>/)`; unit
+    /// fires. Agents set `Some(.loopr/runs/<session-id>/work/<work-id>/)`; unit
     /// tests leave `None` (spawn falls back to
     /// `std::env::temp_dir().join("loopr-tool-output/")`).
     pub persist_base: Option<PathBuf>,

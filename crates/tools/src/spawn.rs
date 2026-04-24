@@ -46,7 +46,7 @@ pub struct SpawnResult {
 /// Injected by callers to control where overflow output gets persisted.
 #[derive(Default)]
 pub struct PersistConfig<'a> {
-    /// Agent provides `Some(.loopr/runs/<run-id>/work/<work-id>/)`. Unit tests
+    /// Agent provides `Some(.loopr/runs/<session-id>/work/<work-id>/)`. Unit tests
     /// leave `None`, in which case spawn falls back to
     /// `std::env::temp_dir().join("loopr-tool-output/")`.
     pub base: Option<&'a Path>,

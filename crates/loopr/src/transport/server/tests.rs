@@ -15,7 +15,7 @@ use context::InlineContextBuilder;
 use ipc::{DaemonRequest, DaemonResponse, HandshakeParams, PROTOCOL_VERSION};
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
-use telemetry::RunId;
+use telemetry::SessionId;
 use tempfile::TempDir;
 use tools::{BashDenylist, LaneRouter, SandboxMode};
 use worktree::AttemptCleanupPolicy;
@@ -36,7 +36,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
     let bash_denylist = Arc::new(BashDenylist::with_base());
     Arc::new(DaemonContext::new(
         target,
-        RunId::parse("20260419-000000").unwrap(),
+        SessionId::parse("20260419-000000").unwrap(),
         std::process::id(),
         store,
         dummy_llm(),

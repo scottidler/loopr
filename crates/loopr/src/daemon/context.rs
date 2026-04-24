@@ -25,7 +25,7 @@ use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
 use llm::LlmClient;
 use store::{BundleUpdateError, Store};
-use telemetry::RunId;
+use telemetry::SessionId;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::{AttemptCleanupPolicy, Worktree};
 
@@ -48,7 +48,7 @@ pub const EVENTS_CAPACITY: usize = 64;
 
 pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     pub target: PathBuf,
-    pub run_id: RunId,
+    pub session_id: SessionId,
     pub started_at: chrono::DateTime<chrono::Local>,
     pub pid: u32,
     /// Broadcast bus for `DaemonEvent`s. Stage 4 defines the channel but
@@ -170,7 +170,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         target: PathBuf,
-        run_id: RunId,
+        session_id: SessionId,
         pid: u32,
         store: Store,
         llm: Arc<L>,
@@ -187,7 +187,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         Self {
             target,
-            run_id,
+            session_id,
             started_at: chrono::Local::now(),
             pid,
             events,
@@ -214,7 +214,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Build a per-invocation `ToolContext` for one tool call.
     ///
     /// The persist base for overflow output is
-    /// `<target>/.loopr/runs/<run-id>/work/<work-id>/`. The ralph loop
+    /// `<target>/.loopr/runs/<session-id>/work/<work-id>/`. The ralph loop
     /// creates these directories on first use; the tool subprocess spawner
     /// calls `create_dir_all` before writing.
     ///
@@ -238,7 +238,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Cleanup honors `AttemptCleanupPolicy`. The worktree's branch is
     /// always retained regardless of cleanup policy (vision.md:135 —
     /// Stage 8 Integrator will merge it).
-    #[tracing::instrument(level = "info", skip_all, fields(work_id = %work.id, run_id = %self.run_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(work_id = %work.id, session_id = %self.session_id))]
     pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
         // Advance Work through the pipeline-start transitions via the FSM.
         // Guarded: reconcile or a prior call may have advanced us already.
@@ -271,7 +271,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             .target
             .join(".loopr")
             .join("runs")
-            .join(self.run_id.as_str())
+            .join(self.session_id.as_str())
             .join("work")
             .join(work.id.as_ref());
         let _ = std::fs::create_dir_all(&persist_base);
@@ -377,7 +377,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// will never drain. Per `CLAUDE.md` agents crate rule, every
     /// orchestration decision (triage, verdict routing, next-stage spawn)
     /// lives here, not in `agents::reviewer`.
-    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, run_id = %self.run_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id))]
     pub async fn spawn_reviewer_for_bundle(self: Arc<Self>, mut bundle: Bundle) {
         if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
             debug!("shutdown in progress; skipping reviewer spawn");
@@ -519,7 +519,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     ///
     /// Shutdown-aware: shutdown_notify cuts the backoff sleep so a Ctrl-C
     /// during a retry does not block the daemon for 12.6s.
-    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, run_id = %self.run_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id))]
     pub async fn spawn_integrator_for_bundle(self: Arc<Self>, bundle: Bundle) {
         if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
             debug!("shutdown in progress; skipping integrator spawn");
@@ -644,7 +644,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             .target
             .join(".loopr")
             .join("runs")
-            .join(self.run_id.as_str())
+            .join(self.session_id.as_str())
             .join("work")
             .join(work_id.as_ref());
         ToolContext {

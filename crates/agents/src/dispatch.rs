@@ -266,7 +266,7 @@ async fn run_git(path: &Path, args: &[&str]) -> Result<(), DispatchError> {
 ///
 /// Per-Work instance: each Work's implementer gets its own `RealTools`
 /// with that Work's `persist_base` so overflow-output files land under
-/// `.loopr/runs/<run-id>/work/<work-id>/`.
+/// `.loopr/runs/<session-id>/work/<work-id>/`.
 pub struct RealTools {
     router: Arc<LaneRouter>,
     sandbox: SandboxMode,

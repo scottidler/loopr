@@ -10,7 +10,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, fmt};
 
 use crate::fanout::WorkFanoutLayer;
-use crate::runid::RunId;
+use crate::session::SessionId;
 
 /// Newtype wrapper that makes `Arc<Mutex<LineWriter<File>>>` usable as a
 /// `MakeWriter` for `tracing-subscriber::fmt::Layer`. Required because:
@@ -92,7 +92,7 @@ impl Drop for Guard {
 
 /// Initialize the global tracing subscriber for this process.
 ///
-/// Creates `<target>/.loopr/runs/<run_id>/` if it does not exist, opens
+/// Creates `<target>/.loopr/runs/<session_id>/` if it does not exist, opens
 /// `events.log` and `loopr.log` there as blocking `LineWriter<File>` handles
 /// wrapped in `Arc<Mutex<_>>` via the `SharedWriter` newtype, and composes:
 ///   1. JSON layer    -> events.log (filtered by `filter`)
@@ -110,7 +110,7 @@ impl Drop for Guard {
 /// `InvalidFilter` without leaving a ghost run directory behind. Each layer
 /// then parses its own fresh `EnvFilter` from the same string (cheaper than
 /// and no less correct than `EnvFilter::Clone`, which does not exist).
-pub fn init(target: &Path, run_id: &RunId, directive: &str) -> Result<Guard, TelemetryInitError> {
+pub fn init(target: &Path, session_id: &SessionId, directive: &str) -> Result<Guard, TelemetryInitError> {
     // Validate before any I/O: a bad directive must not leave a stale run dir.
     EnvFilter::try_new(directive).map_err(|e| TelemetryInitError::InvalidFilter {
         directive: directive.to_string(),
@@ -125,7 +125,7 @@ pub fn init(target: &Path, run_id: &RunId, directive: &str) -> Result<Guard, Tel
         reason: e.to_string(),
     })?;
 
-    let run_dir = target.join(".loopr").join("runs").join(run_id.as_str());
+    let run_dir = target.join(".loopr").join("runs").join(session_id.as_str());
     std::fs::create_dir_all(&run_dir).map_err(|source| TelemetryInitError::DirCreate {
         path: run_dir.clone(),
         source,

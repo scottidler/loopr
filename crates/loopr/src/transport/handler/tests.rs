@@ -12,7 +12,7 @@ use ipc::{
 };
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
-use telemetry::RunId;
+use telemetry::SessionId;
 use tools::{BashDenylist, LaneRouter, SandboxMode};
 use worktree::AttemptCleanupPolicy;
 
@@ -43,7 +43,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
     let bash_denylist = Arc::new(BashDenylist::with_base());
     let ctx = Arc::new(DaemonContext::new(
         td.path().to_path_buf(),
-        RunId::parse("20260419-000000").unwrap(),
+        SessionId::parse("20260419-000000").unwrap(),
         12345,
         store,
         dummy_anthropic(),

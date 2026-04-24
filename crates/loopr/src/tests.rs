@@ -10,15 +10,15 @@ fn parse_cmd(args: &[&str]) -> Command {
         .expect("parse_cmd called with argv that has no subcommand")
 }
 
-fn stub_run_id() -> telemetry::RunId {
-    telemetry::RunId::parse("20260419-000000").unwrap()
+fn stub_session_id() -> telemetry::SessionId {
+    telemetry::SessionId::parse("20260419-000000").unwrap()
 }
 
 #[test]
 fn run_init_returns_stage_5() {
     let err = dispatch(
         std::path::Path::new("/tmp"),
-        &stub_run_id(),
+        &stub_session_id(),
         None,
         parse_cmd(&["loopr", "init"]),
     )
@@ -51,7 +51,13 @@ fn run_daemon_stop_on_empty_target_prints_no_daemon() {
     // Phase 5: `daemon stop` with no daemon running returns Ok(()) and
     // prints "no daemon running" (smoke-tested separately for stdout).
     let td = tempfile::TempDir::new().unwrap();
-    dispatch(td.path(), &stub_run_id(), None, parse_cmd(&["loopr", "daemon", "stop"])).unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        None,
+        parse_cmd(&["loopr", "daemon", "stop"]),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -62,7 +68,7 @@ fn run_daemon_status_on_empty_target_prints_no_daemon() {
     let td = tempfile::TempDir::new().unwrap();
     dispatch(
         td.path(),
-        &stub_run_id(),
+        &stub_session_id(),
         None,
         parse_cmd(&["loopr", "daemon", "status"]),
     )
@@ -76,7 +82,7 @@ fn run_tui_returns_not_yet_implemented() {
     // subcommand) is normalized to Command::Tui in lib::run before
     // dispatch, so exercising it via dispatch directly is equivalent.
     let td = tempfile::TempDir::new().unwrap();
-    let err = dispatch(td.path(), &stub_run_id(), None, parse_cmd(&["loopr", "tui"])).unwrap_err();
+    let err = dispatch(td.path(), &stub_session_id(), None, parse_cmd(&["loopr", "tui"])).unwrap_err();
     match err {
         LooprError::NotYetImplemented { feature } => assert_eq!(feature, "tui"),
         other => panic!("expected NotYetImplemented, got {other:?}"),
@@ -86,7 +92,13 @@ fn run_tui_returns_not_yet_implemented() {
 #[test]
 fn run_logs_tail_on_empty_target_errors_no_runs_found() {
     let td = tempfile::TempDir::new().unwrap();
-    let err = dispatch(td.path(), &stub_run_id(), None, parse_cmd(&["loopr", "logs", "tail"])).unwrap_err();
+    let err = dispatch(
+        td.path(),
+        &stub_session_id(),
+        None,
+        parse_cmd(&["loopr", "logs", "tail"]),
+    )
+    .unwrap_err();
     match err {
         LooprError::LogsQuery(msg) => assert!(msg.contains("no runs found"), "msg: {msg}"),
         other => panic!("expected LogsQuery(no runs found), got {other:?}"),
@@ -97,7 +109,13 @@ fn run_logs_tail_on_empty_target_errors_no_runs_found() {
 fn run_logs_runs_on_empty_target_succeeds_with_no_output() {
     let td = tempfile::TempDir::new().unwrap();
     // list_runs on a target with no .loopr/runs returns empty vec -> Ok(())
-    dispatch(td.path(), &stub_run_id(), None, parse_cmd(&["loopr", "logs", "runs"])).unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        None,
+        parse_cmd(&["loopr", "logs", "runs"]),
+    )
+    .unwrap();
 }
 
 // ---------- resolve_log_directive ----------

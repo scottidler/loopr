@@ -21,7 +21,7 @@ The driver. Binary crate: daemon process, IPC transport, CLI dispatch, source-gu
 - LLM client (`llm`), tool impls (`tools`), worktree lifecycle (`worktree`), persistence (`store`)
 - Record types (`domain`)
 - Decomposition math (`decomposer`), agent loops (`agents`), integration logic (`integrator`)
-- Tracing subscriber init, span conventions, run-id allocation (`telemetry`)
+- Tracing subscriber init, span conventions, session-id allocation (`telemetry`)
 - **TUI:** deferred to its own future crate. When it lands, `loopr` may spawn or exec into it; rendering never lives here
 
 ## Rule

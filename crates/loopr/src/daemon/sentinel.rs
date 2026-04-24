@@ -4,7 +4,7 @@
 //!
 //! * `daemon.pid` - the daemon's PID, written with `O_CREAT | O_EXCL` (atomic claim)
 //! * `daemon.version` - the exact `GIT_DESCRIBE` string of the binary that forked the daemon (for silent-restart on version drift)
-//! * `daemon.run-id` - the daemon's own `RunId` (so clients and tests can locate the daemon's log dir without a round-trip)
+//! * `daemon.session-id` - the daemon's own `SessionId` (so clients and tests can locate the daemon's log dir without a round-trip)
 //! * `socket` - the Unix domain socket
 //!
 //! Everything here is sync; no tokio. Callers that want to wait for the
@@ -26,8 +26,8 @@ const STOP_POLL_INTERVAL_MS: u64 = 50;
 pub const PID_FILENAME: &str = "daemon.pid";
 /// Filename of the daemon-version file.
 pub const VERSION_FILENAME: &str = "daemon.version";
-/// Filename of the daemon-run-id pointer.
-pub const RUN_ID_FILENAME: &str = "daemon.run-id";
+/// Filename of the daemon-session-id pointer.
+pub const SESSION_ID_FILENAME: &str = "daemon.session-id";
 /// Filename of the Unix domain socket.
 pub const SOCKET_FILENAME: &str = "socket";
 
@@ -41,9 +41,9 @@ pub fn version_path(target: &Path) -> PathBuf {
     target.join(".loopr").join(VERSION_FILENAME)
 }
 
-/// Path to `<target>/.loopr/daemon.run-id`.
-pub fn run_id_path(target: &Path) -> PathBuf {
-    target.join(".loopr").join(RUN_ID_FILENAME)
+/// Path to `<target>/.loopr/daemon.session-id`.
+pub fn session_id_path(target: &Path) -> PathBuf {
+    target.join(".loopr").join(SESSION_ID_FILENAME)
 }
 
 /// Path to `<target>/.loopr/socket`.
@@ -111,14 +111,14 @@ pub fn read_version(version_file: &Path) -> Result<Option<String>, LooprError> {
     }
 }
 
-/// Write the daemon-run-id file. Overwrites any existing content.
-pub fn write_run_id(run_id_file: &Path, run_id: &str) -> Result<(), LooprError> {
-    if let Some(parent) = run_id_file.parent() {
+/// Write the daemon-session-id file. Overwrites any existing content.
+pub fn write_session_id(session_id_file: &Path, session_id: &str) -> Result<(), LooprError> {
+    if let Some(parent) = session_id_file.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| LooprError::DaemonStartup(format!("mkdir {}: {e}", parent.display())))?;
     }
-    fs::write(run_id_file, format!("{run_id}\n"))
-        .map_err(|e| LooprError::DaemonStartup(format!("write {}: {e}", run_id_file.display())))
+    fs::write(session_id_file, format!("{session_id}\n"))
+        .map_err(|e| LooprError::DaemonStartup(format!("write {}: {e}", session_id_file.display())))
 }
 
 /// Return `true` iff the stored version string equals `binary_version`.
@@ -216,7 +216,7 @@ pub fn clean(target: &Path) {
     for path in [
         pid_path(target),
         version_path(target),
-        run_id_path(target),
+        session_id_path(target),
         socket_path(target),
     ] {
         let _ = fs::remove_file(&path);

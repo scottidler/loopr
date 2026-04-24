@@ -113,13 +113,13 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let runs_dir = effective.join(".loopr").join("runs");
     std::fs::create_dir_all(&runs_dir)
         .map_err(|e| LooprError::TelemetryInit(format!("create {}: {e}", runs_dir.display())))?;
-    let run_id =
-        telemetry::RunId::allocate(&runs_dir).map_err(|e| LooprError::TelemetryInit(format!("run id alloc: {e}")))?;
+    let session_id = telemetry::SessionId::allocate(&runs_dir)
+        .map_err(|e| LooprError::TelemetryInit(format!("session id alloc: {e}")))?;
     let guard =
-        telemetry::init(&effective, &run_id, &directive).map_err(|e| LooprError::TelemetryInit(e.to_string()))?;
+        telemetry::init(&effective, &session_id, &directive).map_err(|e| LooprError::TelemetryInit(e.to_string()))?;
     let invocation = tracing::info_span!(
         "loopr.invocation",
-        run_id = %run_id,
+        session_id = %session_id,
         subcommand = label,
     );
     let enter = invocation.enter();
@@ -136,7 +136,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let _ = &guard;
     let _ = &enter;
 
-    dispatch(&effective, &run_id, cli.output, command)
+    dispatch(&effective, &session_id, cli.output, command)
 }
 
 /// Resolve the log-filter directive string from CLI flag > env var > default
@@ -153,7 +153,7 @@ fn resolve_log_directive(flag: Option<&str>) -> String {
 
 fn dispatch(
     target: &Path,
-    run_id: &telemetry::RunId,
+    session_id: &telemetry::SessionId,
     output_format: Option<output::Format>,
     command: Command,
 ) -> Result<(), LooprError> {
@@ -179,12 +179,12 @@ fn dispatch(
             DaemonCmd::Status => daemon_status(target),
         },
         Command::Logs { cmd } => match cmd {
-            // `logs` subcommands pass the current run_id as the `exclude`
-            // parameter so the query doesn't return its own in-flight run
+            // `logs` subcommands pass the current session_id as the `exclude`
+            // parameter so the query doesn't return its own in-flight session
             // dir (which would otherwise be newest and shadow the real
             // target of the query).
-            LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(run_id)),
-            LogsCmd::Runs => logs::handle_runs(target, Some(run_id)),
+            LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(session_id)),
+            LogsCmd::Runs => logs::handle_runs(target, Some(session_id)),
         },
         Command::Tui => Err(LooprError::NotYetImplemented { feature: "tui" }),
     }

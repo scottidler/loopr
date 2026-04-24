@@ -9,52 +9,52 @@ use thiserror::Error;
 
 const MAX_ALLOC_RETRIES: u32 = 1000;
 
-/// A run identifier in `YYYYMMDD-HHMMSS[-N]` local-time format.
+/// A session identifier in `YYYYMMDD-HHMMSS[-N]` local-time format.
 ///
-/// First run in a given second gets the clean form (`20260419-143012`);
-/// subsequent runs in the same second get a disambiguator suffix
+/// First session in a given second gets the clean form (`20260419-143012`);
+/// subsequent sessions in the same second get a disambiguator suffix
 /// (`20260419-143012-2`, `20260419-143012-3`, ...).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct RunId(String);
+pub struct SessionId(String);
 
-impl RunId {
-    /// Atomically allocate a new RunId by claiming a `.loopr/runs/<id>/`
+impl SessionId {
+    /// Atomically allocate a new SessionId by claiming a `.loopr/runs/<id>/`
     /// directory via `std::fs::create_dir`. The EEXIST errno is the collision
     /// signal: on EEXIST we bump the suffix and retry, starting at `-2`. The
     /// winning invocation is the one whose `create_dir` succeeded, which
     /// guarantees atomicity across concurrent loopr processes on the same
     /// target.
-    pub fn allocate(runs_dir: &Path) -> Result<Self, RunIdAllocError> {
+    pub fn allocate(runs_dir: &Path) -> Result<Self, SessionIdAllocError> {
         let base = Local::now().format("%Y%m%d-%H%M%S").to_string();
         for attempt in 1..=MAX_ALLOC_RETRIES {
             let candidate = if attempt == 1 { base.clone() } else { format!("{base}-{attempt}") };
             let path = runs_dir.join(&candidate);
             match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(RunId(candidate)),
+                Ok(()) => return Ok(SessionId(candidate)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(source) => return Err(RunIdAllocError::Io { path, source }),
+                Err(source) => return Err(SessionIdAllocError::Io { path, source }),
             }
         }
-        Err(RunIdAllocError::MaxRetries {
+        Err(SessionIdAllocError::MaxRetries {
             path: runs_dir.to_path_buf(),
         })
     }
 
-    /// Parse a previously-written RunId string (e.g. from a dir listing).
+    /// Parse a previously-written SessionId string (e.g. from a dir listing).
     /// Validates the `YYYYMMDD-HHMMSS` skeleton and optional `-N` suffix;
     /// rejects anything else.
-    pub fn parse(s: &str) -> Result<Self, RunIdParseError> {
+    pub fn parse(s: &str) -> Result<Self, SessionIdParseError> {
         let (base, suffix) = if s.len() > 15 { (&s[..15], Some(&s[15..])) } else { (s, None) };
         if !is_valid_base(base) {
-            return Err(RunIdParseError::Malformed(s.to_string()));
+            return Err(SessionIdParseError::Malformed(s.to_string()));
         }
         if let Some(rest) = suffix
             && (!rest.starts_with('-') || !is_valid_suffix(&rest[1..]))
         {
-            return Err(RunIdParseError::Malformed(s.to_string()));
+            return Err(SessionIdParseError::Malformed(s.to_string()));
         }
-        Ok(RunId(s.to_string()))
+        Ok(SessionId(s.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -69,16 +69,16 @@ impl RunId {
     }
 }
 
-impl Display for RunId {
+impl Display for SessionId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl FromStr for RunId {
-    type Err = RunIdParseError;
+impl FromStr for SessionId {
+    type Err = SessionIdParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        RunId::parse(s)
+        SessionId::parse(s)
     }
 }
 
@@ -99,13 +99,13 @@ fn is_valid_suffix(s: &str) -> bool {
 }
 
 #[derive(Error, Debug)]
-pub enum RunIdParseError {
-    #[error("run id `{0}` does not match YYYYMMDD-HHMMSS[-N]")]
+pub enum SessionIdParseError {
+    #[error("session id `{0}` does not match YYYYMMDD-HHMMSS[-N]")]
     Malformed(String),
 }
 
 #[derive(Error, Debug)]
-pub enum RunIdAllocError {
+pub enum SessionIdAllocError {
     /// Allocation retried past the 1000-attempt cap without claiming a free id.
     /// In practice this only fires if the runs directory has ~1000 colliding
     /// ids in the same wall-clock second; treated as unrecoverable.

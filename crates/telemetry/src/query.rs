@@ -6,28 +6,28 @@ use rev_lines::RevLines;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::runid::RunId;
+use crate::session::SessionId;
 
 /// One entry in `loopr logs runs`.
 #[derive(Debug, Clone, Serialize)]
-pub struct RunEntry {
-    pub run_id: RunId,
+pub struct SessionEntry {
+    pub session_id: SessionId,
     pub started_at: chrono::NaiveDateTime,
     pub path: PathBuf,
 }
 
-/// Read the last `n` lines of `<latest-run>/loopr.log` under
+/// Read the last `n` lines of `<latest-session>/loopr.log` under
 /// `<target>/.loopr/runs/`.
 ///
 /// When the query is issued from inside a running invocation (i.e. `loopr
-/// logs tail` initialized its own telemetry and allocated a run-id), callers
+/// logs tail` initialized its own telemetry and allocated a session-id), callers
 /// pass that id as `exclude` to keep the query from reading its own
 /// still-empty log. Other callers pass `None`.
 ///
 /// Returns `NoRunsFound` if the runs dir is empty, absent, or contains only
-/// the excluded run.
-pub fn tail_latest_run(target: &Path, n: usize, exclude: Option<&RunId>) -> Result<String, QueryError> {
-    let runs = list_runs(target, exclude)?;
+/// the excluded session.
+pub fn tail_latest_session(target: &Path, n: usize, exclude: Option<&SessionId>) -> Result<String, QueryError> {
+    let runs = list_sessions(target, exclude)?;
     let latest = runs.into_iter().next().ok_or_else(|| QueryError::NoRunsFound {
         path: target.join(".loopr").join("runs"),
     })?;
@@ -45,11 +45,11 @@ pub fn tail_latest_run(target: &Path, n: usize, exclude: Option<&RunId>) -> Resu
     Ok(out)
 }
 
-/// List all run-ids under `<target>/.loopr/runs/`, newest first, with their
+/// List all session-ids under `<target>/.loopr/runs/`, newest first, with their
 /// parsed started-at timestamps. Directories whose names do not parse as
-/// valid RunIds are skipped silently. The `exclude` parameter suppresses a
-/// caller's own in-flight run-id (see `tail_latest_run` for motivation).
-pub fn list_runs(target: &Path, exclude: Option<&RunId>) -> Result<Vec<RunEntry>, QueryError> {
+/// valid SessionIds are skipped silently. The `exclude` parameter suppresses a
+/// caller's own in-flight session-id (see `tail_latest_session` for motivation).
+pub fn list_sessions(target: &Path, exclude: Option<&SessionId>) -> Result<Vec<SessionEntry>, QueryError> {
     let runs_dir = target.join(".loopr").join("runs");
     if !runs_dir.exists() {
         return Ok(Vec::new());
@@ -58,24 +58,24 @@ pub fn list_runs(target: &Path, exclude: Option<&RunId>) -> Result<Vec<RunEntry>
         path: runs_dir.clone(),
         source,
     })?;
-    let mut entries: Vec<RunEntry> = read
+    let mut entries: Vec<SessionEntry> = read
         .filter_map(Result::ok)
         .filter_map(|de| {
             let file_name = de.file_name();
             let name = file_name.to_str()?;
-            let run_id = RunId::parse(name).ok()?;
-            if exclude.is_some_and(|e| e == &run_id) {
+            let session_id = SessionId::parse(name).ok()?;
+            if exclude.is_some_and(|e| e == &session_id) {
                 return None;
             }
-            let started_at = run_id.started_at()?;
-            Some(RunEntry {
-                run_id,
+            let started_at = session_id.started_at()?;
+            Some(SessionEntry {
+                session_id,
                 started_at,
                 path: de.path(),
             })
         })
         .collect();
-    entries.sort_by(|a, b| b.run_id.as_str().cmp(a.run_id.as_str()));
+    entries.sort_by(|a, b| b.session_id.as_str().cmp(a.session_id.as_str()));
     Ok(entries)
 }
 

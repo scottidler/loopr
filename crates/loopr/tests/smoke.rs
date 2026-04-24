@@ -54,10 +54,10 @@ fn stop_daemon(target: &std::path::Path) {
 }
 
 /// Return the run-dir that is NOT the daemon's. The daemon writes its
-/// own run-id to `.loopr/daemon.run-id`; every other dir under
+/// own session-id to `.loopr/daemon.session-id`; every other dir under
 /// `.loopr/runs/` belongs to a client invocation.
 fn client_run_dirs(target: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let daemon_run_id = fs::read_to_string(target.join(".loopr").join("daemon.run-id"))
+    let daemon_session_id = fs::read_to_string(target.join(".loopr").join("daemon.session-id"))
         .ok()
         .map(|s| s.trim().to_string());
     let runs_dir = target.join(".loopr").join("runs");
@@ -65,7 +65,7 @@ fn client_run_dirs(target: &std::path::Path) -> Vec<std::path::PathBuf> {
     if let Ok(entries) = fs::read_dir(&runs_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if daemon_run_id.as_deref() == Some(name.as_str()) {
+            if daemon_session_id.as_deref() == Some(name.as_str()) {
                 continue;
             }
             out.push(entry.path());
@@ -301,7 +301,7 @@ fn target_is_file_hints_at_parent() {
 #[test]
 fn daemon_start_forks_daemon_and_writes_sentinels() {
     // Stage 4 Phase 3: `daemon start` forks a background daemon that
-    // writes pid / version / run-id sentinels and binds the socket, then
+    // writes pid / version / session-id sentinels and binds the socket, then
     // awaits shutdown. The client-side caller returns immediately.
     let td = TempDir::new().unwrap();
     loopr()
@@ -312,7 +312,7 @@ fn daemon_start_forks_daemon_and_writes_sentinels() {
     let loopr_dir = td.path().join(".loopr");
     assert!(loopr_dir.join("daemon.pid").is_file(), "pid file present");
     assert!(loopr_dir.join("daemon.version").is_file(), "version file present");
-    assert!(loopr_dir.join("daemon.run-id").is_file(), "run-id file present");
+    assert!(loopr_dir.join("daemon.session-id").is_file(), "session-id file present");
     assert!(loopr_dir.join("socket").exists(), "socket bound");
 
     stop_daemon(td.path());
@@ -348,7 +348,7 @@ fn plan_writes_events_and_pretty_logs() {
     let runs_dir = td.path().join(".loopr").join("runs");
     assert!(runs_dir.is_dir(), "runs dir exists: {}", runs_dir.display());
     // Stage 4 Phase 3: `plan` auto-forks a daemon before the client's own
-    // telemetry init, so the runs dir contains TWO run-id dirs (the
+    // telemetry init, so the runs dir contains TWO session-id dirs (the
     // daemon's and the client's). We want the CLIENT's pretty log to
     // carry the invocation span.
     let client_dirs = client_run_dirs(td.path());
@@ -381,7 +381,7 @@ fn events_log_is_valid_json_with_expected_span() {
     let client_dirs = client_run_dirs(td.path());
     assert_eq!(client_dirs.len(), 1);
     let run_dir = &client_dirs[0];
-    let run_id = run_dir.file_name().unwrap().to_str().unwrap().to_string();
+    let session_id = run_dir.file_name().unwrap().to_str().unwrap().to_string();
     let events = run_dir.join("events.log");
     let body = fs::read_to_string(&events).unwrap();
 
@@ -395,9 +395,9 @@ fn events_log_is_valid_json_with_expected_span() {
             for s in spans {
                 if s.get("name") == Some(&serde_json::Value::String("loopr.invocation".into())) {
                     assert_eq!(
-                        s.get("run_id").and_then(|r| r.as_str()),
-                        Some(run_id.as_str()),
-                        "invocation span carries run_id = dir name"
+                        s.get("session_id").and_then(|r| r.as_str()),
+                        Some(session_id.as_str()),
+                        "invocation span carries session_id = dir name"
                     );
                     saw_invocation = true;
                 }
@@ -444,11 +444,11 @@ fn logs_runs_lists_newest_first() {
     let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
     let lines: Vec<&str> = stdout.lines().collect();
     // Stage 4 Phase 3: the first `plan` auto-forks a daemon (so the daemon's
-    // run-id becomes a third listed dir). The second `plan` sees the live
+    // session-id becomes a third listed dir). The second `plan` sees the live
     // daemon via `ensure_daemon_if_needed` and does not re-fork. Expect
-    // three entries total: two client-side run-ids plus the daemon's.
+    // three entries total: two client-side session-ids plus the daemon's.
     assert_eq!(lines.len(), 3, "three runs listed: {stdout}");
-    // Ordering is still newest-first by run-id string sort.
+    // Ordering is still newest-first by session-id string sort.
     for window in lines.windows(2) {
         let a = window[0].split_whitespace().next().unwrap();
         let b = window[1].split_whitespace().next().unwrap();
@@ -473,7 +473,7 @@ fn log_level_gate_suppresses_debug_at_info_default() {
     let td = TempDir::new().unwrap();
     run_plan(td.path());
     // Stage 4 Phase 3: use the client run dir, not whichever dir happens
-    // to be first from read_dir. The daemon writes to its own run-id,
+    // to be first from read_dir. The daemon writes to its own session-id,
     // which on a fast fork may also contain events.
     let client_dirs = client_run_dirs(td.path());
     let run_dir = &client_dirs[0];

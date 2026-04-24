@@ -12,7 +12,7 @@
 
 mod fanout;
 mod query;
-mod runid;
+mod session;
 mod subscriber;
 
 /// Environment variable that shadows the CLI `--log-level` flag default.
@@ -26,8 +26,8 @@ pub const RALPH_PREFIX: &str = "ralph";
 pub const TOOL_PREFIX: &str = "tool";
 
 pub use fanout::WorkFanoutLayer;
-pub use query::{QueryError, RunEntry, list_runs, tail_latest_run};
-pub use runid::{RunId, RunIdAllocError, RunIdParseError};
+pub use query::{QueryError, SessionEntry, list_sessions, tail_latest_session};
+pub use session::{SessionId, SessionIdAllocError, SessionIdParseError};
 pub use subscriber::{Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, init};
 
 #[cfg(test)]

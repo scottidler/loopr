@@ -84,22 +84,22 @@ fn floor_result_parses_as_envfilter() {
     }
 }
 
-// ---------- RunId ----------
+// ---------- SessionId ----------
 
 #[test]
-fn runid_allocate_empty_dir_gets_clean_name() {
+fn sessionid_allocate_empty_dir_gets_clean_name() {
     let td = TempDir::new().unwrap();
-    let id = RunId::allocate(td.path()).unwrap();
+    let id = SessionId::allocate(td.path()).unwrap();
     let s = id.as_str();
     assert_eq!(s.len(), 15, "clean name has no suffix: {s}");
     assert!(td.path().join(s).is_dir());
 }
 
 #[test]
-fn runid_allocate_twice_second_gets_suffix_2() {
+fn sessionid_allocate_twice_second_gets_suffix_2() {
     let td = TempDir::new().unwrap();
-    let a = RunId::allocate(td.path()).unwrap();
-    let b = RunId::allocate(td.path()).unwrap();
+    let a = SessionId::allocate(td.path()).unwrap();
+    let b = SessionId::allocate(td.path()).unwrap();
     assert_ne!(a.as_str(), b.as_str());
     // Same second => second allocation must suffix; different second => either
     // is fine. Accept both to avoid wall-clock flakiness.
@@ -110,70 +110,70 @@ fn runid_allocate_twice_second_gets_suffix_2() {
 }
 
 #[test]
-fn runid_allocate_with_pre_populated_victims() {
+fn sessionid_allocate_with_pre_populated_victims() {
     let td = TempDir::new().unwrap();
     let base = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     for i in 1..=5 {
         let dir = if i == 1 { base.clone() } else { format!("{base}-{i}") };
         fs::create_dir(td.path().join(&dir)).unwrap();
     }
-    let id = RunId::allocate(td.path()).unwrap();
+    let id = SessionId::allocate(td.path()).unwrap();
     assert_eq!(id.as_str(), format!("{base}-6"));
 }
 
 #[test]
-fn runid_parse_valid_no_suffix() {
-    let id = RunId::parse("20260419-143012").unwrap();
+fn sessionid_parse_valid_no_suffix() {
+    let id = SessionId::parse("20260419-143012").unwrap();
     assert_eq!(id.as_str(), "20260419-143012");
 }
 
 #[test]
-fn runid_parse_valid_with_suffix() {
-    let id = RunId::parse("20260419-143012-2").unwrap();
+fn sessionid_parse_valid_with_suffix() {
+    let id = SessionId::parse("20260419-143012-2").unwrap();
     assert_eq!(id.as_str(), "20260419-143012-2");
-    let id = RunId::parse("20260419-143012-42").unwrap();
+    let id = SessionId::parse("20260419-143012-42").unwrap();
     assert_eq!(id.as_str(), "20260419-143012-42");
 }
 
 #[test]
-fn runid_parse_rejects_malformed() {
-    assert!(RunId::parse("").is_err());
-    assert!(RunId::parse("not-a-run-id").is_err());
-    assert!(RunId::parse("20260419").is_err());
-    assert!(RunId::parse("20260419-14301").is_err(), "short time");
-    assert!(RunId::parse("2026041x-143012").is_err(), "non-digit in date");
-    assert!(RunId::parse("20260419-143012-").is_err(), "empty suffix");
-    assert!(RunId::parse("20260419-143012-abc").is_err(), "non-digit suffix");
+fn sessionid_parse_rejects_malformed() {
+    assert!(SessionId::parse("").is_err());
+    assert!(SessionId::parse("not-a-session-id").is_err());
+    assert!(SessionId::parse("20260419").is_err());
+    assert!(SessionId::parse("20260419-14301").is_err(), "short time");
+    assert!(SessionId::parse("2026041x-143012").is_err(), "non-digit in date");
+    assert!(SessionId::parse("20260419-143012-").is_err(), "empty suffix");
+    assert!(SessionId::parse("20260419-143012-abc").is_err(), "non-digit suffix");
 }
 
 #[test]
-fn runid_started_at_strips_suffix() {
-    let id = RunId::parse("20260419-143012-7").unwrap();
+fn sessionid_started_at_strips_suffix() {
+    let id = SessionId::parse("20260419-143012-7").unwrap();
     let ts = id.started_at().unwrap();
     assert_eq!(ts.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-04-19 14:30:12");
 }
 
 #[test]
-fn runid_serde_roundtrip() {
-    let id = RunId::parse("20260419-143012-2").unwrap();
+fn sessionid_serde_roundtrip() {
+    let id = SessionId::parse("20260419-143012-2").unwrap();
     let json = serde_json::to_string(&id).unwrap();
     assert_eq!(json, "\"20260419-143012-2\"");
-    let back: RunId = serde_json::from_str(&json).unwrap();
+    let back: SessionId = serde_json::from_str(&json).unwrap();
     assert_eq!(back.as_str(), "20260419-143012-2");
 }
 
 #[test]
-fn runid_display_matches_as_str() {
-    let id = RunId::parse("20260419-143012").unwrap();
+fn sessionid_display_matches_as_str() {
+    let id = SessionId::parse("20260419-143012").unwrap();
     assert_eq!(format!("{id}"), "20260419-143012");
 }
 
 #[test]
-fn runid_collision_allocates_disambiguator() {
+fn sessionid_collision_allocates_disambiguator() {
     let td = TempDir::new().unwrap();
-    let a = RunId::allocate(td.path()).unwrap();
-    let b = RunId::allocate(td.path()).unwrap();
-    let c = RunId::allocate(td.path()).unwrap();
+    let a = SessionId::allocate(td.path()).unwrap();
+    let b = SessionId::allocate(td.path()).unwrap();
+    let c = SessionId::allocate(td.path()).unwrap();
     assert_ne!(a.as_str(), b.as_str());
     assert_ne!(b.as_str(), c.as_str());
     assert_ne!(a.as_str(), c.as_str());
@@ -230,7 +230,7 @@ fn compose_emits_json_event_with_expected_fields() {
     let subscriber = tracing_subscriber::registry().with(json_layer).with(pretty_layer);
 
     tracing::subscriber::with_default(subscriber, || {
-        let span = info_span!("loopr.invocation", run_id = "20260419-143012", subcommand = "plan");
+        let span = info_span!("loopr.invocation", session_id = "20260419-143012", subcommand = "plan");
         let _enter = span.enter();
         tracing::info!("hello from test");
     });
@@ -359,40 +359,40 @@ fn fanout_same_work_id_reuses_file() {
 // ---------- Query ----------
 
 #[test]
-fn list_runs_returns_newest_first() {
+fn list_sessions_returns_newest_first() {
     let td = TempDir::new().unwrap();
     let runs_dir = td.path().join(".loopr").join("runs");
     fs::create_dir_all(&runs_dir).unwrap();
     for name in ["20260418-120000", "20260419-090000", "20260419-120000-2"] {
         fs::create_dir(runs_dir.join(name)).unwrap();
     }
-    let entries = list_runs(td.path(), None).unwrap();
-    let names: Vec<&str> = entries.iter().map(|e| e.run_id.as_str()).collect();
+    let entries = list_sessions(td.path(), None).unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e.session_id.as_str()).collect();
     assert_eq!(names, vec!["20260419-120000-2", "20260419-090000", "20260418-120000"]);
 }
 
 #[test]
-fn list_runs_skips_invalid_dirnames() {
+fn list_sessions_skips_invalid_dirnames() {
     let td = TempDir::new().unwrap();
     let runs_dir = td.path().join(".loopr").join("runs");
     fs::create_dir_all(&runs_dir).unwrap();
     fs::create_dir(runs_dir.join("20260419-090000")).unwrap();
     fs::create_dir(runs_dir.join("garbage")).unwrap();
     File::create(runs_dir.join("stray.txt")).unwrap();
-    let entries = list_runs(td.path(), None).unwrap();
+    let entries = list_sessions(td.path(), None).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].run_id.as_str(), "20260419-090000");
+    assert_eq!(entries[0].session_id.as_str(), "20260419-090000");
 }
 
 #[test]
-fn list_runs_empty_returns_empty() {
+fn list_sessions_empty_returns_empty() {
     let td = TempDir::new().unwrap();
-    let entries = list_runs(td.path(), None).unwrap();
+    let entries = list_sessions(td.path(), None).unwrap();
     assert!(entries.is_empty());
 }
 
 #[test]
-fn tail_latest_run_returns_last_n_lines() {
+fn tail_latest_session_returns_last_n_lines() {
     let td = TempDir::new().unwrap();
     let runs_dir = td.path().join(".loopr").join("runs");
     let run_dir = runs_dir.join("20260419-120000");
@@ -402,22 +402,22 @@ fn tail_latest_run_returns_last_n_lines() {
         body.push_str(&format!("line {i}\n"));
     }
     fs::write(run_dir.join("loopr.log"), body).unwrap();
-    let tail = tail_latest_run(td.path(), 5, None).unwrap();
+    let tail = tail_latest_session(td.path(), 5, None).unwrap();
     let lines: Vec<&str> = tail.lines().collect();
     assert_eq!(lines, vec!["line 16", "line 17", "line 18", "line 19", "line 20"]);
 }
 
 #[test]
-fn tail_latest_run_no_runs_returns_err() {
+fn tail_latest_session_no_runs_returns_err() {
     let td = TempDir::new().unwrap();
-    match tail_latest_run(td.path(), 10, None) {
+    match tail_latest_session(td.path(), 10, None) {
         Err(QueryError::NoRunsFound { .. }) => {}
         other => panic!("expected NoRunsFound, got {other:?}"),
     }
 }
 
 #[test]
-fn tail_latest_run_picks_newest() {
+fn tail_latest_session_picks_newest() {
     let td = TempDir::new().unwrap();
     let runs_dir = td.path().join(".loopr").join("runs");
     let old = runs_dir.join("20260418-120000");
@@ -426,26 +426,26 @@ fn tail_latest_run_picks_newest() {
     fs::create_dir_all(&new).unwrap();
     fs::write(old.join("loopr.log"), "old line\n").unwrap();
     fs::write(new.join("loopr.log"), "new line\n").unwrap();
-    let tail = tail_latest_run(td.path(), 10, None).unwrap();
+    let tail = tail_latest_session(td.path(), 10, None).unwrap();
     assert!(tail.contains("new line"));
     assert!(!tail.contains("old line"));
 }
 
 #[test]
-fn list_runs_excludes_specified_id() {
+fn list_sessions_excludes_specified_id() {
     let td = TempDir::new().unwrap();
     let runs_dir = td.path().join(".loopr").join("runs");
     fs::create_dir_all(&runs_dir).unwrap();
     fs::create_dir(runs_dir.join("20260419-120000")).unwrap();
     fs::create_dir(runs_dir.join("20260419-130000")).unwrap();
-    let exclude = RunId::parse("20260419-130000").unwrap();
-    let entries = list_runs(td.path(), Some(&exclude)).unwrap();
+    let exclude = SessionId::parse("20260419-130000").unwrap();
+    let entries = list_sessions(td.path(), Some(&exclude)).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].run_id.as_str(), "20260419-120000");
+    assert_eq!(entries[0].session_id.as_str(), "20260419-120000");
 }
 
 #[test]
-fn tail_latest_run_excludes_self() {
+fn tail_latest_session_excludes_self() {
     let td = TempDir::new().unwrap();
     let runs_dir = td.path().join(".loopr").join("runs");
     let a = runs_dir.join("20260419-120000");
@@ -454,8 +454,8 @@ fn tail_latest_run_excludes_self() {
     fs::create_dir_all(&b).unwrap();
     fs::write(a.join("loopr.log"), "older\n").unwrap();
     fs::write(b.join("loopr.log"), "current\n").unwrap();
-    let current = RunId::parse("20260419-130000").unwrap();
-    let tail = tail_latest_run(td.path(), 10, Some(&current)).unwrap();
+    let current = SessionId::parse("20260419-130000").unwrap();
+    let tail = tail_latest_session(td.path(), 10, Some(&current)).unwrap();
     assert!(
         tail.contains("older"),
         "tail shows older run when current is excluded: {tail}"

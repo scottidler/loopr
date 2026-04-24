@@ -80,19 +80,19 @@ fn ac3_version_file_matches_git_describe() {
     stop_daemon(td.path());
 }
 
-// AC 4: `.loopr/daemon.run-id` must name an existing directory under
+// AC 4: `.loopr/daemon.session-id` must name an existing directory under
 // `.loopr/runs/`. Log queries rely on this pointer.
 #[test]
-fn ac4_run_id_file_points_to_extant_run_dir() {
+fn ac4_session_id_file_points_to_extant_run_dir() {
     let td = TempDir::new().unwrap();
     start_daemon(td.path());
 
-    let run_id = fs::read_to_string(td.path().join(".loopr").join("daemon.run-id")).unwrap();
-    let run_id = run_id.trim();
-    let run_dir = td.path().join(".loopr").join("runs").join(run_id);
+    let session_id = fs::read_to_string(td.path().join(".loopr").join("daemon.session-id")).unwrap();
+    let session_id = session_id.trim();
+    let run_dir = td.path().join(".loopr").join("runs").join(session_id);
     assert!(
         run_dir.is_dir(),
-        "daemon.run-id ({run_id}) points to extant dir: {}",
+        "daemon.session-id ({session_id}) points to extant dir: {}",
         run_dir.display()
     );
 
@@ -106,12 +106,22 @@ fn ac5_daemon_emits_started_event_to_its_own_events_log() {
     let td = TempDir::new().unwrap();
     start_daemon(td.path());
 
-    let run_id = fs::read_to_string(td.path().join(".loopr").join("daemon.run-id"))
+    let session_id = fs::read_to_string(td.path().join(".loopr").join("daemon.session-id"))
         .unwrap()
         .trim()
         .to_string();
-    let events = td.path().join(".loopr").join("runs").join(&run_id).join("events.log");
-    let pretty = td.path().join(".loopr").join("runs").join(&run_id).join("loopr.log");
+    let events = td
+        .path()
+        .join(".loopr")
+        .join("runs")
+        .join(&session_id)
+        .join("events.log");
+    let pretty = td
+        .path()
+        .join(".loopr")
+        .join("runs")
+        .join(&session_id)
+        .join("loopr.log");
 
     // Give the tracing-appender a beat to flush the first event.
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -211,8 +221,8 @@ fn ac7_daemon_stop_removes_sentinels() {
         "version file removed"
     );
     assert!(
-        !td.path().join(".loopr").join("daemon.run-id").exists(),
-        "run-id file removed"
+        !td.path().join(".loopr").join("daemon.session-id").exists(),
+        "session-id file removed"
     );
 
     // Process actually exited.

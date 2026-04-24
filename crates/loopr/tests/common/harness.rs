@@ -33,7 +33,7 @@ use llm::LlmClient;
 use loopr::config::Config;
 use loopr::daemon::{DaemonContext, DaemonHandle, build_context, serve_core};
 use loopr::error::LooprError;
-use telemetry::RunId;
+use telemetry::SessionId;
 use tools::SandboxMode;
 
 use super::init_git_repo;
@@ -109,14 +109,14 @@ where
     init_git_repo(tempdir.path());
 
     let target = tempdir.path().to_path_buf();
-    let run_id = RunId::parse("20260422-000000").expect("RunId::parse");
+    let session_id = SessionId::parse("20260422-000000").expect("SessionId::parse");
     // Default Config has `SandboxMode::Required` which needs bwrap on the
     // host. Tests run without that assumption, so force `Off`; individual
     // tests that want to exercise sandbox paths can build their own Config.
     let mut config = Config::default();
     config.tools.sandbox = SandboxMode::Off;
 
-    let ctx = build_context(target.clone(), run_id, 0, llm, config).await?;
+    let ctx = build_context(target.clone(), session_id, 0, llm, config).await?;
     let handle = DaemonHandle::from_context(&ctx);
 
     let task = tokio::spawn(async move { serve_core(ctx).await });
