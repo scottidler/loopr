@@ -4,6 +4,8 @@
 **Date:** 2026-04-18
 **Status:** Seed (not a design doc, not a plan — the architectural shape we're building toward)
 
+**On-disk schema:** the target-local `<target>/.loopr/` tree and the user-global `$XDG_DATA_HOME/loopr/` tree are defined in `docs/design/2026-04-24-loopr-layout.md`. When adding a new kind of artifact, consult that doc for scope boundaries between target-local and XDG.
+
 ## Summary
 
 v5 is a clean-break rewrite of Loopr on an orphan branch. The shape is a compiler-style pipeline of typed stages, each living in its own crate. Seams between stages are Rust function calls with typed arguments, not string-keyed dictionaries. AutoResearch-style experimentation is preserved as config-driven parameter sweeping, not as a YAML-composable orchestration engine.
@@ -253,26 +255,31 @@ Novel strategies mean writing a new `impl RetryStrategy` in Rust. Novel topologi
 
 v5 overrides the `rules/rust.md` default of `log` + `env_logger` and uses **`tracing` + `tracing-subscriber` + `tracing-appender`**. Reason: a multi-crate daemon with long-lived async stages needs span-level context that survives across tasks and crate boundaries. The `log` crate gives flat events; `tracing` gives the span hierarchy that makes "follow one Work from Plan through Tick" tractable. Observability is a first-class concern in v5, owned by its own crate (`telemetry`).
 
-### Three-layer log strategy
+### Four-layer log strategy
 
-1. **Universal structured log** at `.loopr/runs/<run-id>/events.log`, JSON format. Every event carries `crate`, `span` hierarchy, `run_id` / `plan_id` / `work_id` when in scope, `level`, `ts`, and arbitrary kv. One file per run, grep- and jq-friendly, full history.
-2. **Pretty per-run log** at `.loopr/runs/<run-id>/loopr.log`, same events formatted for humans. Mirrored to console at INFO+ during interactive runs.
-3. **Per-Work fanout files** at `.loopr/runs/<run-id>/work/<work-id>.log`. A `WorkFanoutLayer` subscriber watches the `work_id` span and splits a file per Work. Built in Stage 2 (design doc: `docs/design/2026-04-19-telemetry-stage-2.md`); stays inert until Stage 7 emits the first `work_id`-bearing span.
+Per-process telemetry lives under `$XDG_DATA_HOME/loopr/sessions/<session-id>/targets/<target-slug>/runs/<process-id>/`; fanout files live under the same session-id root so they aggregate across processes.
 
-### Run identifier
+1. **Universal structured log** at `runs/<process-id>/events.log`, JSON format. Every event carries `crate`, `span` hierarchy, `session_id` / `process_id` / `target_slug` at minimum plus `plan_id` / `work_id` when in scope, `level`, `ts`, and arbitrary kv. One file per process, grep- and jq-friendly, full history.
+2. **Pretty per-process log** at `runs/<process-id>/loopr.log`, same events formatted for humans. Mirrored to console at INFO+ during interactive runs.
+3. **Per-Work fanout files** at `runs/<process-id>/work/<work-id>.log`. `WorkFanoutLayer` watches the `work_id` span and splits a file per Work.
+4. **Per-Session fanout file** at `sessions/<session-id>/targets/<target-slug>/session-fanout.log`. `SessionFanoutLayer` routes events carrying `session_id` (client) or `client_session_id` (daemon post-handshake) to a single file that aggregates activity across every process touching the session. LRU-capped writer cache.
 
-`run_id = YYYYMMDD-HHMMSS` in local time; e.g., `20260418-123653`. If two runs start in the same second, the daemon appends `-N` where N increments from 2: `20260418-123653-2`. The first run gets the clean name; disambiguator is rare and only when necessary.
+### Identifier taxonomy
+
+- **`session_id`** = `YYYYMMDD-HHMMSS[-N]` in local time, e.g. `20260418-123653` or `20260418-123653-2` on collision. One per user-initiated work session; resumable via `loopr --session <id>` or `loopr sessions resume <id>`. Allocated atomically by `SessionId::allocate` via the `create_dir` EEXIST race on the XDG sessions root. The first session each second gets the clean name; disambiguator is rare.
+- **`process_id`** = `pc-<6-char>` lowercase alphanumeric slug. One per OS process (daemon boot, CLI invocation). Allocated atomically inside the session's `runs/` dir by the same EEXIST pattern.
+- **`target_slug`** = claude-style path slugification of the target's canonical path, leading `/` to leading `-`, interior `/` to `-`. Example: `/home/saidler/repos/rust-version` → `-home-saidler-repos-rust-version`.
 
 ### Span conventions
 
 - `stage.<name>`: a pipeline stage (`stage.decompose`, `stage.implement`, `stage.review`, `stage.integrate`).
 - `ralph.<role>`: one iteration of a ralph loop (`ralph.implementer`, `ralph.reviewer`).
 - `tool.<name>`: one tool invocation (`tool.bash`, `tool.edit`).
-- Every span carries `run_id`; spans within a Plan carry `plan_id`; spans within a Work carry `work_id`.
+- Every span carries `session_id` + `process_id` + `target_slug`; spans within a Plan carry `plan_id`; spans within a Work carry `work_id`. Daemon-side `ipc.connection` spans add `client_session_id` at handshake time (recorded via `Span::record`).
 
 ## Target Repo Layout
 
-Loopr operates on **other** repos, not on itself. When pointed at a target, it manages a single top-level directory `.loopr/` at the target's root, with taskstore nested inside it. Nothing else under the target is touched.
+Loopr operates on **other** repos, not on itself. When pointed at a target, it manages a single top-level directory `.loopr/` at the target's root, with taskstore nested inside it. Nothing else under the target is touched. Per-process telemetry lives in the user's XDG data dir; only artifacts a human might open, edit, or commit stay under `<target>/.loopr/`.
 
 ```
 <target>/
@@ -285,27 +292,37 @@ Loopr operates on **other** repos, not on itself. When pointed at a target, it m
 │   │   ├── ticks.jsonl
 │   │   ├── .version              schema version
 │   │   └── .gitignore            taskstore-managed: excludes its .db cache
-│   ├── runs/                     NOT committed
-│   │   └── 20260418-123653/
-│   │       ├── events.log        structured JSON, per-run
-│   │       └── loopr.log         pretty format, per-run
+│   ├── active-session            pointer file: current session-id for this target (NOT committed)
 │   ├── config.yml                per-repo loopr overrides (local only, NOT committed)
+│   ├── prompts/                  written by `loopr init` via include_dir!() (NOT committed by default)
 │   ├── socket                    Unix domain socket for daemon<->client IPC (NOT committed)
 │   ├── daemon.pid                PID lockfile, one daemon per target (NOT committed)
+│   ├── daemon.process-id         daemon's own ProcessId sentinel (NOT committed)
+│   ├── daemon.version            daemon binary version (reconcile gate; NOT committed)
 │   └── worktrees/                per-attempt agent worktrees (NOT committed; <work-id>-<seq>)
 │       ├── wi-042-1/             first attempt for wi-042 (branch loopr/wk-wi-042-1)
 │       └── wi-042-2/             second attempt (first was rejected)
 └── .gitattributes                committed; sets taskstore merge driver on .loopr/taskstore/*.jsonl
+
+$XDG_DATA_HOME/loopr/             user-global; process-level telemetry and session manifests
+└── sessions/<session-id>/
+    ├── manifest.yml              session metadata: started_at, ended_at, (future: targets[], processes[], records[])
+    └── targets/<target-slug>/
+        ├── session-fanout.log    per-session pretty-log aggregate
+        └── runs/<process-id>/
+            ├── events.log        structured JSON stream (source of truth)
+            ├── loopr.log         pretty human-readable stream
+            └── work/<work-id>.log   per-Work fanout (activates when work_id spans exist)
 ```
 
-Commit boundary runs **inside** `.loopr/`: `taskstore/` is committed (truth), everything else under `.loopr/` is transient and excluded via `.git/info/exclude`. The excludes pattern keeps `.loopr/taskstore/` in git while ignoring `.loopr/runs/`, `.loopr/socket`, `.loopr/daemon.pid`, etc.
+Commit boundary runs **inside** `.loopr/`: `taskstore/` is committed (truth), everything else under `.loopr/` is transient and excluded via `.git/info/exclude`. The excludes pattern keeps `.loopr/taskstore/` in git while ignoring `.loopr/active-session`, `.loopr/socket`, `.loopr/daemon.*`, `.loopr/worktrees/`, etc. Per-process telemetry is not in the target tree at all; it lives in XDG.
 
 ### Rationale for nesting taskstore inside `.loopr/`
 
 - **One top-level folder to reason about.** Every loopr-created file lives under a single `.loopr/` at the target root. Grep, ignore rules, permissions, and tab-completion all benefit.
 - **`.loopr/taskstore/`** holds the truth (Plan/Spec/Phase/Work/Bundle/Tick records as JSONL). Committed so collaborators share state; taskstore's git merge driver resolves concurrent edits by timestamp.
-- **Transient siblings under `.loopr/`** (logs, socket, pid, config, per-attempt worktrees) are ephemeral, machine-local, never committed. The target's `.git/info/exclude` carries the ignore patterns rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`. Patterns: `.loopr/runs/`, `.loopr/worktrees/`, `.loopr/socket`, `.loopr/daemon.pid`, `.loopr/config.yml`.
-- **Per-attempt worktrees** (amended 2026-04-21; see a1 below) live at `.loopr/worktrees/<work-id>-<seq>/` — flat, inside the target, with a unique path-basename per attempt. Flat (not nested under `runs/<run-id>/`) because `git worktree add` derives the `$GIT_DIR/worktrees/<name>/` internal-registry folder name from the path basename; duplicate basenames don't hard-collide but trigger non-deterministic git-internal auto-suffixing that breaks reverse-mapping to our domain IDs. Provenance (which run created an attempt) is carried on the `Work` record in TaskStore, not in the filesystem path.
+- **Transient siblings under `.loopr/`** (socket, pid, process-id, version, worktrees, config, active-session pointer) are ephemeral, machine-local, never committed. The target's `.git/info/exclude` carries the ignore patterns rather than `.gitignore` so loopr does not pollute the target's committed `.gitignore`. Patterns: `.loopr/active-session`, `.loopr/worktrees/`, `.loopr/socket`, `.loopr/daemon.*`, `.loopr/config.yml`. Telemetry files no longer live under the target; see XDG tree above.
+- **Per-attempt worktrees** (amended 2026-04-21; see a1 below) live at `.loopr/worktrees/<work-id>-<seq>/` — flat, inside the target, with a unique path-basename per attempt. Flat (not nested under a session or process dir) because `git worktree add` derives the `$GIT_DIR/worktrees/<name>/` internal-registry folder name from the path basename; duplicate basenames don't hard-collide but trigger non-deterministic git-internal auto-suffixing that breaks reverse-mapping to our domain IDs. Provenance (which session created an attempt) is carried on the `Work` record in TaskStore, not in the filesystem path.
 - **Upstream enablement.** `taskstore 0.5.0` split `open` into `open()` (default `$CWD/.taskstore/`) and `open_at(path, opts)` (exact path). The nested layout is consumer-controlled; `store::Store::open` passes `<target>/.loopr/taskstore/` to `open_at`.
 
 ### Worktree crash recovery
@@ -348,7 +365,7 @@ Single idempotent command run inside the target (or via `-C`):
 1. Create `.loopr/` and seed it with an empty `config.yml`.
 2. Open the TaskStore via `Store::open(".")`, which creates `.loopr/taskstore/` on first call (path comes from `store::TASKSTORE_SUBPATH`).
 3. Install taskstore's git hooks and merge driver (`taskstore install-hooks`).
-4. Append the transient `.loopr/` subpaths (`runs/`, `socket`, `daemon.pid`, `config.yml`, `worktree-registry.jsonl`) to `.git/info/exclude` — leaving `.loopr/taskstore/` tracked — so the local loopr state is ignored without polluting the target's committed `.gitignore` and without excluding the committed truth.
+4. Append the transient `.loopr/` subpaths (`active-session`, `socket`, `daemon.*`, `config.yml`, `worktrees/`) to `.git/info/exclude` — leaving `.loopr/taskstore/` tracked — so the local loopr state is ignored without polluting the target's committed `.gitignore` and without excluding the committed truth.
 5. Verify the target is not a loopr source tree (source-guard check).
 
 ## Prompts
@@ -684,7 +701,7 @@ Sections edited: `loopr` crate bullet (§Crate Layout ABI Contracts), Process Ru
 - **a6 - `--output {json|yaml}` global with TTY auto-default.** New `-o` / `--output` global flag. Default chosen from `std::io::IsTerminal`: YAML when stdout is a TTY (human-readable), JSON when piped (script-friendly). Explicit flag always wins.
 - **a6 - IPC adds `record.list` / `record.get` with `RecordKind` enum; `plan.list` deleted.** One pair of generic methods replaces per-type list methods. Adjacent-tagged sum-type results (`RecordsResult { Plans(Vec<PlanSummary>) | Works(...) | ... }`, `RecordResult { Plan(Plan) | ... }`). Adding Spec/Phase later is two `RecordKind` variants plus two arms per result enum - no new methods.
 - **a6 - `record.list` returns lightweight summary projections, not full records.** `PlanSummary` / `WorkSummary` / `BundleSummary` / `TickSummary` carry id + key parent(s) + status + updated_at only (~200-400 bytes each JSON-encoded). Full records go through `record.get`. Rationale: 1 MiB `MAX_LINE_BYTES` frame cap would otherwise break `loopr bundles` at mature-repo scale. Frame-size regression test pins 1000 `BundleSummary` under 512 KiB.
-- **a6 - CLI reads go through the daemon, not direct taskstore.** The CLI links `ipc` for reads (`RecordList` / `RecordGet`) rather than `store` directly. Architect R1 flagged that direct-disk reads would instantiate a second `AsyncStore` concurrent with the daemon's (SQLite write contention, read-after-write inconsistency, silent `.loopr/taskstore/` auto-creation on uninitialized targets). One seam for state; direct filesystem only for non-state artifacts (`.loopr/runs/*.log` reads for `logs tail` / `logs runs`).
+- **a6 - CLI reads go through the daemon, not direct taskstore.** The CLI links `ipc` for reads (`RecordList` / `RecordGet`) rather than `store` directly. Architect R1 flagged that direct-disk reads would instantiate a second `AsyncStore` concurrent with the daemon's (SQLite write contention, read-after-write inconsistency, silent `.loopr/taskstore/` auto-creation on uninitialized targets). One seam for state; direct filesystem only for non-state artifacts (XDG-resident `events.log` / `loopr.log` reads for `logs tail` / `logs runs`).
 - **a6 - `--worktree-cleanup` CLI flag deleted as dead code.** It was clap-parsed but never consumed by `Config::load` or the daemon context constructor; the env + config precedence was already doing all the work. The precedence in `a5` above is amended to `ENV > config > default`.
 - **a6 - `[Stage N]` markers dropped from subcommand help text.** Teaching-tool artifacts from the Stage 1 skeleton; now clutter.
 - **a6 - Collection-type naming rule added to `rules/rust.md`.** Naming and Style §"Collection type names: plural-s, not 'List' suffix" - prefer `Plans`, `RecordsResult`, `Bundles` over `PlanList`, `RecordListResult`, `BundleList`. Applies across struct names, enum variants, and IPC method/result names.

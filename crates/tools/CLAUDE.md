@@ -40,7 +40,7 @@ Sandbox discipline: the `required|preferred|off` knob is enforced here. `loopr i
 Subprocess output (e.g., `cargo test`, `npm install`) can exceed the `ipc` crate's 1 MiB `LinesCodec` max line length. Hitting the cap severs the client-daemon connection. When Stage 7 lands and `tools` starts capturing real subprocess output for streaming back to clients:
 
 - **Preferred approach:** chunked multi-message IPC. `tools` captures output, emits it as a sequence of `DaemonEvent::ToolOutputChunk { tool_invocation_id, seq, text }` events where each chunk stays well under the 1 MiB cap. Clients reassemble on the other side.
-- **Fallback if chunking is too complex:** truncate at N KB with head+tail summary sent over IPC; full output dumped to `.loopr/runs/<session-id>/work/<work-id>/<tool-invocation-id>.log` for reference.
+- **Fallback if chunking is too complex:** truncate at N KB with head+tail summary sent over IPC; full output dumped to the caller's XDG run dir at `sessions/<session-id>/targets/<target-slug>/runs/<process-id>/work/<work-id>/<tool-invocation-id>.log` for reference.
 
 Decide in the Stage 7 design doc (`docs/design/2026-04-21-tool-registry.md`). User preference is chunked multi-message; raise on the design doc review if that becomes impractical.
 

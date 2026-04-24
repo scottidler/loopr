@@ -33,7 +33,7 @@
 
 ## Stage 2: telemetry initialized
 
-**Goal:** tracing subscriber lives, writes structured JSON to `.loopr/runs/<run-id>/events.log`, pretty output to `.loopr/runs/<run-id>/loopr.log`, console mirror at INFO+ for interactive runs, and a `WorkFanoutLayer` that splits events into `.loopr/runs/<run-id>/work/<work_id>.log` whenever a `work_id`-scoped span fires. `loopr logs tail` shows the latest run. Fanout is built in Stage 2 but stays inert until Stage 7's first `work_id`-bearing span fires.
+**Goal:** tracing subscriber lives, writes structured JSON to `$XDG_DATA_HOME/loopr/sessions/<session-id>/targets/<target-slug>/runs/<process-id>/events.log`, pretty output to the sibling `loopr.log`, console mirror at INFO+ for interactive runs, and a `WorkFanoutLayer` that splits events into `runs/<process-id>/work/<work_id>.log` whenever a `work_id`-scoped span fires. A second `SessionFanoutLayer` aggregates session-scoped events at `sessions/<session-id>/targets/<target-slug>/session-fanout.log`. `loopr logs tail` shows the latest process's pretty log. Fanout layers ship in Stage 2 / Phase 7 and run inert until their routing-field spans fire. (XDG-rooted paths and the `session-id`/`process-id`/`target-slug` taxonomy were retrofitted in `docs/design/2026-04-24-loopr-layout.md`.)
 
 **Design doc:** [`docs/design/2026-04-19-telemetry-stage-2.md`](design/2026-04-19-telemetry-stage-2.md) — consolidated subscriber + run-id + span-conventions + `loopr logs tail` body. Originally listed as two separate docs; collapsed because they cannot be reviewed independently (layers define where spans go; conventions define what spans look like).
 
@@ -41,7 +41,7 @@
 
 **Crates touched:** `telemetry`, `loopr` (CLI flag + run() rewire + logs module).
 
-**Exit criterion:** `loopr -C /tmp plan "x"` allocates a run-id, writes non-empty `events.log` + `loopr.log`, and returns `StageUnimplemented`. `loopr -C /tmp logs tail` prints the pretty log; `loopr -C /tmp logs runs` lists known runs newest-first. (The originally-stated "`loopr --version` emits one span" criterion was unsatisfiable — clap short-circuits `--version` before `lib::run` — so it was replaced.)
+**Exit criterion:** `loopr -C /tmp plan "x"` resolves a session-id and allocates a process-id, writes non-empty `events.log` + `loopr.log` under the XDG session/target/runs path, and returns `StageUnimplemented`. `loopr -C /tmp logs tail` prints the pretty log; `loopr -C /tmp logs runs` lists known sessions newest-first. (The originally-stated "`loopr --version` emits one span" criterion was unsatisfiable — clap short-circuits `--version` before `lib::run` — so it was replaced.)
 
 ---
 
@@ -68,7 +68,7 @@
 
 **Crates touched:** `loopr`, `ipc`, `telemetry`.
 
-**Exit criterion:** two terminals: one runs the daemon, the other runs `loopr plan "x"`; the second terminal gets an ACK and the daemon's log shows the request arriving with the right `run_id`.
+**Exit criterion:** two terminals: one runs the daemon, the other runs `loopr plan "x"`; the second terminal gets an ACK and the daemon's log shows the request arriving with the right `session_id` and `client_session_id`.
 
 ---
 
@@ -153,7 +153,7 @@ The daemon decomposes, implements, reviews, integrates, and produces a Tick that
 
 **Crates touched:** all of them, integration only.
 
-**Exit criterion:** running the above command on a fresh `rust-version` clone produces a merged commit that adds the flag; `rust-version --version` prints the crate version.
+**Exit criterion:** running the above command on a fresh `rust-version` clone produces a merged commit that adds the flag; `rust-version --version` prints the crate version; and a `loopr sessions list` run against the target shows an active session whose `session-fanout.log` references the Plan, Work(s), Bundle, and Tick ids emitted by the pipeline (i.e., session-id indexes the E2E's records).
 
 ---
 
@@ -161,8 +161,8 @@ The daemon decomposes, implements, reviews, integrates, and produces a Tick that
 
 Not scheduled. Earn each when a real run fails for lack of it. Cross-reference `docs/vision.md` "Deferred Enhancements" and "Explicitly Not in First Gate."
 
-- **TUI** as its own crate. Ratatui app + widgets + event loop. Subscribes to the telemetry stream.
-- **Per-Work fanout subscriber.** Split `events.log` by `work_id` span into `.loopr/runs/<run-id>/work/<work-id>.log`.
+- **TUI** as its own crate. Ratatui app + widgets + event loop. Subscribes to the telemetry stream; can attach to or detach from a session.
+- **Per-Work fanout subscriber.** Split `events.log` by `work_id` span into `<run-dir>/work/<work-id>.log`. (Shipped in Stage 2; listed here historically.)
 - **Director agent.** Escalation handling; before this ships, escalation is "exit with error."
 - **Researcher agent.** Tool/info discovery; before this ships, the Implementer does its own lookup.
 - **Parallel worktrees.** Multiple Works running simultaneously.
