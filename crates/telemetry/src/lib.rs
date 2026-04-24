@@ -16,6 +16,7 @@ mod query;
 mod session;
 mod slug;
 mod subscriber;
+mod xdg;
 
 /// Environment variable that shadows the CLI `--log-level` flag default.
 pub const LOG_ENV_VAR: &str = "LOOPR_LOG_LEVEL";
@@ -33,6 +34,7 @@ pub use query::{QueryError, SessionEntry, list_sessions, tail_latest_session};
 pub use session::{SessionId, SessionIdAllocError, SessionIdParseError};
 pub use slug::{TargetSlugError, target_slug};
 pub use subscriber::{Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, init};
+pub use xdg::{XdgError, session_dir, session_run_dir, session_target_dir, xdg_root};
 
 #[cfg(test)]
 mod tests;

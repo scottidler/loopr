@@ -22,6 +22,9 @@ pub enum LooprError {
     #[error("telemetry setup failed: {0}")]
     TelemetryInit(String),
 
+    #[error("session resolution failed: {0}")]
+    SessionResolve(String),
+
     #[error("ipc client error: {0}")]
     ClientIo(String),
 

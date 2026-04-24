@@ -8,6 +8,7 @@ pub mod error;
 pub mod guard;
 pub mod logs;
 pub mod output;
+pub mod session;
 pub mod target;
 pub mod transport;
 

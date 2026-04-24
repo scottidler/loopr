@@ -2323,6 +2323,7 @@ version = "0.5.33"
 dependencies = [
  "chrono",
  "dashmap",
+ "dirs",
  "eyre",
  "rand 0.10.1",
  "rev_lines",
