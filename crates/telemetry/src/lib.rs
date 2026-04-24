@@ -14,6 +14,7 @@ mod fanout;
 mod process;
 mod query;
 mod session;
+mod slug;
 mod subscriber;
 
 /// Environment variable that shadows the CLI `--log-level` flag default.
@@ -30,6 +31,7 @@ pub use fanout::WorkFanoutLayer;
 pub use process::{ProcessId, ProcessIdAllocError, ProcessIdParseError};
 pub use query::{QueryError, SessionEntry, list_sessions, tail_latest_session};
 pub use session::{SessionId, SessionIdAllocError, SessionIdParseError};
+pub use slug::{TargetSlugError, target_slug};
 pub use subscriber::{Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, init};
 
 #[cfg(test)]

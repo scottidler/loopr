@@ -234,6 +234,60 @@ fn processid_display_matches_as_str() {
     assert_eq!(format!("{id}"), "pc-k3m9f2");
 }
 
+// ---------- target_slug ----------
+
+#[test]
+fn target_slug_basic() {
+    let p = std::path::Path::new("/home/saidler/repos/rust-version");
+    assert_eq!(target_slug(p).unwrap(), "-home-saidler-repos-rust-version");
+}
+
+#[test]
+fn target_slug_root() {
+    assert_eq!(target_slug(std::path::Path::new("/")).unwrap(), "-");
+}
+
+#[test]
+fn target_slug_strips_trailing_slash() {
+    let p = std::path::Path::new("/tmp/a/b/");
+    assert_eq!(target_slug(p).unwrap(), "-tmp-a-b");
+}
+
+#[test]
+fn target_slug_rejects_relative() {
+    let err = target_slug(std::path::Path::new("relative/path")).unwrap_err();
+    assert!(matches!(err, TargetSlugError::NotAbsolute(_)));
+}
+
+#[test]
+fn target_slug_rejects_empty() {
+    let err = target_slug(std::path::Path::new("")).unwrap_err();
+    assert_eq!(err, TargetSlugError::Empty);
+}
+
+#[test]
+fn target_slug_rejects_parent_dir_component() {
+    let err = target_slug(std::path::Path::new("/a/../b")).unwrap_err();
+    assert!(matches!(err, TargetSlugError::NonCanonical(_)));
+}
+
+#[test]
+fn target_slug_cur_dir_normalized_away() {
+    // `Path::components()` normalizes `.` out, so `/a/./b` slugs identically
+    // to `/a/b`. This is stdlib behavior, not something this crate controls.
+    let with_dot = target_slug(std::path::Path::new("/a/./b")).unwrap();
+    let without_dot = target_slug(std::path::Path::new("/a/b")).unwrap();
+    assert_eq!(with_dot, without_dot);
+}
+
+#[test]
+fn target_slug_deterministic_across_calls() {
+    let p = std::path::Path::new("/opt/work/project");
+    let a = target_slug(p).unwrap();
+    let b = target_slug(p).unwrap();
+    assert_eq!(a, b);
+}
+
 // ---------- Subscriber round-trip ----------
 //
 // These tests do NOT call `telemetry::init` because `set_global_default` is
