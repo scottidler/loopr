@@ -105,7 +105,7 @@ fn git_repo_with_tracked_and_untracked_not_ignored_files() {
         .expect("git add");
     assert!(add.status.success());
     let commit = std::process::Command::new("git")
-        .args(["commit", "--quiet", "-m", "init"])
+        .args(["commit", "--quiet", "-m", "init", "--no-gpg-sign"])
         .current_dir(target)
         .output()
         .expect("git commit");
