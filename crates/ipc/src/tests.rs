@@ -5,8 +5,9 @@ use domain::Plan;
 use crate::envelope::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::error::RpcError;
 use crate::frame::{ParseError, decode_line, decode_request_line, encode_line};
-use crate::method::{
-    HandshakeParams, HandshakeResult, Method, PlanCreateParams, PlanCreateResult, PlanListResult, StatusResult,
+use crate::method::{HandshakeParams, HandshakeResult, Method, PlanCreateParams, PlanCreateResult, StatusResult};
+use crate::records::{
+    BundleSummary, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
 };
 use crate::{IpcMessage, MAX_LINE_BYTES, PROTOCOL_VERSION};
 
@@ -390,7 +391,7 @@ fn e2e_status_roundtrip() {
     }
 }
 
-// --- Stage 5: plan.create / plan.list method dispatch + result serde ---
+// --- Stage 5: plan.create method dispatch + result serde ---
 
 #[test]
 fn method_try_from_plan_create() {
@@ -432,39 +433,6 @@ fn method_try_from_plan_create_deny_unknown_fields() {
 }
 
 #[test]
-fn method_try_from_plan_list_null_params() {
-    let req = DaemonRequest {
-        id: 2,
-        method: "plan.list".into(),
-        params: json!(null),
-    };
-    assert_eq!(Method::try_from(&req).unwrap(), Method::PlanList);
-}
-
-#[test]
-fn method_try_from_plan_list_empty_object_params() {
-    let req = DaemonRequest {
-        id: 2,
-        method: "plan.list".into(),
-        params: json!({}),
-    };
-    assert_eq!(Method::try_from(&req).unwrap(), Method::PlanList);
-}
-
-#[test]
-fn method_try_from_plan_list_unexpected_params() {
-    let req = DaemonRequest {
-        id: 2,
-        method: "plan.list".into(),
-        params: json!({"filter": "x"}),
-    };
-    match Method::try_from(&req) {
-        Err(RpcError::InvalidParams(_)) => {}
-        other => panic!("expected InvalidParams, got {other:?}"),
-    }
-}
-
-#[test]
 fn plan_create_result_roundtrip() {
     let plan = Plan::new("round-trip me".into());
     let before = PlanCreateResult { plan: plan.clone() };
@@ -475,28 +443,6 @@ fn plan_create_result_roundtrip() {
     assert_eq!(after.plan.status, before.plan.status);
     assert_eq!(after.plan.created_at, before.plan.created_at);
     assert_eq!(after.plan.updated_at, before.plan.updated_at);
-}
-
-#[test]
-fn plan_list_result_roundtrip_empty() {
-    let before = PlanListResult { plans: Vec::new() };
-    let bytes = serde_json::to_vec(&before).unwrap();
-    let after: PlanListResult = serde_json::from_slice(&bytes).unwrap();
-    assert!(after.plans.is_empty());
-}
-
-#[test]
-fn plan_list_result_roundtrip_preserves_order() {
-    let p1 = Plan::new("first".into());
-    let p2 = Plan::new("second".into());
-    let before = PlanListResult {
-        plans: vec![p1.clone(), p2.clone()],
-    };
-    let bytes = serde_json::to_vec(&before).unwrap();
-    let after: PlanListResult = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(after.plans.len(), 2);
-    assert_eq!(after.plans[0].id, p1.id);
-    assert_eq!(after.plans[1].id, p2.id);
 }
 
 #[test]
@@ -512,8 +458,185 @@ fn plan_create_result_deny_unknown_fields() {
 fn plan_create_method_name_wire_form() {
     let name: &'static str = crate::method::MethodName::PlanCreate.into();
     assert_eq!(name, "plan.create");
-    let name: &'static str = crate::method::MethodName::PlanList.into();
-    assert_eq!(name, "plan.list");
+    let name: &'static str = crate::method::MethodName::RecordList.into();
+    assert_eq!(name, "record.list");
+    let name: &'static str = crate::method::MethodName::RecordGet.into();
+    assert_eq!(name, "record.get");
+}
+
+// --- record.list / record.get (Phase 3 of CLI plumbing shape) ---
+
+#[test]
+fn method_try_from_record_list() {
+    let req = DaemonRequest {
+        id: 3,
+        method: "record.list".into(),
+        params: json!({"kind": "plan"}),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::RecordList(RecordListParams { kind: RecordKind::Plan })
+    );
+}
+
+#[test]
+fn method_try_from_record_list_every_kind() {
+    for (wire, kind) in [
+        ("plan", RecordKind::Plan),
+        ("work", RecordKind::Work),
+        ("bundle", RecordKind::Bundle),
+        ("tick", RecordKind::Tick),
+    ] {
+        let req = DaemonRequest {
+            id: 1,
+            method: "record.list".into(),
+            params: json!({"kind": wire}),
+        };
+        assert_eq!(
+            Method::try_from(&req).unwrap(),
+            Method::RecordList(RecordListParams { kind }),
+            "kind={wire}"
+        );
+    }
+}
+
+#[test]
+fn method_try_from_record_list_missing_kind_is_invalid_params() {
+    let req = DaemonRequest {
+        id: 3,
+        method: "record.list".into(),
+        params: json!({}),
+    };
+    match Method::try_from(&req) {
+        Err(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn method_try_from_record_list_bad_kind_is_invalid_params() {
+    let req = DaemonRequest {
+        id: 3,
+        method: "record.list".into(),
+        params: json!({"kind": "bogus"}),
+    };
+    match Method::try_from(&req) {
+        Err(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn method_try_from_record_get() {
+    let req = DaemonRequest {
+        id: 4,
+        method: "record.get".into(),
+        params: json!({"id": "pl-abcde"}),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::RecordGet(RecordGetParams { id: "pl-abcde".into() })
+    );
+}
+
+#[test]
+fn records_result_plans_empty_roundtrip() {
+    let before = RecordsResult::Plans(Vec::new());
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: RecordsResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn records_result_wire_shape_is_adjacent_tagged() {
+    let before = RecordsResult::Plans(Vec::new());
+    let v = serde_json::to_value(&before).unwrap();
+    let obj = v.as_object().expect("object");
+    assert_eq!(obj.get("kind").and_then(|k| k.as_str()), Some("plans"));
+    assert!(
+        obj.get("records").is_some(),
+        "adjacent tagging nests the value under `records`"
+    );
+}
+
+#[test]
+fn records_result_plans_roundtrip_with_summaries() {
+    let p1 = Plan::new("first".into());
+    let p2 = Plan::new("second".into());
+    let summaries = vec![PlanSummary::from(&p1), PlanSummary::from(&p2)];
+    let before = RecordsResult::Plans(summaries);
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: RecordsResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+    match after {
+        RecordsResult::Plans(ps) => {
+            assert_eq!(ps.len(), 2);
+            assert_eq!(ps[0].id, p1.id);
+            assert_eq!(ps[1].id, p2.id);
+        }
+        other => panic!("expected Plans, got {other:?}"),
+    }
+}
+
+#[test]
+fn record_result_plan_roundtrip() {
+    let plan = Plan::new("one".into());
+    let before = RecordResult::Plan(plan.clone());
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: RecordResult = serde_json::from_slice(&bytes).unwrap();
+    match after {
+        RecordResult::Plan(p) => {
+            assert_eq!(p.id, plan.id);
+            assert_eq!(p.goal, plan.goal);
+        }
+        other => panic!("expected Plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn plan_summary_projection_is_lossy_but_preserves_identity() {
+    let plan = Plan::new("coverage".into());
+    let summary = PlanSummary::from(&plan);
+    assert_eq!(summary.id, plan.id);
+    assert_eq!(summary.goal, plan.goal);
+    assert_eq!(summary.status, plan.status);
+    assert_eq!(summary.updated_at, plan.updated_at);
+}
+
+#[test]
+fn record_kind_wire_form_is_kebab_case() {
+    assert_eq!(serde_json::to_value(RecordKind::Plan).unwrap(), json!("plan"));
+    assert_eq!(serde_json::to_value(RecordKind::Work).unwrap(), json!("work"));
+    assert_eq!(serde_json::to_value(RecordKind::Bundle).unwrap(), json!("bundle"));
+    assert_eq!(serde_json::to_value(RecordKind::Tick).unwrap(), json!("tick"));
+}
+
+#[test]
+fn records_result_bundles_frame_fits_under_max_line_bytes() {
+    // A pathological list of 1000 BundleSummaries should land well below
+    // the 1 MiB IPC frame cap. If this test starts failing, summaries
+    // grew too large (or a field was added that shouldn't be in the
+    // projection) and the frame-cap risk flagged in the design doc is
+    // live.
+    let mut bundles = Vec::with_capacity(1000);
+    for _ in 0..1000 {
+        let b = domain::Bundle::new(domain::WorkId::new(), "loopr/wk-xxxxxxx-1".into(), vec!["claim".into()]);
+        bundles.push(BundleSummary::from(&b));
+    }
+    let result = RecordsResult::Bundles(bundles);
+    let bytes = serde_json::to_vec(&result).unwrap();
+    assert!(
+        bytes.len() < crate::MAX_LINE_BYTES,
+        "1000 BundleSummaries encoded to {} bytes, over the {} MiB cap",
+        bytes.len(),
+        crate::MAX_LINE_BYTES / (1 << 20)
+    );
+    // Also assert a comfortable margin so we don't pass right at the cliff.
+    assert!(
+        bytes.len() < crate::MAX_LINE_BYTES / 2,
+        "1000 BundleSummaries encoded to {} bytes; expected well under 512 KiB",
+        bytes.len()
+    );
 }
 
 #[test]

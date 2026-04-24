@@ -25,6 +25,7 @@ mod envelope;
 mod error;
 mod frame;
 mod method;
+mod records;
 
 /// Maximum bytes per NDJSON line, enforced by [`decode_line`] /
 /// [`decode_request_line`]. Matches v3/v4 and the value wired to
@@ -40,8 +41,11 @@ pub use envelope::{DaemonEvent, DaemonRequest, DaemonResponse, IpcMessage};
 pub use error::{RpcError, RpcErrorWire};
 pub use frame::{ParseError, decode_line, decode_request_line, encode_line};
 pub use method::{
-    HandshakeParams, HandshakeResult, Method, MethodName, PlanCreateParams, PlanCreateResult, PlanListResult,
-    StatusResult,
+    HandshakeParams, HandshakeResult, Method, MethodName, PlanCreateParams, PlanCreateResult, StatusResult,
+};
+pub use records::{
+    BundleSummary, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
+    TickSummary, WorkSummary,
 };
 
 #[cfg(test)]

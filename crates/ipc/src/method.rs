@@ -5,6 +5,7 @@ use domain::Plan;
 
 use crate::envelope::DaemonRequest;
 use crate::error::RpcError;
+use crate::records::{RecordGetParams, RecordListParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString, IntoStaticStr)]
 pub enum MethodName {
@@ -14,8 +15,10 @@ pub enum MethodName {
     SystemStatus,
     #[strum(serialize = "plan.create")]
     PlanCreate,
-    #[strum(serialize = "plan.list")]
-    PlanList,
+    #[strum(serialize = "record.list")]
+    RecordList,
+    #[strum(serialize = "record.get")]
+    RecordGet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +26,8 @@ pub enum Method {
     Handshake(HandshakeParams),
     Status,
     PlanCreate(PlanCreateParams),
-    PlanList,
+    RecordList(RecordListParams),
+    RecordGet(RecordGetParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,11 +64,15 @@ impl TryFrom<&DaemonRequest> for Method {
                     serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
                 Ok(Method::PlanCreate(params))
             }
-            MethodName::PlanList => {
-                if !req.params.is_null() && !matches!(&req.params, serde_json::Value::Object(m) if m.is_empty()) {
-                    return Err(RpcError::InvalidParams("plan.list takes no params".into()));
-                }
-                Ok(Method::PlanList)
+            MethodName::RecordList => {
+                let params: RecordListParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::RecordList(params))
+            }
+            MethodName::RecordGet => {
+                let params: RecordGetParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::RecordGet(params))
             }
         }
     }
@@ -95,13 +103,4 @@ pub struct StatusResult {
 #[serde(deny_unknown_fields)]
 pub struct PlanCreateResult {
     pub plan: Plan,
-}
-
-/// Success payload for `plan.list`: every Plan in the store, ordered by
-/// `AsyncStore::list`'s contract (updated_at descending). See
-/// `store::PlansStore::list` for the ordering guarantee.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanListResult {
-    pub plans: Vec<Plan>,
 }

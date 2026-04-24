@@ -84,6 +84,13 @@ impl<'a> TicksStore<'a> {
         }
     }
 
+    /// Return every stored Tick. `AsyncStore::list` orders by `updated_at`
+    /// descending; callers should not depend on order beyond that contract.
+    /// Plan-scoped listing is available via [`TicksStore::list_by_plan_id`].
+    pub async fn list(&self) -> Result<Vec<Tick>, StoreError> {
+        Ok(self.inner.list::<Tick>(&[]).await?)
+    }
+
     /// Return every Tick for the given `PlanId`, ordered by `updated_at`
     /// descending per `AsyncStore::list`'s contract. Backed by the SQLite
     /// index on `plan_id` (`#[record(indexed)]` on the struct field).

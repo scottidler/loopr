@@ -7,8 +7,8 @@ use tempfile::TempDir;
 use agents::{ImplementerConfig, ReviewerConfig};
 use context::InlineContextBuilder;
 use ipc::{
-    DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, PlanListResult, RpcError,
-    StatusResult,
+    DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, RecordKind, RecordListParams,
+    RecordsResult, RpcError, StatusResult,
 };
 use llm::{AnthropicClient, LlmConfig};
 use store::Store;
@@ -227,7 +227,7 @@ async fn plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty
 }
 
 #[tokio::test]
-async fn plan_list_returns_all_plans() {
+async fn record_list_plans_returns_all_plan_summaries() {
     let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Complete;
 
@@ -245,17 +245,22 @@ async fn plan_list_returns_all_plans() {
 
     let req = DaemonRequest {
         id: 12,
-        method: "plan.list".into(),
-        params: serde_json::Value::Null,
+        method: "record.list".into(),
+        params: serde_json::to_value(RecordListParams { kind: RecordKind::Plan }).unwrap(),
     };
     let resp = dispatch(&req, &mut state, &ctx).await;
     assert_eq!(resp.id, 12);
     assert!(resp.error.is_none(), "list no error: {resp:?}");
-    let result: PlanListResult = serde_json::from_value(resp.result.unwrap()).unwrap();
-    assert_eq!(result.plans.len(), 2);
-    let goals: Vec<_> = result.plans.iter().map(|p| p.goal.clone()).collect();
-    assert!(goals.contains(&"first".to_string()));
-    assert!(goals.contains(&"second".to_string()));
+    let result: RecordsResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    match result {
+        RecordsResult::Plans(summaries) => {
+            assert_eq!(summaries.len(), 2);
+            let goals: Vec<_> = summaries.iter().map(|p| p.goal.clone()).collect();
+            assert!(goals.contains(&"first".to_string()));
+            assert!(goals.contains(&"second".to_string()));
+        }
+        other => panic!("expected Plans, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -276,13 +281,13 @@ async fn plan_create_bad_params_is_invalid_params() {
 }
 
 #[tokio::test]
-async fn plan_list_rejects_non_empty_params() {
+async fn record_list_rejects_missing_kind() {
     let (_td, ctx) = stub_ctx().await;
     let mut state = HandshakeState::Complete;
     let req = DaemonRequest {
         id: 14,
-        method: "plan.list".into(),
-        params: serde_json::json!({"filter": "x"}),
+        method: "record.list".into(),
+        params: serde_json::json!({}),
     };
     let resp = dispatch(&req, &mut state, &ctx).await;
     assert_eq!(resp.id, 14);

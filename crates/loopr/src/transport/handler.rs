@@ -10,8 +10,9 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use ipc::{
-    DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams,
-    PlanCreateResult, PlanListResult, RpcError, StatusResult,
+    BundleSummary, DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION,
+    PlanCreateParams, PlanCreateResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult,
+    RecordsResult, RpcError, StatusResult, TickSummary, WorkSummary,
 };
 use llm::LlmClient;
 use store::StoreError;
@@ -67,7 +68,8 @@ where
         Method::Handshake(params) => handle_handshake(req.id, params, state),
         Method::Status => handle_status(req.id, ctx),
         Method::PlanCreate(params) => handle_plan_create(req.id, params, ctx).await,
-        Method::PlanList => handle_plan_list(req.id, ctx).await,
+        Method::RecordList(params) => handle_record_list(req.id, params, ctx).await,
+        Method::RecordGet(params) => handle_record_get(req.id, params, ctx).await,
     }
 }
 
@@ -180,23 +182,98 @@ where
     }
 }
 
-async fn handle_plan_list<L: LlmClient + Send + Sync + 'static>(
+/// Handle `record.list`. Fetches the full records for the requested kind
+/// from the store, then projects each into its summary type so the
+/// response stays well under the 1 MiB IPC frame cap. See
+/// `docs/design/2026-04-23-cli-plumbing-shape.md`.
+async fn handle_record_list<L: LlmClient + Send + Sync + 'static>(
     id: u64,
+    params: RecordListParams,
     ctx: &Arc<DaemonContext<L>>,
 ) -> DaemonResponse {
-    match ctx.store.plans().list().await {
-        Ok(plans) => {
-            let result = PlanListResult { plans };
-            match serde_json::to_value(&result) {
-                Ok(v) => DaemonResponse::ok(id, v),
-                Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.list: {e}"))),
-            }
-        }
-        Err(e) => {
-            warn!(request_id = id, error = %e, "plan.list failed at store");
-            DaemonResponse::err(id, map_store_error(e))
-        }
+    let result = match params.kind {
+        RecordKind::Plan => match ctx.store.plans().list().await {
+            Ok(plans) => RecordsResult::Plans(plans.iter().map(PlanSummary::from).collect()),
+            Err(e) => return store_err_response(id, e, "plans"),
+        },
+        RecordKind::Work => match ctx.store.works().list().await {
+            Ok(works) => RecordsResult::Works(works.iter().map(WorkSummary::from).collect()),
+            Err(e) => return store_err_response(id, e, "works"),
+        },
+        RecordKind::Bundle => match ctx.store.bundles().list().await {
+            Ok(bundles) => RecordsResult::Bundles(bundles.iter().map(BundleSummary::from).collect()),
+            Err(e) => return store_err_response(id, e, "bundles"),
+        },
+        RecordKind::Tick => match ctx.store.ticks().list().await {
+            Ok(ticks) => RecordsResult::Ticks(ticks.iter().map(TickSummary::from).collect()),
+            Err(e) => return store_err_response(id, e, "ticks"),
+        },
+    };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize record.list: {e}"))),
     }
+}
+
+/// Handle `record.get`. Routes by id prefix to the right store accessor
+/// and returns the full record wrapped in `RecordResult`. The prefix
+/// literals mirror the `$prefix` arguments to the `id_type!` macro
+/// invocations in `crates/domain/src/id.rs`.
+async fn handle_record_get<L: LlmClient + Send + Sync + 'static>(
+    id: u64,
+    params: RecordGetParams,
+    ctx: &Arc<DaemonContext<L>>,
+) -> DaemonResponse {
+    use std::str::FromStr;
+    let prefix = params.id.split('-').next().unwrap_or("");
+    let result = match prefix {
+        "pl" => match domain::PlanId::from_str(&params.id) {
+            Ok(pid) => match ctx.store.plans().get(&pid).await {
+                Ok(plan) => RecordResult::Plan(plan),
+                Err(e) => return store_err_response(id, e, "plans"),
+            },
+            Err(never) => match never {},
+        },
+        "wk" => match domain::WorkId::from_str(&params.id) {
+            Ok(wid) => match ctx.store.works().get(&wid).await {
+                Ok(work) => RecordResult::Work(work),
+                Err(e) => return store_err_response(id, e, "works"),
+            },
+            Err(never) => match never {},
+        },
+        "bd" => match domain::BundleId::from_str(&params.id) {
+            Ok(bid) => match ctx.store.bundles().get(&bid).await {
+                Ok(bundle) => RecordResult::Bundle(bundle),
+                Err(e) => return store_err_response(id, e, "bundles"),
+            },
+            Err(never) => match never {},
+        },
+        "tk" => match domain::TickId::from_str(&params.id) {
+            Ok(tid) => match ctx.store.ticks().get(&tid).await {
+                Ok(tick) => RecordResult::Tick(tick),
+                Err(e) => return store_err_response(id, e, "ticks"),
+            },
+            Err(never) => match never {},
+        },
+        _ => {
+            return DaemonResponse::err(
+                id,
+                RpcError::InvalidParams(format!(
+                    "unknown id prefix in `{}`; expected one of: pl-, wk-, bd-, tk-",
+                    params.id
+                )),
+            );
+        }
+    };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize record.get: {e}"))),
+    }
+}
+
+fn store_err_response(id: u64, err: StoreError, collection: &'static str) -> DaemonResponse {
+    warn!(request_id = id, collection = collection, error = %err, "record query failed at store");
+    DaemonResponse::err(id, map_store_error(err))
 }
 
 /// Translate `store::StoreError` into a wire-level `RpcError`. Kept in the
