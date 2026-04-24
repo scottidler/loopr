@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-23
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5 + 2 architect rounds
 **Crates touched:** loopr, ipc
 
