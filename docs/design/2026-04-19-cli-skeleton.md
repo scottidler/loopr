@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-19
-**Status:** Implemented (amended by [`docs/design/2026-04-19-telemetry-stage-2.md`](../../../../docs/design/2026-04-19-telemetry-stage-2.md) for the `--log-level` / `-l` global flag)
+**Status:** Implemented (amended by [`docs/design/2026-04-19-telemetry-stage-2.md`](2026-04-19-telemetry-stage-2.md) for the `--log-level` / `-l` global flag; further amended by [`docs/design/2026-04-23-cli-plumbing-shape.md`](2026-04-23-cli-plumbing-shape.md) which reshaped the surface to a plumbing CLI: deleted `decompose` / `execute` / `integrate` / `score` / `list` as dead-under-auto-chain, replaced with flat `plans` / `works` / `bundles` / `ticks` / `show` verbs going through IPC `record.list` / `record.get`, added `-o` / `--output` global, made `loopr` bare launch the TUI, deleted the `--worktree-cleanup` CLI flag as dead code, dropped `[Stage N]` markers from help text.)
 **Review Passes Completed:** 5/5
 
 ## Summary

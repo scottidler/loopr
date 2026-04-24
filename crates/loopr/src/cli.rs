@@ -2,8 +2,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use worktree::AttemptCleanupPolicy;
-
 use crate::output::Format;
 
 #[derive(Parser, Debug)]
@@ -29,16 +27,6 @@ pub struct Cli {
     #[arg(short = 'l', long = "log-level", global = true, value_name = "DIRECTIVE")]
     pub log_level: Option<String>,
 
-    /// When the coordinator cleans up per-attempt worktrees. Overrides
-    /// `.loopr/config.yml` and `LOOPR_WORKTREE_CLEANUP_POLICY`.
-    ///
-    /// - immediate: clean on Bundle rejection (smallest disk; no forensics)
-    /// - on-work-terminal: sweep prior attempts when Work reaches Done/Abandoned (DEFAULT)
-    /// - on-run-end: keep everything until the run ends, then sweep
-    /// - never: strict debug-only; leaks memory + FDs on long-uptime daemons
-    #[arg(long = "worktree-cleanup", global = true, value_name = "POLICY")]
-    pub worktree_cleanup: Option<AttemptCleanupPolicy>,
-
     /// Output format for data-returning verbs. Default picks JSON when
     /// stdout is a pipe, YAML when stdout is a TTY.
     #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT")]
@@ -53,10 +41,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize loopr state (.loopr/, .loopr/taskstore/, git hooks) at the target. [Stage 5]
+    /// Initialize loopr state (.loopr/, .loopr/taskstore/, git hooks) at the target.
     Init,
 
-    /// Submit a Plan goal to the daemon. [Stage 5]
+    /// Submit a Plan goal to the daemon.
     Plan {
         /// One-sentence goal to plan for.
         goal: String,
@@ -80,13 +68,13 @@ pub enum Command {
         id: String,
     },
 
-    /// Daemon lifecycle (start, stop, status). [Stage 4]
+    /// Daemon lifecycle (start, stop, status).
     Daemon {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
 
-    /// Inspect run logs. [Stage 2 body; stub parses now]
+    /// Inspect run logs.
     Logs {
         #[command(subcommand)]
         cmd: LogsCmd,
