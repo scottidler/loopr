@@ -34,8 +34,8 @@ fn tick_new_preserves_branch_and_sha_and_bundles() {
         "deadbeef".to_string(),
         vec!["cafebabe".to_string()],
     );
-    assert_eq!(tick.integration_branch, "loopr/plan-abc");
-    assert_eq!(tick.integration_sha, "deadbeef");
+    assert_eq!(tick.branch, "loopr/plan-abc");
+    assert_eq!(tick.sha, "deadbeef");
     assert_eq!(tick.bundles, vec![bid]);
     assert_eq!(tick.merge_commits, vec!["cafebabe".to_string()]);
 }
@@ -114,8 +114,8 @@ fn tick_serde_roundtrip_json() {
     let back: Tick = serde_json::from_str(&json).unwrap();
     assert_eq!(tick.id, back.id);
     assert_eq!(tick.plan_id, back.plan_id);
-    assert_eq!(tick.integration_branch, back.integration_branch);
-    assert_eq!(tick.integration_sha, back.integration_sha);
+    assert_eq!(tick.branch, back.branch);
+    assert_eq!(tick.sha, back.sha);
     assert_eq!(tick.bundles, back.bundles);
     assert_eq!(tick.merge_commits, back.merge_commits);
     assert_eq!(tick.created_at, back.created_at);
@@ -129,8 +129,8 @@ fn tick_serde_rejects_unknown_fields() {
         "plan_id": "pl-xyz34",
         "updated_at": 1700000000000,
         "created_at": 1700000000000,
-        "integration_branch": "loopr/plan-xyz34",
-        "integration_sha": "abc",
+        "branch": "loopr/plan-xyz34",
+        "sha": "abc",
         "bundles": [],
         "merge_commits": [],
         "bogus_field": "fail"

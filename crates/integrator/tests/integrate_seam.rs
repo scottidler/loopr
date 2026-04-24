@@ -87,9 +87,9 @@ fn git_capture(path: &Path, args: &[&str]) -> String {
 }
 
 async fn setup(plan: &Plan) -> (TempDir, Store, PathBuf, String) {
-    let (dir, path, base_sha) = init_repo_with_integration_branch(plan);
+    let (dir, path, sha) = init_repo_with_integration_branch(plan);
     let store = Store::open(&path).await.unwrap();
-    (dir, store, path, base_sha)
+    (dir, store, path, sha)
 }
 
 fn sample_work(plan: &Plan) -> Work {
@@ -166,16 +166,16 @@ async fn happy_path_merges_bundle_and_writes_tick() {
 
     // Tick shape.
     assert_eq!(tick.plan_id, plan.id);
-    assert_eq!(tick.integration_branch, format!("loopr/plan-{}", plan.id));
+    assert_eq!(tick.branch, format!("loopr/plan-{}", plan.id));
     assert_eq!(tick.bundles, vec![bundle.id.clone()]);
     assert_eq!(tick.merge_commits.len(), 1);
 
-    // Integration branch HEAD matches tick.integration_sha.
+    // Integration branch HEAD matches tick.sha.
     git(&repo, &["checkout", "-q", &format!("loopr/plan-{}", plan.id)]);
-    let head_sha = git_capture(&repo, &["rev-parse", "HEAD"]);
-    assert_eq!(head_sha, tick.integration_sha);
+    let head = git_capture(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(head, tick.sha);
 
-    // Merge commit has two parents (pre_merge_sha + bundle_head).
+    // Merge commit has two parents (pre_merge + bundle_head).
     let parents = git_capture(&repo, &["rev-list", "--parents", "-n", "1", "HEAD"]);
     assert_eq!(
         parents.split_whitespace().count(),
@@ -284,7 +284,7 @@ async fn integration_branch_missing_returns_typed_error() {
 #[tokio::test]
 async fn empty_branch_detected_before_merge_attempt() {
     let plan = Plan::new("ship".to_string());
-    let (_dir, store, repo, base_sha) = setup(&plan).await;
+    let (_dir, store, repo, sha) = setup(&plan).await;
     store.plans().create(plan.clone()).await.unwrap();
     let work = sample_work(&plan);
     store.works().create(work.clone()).await.unwrap();
@@ -294,7 +294,7 @@ async fn empty_branch_detected_before_merge_attempt() {
     let branch = format!("loopr/wk-{}", work.id);
     git(&repo, &["branch", &branch, &format!("loopr/plan-{}", plan.id)]);
 
-    let bundle = persist_accepted_bundle(&store, &work, &branch, &base_sha, vec![]).await;
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &sha, vec![]).await;
 
     let deps = deps_for(&store, &repo);
     let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
@@ -317,7 +317,7 @@ async fn empty_branch_detected_before_merge_attempt() {
 #[tokio::test]
 async fn retryable_conflict_rolls_back_and_marks_integration_failed() {
     let plan = Plan::new("ship".to_string());
-    let (_dir, store, repo, base_sha) = setup(&plan).await;
+    let (_dir, store, repo, sha) = setup(&plan).await;
     store.plans().create(plan.clone()).await.unwrap();
     let work = sample_work(&plan);
     store.works().create(work.clone()).await.unwrap();
@@ -331,10 +331,10 @@ async fn retryable_conflict_rolls_back_and_marks_integration_failed() {
     let integ_head = git_capture(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["checkout", "-q", "main"]);
 
-    // Bundle branch starts from base_sha (before the integ-side change)
+    // Bundle branch starts from sha (before the integ-side change)
     // and writes the SAME file with DIFFERENT content -> textual conflict.
     let branch = format!("loopr/wk-{}", work.id);
-    git(&repo, &["checkout", "-q", "-b", &branch, &base_sha]);
+    git(&repo, &["checkout", "-q", "-b", &branch, &sha]);
     std::fs::write(repo.join("conflict.rs"), "fn bundle_side() {}\n").unwrap();
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "bundle-side change", "--no-gpg-sign"]);
@@ -398,7 +398,7 @@ async fn crash_recovery_a_merge_landed_tick_landed_merged_write_lost() {
     // Simulate prior call: merge happened on the integration branch.
     let integ = format!("loopr/plan-{}", plan.id);
     git(&repo, &["checkout", "-q", &integ]);
-    let pre_merge_sha = git_capture(&repo, &["rev-parse", "HEAD"]);
+    let pre_merge = git_capture(&repo, &["rev-parse", "HEAD"]);
     git(
         &repo,
         &[
@@ -410,8 +410,8 @@ async fn crash_recovery_a_merge_landed_tick_landed_merged_write_lost() {
             "--no-gpg-sign",
         ],
     );
-    let integration_sha = git_capture(&repo, &["rev-parse", "HEAD"]);
-    assert_ne!(pre_merge_sha, integration_sha);
+    let sha = git_capture(&repo, &["rev-parse", "HEAD"]);
+    assert_ne!(pre_merge, sha);
 
     // Persist a Bundle, drive it to Integrating (simulating the prior
     // Phase 2 Accepted -> Integrating write), then invoke integrate.
@@ -425,8 +425,8 @@ async fn crash_recovery_a_merge_landed_tick_landed_merged_write_lost() {
         plan.id.clone(),
         vec![bundle.id.clone()],
         integ.clone(),
-        integration_sha.clone(),
-        vec![integration_sha.clone()],
+        sha.clone(),
+        vec![sha.clone()],
     );
     let _ = store.ticks().create(pre_existing_tick.clone()).await.unwrap();
 
@@ -526,7 +526,7 @@ async fn crash_recovery_c_merge_never_landed_falls_through_to_normal_merge() {
     // Integration branch actually advanced.
     git(&repo, &["checkout", "-q", &format!("loopr/plan-{}", plan.id)]);
     let post = git_capture(&repo, &["rev-parse", "HEAD"]);
-    assert_eq!(post, tick.integration_sha);
+    assert_eq!(post, tick.sha);
 
     store.close().await.unwrap();
 }
@@ -536,7 +536,7 @@ async fn crash_recovery_d_merge_never_landed_merge_fails_produces_conflict() {
     // Integrating bundle, ancestry=false, but the merge itself fails.
     // Crash-recovery does not shield a legitimately-failing merge.
     let plan = Plan::new("ship".to_string());
-    let (_dir, store, repo, base_sha) = setup(&plan).await;
+    let (_dir, store, repo, sha) = setup(&plan).await;
     store.plans().create(plan.clone()).await.unwrap();
     let work = sample_work(&plan);
     store.works().create(work.clone()).await.unwrap();
@@ -549,9 +549,9 @@ async fn crash_recovery_d_merge_never_landed_merge_fails_produces_conflict() {
     git(&repo, &["commit", "-q", "-m", "integ-side change", "--no-gpg-sign"]);
     git(&repo, &["checkout", "-q", "main"]);
 
-    // Bundle branch from base_sha with a DIFFERENT conflict.rs.
+    // Bundle branch from sha with a DIFFERENT conflict.rs.
     let branch = format!("loopr/wk-{}", work.id);
-    git(&repo, &["checkout", "-q", "-b", &branch, &base_sha]);
+    git(&repo, &["checkout", "-q", "-b", &branch, &sha]);
     std::fs::write(repo.join("conflict.rs"), "fn bundle_side() {}\n").unwrap();
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "bundle-side change", "--no-gpg-sign"]);

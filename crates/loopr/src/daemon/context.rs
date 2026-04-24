@@ -258,10 +258,10 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             return;
         }
 
-        let base_sha = match rev_parse_head(&self.target).await {
+        let sha = match rev_parse_head(&self.target).await {
             Ok(sha) => sha,
             Err(e) => {
-                error!(error = %e, "base_sha lookup failed; Work remains InProgress");
+                error!(error = %e, "sha lookup failed; Work remains InProgress");
                 return;
             }
         };
@@ -279,7 +279,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         let target = self.target.clone();
         let root = worktree_root.clone();
         let wid = work.id.clone();
-        let base = base_sha.clone();
+        let base = sha.clone();
         let worktree = match tokio::task::spawn_blocking(move || Worktree::create(&target, &root, wid, &base)).await {
             Ok(Ok(wt)) => wt,
             Ok(Err(e)) => {
@@ -591,7 +591,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
 
         match outcome {
             Ok(tick) => {
-                info!(tick_id = %tick.id, integration_sha = %tick.integration_sha, "integration succeeded");
+                info!(tick_id = %tick.id, sha = %tick.sha, "integration succeeded");
                 // Work: InReview -> Integrated -> Done.
                 if let Err(e) =
                     transition_and_persist_work(&self.store, &mut work, WorkStatus::Integrated, Role::Integrator, false)

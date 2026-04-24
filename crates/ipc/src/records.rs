@@ -112,7 +112,7 @@ impl From<&Bundle> for BundleSummary {
 pub struct TickSummary {
     pub id: TickId,
     pub plan_id: PlanId,
-    pub integration_sha: String,
+    pub sha: String,
     pub updated_at: i64,
 }
 
@@ -121,7 +121,7 @@ impl From<&Tick> for TickSummary {
         Self {
             id: t.id.clone(),
             plan_id: t.plan_id.clone(),
-            integration_sha: t.integration_sha.clone(),
+            sha: t.sha.clone(),
             updated_at: t.updated_at,
         }
     }

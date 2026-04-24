@@ -136,10 +136,10 @@ fn run_capture(path: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn fake_worktree(repo_path: &Path, base_sha: &str, work_id: WorkId) -> Worktree {
+fn fake_worktree(repo_path: &Path, sha: &str, work_id: WorkId) -> Worktree {
     let worktree_root = repo_path.parent().unwrap().join("wts");
     std::fs::create_dir_all(&worktree_root).unwrap();
-    Worktree::create(repo_path, &worktree_root, work_id, base_sha).unwrap()
+    Worktree::create(repo_path, &worktree_root, work_id, sha).unwrap()
 }
 
 fn make_work() -> Work {

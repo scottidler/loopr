@@ -9,7 +9,7 @@
 //!   successful parse (`Ok(actions)` branch), NEVER unconditionally.
 //! - Force-propose guard escalates (returns Err(EscalationNeeded))
 //!   rather than persisting a zombie Bundle with empty head_commit.
-//! - `loc_changed` is computed against the worktree's base_sha at
+//! - `loc_changed` is computed against the worktree's sha at
 //!   ProposeBundle time; the dispatcher does that already.
 //! - Per-iteration message history is local; cross-iteration context
 //!   travels only via `history: Vec<IterationSummary>`.
@@ -327,8 +327,8 @@ where
     }
 
     let head_after = rev_parse_head(worktree.path()).await.ok();
-    let loc_changed = if !worktree.base_sha().is_empty() {
-        compute_loc_changed(worktree.path(), worktree.base_sha()).await.ok()
+    let loc_changed = if !worktree.sha().is_empty() {
+        compute_loc_changed(worktree.path(), worktree.sha()).await.ok()
     } else {
         None
     };
@@ -382,8 +382,8 @@ async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-async fn compute_loc_changed(path: &Path, base_sha: &str) -> Result<u32, DispatchError> {
-    let spec = format!("{base_sha}..HEAD");
+async fn compute_loc_changed(path: &Path, sha: &str) -> Result<u32, DispatchError> {
+    let spec = format!("{sha}..HEAD");
     let output = Command::new("git")
         .arg("-C")
         .arg(path)

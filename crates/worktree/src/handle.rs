@@ -28,7 +28,7 @@ pub struct Worktree {
     work_id: WorkId,
     seq: u32,
     repo_path: PathBuf,
-    base_sha: String,
+    sha: String,
     consumed: bool,
 }
 
@@ -51,9 +51,9 @@ impl Worktree {
 
     /// The commit SHA the worktree was branched from. Preserved for
     /// downstream diff operations (e.g., Implementer's
-    /// `loc_changed = git diff --numstat <base_sha>..HEAD`).
-    pub fn base_sha(&self) -> &str {
-        &self.base_sha
+    /// `loc_changed = git diff --numstat <sha>..HEAD`).
+    pub fn sha(&self) -> &str {
+        &self.sha
     }
 
     /// Explicit cleanup. Removes the worktree (`git worktree remove --force`)
@@ -70,7 +70,7 @@ impl Worktree {
     /// "already exists" class of errors (locale-stable via `LC_ALL=C` in
     /// `ops::git_cmd`).
     ///
-    /// Callers pass an already-resolved `base_sha` (not a ref) — the
+    /// Callers pass an already-resolved `sha` (not a ref) — the
     /// coordinator in `loopr` resolves it in repo context, NEVER inside a
     /// worktree, because `HEAD` inside a worktree resolves to the worktree's
     /// own branch tip rather than the intended base (D10; v4
@@ -78,12 +78,7 @@ impl Worktree {
     ///
     /// `git worktree prune` runs ONCE at entry (D9). It is NOT called inside
     /// the retry loop: pruning mid-loop would create new race conditions.
-    pub fn create(
-        repo_path: &Path,
-        worktree_root: &Path,
-        work_id: WorkId,
-        base_sha: &str,
-    ) -> Result<Self, WorktreeError> {
+    pub fn create(repo_path: &Path, worktree_root: &Path, work_id: WorkId, sha: &str) -> Result<Self, WorktreeError> {
         std::fs::create_dir_all(worktree_root)?;
 
         // D9: clear crashed-session registrations left behind under
@@ -91,7 +86,7 @@ impl Worktree {
         ops::prune(repo_path)?;
 
         for seq in 1..=MAX_SEQ {
-            match ops::try_create_at_seq(repo_path, worktree_root, &work_id, seq, base_sha)? {
+            match ops::try_create_at_seq(repo_path, worktree_root, &work_id, seq, sha)? {
                 CreateOutcome::Created { path, branch } => {
                     verify_branch(&path, &branch)?;
                     return Ok(Self {
@@ -100,7 +95,7 @@ impl Worktree {
                         work_id,
                         seq,
                         repo_path: repo_path.to_path_buf(),
-                        base_sha: base_sha.to_string(),
+                        sha: sha.to_string(),
                         consumed: false,
                     });
                 }
@@ -131,7 +126,7 @@ impl Worktree {
             work_id,
             seq,
             repo_path,
-            base_sha: String::new(),
+            sha: String::new(),
             consumed,
         }
     }

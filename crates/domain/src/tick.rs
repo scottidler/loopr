@@ -21,7 +21,7 @@ use crate::id::{BundleId, PlanId, TickId, now_millis};
 /// `<target>/.loopr/taskstore/ticks.jsonl` via the `Record` derive.
 ///
 /// The `plan_id` field is indexed for `TicksStore::list_by_plan_id`.
-/// The `integration_branch` string duplicates information derivable
+/// The `branch` string duplicates information derivable
 /// from `plan_id` (it is always `loopr/plan-<plan_id>`) but is
 /// carried on the record to save a `PlansStore` join for audit
 /// queries and to future-proof against branch-naming changes.
@@ -33,8 +33,8 @@ pub struct Tick {
     pub plan_id: PlanId,
     pub updated_at: i64,
     pub created_at: i64,
-    pub integration_branch: String,
-    pub integration_sha: String,
+    pub branch: String,
+    pub sha: String,
     pub bundles: Vec<BundleId>,
     pub merge_commits: Vec<String>,
 }
@@ -50,8 +50,8 @@ impl Tick {
     pub fn new(
         plan_id: PlanId,
         bundles: Vec<BundleId>,
-        integration_branch: String,
-        integration_sha: String,
+        branch: String,
+        sha: String,
         merge_commits: Vec<String>,
     ) -> Self {
         let now = now_millis();
@@ -60,8 +60,8 @@ impl Tick {
             plan_id,
             updated_at: now,
             created_at: now,
-            integration_branch,
-            integration_sha,
+            branch,
+            sha,
             bundles,
             merge_commits,
         }

@@ -7,7 +7,7 @@ Every Work attempt gets a fresh worktree at `<target>/.loopr/worktrees/<work-id>
 ## In scope
 
 - `Worktree` RAII handle: owns `path` / `branch` / `work_id` / `seq` / `repo_path` / `consumed`. `Drop` is a crash safety net; routine cleanup is explicit `.cleanup()` inside `tokio::task::spawn_blocking` (sync `git worktree remove` must not starve the tokio executor).
-- `Worktree::create(repo_path, worktree_root, work_id, base_sha)` — provisions the worktree + branch; caller passes a pre-resolved base SHA (D10: resolved in repo context, never inside the worktree).
+- `Worktree::create(repo_path, worktree_root, work_id, sha)` — provisions the worktree + branch; caller passes a pre-resolved base SHA (D10: resolved in repo context, never inside the worktree).
 - `Worktree::cleanup(self)` — removes the worktree, **keeps the branch** (integrator merges it later).
 - `worktree::delete_branch(repo_path, branch)` — integrator calls this after a Tick publishes; idempotent.
 - `worktree::list(repo_path, worktree_root)` — parses `git worktree list --porcelain`, filtered to paths under `worktree_root`.

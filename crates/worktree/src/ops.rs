@@ -47,7 +47,7 @@ pub(crate) fn try_create_at_seq(
     worktree_root: &Path,
     work_id: &WorkId,
     seq: u32,
-    base_sha: &str,
+    sha: &str,
 ) -> Result<CreateOutcome, WorktreeError> {
     let path = worktree_root.join(format!("{}-{}", work_id, seq));
     let branch = format!("loopr/wk-{}-{}", work_id, seq);
@@ -61,7 +61,7 @@ pub(crate) fn try_create_at_seq(
             })?,
             "-b",
             &branch,
-            base_sha,
+            sha,
         ])
         .output()?;
 

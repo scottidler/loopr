@@ -243,7 +243,7 @@ pub struct BundleSummary {
 pub struct TickSummary {
     pub id: TickId,
     pub plan_id: PlanId,
-    pub commit_sha: String,
+    pub sha: String,
     pub updated_at: i64,
 }
 ```
@@ -435,7 +435,7 @@ All phases are mechanical CLI and IPC reshaping. Sonnet throughout.
 - `cargo add serde_yaml` under `crates/loopr/Cargo.toml` (or whichever YAML crate `cargo add` resolves to today)
 - Create `crates/loopr/src/output.rs` with `Format`, `resolve`, `render`, `OutputError`
 - Add `--output` / `-o` global flag to `Cli`
-- Unit tests: explicit-flag-wins; YAML round-trip on a sample `Plan`; JSON round-trip on a sample `Plan`; TTY auto-detect via a small `OutputStream` indirection trait for testability
+- Unit tests: explicit-flag-wins; YAML round-trip on a sample `Plan`; JSON round-trip on a sample `Plan`. TTY auto-detect is tested via a private `fn resolve_inner(explicit: Option<Format>, stdout_is_tty: bool) -> Format` that takes the TTY bool as a parameter; the public `Format::resolve` thin-wraps it with the real `std::io::stdout().is_terminal()` call. Tests pass explicit `true`/`false` to `resolve_inner` and cover all four (Some/None × tty/pipe) cases without a trait. Integration-test coverage for the real-stdout path happens in `tests/smoke.rs`.
 
 Exit: `cargo test -p loopr` green; module compiles, unused.
 

@@ -177,7 +177,7 @@ fn cleanup_removes_worktree_keeps_branch() {
 }
 
 #[test]
-fn create_base_sha_becomes_worktree_head() {
+fn create_sha_becomes_worktree_head() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -188,7 +188,7 @@ fn create_base_sha_becomes_worktree_head() {
 
     let out = ops::git_cmd(wt.path()).args(["rev-parse", "HEAD"]).output().unwrap();
     let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    assert_eq!(head, sha, "worktree HEAD must match the base_sha we passed");
+    assert_eq!(head, sha, "worktree HEAD must match the sha we passed");
 
     wt.cleanup().unwrap();
 }

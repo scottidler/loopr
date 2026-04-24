@@ -145,7 +145,7 @@ async fn propose_bundle(worktree: &Worktree, claims: Vec<String>) -> Result<Acti
     }
 
     let head_commit = rev_parse_head(worktree.path()).await.ok();
-    let loc_changed = compute_loc_changed(worktree.path(), worktree.base_sha()).await.ok();
+    let loc_changed = compute_loc_changed(worktree.path(), worktree.sha()).await.ok();
 
     let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), claims);
     bundle.head_commit = head_commit;
@@ -205,15 +205,15 @@ async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Compute lines changed between `base_sha` and `HEAD` via
+/// Compute lines changed between `sha` and `HEAD` via
 /// `git diff --numstat`. Binary files show `-\t-\t<file>` in numstat
-/// output and contribute 0 to the total. If `base_sha` is empty
+/// output and contribute 0 to the total. If `sha` is empty
 /// (test-only constructor), returns 0.
-async fn compute_loc_changed(path: &Path, base_sha: &str) -> Result<u32, DispatchError> {
-    if base_sha.is_empty() {
+async fn compute_loc_changed(path: &Path, sha: &str) -> Result<u32, DispatchError> {
+    if sha.is_empty() {
         return Ok(0);
     }
-    let spec = format!("{base_sha}..HEAD");
+    let spec = format!("{sha}..HEAD");
     let output = Command::new("git")
         .arg("-C")
         .arg(path)

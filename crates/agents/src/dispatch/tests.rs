@@ -75,9 +75,9 @@ fn run_capture(path: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn fake_worktree(path: &Path, base_sha: String) -> Worktree {
+fn fake_worktree(path: &Path, sha: String) -> Worktree {
     // We can't use from_parts directly (it's pub(crate) in worktree).
-    // Instead: the dispatcher only reads path/work_id/branch/base_sha.
+    // Instead: the dispatcher only reads path/work_id/branch/sha.
     // We fake a worktree via a shell-level Worktree construction is not
     // exposed; the dispatcher has what it needs through a minimal shim.
     // Actually the handle's fields are private; the only way to get one
@@ -91,7 +91,7 @@ fn fake_worktree(path: &Path, base_sha: String) -> Worktree {
     // correct path: spin up a real worktree.
     let worktree_root = path.parent().unwrap().join("wts");
     std::fs::create_dir_all(&worktree_root).unwrap();
-    Worktree::create(path, &worktree_root, WorkId::new(), &base_sha).unwrap()
+    Worktree::create(path, &worktree_root, WorkId::new(), &sha).unwrap()
 }
 
 #[tokio::test]
@@ -196,7 +196,7 @@ async fn propose_bundle_captures_head_and_loc_changed() {
             assert_eq!(bundle.claims, vec!["changed readme".to_string()]);
             // Base had README.md = "initial\n" (1 line). New content is 3 lines.
             // Diff: -1 / +3 = 4 lines changed.
-            assert_eq!(bundle.loc_changed, Some(4), "loc_changed must reflect diff vs base_sha");
+            assert_eq!(bundle.loc_changed, Some(4), "loc_changed must reflect diff vs sha");
             assert!(!bundle.force_proposed, "force_proposed false on normal propose");
         }
         other => panic!("expected BundleCreated, got {other:?}"),

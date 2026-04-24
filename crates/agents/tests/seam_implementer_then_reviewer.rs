@@ -73,7 +73,7 @@ fn git_capture(path: &Path, args: &[&str]) -> String {
 
 #[tokio::test]
 async fn implementer_writes_bundle_then_reviewer_accepts_it() {
-    let (_dir, repo_path, base_sha) = init_repo();
+    let (_dir, repo_path, sha) = init_repo();
     let store = Store::open(&repo_path).await.unwrap();
 
     // Set up Plan + Work.
@@ -86,7 +86,7 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     // Worktree for the Implementer.
     let worktree_root = repo_path.parent().unwrap().join("impl-reviewer-wts");
     std::fs::create_dir_all(&worktree_root).unwrap();
-    let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &base_sha).unwrap();
+    let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &sha).unwrap();
 
     // Stage 7: Implementer emits a propose_bundle immediately.
     let impl_llm = ScriptedLlm::new();

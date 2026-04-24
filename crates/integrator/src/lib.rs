@@ -241,7 +241,7 @@ where
     }
 
     git::checkout(&deps.target, &integ_branch, deps.config.git_timeout).await?;
-    let pre_merge_sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
+    let pre_merge = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
 
     let mut outcomes: Vec<(BundleId, MergeOutcome)> = Vec::with_capacity(bundles.len());
 
@@ -251,7 +251,7 @@ where
     // branch cannot already be merged; one that entered Integrating
     // is a crash-recovery re-entry whose branch MAY already be merged.
     // Architect R2 finding: routing on bundle_states (all Integrating
-    // after prologue) and using `head_commit == pre_merge_sha` as
+    // after prologue) and using `head_commit == pre_merge` as
     // the empty-branch check is unsound when the integration branch
     // advances between Bundle creation and its integration - the
     // naive equality bypasses the guard and a later is_ancestor +
@@ -262,7 +262,7 @@ where
             None => {
                 return fail_all(
                     &bundle_states,
-                    &pre_merge_sha,
+                    &pre_merge,
                     deps,
                     IntegrationError::Git(format!("bundle {} has no head_commit", b.id)),
                 )
@@ -281,7 +281,7 @@ where
                     git::assert_nontrivial_branch(&deps.target, b.id.as_ref(), &b.branch_name, deps.config.git_timeout)
                         .await
                 {
-                    return fail_all(&bundle_states, &pre_merge_sha, deps, err).await;
+                    return fail_all(&bundle_states, &pre_merge, deps, err).await;
                 }
                 // No ancestry check: if Accepted, the branch has never
                 // been merged, so is_ancestor is guaranteed false.
@@ -306,7 +306,7 @@ where
                     git::assert_nontrivial_branch(&deps.target, b.id.as_ref(), &b.branch_name, deps.config.git_timeout)
                         .await
                 {
-                    return fail_all(&bundle_states, &pre_merge_sha, deps, err).await;
+                    return fail_all(&bundle_states, &pre_merge, deps, err).await;
                 }
             }
             _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating bundles"),
@@ -318,7 +318,7 @@ where
             }
             Err(stderr) => {
                 git::merge_abort(&deps.target, deps.config.git_timeout).await;
-                git::reset_hard(&deps.target, &pre_merge_sha, deps.config.git_timeout).await?;
+                git::reset_hard(&deps.target, &pre_merge, deps.config.git_timeout).await?;
                 let kind = classify_conflict(b, &bundle_states);
                 let err = match kind {
                     ConflictKind::Structural { files, peer_bundle_ids } => IntegrationError::ConflictStructural {
@@ -339,7 +339,7 @@ where
         }
     }
 
-    let integration_sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
+    let sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
 
     // Phase 3: commit (batched store writes)
     // Tick first. On `DuplicateTick`, adopt the existing Tick (prior
@@ -348,7 +348,7 @@ where
         plan.id.clone(),
         outcomes.iter().map(|(id, _)| id.clone()).collect(),
         integ_branch,
-        integration_sha,
+        sha,
         outcomes.iter().map(|(_, o)| o.sha()).collect(),
     );
     let tick = match deps.ticks.create(tick).await {
@@ -475,12 +475,12 @@ async fn transition_bundle_returning<U: BundleUpdateSink>(
     Ok(clone)
 }
 
-/// On git-sequence failure: roll git back to `pre_merge_sha`, then
+/// On git-sequence failure: roll git back to `pre_merge`, then
 /// transition every Bundle in the slice to `IntegrationFailed` in one
 /// batch. A failure inside `reset_hard` is fatal and bubbles.
 async fn fail_all<U, W, T>(
     bundles: &[Bundle],
-    pre_merge_sha: &str,
+    pre_merge: &str,
     deps: &IntegratorDeps<U, W, T>,
     err: IntegrationError,
 ) -> Result<Tick, IntegrationError>
@@ -490,7 +490,7 @@ where
     T: TickSink,
 {
     git::merge_abort(&deps.target, deps.config.git_timeout).await;
-    git::reset_hard(&deps.target, pre_merge_sha, deps.config.git_timeout).await?;
+    git::reset_hard(&deps.target, pre_merge, deps.config.git_timeout).await?;
     fail_all_without_reset(bundles, deps, err).await
 }
 

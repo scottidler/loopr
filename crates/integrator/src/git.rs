@@ -86,9 +86,9 @@ pub(crate) async fn assert_nontrivial_branch(
             String::from_utf8_lossy(&head.stderr)
         )));
     }
-    let base_sha = String::from_utf8_lossy(&base.stdout).trim().to_string();
-    let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
-    if base_sha == head_sha {
+    let base_resolved = String::from_utf8_lossy(&base.stdout).trim().to_string();
+    let head_resolved = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    if base_resolved == head_resolved {
         return Err(IntegrationError::EmptyBranch {
             bundle_id: bundle_id.to_string(),
             branch: branch.to_string(),

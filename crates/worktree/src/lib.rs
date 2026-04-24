@@ -62,8 +62,8 @@ pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError
 /// SHA **in the repo's context**, not inside any worktree. This matters:
 /// `HEAD` resolved inside a worktree returns that worktree's own branch
 /// tip, which is exactly wrong when the coordinator wants the current
-/// integration-branch tip to use as `base_sha` for the next attempt (D10;
+/// integration-branch tip to use as `sha` for the next attempt (D10;
 /// v4 NO-OP-LOOP bug, commit `120c29b`).
-pub fn resolve_base_sha(repo_path: &Path, base_ref: &str) -> Result<String, WorktreeError> {
+pub fn resolve_sha(repo_path: &Path, base_ref: &str) -> Result<String, WorktreeError> {
     ops::resolve_sha(repo_path, base_ref)
 }

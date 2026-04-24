@@ -69,7 +69,7 @@ fn run_capture(path: &Path, args: &[&str]) -> String {
 
 #[tokio::test]
 async fn full_roundtrip_bundle_persists_in_real_store() {
-    let (_dir, repo_path, base_sha) = init_repo();
+    let (_dir, repo_path, sha) = init_repo();
 
     // Real Store at .loopr/taskstore/ under the repo.
     let store = Store::open(&repo_path).await.unwrap();
@@ -81,7 +81,7 @@ async fn full_roundtrip_bundle_persists_in_real_store() {
     // Real worktree via the worktree crate, using the Work's ID.
     let worktree_root = repo_path.parent().unwrap().join("seam-wts");
     std::fs::create_dir_all(&worktree_root).unwrap();
-    let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &base_sha).unwrap();
+    let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &sha).unwrap();
 
     // Fake LLM with a 2-step script.
     let llm = ScriptedLlm::new();
