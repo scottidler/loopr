@@ -32,6 +32,11 @@ pub struct Cli {
     #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT")]
     pub output: Option<Format>,
 
+    /// Force attach this process to the given session id. Bypasses the
+    /// active-session pointer. Rejected if the session is ended.
+    #[arg(long = "session", global = true, value_name = "ID")]
+    pub session: Option<String>,
+
     /// Optional subcommand. Bare `loopr` (no subcommand) launches the TUI
     /// (post-first-gate; returns `NotYetImplemented` until the TUI crate
     /// ships). Use `loopr tui` for the explicit form.
@@ -80,6 +85,12 @@ pub enum Command {
         cmd: LogsCmd,
     },
 
+    /// Manage loopr sessions (list, new, resume, end, status).
+    Sessions {
+        #[command(subcommand)]
+        cmd: SessionsCmd,
+    },
+
     /// Launch the TUI. Same as bare `loopr` (no subcommand).
     Tui,
 }
@@ -104,6 +115,13 @@ impl Command {
                 LogsCmd::Tail { .. } => "logs-tail",
                 LogsCmd::Runs => "logs-runs",
             },
+            Command::Sessions { cmd } => match cmd {
+                SessionsCmd::List => "sessions-list",
+                SessionsCmd::New => "sessions-new",
+                SessionsCmd::Resume { .. } => "sessions-resume",
+                SessionsCmd::End => "sessions-end",
+                SessionsCmd::Status => "sessions-status",
+            },
             Command::Tui => "tui",
         }
     }
@@ -118,6 +136,23 @@ pub enum LogsCmd {
     },
     /// List known runs.
     Runs,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SessionsCmd {
+    /// List all known sessions under XDG.
+    List,
+    /// Allocate a new session and make it the active session for this target.
+    New,
+    /// Attach this target's active-session pointer to an existing (not-ended) session.
+    Resume {
+        /// Session id to attach, e.g. `20260424-150000` or `20260424-150000-2`.
+        id: String,
+    },
+    /// Mark the active session as ended and clear this target's pointer.
+    End,
+    /// Show the target's active session and its processes.
+    Status,
 }
 
 #[derive(Subcommand, Debug)]

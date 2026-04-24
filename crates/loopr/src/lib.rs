@@ -12,7 +12,7 @@ pub mod session;
 pub mod target;
 pub mod transport;
 
-pub use cli::{Cli, Command, DaemonCmd, LogsCmd};
+pub use cli::{Cli, Command, DaemonCmd, LogsCmd, SessionsCmd};
 pub use error::LooprError;
 pub use output::Format;
 
@@ -111,7 +111,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     // `rules/rust.md` forbids the leading-underscore crutch for used locals;
     // these locals ARE used - their Drop timing is the whole point.
     let directive = resolve_log_directive(cli.log_level.as_deref());
-    let session_id = session::resolve_session_id(&effective, None)?;
+    let session_id = session::resolve_session_id(&effective, cli.session.as_deref())?;
     let target_slug =
         telemetry::target_slug(&effective).map_err(|e| LooprError::TelemetryInit(format!("target_slug: {e}")))?;
     let process_runs_dir = telemetry::session_target_dir(&session_id, &target_slug)
@@ -196,6 +196,7 @@ fn dispatch(
             LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(process_id)),
             LogsCmd::Runs => logs::handle_runs(target, Some(session_id)),
         },
+        Command::Sessions { cmd } => commands::sessions::run(target, cmd),
         Command::Tui => Err(LooprError::NotYetImplemented { feature: "tui" }),
     }
 }

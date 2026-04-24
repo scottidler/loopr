@@ -28,14 +28,10 @@ fn with_xdg_home<F: FnOnce(&std::path::Path)>(f: F) {
     }
 }
 
-/// Serialize env-mutating tests. Env is process-global; `#[test]` runs
-/// threads in parallel by default. A std::sync::Mutex is enough — the
-/// resolver itself does no async.
+/// Serialize env-mutating tests. Delegates to the crate-shared mutex
+/// so this module's tests interleave-proof with `commands/sessions/tests.rs`.
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    M.get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    crate::session::test_env_mutex()
 }
 
 #[test]
