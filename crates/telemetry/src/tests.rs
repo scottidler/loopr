@@ -179,6 +179,61 @@ fn sessionid_collision_allocates_disambiguator() {
     assert_ne!(a.as_str(), c.as_str());
 }
 
+// ---------- ProcessId ----------
+
+#[test]
+fn processid_allocate_produces_valid_slug() {
+    let td = TempDir::new().unwrap();
+    let id = ProcessId::allocate(td.path()).unwrap();
+    let s = id.as_str();
+    assert!(s.starts_with("pc-"), "prefix: {s}");
+    assert_eq!(s.len(), 9, "pc- + 6 char slug: {s}");
+    assert!(td.path().join(s).is_dir());
+}
+
+#[test]
+fn processid_parse_valid() {
+    let id = ProcessId::parse("pc-k3m9f2").unwrap();
+    assert_eq!(id.as_str(), "pc-k3m9f2");
+}
+
+#[test]
+fn processid_parse_rejects_malformed() {
+    assert!(ProcessId::parse("").is_err());
+    assert!(ProcessId::parse("k3m9f2").is_err(), "missing prefix");
+    assert!(ProcessId::parse("pc-k3m9f").is_err(), "short slug");
+    assert!(ProcessId::parse("pc-k3m9f22").is_err(), "long slug");
+    assert!(ProcessId::parse("pc-K3M9F2").is_err(), "uppercase rejected");
+    assert!(ProcessId::parse("pc-k3m9f!").is_err(), "non-alnum rejected");
+    assert!(ProcessId::parse("pd-k3m9f2").is_err(), "wrong prefix");
+}
+
+#[test]
+fn processid_serde_roundtrip() {
+    let id = ProcessId::parse("pc-k3m9f2").unwrap();
+    let json = serde_json::to_string(&id).unwrap();
+    assert_eq!(json, "\"pc-k3m9f2\"");
+    let back: ProcessId = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.as_str(), "pc-k3m9f2");
+}
+
+#[test]
+fn processid_10k_allocations_no_collisions() {
+    let td = TempDir::new().unwrap();
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..10_000 {
+        let id = ProcessId::allocate(td.path()).unwrap();
+        assert!(seen.insert(id.as_str().to_string()), "duplicate id: {id}");
+    }
+    assert_eq!(seen.len(), 10_000);
+}
+
+#[test]
+fn processid_display_matches_as_str() {
+    let id = ProcessId::parse("pc-k3m9f2").unwrap();
+    assert_eq!(format!("{id}"), "pc-k3m9f2");
+}
+
 // ---------- Subscriber round-trip ----------
 //
 // These tests do NOT call `telemetry::init` because `set_global_default` is

@@ -2324,6 +2324,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "eyre",
+ "rand 0.10.1",
  "rev_lines",
  "serde",
  "serde_json",

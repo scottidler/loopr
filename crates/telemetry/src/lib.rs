@@ -11,6 +11,7 @@
 //! is its permanent contract.
 
 mod fanout;
+mod process;
 mod query;
 mod session;
 mod subscriber;
@@ -26,6 +27,7 @@ pub const RALPH_PREFIX: &str = "ralph";
 pub const TOOL_PREFIX: &str = "tool";
 
 pub use fanout::WorkFanoutLayer;
+pub use process::{ProcessId, ProcessIdAllocError, ProcessIdParseError};
 pub use query::{QueryError, SessionEntry, list_sessions, tail_latest_session};
 pub use session::{SessionId, SessionIdAllocError, SessionIdParseError};
 pub use subscriber::{Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, init};

@@ -10,6 +10,7 @@ license.workspace = true
 chrono.workspace = true
 dashmap = "6.1.0"
 eyre.workspace = true
+rand = "0.10.1"
 rev_lines = "0.3.0"
 serde.workspace = true
 serde_json.workspace = true
