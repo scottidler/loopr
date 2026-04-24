@@ -44,8 +44,11 @@ pub struct Cli {
     #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT")]
     pub output: Option<Format>,
 
+    /// Optional subcommand. Bare `loopr` (no subcommand) launches the TUI
+    /// (post-first-gate; returns `NotYetImplemented` until the TUI crate
+    /// ships). Use `loopr tui` for the explicit form.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -88,6 +91,9 @@ pub enum Command {
         #[command(subcommand)]
         cmd: LogsCmd,
     },
+
+    /// Launch the TUI. Same as bare `loopr` (no subcommand).
+    Tui,
 }
 
 impl Command {
@@ -110,6 +116,7 @@ impl Command {
                 LogsCmd::Tail { .. } => "logs-tail",
                 LogsCmd::Runs => "logs-runs",
             },
+            Command::Tui => "tui",
         }
     }
 }

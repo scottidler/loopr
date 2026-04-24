@@ -5,7 +5,9 @@ use clap::Parser;
 use super::*;
 
 fn parse_cmd(args: &[&str]) -> Command {
-    Cli::parse_from(args).command
+    Cli::parse_from(args)
+        .command
+        .expect("parse_cmd called with argv that has no subcommand")
 }
 
 fn stub_run_id() -> telemetry::RunId {
@@ -65,6 +67,20 @@ fn run_daemon_status_on_empty_target_prints_no_daemon() {
         parse_cmd(&["loopr", "daemon", "status"]),
     )
     .unwrap();
+}
+
+#[test]
+fn run_tui_returns_not_yet_implemented() {
+    // Explicit `loopr tui` reaches dispatch and should return
+    // NotYetImplemented until the TUI crate lands. Bare `loopr` (no
+    // subcommand) is normalized to Command::Tui in lib::run before
+    // dispatch, so exercising it via dispatch directly is equivalent.
+    let td = tempfile::TempDir::new().unwrap();
+    let err = dispatch(td.path(), &stub_run_id(), None, parse_cmd(&["loopr", "tui"])).unwrap_err();
+    match err {
+        LooprError::NotYetImplemented { feature } => assert_eq!(feature, "tui"),
+        other => panic!("expected NotYetImplemented, got {other:?}"),
+    }
 }
 
 #[test]

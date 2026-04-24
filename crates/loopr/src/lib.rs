@@ -34,7 +34,11 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     // This is also where `daemon start --foreground` is recognized so the
     // foreground branch (which IS the daemon) doesn't init a second
     // subscriber on top of the one `daemon_main` will install.
-    match &cli.command {
+    // Normalize bare invocation (`loopr` with no subcommand) to `Command::Tui`.
+    // Every downstream code path (auto-fork, dispatch) matches on a concrete
+    // Command, not an Option.
+    let command = cli.command.unwrap_or(Command::Tui);
+    match &command {
         Command::Daemon {
             cmd: DaemonCmd::Start { foreground: false },
         } => {
@@ -93,7 +97,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         _ => {}
     }
 
-    let label = cli.command.label();
+    let label = command.label();
 
     // Telemetry init. Declaration order is load-bearing: Rust drops locals in
     // reverse order at scope exit. We want:
@@ -132,7 +136,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let _ = &guard;
     let _ = &enter;
 
-    dispatch(&effective, &run_id, cli.output, cli.command)
+    dispatch(&effective, &run_id, cli.output, command)
 }
 
 /// Resolve the log-filter directive string from CLI flag > env var > default
@@ -182,6 +186,7 @@ fn dispatch(
             LogsCmd::Tail { lines } => logs::handle_tail(target, lines, Some(run_id)),
             LogsCmd::Runs => logs::handle_runs(target, Some(run_id)),
         },
+        Command::Tui => Err(LooprError::NotYetImplemented { feature: "tui" }),
     }
 }
 

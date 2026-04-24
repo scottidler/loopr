@@ -39,6 +39,9 @@ pub enum LooprError {
 
     #[error("unknown id prefix in `{id}`; expected one of: pl-, wk-, bd-, tk-")]
     UnknownIdPrefix { id: String },
+
+    #[error("{feature} is not yet implemented")]
+    NotYetImplemented { feature: &'static str },
 }
 
 fn parent_hint(path: &Path) -> String {
