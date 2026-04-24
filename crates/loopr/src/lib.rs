@@ -1,6 +1,7 @@
 use std::path::Path;
 
 pub mod cli;
+pub mod commands;
 pub mod config;
 pub mod daemon;
 pub mod error;
@@ -78,7 +79,12 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                 .map_err(|e| LooprError::DaemonStartup(format!("runtime build: {e}")))?;
             return rt.block_on(daemon::daemon_main(effective));
         }
-        Command::Plan { .. } | Command::Daemon { cmd: DaemonCmd::Status } => {
+        Command::Plan { .. }
+        | Command::Plans
+        | Command::Works
+        | Command::Bundles
+        | Command::Ticks
+        | Command::Daemon { cmd: DaemonCmd::Status } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
             daemon::ensure_daemon_if_needed(&effective)?;
@@ -125,7 +131,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let _ = &guard;
     let _ = &enter;
 
-    dispatch(&effective, &run_id, cli.command)
+    dispatch(&effective, &run_id, cli.output, cli.command)
 }
 
 /// Resolve the log-filter directive string from CLI flag > env var > default
@@ -140,13 +146,22 @@ fn resolve_log_directive(flag: Option<&str>) -> String {
         .unwrap_or_else(|| "info".to_string())
 }
 
-fn dispatch(target: &Path, run_id: &telemetry::RunId, command: Command) -> Result<(), LooprError> {
+fn dispatch(
+    target: &Path,
+    run_id: &telemetry::RunId,
+    output_format: Option<output::Format>,
+    command: Command,
+) -> Result<(), LooprError> {
     match command {
         Command::Init => Err(LooprError::StageUnimplemented {
             stage: 5,
             subcommand: "init",
         }),
         Command::Plan { goal } => plan_command(target, goal),
+        Command::Plans => commands::list::run(target, output_format, ipc::RecordKind::Plan),
+        Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),
+        Command::Bundles => commands::list::run(target, output_format, ipc::RecordKind::Bundle),
+        Command::Ticks => commands::list::run(target, output_format, ipc::RecordKind::Tick),
         Command::Daemon { cmd } => match cmd {
             // `Start` is handled above in `run` (pre-telemetry); it never
             // reaches `dispatch`.

@@ -27,6 +27,49 @@ fn test_cli_parses_plan() {
 }
 
 #[test]
+fn test_cli_parses_plans() {
+    let cli = Cli::parse_from(["loopr", "plans"]);
+    assert!(matches!(cli.command, Command::Plans));
+}
+
+#[test]
+fn test_cli_parses_works() {
+    let cli = Cli::parse_from(["loopr", "works"]);
+    assert!(matches!(cli.command, Command::Works));
+}
+
+#[test]
+fn test_cli_parses_bundles() {
+    let cli = Cli::parse_from(["loopr", "bundles"]);
+    assert!(matches!(cli.command, Command::Bundles));
+}
+
+#[test]
+fn test_cli_parses_ticks() {
+    let cli = Cli::parse_from(["loopr", "ticks"]);
+    assert!(matches!(cli.command, Command::Ticks));
+}
+
+#[test]
+fn test_cli_parses_output_json_global() {
+    use crate::output::Format;
+    let cli = Cli::parse_from(["loopr", "--output", "json", "plans"]);
+    assert_eq!(cli.output, Some(Format::Json));
+    assert!(matches!(cli.command, Command::Plans));
+}
+
+#[test]
+fn test_cli_parses_output_yaml_short() {
+    use crate::output::Format;
+    let cli = Cli::parse_from(["loopr", "-o", "yaml", "plan", "x"]);
+    assert_eq!(cli.output, Some(Format::Yaml));
+    match cli.command {
+        Command::Plan { goal } => assert_eq!(goal, "x"),
+        _ => panic!("expected Plan"),
+    }
+}
+
+#[test]
 fn test_cli_parses_daemon_start() {
     let cli = Cli::parse_from(["loopr", "daemon", "start"]);
     match cli.command {
@@ -145,6 +188,10 @@ fn test_command_label_covers_every_variant() {
     let cases = [
         (&["loopr", "init"][..], "init"),
         (&["loopr", "plan", "x"][..], "plan"),
+        (&["loopr", "plans"][..], "plans"),
+        (&["loopr", "works"][..], "works"),
+        (&["loopr", "bundles"][..], "bundles"),
+        (&["loopr", "ticks"][..], "ticks"),
         (&["loopr", "daemon", "start"][..], "daemon-start"),
         (&["loopr", "daemon", "stop"][..], "daemon-stop"),
         (&["loopr", "daemon", "status"][..], "daemon-status"),

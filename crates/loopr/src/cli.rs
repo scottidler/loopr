@@ -59,6 +59,18 @@ pub enum Command {
         goal: String,
     },
 
+    /// List all Plans in the target's taskstore.
+    Plans,
+
+    /// List all Work items in the target's taskstore.
+    Works,
+
+    /// List all Bundles in the target's taskstore.
+    Bundles,
+
+    /// List all Ticks in the target's taskstore.
+    Ticks,
+
     /// Daemon lifecycle (start, stop, status). [Stage 4]
     Daemon {
         #[command(subcommand)]
@@ -78,6 +90,10 @@ impl Command {
         match self {
             Command::Init => "init",
             Command::Plan { .. } => "plan",
+            Command::Plans => "plans",
+            Command::Works => "works",
+            Command::Bundles => "bundles",
+            Command::Ticks => "ticks",
             Command::Daemon { cmd } => match cmd {
                 DaemonCmd::Start { .. } => "daemon-start",
                 DaemonCmd::Stop => "daemon-stop",

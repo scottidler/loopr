@@ -122,6 +122,58 @@ fn plan_on_tempdir_creates_and_prints_plan() {
 }
 
 #[test]
+fn plans_lists_created_plans_as_summary_projections() {
+    let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
+    // Create two plans via the binary so the test exercises the full
+    // round-trip (client -> daemon -> store -> summary projection -> client).
+    loopr()
+        .args(["-C", td.path().to_str().unwrap(), "plan", "first"])
+        .assert()
+        .success();
+    loopr()
+        .args(["-C", td.path().to_str().unwrap(), "plan", "second"])
+        .assert()
+        .success();
+
+    // JSON output for deterministic parsing in the smoke test. Default
+    // behavior (TTY-picked YAML) is covered by the unit tests in
+    // crates/loopr/src/output/tests.rs.
+    let output = loopr()
+        .args(["-C", td.path().to_str().unwrap(), "-o", "json", "plans"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    // Adjacent-tagged RecordsResult: {"kind": "plans", "records": [...]}
+    assert!(stdout.contains("\"kind\""), "json includes tag: {stdout}");
+    assert!(stdout.contains("\"plans\""), "json tag value is plans: {stdout}");
+    assert!(stdout.contains("\"records\""), "json includes records array: {stdout}");
+    assert!(stdout.contains("first"), "first plan goal present: {stdout}");
+    assert!(stdout.contains("second"), "second plan goal present: {stdout}");
+    assert!(stdout.contains("pl-"), "plan id prefix present: {stdout}");
+
+    stop_daemon(td.path());
+}
+
+#[test]
+fn plans_on_fresh_target_emits_empty_records_array() {
+    let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
+    let output = loopr()
+        .args(["-C", td.path().to_str().unwrap(), "-o", "json", "plans"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    assert!(stdout.contains("\"plans\""));
+    assert!(
+        stdout.contains("\"records\":[]") || stdout.contains("\"records\": []"),
+        "empty records array: {stdout}"
+    );
+
+    stop_daemon(td.path());
+}
+
+#[test]
 fn source_guard_blocks_target_with_sentinel() {
     let td = TempDir::new().unwrap();
     fs::write(td.path().join(".loopr-source-guard"), "").unwrap();
