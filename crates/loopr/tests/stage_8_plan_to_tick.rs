@@ -67,7 +67,7 @@ async fn plan_to_tick_happy_path() {
     let mut client = IpcClient::connect(daemon.handle().socket_path())
         .await
         .expect("connect");
-    let hs = client.handshake().await.expect("handshake");
+    let hs = client.handshake(None).await.expect("handshake");
     assert_eq!(hs.protocol_version, PROTOCOL_VERSION);
 
     let (resp, _events) = client

@@ -94,6 +94,7 @@ fn handshake_req(id: u64, version: u32) -> DaemonRequest {
         method: "system.handshake".into(),
         params: serde_json::to_value(HandshakeParams {
             protocol_version: version,
+            session_id: None,
         })
         .unwrap(),
     }

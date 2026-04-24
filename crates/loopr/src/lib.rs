@@ -241,7 +241,7 @@ fn daemon_status(target: &Path) -> Result<(), LooprError> {
         .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
     rt.block_on(async {
         let mut client = transport::connect_or_wait(target).await?;
-        client.handshake().await?;
+        client.handshake(None).await?;
         let (resp, _events) = client
             .request(ipc::MethodName::SystemStatus, serde_json::Value::Null)
             .await?;
@@ -272,7 +272,7 @@ fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
         .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
     rt.block_on(async {
         let mut client = transport::connect_or_wait(target).await?;
-        client.handshake().await?;
+        client.handshake(None).await?;
         let params = ipc::PlanCreateParams { goal };
         let params_value = serde_json::to_value(&params)
             .map_err(|e| LooprError::ClientIo(format!("serialize plan.create params: {e}")))?;

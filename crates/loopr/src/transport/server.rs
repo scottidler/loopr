@@ -99,7 +99,11 @@ where
                 let (stream, _) = accept
                     .map_err(|e| LooprError::ClientIo(format!("accept: {e}")))?;
                 let conn_id = uuid::Uuid::new_v4();
-                let span = tracing::info_span!("ipc.connection", conn_id = %conn_id);
+                let span = tracing::info_span!(
+                    "ipc.connection",
+                    conn_id = %conn_id,
+                    client_session_id = tracing::field::Empty,
+                );
                 let ctx_cloned = ctx.clone();
                 handlers.spawn(handle_client(stream, ctx_cloned).instrument(span));
             }

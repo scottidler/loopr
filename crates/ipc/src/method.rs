@@ -34,6 +34,12 @@ pub enum Method {
 #[serde(deny_unknown_fields)]
 pub struct HandshakeParams {
     pub protocol_version: u32,
+    /// Client's resolved session-id. Additive field: older clients may
+    /// omit it, in which case the daemon records the connection under
+    /// its own daemon-boot session-id. Newer daemons treat `None` as
+    /// equivalent to daemon-boot-session attachment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -30,7 +30,7 @@ pub fn run(target: &Path, explicit_format: Option<Format>, id: String) -> Result
         .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
     rt.block_on(async {
         let mut client = transport::connect_or_wait(target).await?;
-        client.handshake().await?;
+        client.handshake(None).await?;
         let params = RecordGetParams { id: id.clone() };
         let params_value = serde_json::to_value(&params)
             .map_err(|e| LooprError::ClientIo(format!("serialize record.get params: {e}")))?;

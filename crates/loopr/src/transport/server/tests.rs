@@ -74,6 +74,7 @@ async fn handshake_then_status_roundtrip() {
         method: "system.handshake".into(),
         params: serde_json::to_value(HandshakeParams {
             protocol_version: PROTOCOL_VERSION,
+            session_id: None,
         })
         .unwrap(),
     };
@@ -148,6 +149,7 @@ async fn concurrent_clients_do_not_cross_correlate() {
             method: "system.handshake".into(),
             params: serde_json::to_value(HandshakeParams {
                 protocol_version: PROTOCOL_VERSION,
+                session_id: None,
             })
             .unwrap(),
         };
@@ -234,6 +236,7 @@ async fn oversize_line_closes_connection_daemon_stays_up() {
             method: "system.handshake".into(),
             params: serde_json::to_value(HandshakeParams {
                 protocol_version: PROTOCOL_VERSION,
+                session_id: None,
             })
             .unwrap(),
         };

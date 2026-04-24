@@ -86,6 +86,19 @@ fn handle_handshake(id: u64, params: HandshakeParams, state: &mut HandshakeState
             RpcError::protocol_version_mismatch(params.protocol_version, PROTOCOL_VERSION),
         );
     }
+    // Phase 6: record the caller's session-id on the current span (the
+    // enclosing `ipc.connection` span in `transport::server`). Every event
+    // emitted on this connection inherits `client_session_id` for easier
+    // correlation across the daemon's log and the client's log. Absent
+    // session-id means the caller did not advertise one (legacy client or
+    // daemon-internal call) — in that case we omit the field rather than
+    // recording an empty placeholder.
+    if let Some(ref sid) = params.session_id {
+        tracing::Span::current().record("client_session_id", sid.as_str());
+        tracing::info!(request_id = id, client_session_id = %sid, "handshake: client session attached");
+    } else {
+        tracing::info!(request_id = id, "handshake: client did not advertise session_id");
+    }
     *state = HandshakeState::Complete;
     let result = HandshakeResult {
         protocol_version: PROTOCOL_VERSION,

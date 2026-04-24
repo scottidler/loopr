@@ -45,9 +45,14 @@ impl IpcClient {
 
     /// Run the mandatory `system.handshake`. Must be the first request
     /// on every connection per the Stage 3 contract.
-    pub async fn handshake(&mut self) -> Result<HandshakeResult, LooprError> {
+    ///
+    /// `session_id`, when present, is forwarded to the daemon so every
+    /// server-side span emitted for requests on this connection inherits
+    /// the caller's session scope (Phase 6 additive extension).
+    pub async fn handshake(&mut self, session_id: Option<&str>) -> Result<HandshakeResult, LooprError> {
         let params = HandshakeParams {
             protocol_version: protocol_version_or_override(),
+            session_id: session_id.map(str::to_owned),
         };
         let params_json =
             serde_json::to_value(params).map_err(|e| LooprError::HandshakeFailed(format!("serialize params: {e}")))?;

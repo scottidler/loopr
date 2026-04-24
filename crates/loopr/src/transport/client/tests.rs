@@ -76,7 +76,7 @@ async fn client_handshake_then_status() {
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
     let mut client = IpcClient::connect(&socket).await.unwrap();
-    let hs = client.handshake().await.unwrap();
+    let hs = client.handshake(None).await.unwrap();
     assert_eq!(hs.protocol_version, PROTOCOL_VERSION);
 
     let (resp, events) = client
@@ -105,7 +105,7 @@ async fn client_request_raw_unknown_method_returns_method_not_found() {
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
     let mut client = IpcClient::connect(&socket).await.unwrap();
-    client.handshake().await.unwrap();
+    client.handshake(None).await.unwrap();
     let (resp, _) = client
         .request_raw("bogus.method", serde_json::json!({"goal": "x"}))
         .await
@@ -140,7 +140,7 @@ async fn client_handshake_version_mismatch_closes_connection() {
         std::env::set_var("LOOPR_PROTOCOL_VERSION_OVERRIDE", "9999");
     }
     let mut client = IpcClient::connect(&socket).await.unwrap();
-    let err = client.handshake().await.unwrap_err();
+    let err = client.handshake(None).await.unwrap_err();
     unsafe {
         std::env::remove_var("LOOPR_PROTOCOL_VERSION_OVERRIDE");
     }

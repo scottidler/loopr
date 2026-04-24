@@ -302,7 +302,26 @@ fn method_try_from_handshake() {
     };
     assert_eq!(
         Method::try_from(&req).unwrap(),
-        Method::Handshake(HandshakeParams { protocol_version: 1 })
+        Method::Handshake(HandshakeParams {
+            protocol_version: 1,
+            session_id: None,
+        })
+    );
+}
+
+#[test]
+fn method_try_from_handshake_with_session_id() {
+    let req = DaemonRequest {
+        id: 1,
+        method: "system.handshake".into(),
+        params: json!({"protocol_version": 1, "session_id": "20260424-150000"}),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::Handshake(HandshakeParams {
+            protocol_version: 1,
+            session_id: Some("20260424-150000".into()),
+        })
     );
 }
 
@@ -341,13 +360,20 @@ fn e2e_handshake_roundtrip() {
         method: "system.handshake".into(),
         params: serde_json::to_value(HandshakeParams {
             protocol_version: PROTOCOL_VERSION,
+            session_id: None,
         })
         .unwrap(),
     };
     let bytes = encode_line(&req);
     let decoded_req = decode_request_line(&bytes).unwrap();
     let method = Method::try_from(&decoded_req).unwrap();
-    assert_eq!(method, Method::Handshake(HandshakeParams { protocol_version: 1 }));
+    assert_eq!(
+        method,
+        Method::Handshake(HandshakeParams {
+            protocol_version: 1,
+            session_id: None,
+        })
+    );
 
     let result = serde_json::to_value(HandshakeResult {
         protocol_version: PROTOCOL_VERSION,
@@ -659,6 +685,7 @@ fn version_advertisement_in_handshake_bytes() {
         method: "system.handshake".into(),
         params: serde_json::to_value(HandshakeParams {
             protocol_version: PROTOCOL_VERSION,
+            session_id: None,
         })
         .unwrap(),
     };
