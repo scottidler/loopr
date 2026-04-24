@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 
 use worktree::AttemptCleanupPolicy;
 
+use crate::output::Format;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "loopr",
@@ -36,6 +38,11 @@ pub struct Cli {
     /// - never: strict debug-only; leaks memory + FDs on long-uptime daemons
     #[arg(long = "worktree-cleanup", global = true, value_name = "POLICY")]
     pub worktree_cleanup: Option<AttemptCleanupPolicy>,
+
+    /// Output format for data-returning verbs. Default picks JSON when
+    /// stdout is a pipe, YAML when stdout is a TTY.
+    #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT")]
+    pub output: Option<Format>,
 
     #[command(subcommand)]
     pub command: Command,

@@ -6,11 +6,13 @@ pub mod daemon;
 pub mod error;
 pub mod guard;
 pub mod logs;
+pub mod output;
 pub mod target;
 pub mod transport;
 
 pub use cli::{Cli, Command, DaemonCmd, LogsCmd};
 pub use error::LooprError;
+pub use output::Format;
 
 pub fn run(cli: Cli) -> Result<(), LooprError> {
     let cwd = std::env::current_dir().map_err(|_| LooprError::TargetInvalid {
