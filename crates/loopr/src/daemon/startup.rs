@@ -88,6 +88,31 @@ where
     Ok(report)
 }
 
+/// One-shot detector for a legacy pre-XDG `<target>/.loopr/runs/` dir.
+///
+/// Under the v5 Working Rule "no coexistence migrations", the daemon
+/// does not auto-delete legacy state when the schema changes. Instead
+/// it emits a single `warn!` at boot so the operator knows to clean it
+/// up with `rkvr rmrf`, and then writes exclusively to XDG. A target
+/// without `.loopr/runs/` returns `false` silently (fresh install or
+/// already-cleaned).
+///
+/// Returns whether the legacy dir was present so callers (and tests)
+/// can assert on the detection outcome. The warning itself is a side
+/// effect and only observable by a connected tracing subscriber.
+pub fn check_legacy_runs_dir(target: &Path) -> bool {
+    let legacy = target.join(".loopr").join("runs");
+    if legacy.is_dir() {
+        tracing::warn!(
+            path = %legacy.display(),
+            "legacy runs dir present; no migration performed; rkvr rmrf to clean"
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Stage 7 worktree hygiene pass. Extracted from `reconcile` in Stage 8
 /// so existing unit tests can exercise it without constructing a full
 /// `DaemonContext`. Pure worktree/TaskStore logic; no task-spawn side

@@ -183,3 +183,36 @@ async fn reconcile_skips_foreign_branch_under_worktree_root() {
     assert_eq!(report.cleaned, 0);
     assert!(foreign_path.exists(), "foreign worktree must NOT be cleaned");
 }
+
+// ---------- check_legacy_runs_dir ----------
+
+#[test]
+fn check_legacy_runs_dir_fresh_target_returns_false() {
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(td.path().join(".loopr")).unwrap();
+    assert!(!check_legacy_runs_dir(td.path()));
+}
+
+#[test]
+fn check_legacy_runs_dir_absent_loopr_returns_false() {
+    let td = tempfile::TempDir::new().unwrap();
+    // No `.loopr/` at all.
+    assert!(!check_legacy_runs_dir(td.path()));
+}
+
+#[test]
+fn check_legacy_runs_dir_present_returns_true() {
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(td.path().join(".loopr").join("runs")).unwrap();
+    assert!(check_legacy_runs_dir(td.path()));
+}
+
+#[test]
+fn check_legacy_runs_dir_file_at_runs_path_returns_false() {
+    // If a plain file happens to sit at `.loopr/runs` (unusual but not
+    // impossible) the detector should not treat it as legacy state.
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(td.path().join(".loopr")).unwrap();
+    std::fs::write(td.path().join(".loopr").join("runs"), b"").unwrap();
+    assert!(!check_legacy_runs_dir(td.path()));
+}

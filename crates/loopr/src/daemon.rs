@@ -333,6 +333,10 @@ async fn run_active_daemon(
     let _guard = telemetry::init(&target, &session_id, &target_slug, &process_id, &directive)
         .map_err(|e| LooprError::DaemonStartup(format!("telemetry init: {e}")))?;
 
+    // One-shot legacy-state detector. Fires once per daemon boot; no-op
+    // on fresh targets or targets already cleaned with `rkvr rmrf`.
+    startup::check_legacy_runs_dir(&target);
+
     // Load top-level Config (composes each stage's config) and build the
     // process-wide AnthropicClient. Config missing from `.loopr/config.yml`
     // falls back to defaults; API key missing from env falls back to a
