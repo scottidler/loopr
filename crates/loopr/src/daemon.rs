@@ -318,6 +318,19 @@ pub async fn daemon_main(target: PathBuf) -> Result<(), LooprError> {
 ///    close and let the final `Arc::drop` invoke `Store::Drop` — the
 ///    crash-interrupt fallback path that the store is explicitly
 ///    designed to tolerate as best-effort only.
+#[tracing::instrument(
+    name = "daemon.run_active",
+    level = "info",
+    skip_all,
+    fields(
+        target = %target.display(),
+        session_id = %session_id,
+        process_id = %process_id,
+        target_slug = %target_slug,
+        pid,
+    ),
+    err,
+)]
 async fn run_active_daemon(
     target: PathBuf,
     session_id: SessionId,
@@ -361,6 +374,19 @@ async fn run_active_daemon(
 /// `.git/info/exclude` patterns, builds `LaneRouter` + `BashDenylist` +
 /// `path_deny_patterns` from config, runs the startup reconcile sweep.
 /// Fails if the Store cannot open or the lane router fails sandbox detection.
+#[tracing::instrument(
+    name = "daemon.build_context",
+    level = "info",
+    skip_all,
+    fields(
+        target = %target.display(),
+        session_id = %session_id,
+        process_id = %process_id,
+        target_slug = %target_slug,
+        pid,
+    ),
+    err,
+)]
 pub async fn build_context<L>(
     target: PathBuf,
     session_id: SessionId,
@@ -473,6 +499,13 @@ where
 /// (e.g. production's signal watcher). Closing the store inside this
 /// function would deterministically fail `try_unwrap` when production's
 /// watcher still holds a clone.
+#[tracing::instrument(
+    name = "daemon.serve_core",
+    level = "info",
+    skip_all,
+    fields(target = %ctx.target.display(), session_id = %ctx.session_id, process_id = %ctx.process_id),
+    err,
+)]
 pub async fn serve_core<L>(ctx: Arc<DaemonContext<L>>) -> Result<Arc<DaemonContext<L>>, LooprError>
 where
     L: LlmClient + Send + Sync + 'static,

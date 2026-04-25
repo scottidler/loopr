@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use agents::{
@@ -246,6 +246,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// always retained regardless of cleanup policy (vision.md:135 —
     /// Stage 8 Integrator will merge it).
     #[tracing::instrument(level = "info", skip_all, fields(work_id = %work.id, session_id = %self.session_id))]
+    #[instrument(
+        name = "daemon.spawn_implementer_for_work",
+        level = "info",
+        skip_all,
+        fields(work_id = %work.id, work_status = ?work.status),
+    )]
     pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
         // Advance Work through the pipeline-start transitions via the FSM.
         // Guarded: reconcile or a prior call may have advanced us already.
@@ -385,6 +391,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// orchestration decision (triage, verdict routing, next-stage spawn)
     /// lives here, not in `agents::reviewer`.
     #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id))]
+    #[instrument(
+        name = "daemon.spawn_reviewer_for_bundle",
+        level = "info",
+        skip_all,
+        fields(bundle_id = %bundle.id, work_id = %bundle.work_id, bundle_status = ?bundle.status),
+    )]
     pub async fn spawn_reviewer_for_bundle(self: Arc<Self>, mut bundle: Bundle) {
         if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
             debug!("shutdown in progress; skipping reviewer spawn");
@@ -527,6 +539,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Shutdown-aware: shutdown_notify cuts the backoff sleep so a Ctrl-C
     /// during a retry does not block the daemon for 12.6s.
     #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id))]
+    #[instrument(
+        name = "daemon.spawn_integrator_for_bundle",
+        level = "info",
+        skip_all,
+        fields(bundle_id = %bundle.id, work_id = %bundle.work_id),
+    )]
     pub async fn spawn_integrator_for_bundle(self: Arc<Self>, bundle: Bundle) {
         if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
             debug!("shutdown in progress; skipping integrator spawn");

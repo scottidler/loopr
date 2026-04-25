@@ -29,6 +29,18 @@ The driver. Binary crate: daemon process, IPC transport, CLI dispatch, source-gu
 
 This crate orchestrates. It does not implement any pipeline stage. If you catch yourself writing decomposition logic or an agent loop here, move it to the stage crate and call it from the driver.
 
+## Instrumentation (daemon side)
+
+The daemon's IPC dispatch and pipeline-spawn methods carry `#[tracing::instrument]`:
+
+- `ipc.dispatch` (info) — every request, fields(`request_id`, `method`, `handshake_state`).
+- `ipc.handshake` is recorded inline; `ipc.plan_create` (info, `goal_len`, post-record `plan_id`), `ipc.record_list` (debug, `kind`), `ipc.record_get` (debug, `record_id`), `ipc.status` (debug).
+- `daemon.run_active`, `daemon.build_context`, `daemon.serve_core` — info+err with `target`/`session_id`/`process_id`/`target_slug`/`pid` so a daemon-startup failure carries every identifier needed to correlate against XDG paths.
+- `daemon.reconcile`, `daemon.sweep_worktrees` — info/debug+err.
+- `daemon.spawn_implementer_for_work`, `daemon.spawn_reviewer_for_bundle`, `daemon.spawn_integrator_for_bundle` — info, work_id/bundle_id + status fields. Every event emitted while these run inherits the relevant ids automatically.
+
+Per-request scope fields available on the daemon's `ipc.connection` span (set in transport/server.rs at handshake completion): `client_session_id` and `request_id` propagate from the connection span downward into every handler's span.
+
 ## Transcripts
 
 `crates/loopr/src/transcript/` holds the LLM round-trip transcript writers. Layout:

@@ -63,6 +63,7 @@ pub struct ReconcileReport {
     pub bundles_terminal: usize,
 }
 
+#[tracing::instrument(name = "daemon.reconcile", level = "info", skip_all, fields(target = %ctx.target.display()), err)]
 pub async fn reconcile<L>(ctx: &Arc<DaemonContext<L>>) -> Result<ReconcileReport, LooprError>
 where
     L: LlmClient + Send + Sync + 'static,
@@ -117,6 +118,7 @@ pub fn check_legacy_runs_dir(target: &Path) -> bool {
 /// so existing unit tests can exercise it without constructing a full
 /// `DaemonContext`. Pure worktree/TaskStore logic; no task-spawn side
 /// effects. `reconcile` calls this then `sweep_bundles`.
+#[tracing::instrument(name = "daemon.sweep_worktrees", level = "debug", skip_all, fields(target = %target.display()), err)]
 pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileReport, LooprError> {
     let worktree_root = target.join(".loopr").join("worktrees");
 

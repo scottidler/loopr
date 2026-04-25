@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use ipc::{
     BundleSummary, DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION,
@@ -32,6 +32,12 @@ pub enum HandshakeState {
 /// Dispatch a single request to the correct handler. Returns the
 /// `DaemonResponse` to be sent back on the wire. Does not perform I/O
 /// beyond reading `ctx` fields and allocating the response.
+#[instrument(
+    name = "ipc.dispatch",
+    level = "info",
+    skip_all,
+    fields(request_id = req.id, method = %req.method, handshake_state = ?state),
+)]
 pub async fn dispatch<L>(req: &DaemonRequest, state: &mut HandshakeState, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
 where
     L: LlmClient + Send + Sync + 'static,
@@ -110,6 +116,7 @@ fn handle_handshake(id: u64, params: HandshakeParams, state: &mut HandshakeState
     }
 }
 
+#[instrument(name = "ipc.status", level = "debug", skip_all, fields(request_id = id))]
 fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse {
     // Stage 4 has no records to count; active_plans / active_works are
     // hardcoded zeros. Stage 5+ reads from taskstore via a new dep.
@@ -125,6 +132,12 @@ fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<Daemon
     }
 }
 
+#[instrument(
+    name = "ipc.plan_create",
+    level = "info",
+    skip_all,
+    fields(request_id = id, goal_len = params.goal.len(), plan_id = tracing::field::Empty),
+)]
 async fn handle_plan_create<L>(id: u64, params: PlanCreateParams, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
 where
     L: LlmClient + Send + Sync + 'static,
@@ -136,6 +149,7 @@ where
     // PlanStatus::Active, so no Draft->Active transition is needed here.
     let plan = domain::Plan::new(params.goal);
     let plan_snapshot = plan.clone();
+    tracing::Span::current().record("plan_id", plan.id.to_string().as_str());
 
     if let Err(e) = crate::daemon::git::ensure_integration_branch(&ctx.target, &plan.id).await {
         warn!(request_id = id, plan_id = %plan.id, error = %e, "plan.create failed at integration-branch creation");
@@ -199,6 +213,12 @@ where
 /// from the store, then projects each into its summary type so the
 /// response stays well under the 1 MiB IPC frame cap. See
 /// `docs/design/2026-04-23-cli-plumbing-shape.md`.
+#[instrument(
+    name = "ipc.record_list",
+    level = "debug",
+    skip_all,
+    fields(request_id = id, kind = ?params.kind),
+)]
 async fn handle_record_list<L: LlmClient + Send + Sync + 'static>(
     id: u64,
     params: RecordListParams,
@@ -232,6 +252,12 @@ async fn handle_record_list<L: LlmClient + Send + Sync + 'static>(
 /// and returns the full record wrapped in `RecordResult`. The prefix
 /// literals mirror the `$prefix` arguments to the `id_type!` macro
 /// invocations in `crates/domain/src/id.rs`.
+#[instrument(
+    name = "ipc.record_get",
+    level = "debug",
+    skip_all,
+    fields(request_id = id, record_id = %params.id),
+)]
 async fn handle_record_get<L: LlmClient + Send + Sync + 'static>(
     id: u64,
     params: RecordGetParams,
