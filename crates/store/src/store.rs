@@ -2,6 +2,7 @@ use std::path::Path;
 
 use taskstore_async::{AsyncStore, OpenOptions};
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 use crate::bundles::BundlesStore;
 use crate::error::StoreError;
@@ -54,6 +55,7 @@ impl Store {
     /// folder. Passing a bare `target` to the old `open(path, opts)` is
     /// an API that no longer exists; this wrapper is the sole consumer
     /// that needs to know about the nested layout.
+    #[instrument(name = "store.open", level = "info", skip_all, fields(target = %target.as_ref().display()), err)]
     pub async fn open(target: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = target.as_ref().join(TASKSTORE_SUBPATH);
         let inner = AsyncStore::open_at(path, OpenOptions::default()).await?;
@@ -102,6 +104,7 @@ impl Store {
     /// most. Daemon shutdown handlers MUST invoke `close().await` before the
     /// runtime terminates; `Drop` is a last-resort fallback for crash-interrupt
     /// paths only.
+    #[instrument(name = "store.close", level = "info", skip_all, err)]
     pub async fn close(self) -> Result<(), StoreError> {
         self.inner.close().await?;
         Ok(())

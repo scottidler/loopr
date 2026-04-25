@@ -32,6 +32,20 @@ The Round 1 Architect critique — "domain should not depend on an I/O-bound per
 
 `scottidler/taskstore` is a two-crate workspace: `taskstore-traits` (trait-only, pure `serde` + `std`) and `taskstore` (Store engine + `rusqlite`/`fs2`/`chrono`). `domain` depends on traits-only; `store` depends on the full crate because it needs `Store`. Both deps MUST resolve to the same commit — they're declared centrally in the root `Cargo.toml` for exactly that reason. See `../../docs/taskstore-integration.md` for the split-brain failure mode that motivates the centralized declaration.
 
+## Instrumentation
+
+Every public method on `PlansStore`, `WorksStore`, `BundlesStore`, `TicksStore`, plus `Store::open` and `Store::close`, opens a span at `debug` (open/close at `info`) with `err`. Required scope fields:
+
+- `record_kind` — `plan` / `work` / `bundle` / `tick`. Constant per collection.
+- `record_id` — present on `create`, `get`, `update` (and `record_kind`-prefixed lists carry the parent id, e.g. `parent_id` on `works.list_by_parent_id`).
+- `op` — `create` / `create_many` / `get` / `list` / `list_by_*` / `update`. Stable string per method.
+- `count` — recorded on every `list*` after the query returns; lets readers compare expected vs actual cardinality.
+- Domain-specific: `parent_id` on Work create, `work_id` on Bundle create/update, `force_proposed` on Bundle create, `expected_updated_at` on Bundle update (the OCC version), `bundle_count` on Tick create.
+
+Writes (`create`, `create_many`, `update`) carry `ret` so the span close logs the returned id. Reads carry `err` only.
+
+The acceptance test `tests/instrumentation.rs` opens a tempdir Store, exercises every method on every collection, and asserts each span exists with its required keys.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

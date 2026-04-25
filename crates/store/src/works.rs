@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
+use tracing::instrument;
 
 use domain::{PlanId, Work, WorkId};
 
@@ -20,6 +21,14 @@ impl<'a> WorksStore<'a> {
     /// race-condition caveat documented there — pre-check is not
     /// transactional, but freshly minted `WorkId`s make collisions ~0 under
     /// the single-daemon model.
+    #[instrument(
+        name = "works.create",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", record_id = %work.id, parent_id = %work.parent_id, op = "create"),
+        ret,
+        err,
+    )]
     pub async fn create(&self, work: Work) -> Result<WorkId, StoreError> {
         let id_str = work.id.as_ref().to_string();
         if self.inner.get::<Work>(&id_str).await?.is_some() {
@@ -42,6 +51,13 @@ impl<'a> WorksStore<'a> {
     /// A fresh decomposition never has id collisions because `WorkId`s are
     /// freshly minted by the decomposer, so this method's practical failure
     /// mode is limited to IO errors on disk.
+    #[instrument(
+        name = "works.create_many",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", op = "create_many", count = works.len()),
+        err,
+    )]
     pub async fn create_many(&self, works: Vec<Work>) -> Result<Vec<WorkId>, StoreError> {
         let returned = self.inner.create_many(works).await?;
         Ok(returned
@@ -51,6 +67,13 @@ impl<'a> WorksStore<'a> {
     }
 
     /// Fetch a Work by id. Missing id yields `StoreError::RecordNotFound`.
+    #[instrument(
+        name = "works.get",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", record_id = %id, op = "get"),
+        err,
+    )]
     pub async fn get(&self, id: &WorkId) -> Result<Work, StoreError> {
         match self.inner.get::<Work>(id.as_ref()).await? {
             Some(work) => Ok(work),
@@ -63,8 +86,17 @@ impl<'a> WorksStore<'a> {
 
     /// Return every stored Work. `AsyncStore::list` orders by `updated_at`
     /// descending; callers should not depend on order beyond that contract.
+    #[instrument(
+        name = "works.list",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", op = "list", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list(&self) -> Result<Vec<Work>, StoreError> {
-        Ok(self.inner.list::<Work>(&[]).await?)
+        let result = self.inner.list::<Work>(&[]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Return every Work whose `parent_id == plan_id`. Backed by the SQLite
@@ -74,13 +106,22 @@ impl<'a> WorksStore<'a> {
     /// in `spawn_integrator_for_bundle`: after a successful integration,
     /// enumerate sibling Works to decide whether the parent Plan can
     /// transition to `Complete`.
+    #[instrument(
+        name = "works.list_by_parent_id",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", parent_id = %plan_id, op = "list_by_parent_id", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list_by_parent_id(&self, plan_id: &PlanId) -> Result<Vec<Work>, StoreError> {
         let filter = Filter {
             field: "parent_id".to_string(),
             op: FilterOp::Eq,
             value: IndexValue::String(plan_id.to_string()),
         };
-        Ok(self.inner.list::<Work>(&[filter]).await?)
+        let result = self.inner.list::<Work>(&[filter]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Persist a status / field change on an existing Work. Delegates to
@@ -88,6 +129,14 @@ impl<'a> WorksStore<'a> {
     /// the SQLite cache row. The Stage-7 wiring requires this so
     /// implementer-error transitions (Blocked / Failed) survive daemon
     /// restart; without it the daemon re-dispatches failing Works forever.
+    #[instrument(
+        name = "works.update",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", record_id = %work.id, status = ?work.status, op = "update"),
+        ret,
+        err,
+    )]
     pub async fn update(&self, work: Work) -> Result<(), StoreError> {
         self.inner.update(work).await?;
         Ok(())

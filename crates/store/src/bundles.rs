@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 use domain::{Bundle, BundleId, WorkId};
 
@@ -23,6 +24,20 @@ impl<'a> BundlesStore<'a> {
     /// and `WorksStore::create` race-condition caveat: the pre-check
     /// is not transactional, but freshly minted `BundleId`s make
     /// collisions ~0 under the single-daemon model.
+    #[instrument(
+        name = "bundles.create",
+        level = "debug",
+        skip_all,
+        fields(
+            record_kind = "bundle",
+            record_id = %bundle.id,
+            work_id = %bundle.work_id,
+            op = "create",
+            force_proposed = bundle.force_proposed,
+        ),
+        ret,
+        err,
+    )]
     pub async fn create(&self, bundle: Bundle) -> Result<BundleId, StoreError> {
         let id_str = bundle.id.as_ref().to_string();
         if self.inner.get::<Bundle>(&id_str).await?.is_some() {
@@ -36,6 +51,13 @@ impl<'a> BundlesStore<'a> {
     }
 
     /// Fetch a Bundle by id. Missing id yields `StoreError::RecordNotFound`.
+    #[instrument(
+        name = "bundles.get",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "bundle", record_id = %id, op = "get"),
+        err,
+    )]
     pub async fn get(&self, id: &BundleId) -> Result<Bundle, StoreError> {
         match self.inner.get::<Bundle>(id.as_ref()).await? {
             Some(bundle) => Ok(bundle),
@@ -49,21 +71,39 @@ impl<'a> BundlesStore<'a> {
     /// Return every stored Bundle. `AsyncStore::list` orders by
     /// `updated_at` descending; callers should not depend on order
     /// beyond that contract.
+    #[instrument(
+        name = "bundles.list",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "bundle", op = "list", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list(&self) -> Result<Vec<Bundle>, StoreError> {
-        Ok(self.inner.list::<Bundle>(&[]).await?)
+        let result = self.inner.list::<Bundle>(&[]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Return every Bundle whose `work_id` matches the given
     /// `WorkId`. Backed by the SQLite index on `work_id`
     /// (`#[record(indexed)]` on the struct field), so this is an
     /// index lookup rather than a full-table scan.
+    #[instrument(
+        name = "bundles.list_by_work_id",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "bundle", work_id = %work_id, op = "list_by_work_id", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list_by_work_id(&self, work_id: &WorkId) -> Result<Vec<Bundle>, StoreError> {
         let filter = Filter {
             field: "work_id".to_string(),
             op: FilterOp::Eq,
             value: IndexValue::String(work_id.to_string()),
         };
-        Ok(self.inner.list::<Bundle>(&[filter]).await?)
+        let result = self.inner.list::<Bundle>(&[filter]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Persist a status / field change on an existing Bundle with
@@ -89,6 +129,21 @@ impl<'a> BundlesStore<'a> {
     /// never-push; multi-daemon or external-writer OCC would need an
     /// upstream `taskstore-async::update_if` CAS primitive, which is
     /// deferred.
+    #[instrument(
+        name = "bundles.update",
+        level = "debug",
+        skip_all,
+        fields(
+            record_kind = "bundle",
+            record_id = %bundle.id,
+            work_id = %bundle.work_id,
+            status = ?bundle.status,
+            expected_updated_at,
+            op = "update",
+        ),
+        ret,
+        err,
+    )]
     pub async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), StoreError> {
         let _guard = self.update_lock.lock().await;
         let id_str = bundle.id.as_ref().to_string();

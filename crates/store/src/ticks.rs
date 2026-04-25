@@ -22,6 +22,7 @@ use std::collections::HashSet;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 use domain::{PlanId, Tick, TickId};
 
@@ -53,6 +54,19 @@ impl<'a> TicksStore<'a> {
     ///
     /// On success returns a clone of the input Tick (caller-convenience so
     /// the call site need not clone upstream of the `await`).
+    #[instrument(
+        name = "ticks.create",
+        level = "debug",
+        skip_all,
+        fields(
+            record_kind = "tick",
+            record_id = %tick.id,
+            plan_id = %tick.plan_id,
+            bundle_count = tick.bundles.len(),
+            op = "create",
+        ),
+        err,
+    )]
     pub async fn create(&self, tick: Tick) -> Result<Tick, StoreError> {
         let _guard = self.tick_lock.lock().await;
 
@@ -74,6 +88,13 @@ impl<'a> TicksStore<'a> {
     }
 
     /// Fetch a Tick by id. Missing id yields `StoreError::RecordNotFound`.
+    #[instrument(
+        name = "ticks.get",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "tick", record_id = %id, op = "get"),
+        err,
+    )]
     pub async fn get(&self, id: &TickId) -> Result<Tick, StoreError> {
         match self.inner.get::<Tick>(id.as_ref()).await? {
             Some(tick) => Ok(tick),
@@ -87,20 +108,38 @@ impl<'a> TicksStore<'a> {
     /// Return every stored Tick. `AsyncStore::list` orders by `updated_at`
     /// descending; callers should not depend on order beyond that contract.
     /// Plan-scoped listing is available via [`TicksStore::list_by_plan_id`].
+    #[instrument(
+        name = "ticks.list",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "tick", op = "list", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list(&self) -> Result<Vec<Tick>, StoreError> {
-        Ok(self.inner.list::<Tick>(&[]).await?)
+        let result = self.inner.list::<Tick>(&[]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Return every Tick for the given `PlanId`, ordered by `updated_at`
     /// descending per `AsyncStore::list`'s contract. Backed by the SQLite
     /// index on `plan_id` (`#[record(indexed)]` on the struct field).
+    #[instrument(
+        name = "ticks.list_by_plan_id",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "tick", plan_id = %plan_id, op = "list_by_plan_id", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list_by_plan_id(&self, plan_id: &PlanId) -> Result<Vec<Tick>, StoreError> {
         let filter = Filter {
             field: "plan_id".to_string(),
             op: FilterOp::Eq,
             value: IndexValue::String(plan_id.to_string()),
         };
-        Ok(self.inner.list::<Tick>(&[filter]).await?)
+        let result = self.inner.list::<Tick>(&[filter]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Internal variant used inside `create`'s lock scope; identical query

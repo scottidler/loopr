@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use taskstore_async::AsyncStore;
+use tracing::instrument;
 
 use domain::{Plan, PlanId};
 
@@ -31,6 +32,14 @@ impl<'a> PlansStore<'a> {
     /// multi-writer scenario emerges, extend `AsyncStore` with a conditional-
     /// write primitive and replace this pre-check with the atomic upstream
     /// path.
+    #[instrument(
+        name = "plans.create",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "plan", record_id = %plan.id, op = "create", goal_len = plan.goal.len()),
+        ret,
+        err,
+    )]
     pub async fn create(&self, plan: Plan) -> Result<PlanId, StoreError> {
         let id_str = plan.id.as_ref().to_string();
         if self.inner.get::<Plan>(&id_str).await?.is_some() {
@@ -46,6 +55,13 @@ impl<'a> PlansStore<'a> {
     /// Fetch a Plan by id. Missing id yields `StoreError::RecordNotFound`;
     /// the `Option<T>` from the underlying store is collapsed here so every
     /// Stage 5+ accessor returns the same shape.
+    #[instrument(
+        name = "plans.get",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "plan", record_id = %id, op = "get"),
+        err,
+    )]
     pub async fn get(&self, id: &PlanId) -> Result<Plan, StoreError> {
         match self.inner.get::<Plan>(id.as_ref()).await? {
             Some(plan) => Ok(plan),
@@ -58,8 +74,17 @@ impl<'a> PlansStore<'a> {
 
     /// Return every stored Plan. `AsyncStore::list` orders by `updated_at`
     /// descending; callers should not depend on order beyond that contract.
+    #[instrument(
+        name = "plans.list",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "plan", op = "list", count = tracing::field::Empty),
+        err,
+    )]
     pub async fn list(&self) -> Result<Vec<Plan>, StoreError> {
-        Ok(self.inner.list::<Plan>(&[]).await?)
+        let result = self.inner.list::<Plan>(&[]).await?;
+        tracing::Span::current().record("count", result.len());
+        Ok(result)
     }
 
     /// Persist a status / field change on an existing Plan. Delegates to
@@ -69,6 +94,14 @@ impl<'a> PlansStore<'a> {
     /// one Done, the Coordinator fires `Active -> Complete` via this method.
     /// Mirrors `WorksStore::update` (blind-write, no OCC); Plans have no
     /// concurrent-writer race in the single-daemon-per-target threat model.
+    #[instrument(
+        name = "plans.update",
+        level = "debug",
+        skip_all,
+        fields(record_kind = "plan", record_id = %plan.id, op = "update"),
+        ret,
+        err,
+    )]
     pub async fn update(&self, plan: Plan) -> Result<(), StoreError> {
         self.inner.update(plan).await?;
         Ok(())
