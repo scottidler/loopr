@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, info_span, warn};
+use tracing::{debug, info_span, instrument, warn};
 
 use crate::client::LlmClient;
 use crate::config::LlmConfig;
@@ -64,6 +64,17 @@ impl AnthropicClient {
     /// is not a valid HTTP header value (e.g. embedded control
     /// characters), or the underlying `reqwest::Client::build` fails
     /// (rare; usually TLS backend misconfiguration).
+    #[instrument(
+        name = "llm.anthropic.new",
+        level = "info",
+        skip_all,
+        fields(
+            model = %config.model,
+            api_base_url = %config.api_base_url,
+            max_tokens = config.max_tokens,
+        ),
+        err,
+    )]
     pub fn new(config: LlmConfig, api_key: String) -> Result<Self, LlmError> {
         if api_key.is_empty() {
             return Err(LlmError::Fatal {
@@ -314,6 +325,7 @@ impl AnthropicClient {
 /// scheme must be `http` or `https`, host must be present, path must
 /// not include a trailing slash (since we concatenate `/v1/messages`
 /// at call time).
+#[instrument(level = "debug", skip_all, fields(url = url_str), err)]
 fn validate_api_base_url(url_str: &str) -> Result<(), LlmError> {
     if url_str.is_empty() {
         return Err(LlmError::Fatal {
@@ -389,6 +401,13 @@ fn reqwest_err_to_llm_error(e: reqwest::Error) -> LlmError {
     }
 }
 
+#[instrument(
+    name = "llm.anthropic.classify_response",
+    level = "debug",
+    skip_all,
+    fields(status = status.as_u16(), body_bytes = body.len(), expected_tool_name),
+    err,
+)]
 fn classify_response(
     status: reqwest::StatusCode,
     body: &[u8],
@@ -420,6 +439,13 @@ fn classify_response(
     }
 }
 
+#[instrument(
+    name = "llm.anthropic.classify_free_response",
+    level = "debug",
+    skip_all,
+    fields(status = status.as_u16(), body_bytes = body.len()),
+    err,
+)]
 fn classify_free_response(status: reqwest::StatusCode, body: &[u8], max_tokens: u32) -> Result<String, LlmError> {
     if status.is_success() {
         let parsed: Value = serde_json::from_slice(body).map_err(|_| LlmError::Retryable {
