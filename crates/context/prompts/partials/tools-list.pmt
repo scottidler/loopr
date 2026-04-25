@@ -1,0 +1,5 @@
+{{#each tools}}
+  - {{name}}: {{description}}
+{{else}}
+  (none)
+{{/each}}

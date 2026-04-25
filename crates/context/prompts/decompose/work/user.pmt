@@ -1,0 +1,11 @@
+## Plan
+
+{{goal}}
+
+{{#if prev_error}}
+## Previous Attempt Failed
+
+{{prev_error}}
+
+Please fix the issues and try again.
+{{/if}}

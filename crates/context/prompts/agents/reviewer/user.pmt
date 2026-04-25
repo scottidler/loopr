@@ -1,0 +1,30 @@
+## Work
+{{work_title}}
+Work ID: {{work_id}}
+
+### Acceptance Criteria
+{{#each acceptance_criteria}}
+- {{this}}
+{{else}}
+(none specified)
+{{/each}}
+
+## Bundle Under Review
+- id:             {{bundle.id}}
+- branch:         {{bundle.branch_name}}
+- head_commit:    {{bundle.head_commit_display}}
+- paths:          {{bundle.paths_display}}
+- loc_changed:    {{bundle.loc_changed_display}}
+- force_proposed: {{bundle.force_proposed}}
+
+{{#if bundle.claims}}
+### Claims
+{{#each bundle.claims}}
+- {{this}}
+{{/each}}
+
+{{/if}}
+{{evidence_section}}
+
+## Respond
+Emit exactly one JSON object matching the Verdict schema.

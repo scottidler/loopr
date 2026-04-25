@@ -1,0 +1,27 @@
+# Work: {{work_title}}
+Work ID: {{work_id}}
+Worktree: {{worktree_path}}
+Iteration: {{iteration}}
+
+## Acceptance Criteria
+{{#each acceptance_criteria}}
+{{n}}. {{text}}
+{{else}}
+(none specified)
+{{/each}}
+
+{{#if rejected_bundle_reason}}
+## Prior Bundle Was Rejected
+{{rejected_bundle_reason}}
+
+{{/if}}
+{{#if prior_iterations}}
+## Prior Iterations
+{{#each prior_iterations}}
+### Iteration {{iteration}}
+{{summary}}
+
+{{/each}}
+{{/if}}
+## Respond
+Emit a JSON array of actions for this iteration.
