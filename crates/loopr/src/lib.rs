@@ -169,10 +169,7 @@ fn dispatch(
     command: Command,
 ) -> Result<(), LooprError> {
     match command {
-        Command::Init => Err(LooprError::StageUnimplemented {
-            stage: 5,
-            subcommand: "init",
-        }),
+        Command::Init { force } => commands::init::run(target, force),
         Command::Plan { goal } => plan_command(target, goal),
         Command::Plans => commands::list::run(target, output_format, ipc::RecordKind::Plan),
         Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),

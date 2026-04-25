@@ -19,22 +19,18 @@ fn stub_process_id() -> telemetry::ProcessId {
 }
 
 #[test]
-fn run_init_returns_stage_5() {
-    let err = dispatch(
-        std::path::Path::new("/tmp"),
+fn run_init_seeds_prompts_into_target() {
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(
+        td.path(),
         &stub_session_id(),
         &stub_process_id(),
         None,
         parse_cmd(&["loopr", "init"]),
     )
-    .unwrap_err();
-    match err {
-        LooprError::StageUnimplemented { stage, subcommand } => {
-            assert_eq!(stage, 5);
-            assert_eq!(subcommand, "init");
-        }
-        other => panic!("expected StageUnimplemented, got {other:?}"),
-    }
+    .unwrap();
+    let seeded = td.path().join(".loopr/prompts/agents/implementer/system.pmt");
+    assert!(seeded.exists(), "init should have seeded {seeded:?}");
 }
 
 // `run_plan_returns_stage_5` used to assert that `dispatch` returned the

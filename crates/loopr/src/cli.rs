@@ -46,8 +46,17 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize loopr state (.loopr/, .loopr/taskstore/, git hooks) at the target.
-    Init,
+    /// Initialize loopr state at the target. Currently seeds
+    /// `.loopr/prompts/` from the baked prompt tree (idempotent merge
+    /// by default; `--force` overwrites). Future scope: `.loopr/`,
+    /// `.loopr/taskstore/`, git hooks.
+    Init {
+        /// Overwrite existing `.loopr/prompts/<file>` instead of
+        /// preserving them. Default mode is merge: only missing files
+        /// are written.
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
 
     /// Submit a Plan goal to the daemon.
     Plan {
@@ -99,7 +108,7 @@ impl Command {
     /// Stable string label for telemetry and error reporting.
     pub fn label(&self) -> &'static str {
         match self {
-            Command::Init => "init",
+            Command::Init { .. } => "init",
             Command::Plan { .. } => "plan",
             Command::Plans => "plans",
             Command::Works => "works",

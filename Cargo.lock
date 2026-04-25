@@ -1504,6 +1504,7 @@ dependencies = [
  "domain",
  "eyre",
  "futures-util",
+ "include_dir",
  "integrator",
  "ipc",
  "libc",

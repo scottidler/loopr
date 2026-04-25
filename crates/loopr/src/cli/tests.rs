@@ -14,7 +14,13 @@ fn test_cli_verify() {
 #[test]
 fn test_cli_parses_init() {
     let cli = Cli::parse_from(["loopr", "init"]);
-    assert!(matches!(cli.command, Some(Command::Init)));
+    assert!(matches!(cli.command, Some(Command::Init { force: false })));
+}
+
+#[test]
+fn test_cli_parses_init_with_force() {
+    let cli = Cli::parse_from(["loopr", "init", "--force"]);
+    assert!(matches!(cli.command, Some(Command::Init { force: true })));
 }
 
 #[test]
