@@ -178,10 +178,9 @@ fn dispatch(
         Command::Daemon { cmd } => match cmd {
             // `Start` is handled above in `run` (pre-telemetry); it never
             // reaches `dispatch`.
-            DaemonCmd::Start { .. } => Err(LooprError::StageUnimplemented {
-                stage: 4,
-                subcommand: "daemon-start",
-            }),
+            DaemonCmd::Start { .. } => {
+                unreachable!("DaemonCmd::Start is fork-hoisted in run() before dispatch")
+            }
             DaemonCmd::Stop => daemon_stop(target),
             DaemonCmd::Status => daemon_status(target),
         },
@@ -195,7 +194,7 @@ fn dispatch(
             LogsCmd::Runs => logs::handle_runs(target, Some(session_id)),
         },
         Command::Sessions { cmd } => commands::sessions::run(target, cmd),
-        Command::Tui => Err(LooprError::NotYetImplemented { feature: "tui" }),
+        Command::Tui => Err(LooprError::TuiNotInstalled),
     }
 }
 

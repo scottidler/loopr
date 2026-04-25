@@ -38,7 +38,7 @@ pub struct Cli {
     pub session: Option<String>,
 
     /// Optional subcommand. Bare `loopr` (no subcommand) launches the TUI
-    /// (post-first-gate; returns `NotYetImplemented` until the TUI crate
+    /// (post-first-gate; returns `TuiNotInstalled` until the TUI crate
     /// ships). Use `loopr tui` for the explicit form.
     #[command(subcommand)]
     pub command: Option<Command>,

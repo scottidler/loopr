@@ -13,9 +13,6 @@ pub enum LooprError {
     #[error("target {} is a file, not a directory (try -C {} to use its parent)", path.display(), parent_hint(path))]
     TargetIsFile { path: PathBuf },
 
-    #[error("subcommand `{subcommand}` is not yet implemented (earned at Stage {stage})")]
-    StageUnimplemented { stage: u8, subcommand: &'static str },
-
     #[error("log query failed: {0}")]
     LogsQuery(String),
 
@@ -43,8 +40,8 @@ pub enum LooprError {
     #[error("unknown id prefix in `{id}`; expected one of: pl-, wk-, bd-, tk-")]
     UnknownIdPrefix { id: String },
 
-    #[error("{feature} is not yet implemented")]
-    NotYetImplemented { feature: &'static str },
+    #[error("the TUI is not built into this binary; install the `loopr-tui` crate or run `loopr <subcommand>`")]
+    TuiNotInstalled,
 }
 
 fn parent_hint(path: &Path) -> String {

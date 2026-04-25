@@ -33,11 +33,10 @@ fn run_init_seeds_prompts_into_target() {
     assert!(seeded.exists(), "init should have seeded {seeded:?}");
 }
 
-// `run_plan_returns_stage_5` used to assert that `dispatch` returned the
-// stub `StageUnimplemented { stage: 5 }` directly. Phase 5 replaces that
-// stub with a real client round-trip: plan() now tries to connect to a
-// daemon at `<target>/.loopr/socket`. The daemon is live in an E2E test
-// (see `tests/smoke.rs::plan_on_tempdir_returns_stage_unimplemented`),
+// `run_plan_returns_stage_5` used to assert that `dispatch` returned a
+// stub error directly. plan() now performs a real client round-trip: it
+// tries to connect to a daemon at `<target>/.loopr/socket`. The daemon is
+// live in an E2E test (see `tests/smoke.rs::plan_on_tempdir_returns_stage_unimplemented`),
 // not in a pure unit test. The unit-level coverage moves to the per-
 // function coverage of `daemon_stop` / `daemon_status` below.
 
@@ -79,9 +78,9 @@ fn run_daemon_status_on_empty_target_prints_no_daemon() {
 }
 
 #[test]
-fn run_tui_returns_not_yet_implemented() {
+fn run_tui_returns_tui_not_installed() {
     // Explicit `loopr tui` reaches dispatch and should return
-    // NotYetImplemented until the TUI crate lands. Bare `loopr` (no
+    // TuiNotInstalled until the TUI crate lands. Bare `loopr` (no
     // subcommand) is normalized to Command::Tui in lib::run before
     // dispatch, so exercising it via dispatch directly is equivalent.
     let td = tempfile::TempDir::new().unwrap();
@@ -94,8 +93,8 @@ fn run_tui_returns_not_yet_implemented() {
     )
     .unwrap_err();
     match err {
-        LooprError::NotYetImplemented { feature } => assert_eq!(feature, "tui"),
-        other => panic!("expected NotYetImplemented, got {other:?}"),
+        LooprError::TuiNotInstalled => {}
+        other => panic!("expected TuiNotInstalled, got {other:?}"),
     }
 }
 

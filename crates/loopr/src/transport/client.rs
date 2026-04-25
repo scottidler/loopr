@@ -87,11 +87,10 @@ impl IpcClient {
         self.request_impl(method_str, params).await
     }
 
-    /// Untyped request: Stage-4-only escape hatch for methods that have
-    /// not yet been promoted into `MethodName`. Used by `loopr plan "x"`
-    /// to send "plan.create" before Stage 5 adds the variant; the daemon
-    /// returns `RpcError::MethodNotFound` which the caller maps to
-    /// `LooprError::StageUnimplemented`.
+    /// Untyped request: escape hatch for methods that have not been
+    /// promoted into `MethodName`. The daemon returns
+    /// `RpcError::MethodNotFound` for unknown methods, which the caller
+    /// maps to whatever error variant fits the surface.
     pub async fn request_raw(
         &mut self,
         method: &str,

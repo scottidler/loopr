@@ -257,26 +257,26 @@ fn show_with_unknown_prefix_errors_cleanly_without_ipc() {
 }
 
 #[test]
-fn bare_invocation_routes_to_tui_and_errors_not_yet_implemented() {
+fn bare_invocation_routes_to_tui_and_errors_tui_not_installed() {
     // Bare `loopr` with a valid target: no subcommand, so lib::run
     // normalizes to Command::Tui. Until the TUI crate lands this exits
-    // non-zero with a clear "tui is not yet implemented" message.
+    // non-zero with a clear "TUI is not built into this binary" message.
     let td = TempDir::new().unwrap();
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap()])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("tui is not yet implemented"));
+        .stderr(predicate::str::contains("TUI is not built into this binary"));
 }
 
 #[test]
-fn explicit_tui_subcommand_errors_not_yet_implemented() {
+fn explicit_tui_subcommand_errors_tui_not_installed() {
     let td = TempDir::new().unwrap();
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "tui"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("tui is not yet implemented"));
+        .stderr(predicate::str::contains("TUI is not built into this binary"));
 }
 
 #[test]
