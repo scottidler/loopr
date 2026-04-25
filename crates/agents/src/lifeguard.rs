@@ -81,8 +81,17 @@ impl Lifeguard {
         span.record("action_count", my_count);
         self.last_hash = Some(hash);
         if my_count >= self.max_repeat {
+            // Embed action_hash + action_count in the message itself. The
+            // span fields exist (above), but at INFO-level filtering the
+            // span open/close events are dropped while the implementer's
+            // ERROR event survives — so the operator only sees this line.
+            // Without action_hash here, "which action repeated?" requires
+            // re-running at DEBUG. With it here, the answer is in every
+            // log level. The 2026-04-24 instrumentation sweep missed this.
             return Decision::Escalate(format!(
-                "same action repeated {my_count} times (max_repeat={})",
+                "same action repeated {my_count} times \
+                 (action_kind={}, action_hash={hash:#018x}, max_repeat={})",
+                action.kind(),
                 self.max_repeat
             ));
         }
