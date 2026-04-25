@@ -69,4 +69,11 @@ pub enum DecomposerError {
     /// the `children` array so the retry prompt can point at it.
     #[error("child at index {0} has empty title")]
     EmptyTitle(usize),
+
+    /// Failure constructing or rendering a `.pmt` template via the
+    /// `context::PromptLoader`. Surfaces e.g. a malformed override
+    /// `.pmt` file in `<target>/.loopr/prompts/`, or a missing
+    /// template under any layer.
+    #[error("prompt error: {0}")]
+    Prompt(#[from] context::PromptError),
 }

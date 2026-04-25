@@ -338,6 +338,7 @@ dependencies = [
 name = "context"
 version = "0.6.1"
 dependencies = [
+ "dirs",
  "domain",
  "handlebars",
  "include_dir",

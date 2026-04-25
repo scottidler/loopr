@@ -439,7 +439,10 @@ where
         .collect();
     path_deny_patterns.extend(config.tools.path_deny_patterns.iter().cloned());
 
-    let context_builder = Arc::new(::context::InlineContextBuilder::new());
+    let prompt_loader = Arc::new(::context::PromptLoader::for_target(&target).map_err(|e| {
+        LooprError::DaemonStartup(format!("prompt loader construction failed for target {target:?}: {e}"))
+    })?);
+    let context_builder = Arc::new(::context::InlineContextBuilder::with_loader(prompt_loader));
     let implementer_config = ::agents::ImplementerConfig::default();
     let reviewer_config = ::agents::ReviewerConfig::default();
     let integrator_config = ::integrator::IntegratorConfig::default();

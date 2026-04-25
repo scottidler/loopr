@@ -1,8 +1,14 @@
+use context::PromptLoader;
+
 use super::{assemble_system, assemble_user};
+
+fn loader() -> PromptLoader {
+    PromptLoader::new(None, None).expect("baked .pmt tree must compile")
+}
 
 #[test]
 fn system_template_substitutes_tree_marker() {
-    let s = assemble_system("src/main.rs\nREADME.md");
+    let s = assemble_system(&loader(), "src/main.rs\nREADME.md").unwrap();
     assert!(!s.contains("{{ TREE }}"), "marker must be substituted: {s}");
     assert!(s.contains("src/main.rs"), "tree contents land in prompt: {s}");
     assert!(s.contains("software architect"), "framing retained: {s}");
@@ -10,13 +16,13 @@ fn system_template_substitutes_tree_marker() {
 
 #[test]
 fn system_template_handles_empty_workspace_sentinel() {
-    let s = assemble_system("(empty workspace)");
+    let s = assemble_system(&loader(), "(empty workspace)").unwrap();
     assert!(s.contains("(empty workspace)"), "sentinel interpolates: {s}");
 }
 
 #[test]
 fn user_message_without_prev_error_has_plan_only() {
-    let u = assemble_user("build a CLI", None);
+    let u = assemble_user(&loader(), "build a CLI", None).unwrap();
     assert!(u.contains("## Plan"));
     assert!(u.contains("build a CLI"));
     assert!(!u.contains("Previous Attempt Failed"), "no retry section on first call");
@@ -24,7 +30,7 @@ fn user_message_without_prev_error_has_plan_only() {
 
 #[test]
 fn user_message_with_prev_error_includes_retry_section() {
-    let u = assemble_user("build a CLI", Some("tool_use block missing"));
+    let u = assemble_user(&loader(), "build a CLI", Some("tool_use block missing")).unwrap();
     assert!(u.contains("## Plan"));
     assert!(u.contains("## Previous Attempt Failed"));
     assert!(u.contains("tool_use block missing"));
@@ -35,7 +41,7 @@ fn user_message_with_prev_error_includes_retry_section() {
 fn user_message_truncates_oversized_retry_error_with_exact_suffix() {
     // Build a 10 KiB error (10240 bytes of ASCII).
     let oversized: String = "a".repeat(10240);
-    let u = assemble_user("goal", Some(&oversized));
+    let u = assemble_user(&loader(), "goal", Some(&oversized)).unwrap();
 
     // The exact suffix wording must match the Phase 6 assertion.
     assert!(
@@ -53,7 +59,7 @@ fn user_message_truncates_oversized_retry_error_with_exact_suffix() {
 #[test]
 fn user_message_does_not_truncate_retry_error_under_cap() {
     let small = "boom";
-    let u = assemble_user("goal", Some(small));
+    let u = assemble_user(&loader(), "goal", Some(small)).unwrap();
     assert!(u.contains("boom"));
     assert!(!u.contains("error truncated"), "under-cap error must not be truncated");
 }

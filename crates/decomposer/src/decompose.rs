@@ -23,6 +23,7 @@ use std::path::Path;
 
 use tracing::{info, instrument, warn};
 
+use context::PromptLoader;
 use domain::{AcceptanceCriteria, Plan, Work, WorkId};
 use llm::{LlmClient, ToolCall};
 
@@ -64,14 +65,15 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         }
     };
 
-    let system = assemble_system(&tree);
-    let first_user = assemble_user(&plan.goal, None);
+    let loader = PromptLoader::for_target(target)?;
+    let system = assemble_system(&loader, &tree)?;
+    let first_user = assemble_user(&loader, &plan.goal, None)?;
 
     let tool_call = match try_llm_once(llm, &system, &first_user).await {
         Ok(tc) => tc,
         Err(first_err) => {
             warn!(error = %first_err, "decompose: first LLM call failed, retrying once");
-            let retry_user = assemble_user(&plan.goal, Some(&first_err.to_string()));
+            let retry_user = assemble_user(&loader, &plan.goal, Some(&first_err.to_string()))?;
             match try_llm_once(llm, &system, &retry_user).await {
                 Ok(tc) => tc,
                 Err(retry_err) => {

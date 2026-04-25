@@ -16,7 +16,6 @@ mod reviewer;
 
 pub use implementer::InlineContextBuilder;
 pub use loader::{BAKED_PROMPTS, PromptError, PromptLoader, baked_prompts};
-pub use reviewer::REVIEWER_SYSTEM_PROMPT;
 
 use std::path::Path;
 

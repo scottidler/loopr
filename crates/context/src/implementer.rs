@@ -1,44 +1,100 @@
-//! `InlineContextBuilder`: the Stage-7 `ContextBuilder` impl.
+//! `InlineContextBuilder`: the `ContextBuilder` impl backed by the
+//! disk-resident `.pmt` tree via `PromptLoader`.
 //!
-//! Inline string rendering — no handlebars, no `.pmt` file loading.
-//!
-//! TODO(pmt-migration): The three-layer template-override chain
-//! documented in `crates/context/CLAUDE.md` (`.loopr/prompts/` ->
-//! `~/.config/loopr/prompts/` -> `include_dir!()`-baked defaults) plus
-//! handlebars-rust is the committed end state. It lands in a separate
-//! design doc (see the Open Questions section of
-//! `docs/design/2026-04-22-reviewer.md`). Both the Implementer's
-//! `render_system_prompt` constant and the Reviewer's
-//! `REVIEWER_SYSTEM_PROMPT` migrate together. Not forgotten.
+//! "Inline" once meant inline string literals; it now means stateless,
+//! deterministic, thread-safe rendering on top of the loader (the
+//! prompt source moved from Rust strings to `crates/context/prompts/`
+//! `.pmt` files). Per the v5 "no coexistence migrations" rule,
+//! callers don't choose between inline-string and file-loaded modes —
+//! the latter is the only mode.
 
-use std::fmt::Write;
 use std::path::Path;
+use std::sync::Arc;
 
+use serde::Serialize;
 use tracing::instrument;
 
 use domain::{Bundle, Work};
 use tools::ToolSchema;
 
-use crate::reviewer::render_reviewer_user_message;
-use crate::{
-    AssembledContext, ContextBuilder, ContextError, ITERATION_SUMMARY_CAP, IterationSummary, REVIEWER_SYSTEM_PROMPT,
-    StateSummary,
-};
+use crate::loader::PromptLoader;
+use crate::reviewer::build_reviewer_user_ctx;
+use crate::{AssembledContext, ContextBuilder, ContextError, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
 
 /// Rough tokens-per-char estimate (English text averages ~4 chars
 /// per token; we use 4 as the divisor for a generous-side estimate
 /// that errs toward undercounting).
 pub(crate) const CHARS_PER_TOKEN: usize = 4;
 
-/// Inline string-rendering `ContextBuilder`. Produces deterministic
-/// output; takes nothing from disk; thread-safe by being stateless.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct InlineContextBuilder;
+/// `ContextBuilder` impl that renders prompts via `PromptLoader`.
+/// Construct with `new()` (baked-only loader, used by tests) or
+/// `with_loader(loader)` (production: pass a layer-aware loader from
+/// the binary's `PromptLoader::for_target(target)` call).
+#[derive(Debug, Clone)]
+pub struct InlineContextBuilder {
+    loader: Arc<PromptLoader>,
+}
+
+impl Default for InlineContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl InlineContextBuilder {
-    pub const fn new() -> Self {
-        Self
+    /// Construct with a baked-only loader. The baked layer is always
+    /// available, so this cannot fail in practice; an `expect` here
+    /// catches the (programmer-error) case of a malformed baked
+    /// `.pmt` file slipping through CI.
+    pub fn new() -> Self {
+        let loader = PromptLoader::new(None, None).expect("baked .pmt tree must compile");
+        Self {
+            loader: Arc::new(loader),
+        }
     }
+
+    /// Construct with a caller-supplied loader. Production code uses
+    /// this with the result of `PromptLoader::for_target(target)` so
+    /// the project and user override layers participate.
+    pub fn with_loader(loader: Arc<PromptLoader>) -> Self {
+        Self { loader }
+    }
+}
+
+#[derive(Serialize)]
+struct ToolCtx<'a> {
+    name: &'a str,
+    description: &'a str,
+}
+
+#[derive(Serialize)]
+struct ImplementerSystemCtx<'a> {
+    tools: Vec<ToolCtx<'a>>,
+}
+
+#[derive(Serialize)]
+struct AcCtx<'a> {
+    n: usize,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct PriorIterationCtx<'a> {
+    iteration: u32,
+    summary: String,
+    #[serde(skip)]
+    _phantom: std::marker::PhantomData<&'a ()>,
+}
+
+#[derive(Serialize)]
+struct ImplementerUserCtx<'a> {
+    work_id: String,
+    work_title: &'a str,
+    worktree_path: String,
+    iteration: u32,
+    acceptance_criteria: Vec<AcCtx<'a>>,
+    rejected_bundle_reason: Option<&'a str>,
+    prior_iterations: Vec<PriorIterationCtx<'a>>,
 }
 
 impl ContextBuilder for InlineContextBuilder {
@@ -67,8 +123,46 @@ impl ContextBuilder for InlineContextBuilder {
         state: &StateSummary,
         iteration: u32,
     ) -> Result<AssembledContext, ContextError> {
-        let system_prompt = render_system_prompt(tool_schemas);
-        let user_message = render_user_message(work, worktree_path, history, state, iteration);
+        let system_ctx = ImplementerSystemCtx {
+            tools: tool_schemas
+                .iter()
+                .map(|s| ToolCtx {
+                    name: s.name,
+                    description: s.description,
+                })
+                .collect(),
+        };
+        let system_prompt = self.loader.render("agents/implementer/system.pmt", &system_ctx)?;
+
+        let acceptance_criteria: Vec<AcCtx> = work
+            .acceptance_criteria
+            .0
+            .iter()
+            .enumerate()
+            .map(|(i, ac)| AcCtx {
+                n: i + 1,
+                text: ac.as_str(),
+            })
+            .collect();
+        let prior_iterations: Vec<PriorIterationCtx> = history
+            .iter()
+            .map(|h| PriorIterationCtx {
+                iteration: h.iteration,
+                summary: cap_chars(&h.actions_summary, ITERATION_SUMMARY_CAP),
+                _phantom: std::marker::PhantomData,
+            })
+            .collect();
+        let user_ctx = ImplementerUserCtx {
+            work_id: work.id.to_string(),
+            work_title: work.title.as_str(),
+            worktree_path: worktree_path.display().to_string(),
+            iteration,
+            acceptance_criteria,
+            rejected_bundle_reason: state.rejected_bundle_reason.as_deref(),
+            prior_iterations,
+        };
+        let user_message = self.loader.render("agents/implementer/user.pmt", &user_ctx)?;
+
         let token_estimate = (system_prompt.len() + user_message.len()) / CHARS_PER_TOKEN;
         let span = tracing::Span::current();
         span.record("system_chars", system_prompt.len());
@@ -104,8 +198,11 @@ impl ContextBuilder for InlineContextBuilder {
         diff: &str,
         noop_files: Option<&[(String, String)]>,
     ) -> Result<AssembledContext, ContextError> {
-        let system_prompt = REVIEWER_SYSTEM_PROMPT.to_string();
-        let user_message = render_reviewer_user_message(bundle, work, diff, noop_files);
+        let system_prompt = self
+            .loader
+            .render("agents/reviewer/system.pmt", &serde_json::json!({}))?;
+        let user_ctx = build_reviewer_user_ctx(bundle, work, diff, noop_files);
+        let user_message = self.loader.render("agents/reviewer/user.pmt", &user_ctx)?;
         let token_estimate = (system_prompt.len() + user_message.len()) / CHARS_PER_TOKEN;
         let span = tracing::Span::current();
         span.record("system_chars", system_prompt.len());
@@ -117,77 +214,6 @@ impl ContextBuilder for InlineContextBuilder {
             token_estimate,
         })
     }
-}
-
-fn render_system_prompt(tool_schemas: &[ToolSchema]) -> String {
-    let mut s = String::new();
-    s.push_str("You are the Implementer agent in a loopr pipeline. Your job is to complete one Work item inside a git worktree.\n\n");
-    s.push_str("You operate by emitting a JSON array of actions. Each iteration, you receive the current Work (title, acceptance criteria), the worktree path, and summaries of prior iterations. You respond with one JSON array.\n\n");
-    s.push_str("Valid action types:\n");
-    s.push_str("  - run_tool: invoke a tool (see schemas below)\n");
-    s.push_str("  - commit_changes: git add + commit staged work\n");
-    s.push_str("  - propose_bundle: finalize the Bundle for review (use only when all acceptance criteria pass)\n");
-    s.push_str("  - done: no-op completion (use when no code changes are required)\n");
-    s.push_str("  - need_help: escalate to a human (use only when truly blocked)\n\n");
-    s.push_str("Tools available:\n");
-    if tool_schemas.is_empty() {
-        s.push_str("  (none)\n");
-    } else {
-        for schema in tool_schemas {
-            let _ = writeln!(s, "  - {}: {}", schema.name, schema.description);
-        }
-    }
-    s.push_str("\nRespond with a JSON array of actions, nothing else. Example:\n");
-    s.push_str(r#"[{"type":"run_tool","tool":"bash","input":{"command":"ls"}}]"#);
-    s.push('\n');
-    s
-}
-
-fn render_user_message(
-    work: &Work,
-    worktree_path: &Path,
-    history: &[IterationSummary],
-    state: &StateSummary,
-    iteration: u32,
-) -> String {
-    let mut s = String::new();
-    let _ = writeln!(s, "# Work: {}", work.title);
-    let _ = writeln!(s, "Work ID: {}", work.id);
-    let _ = writeln!(s, "Worktree: {}", worktree_path.display());
-    let _ = writeln!(s, "Iteration: {iteration}");
-    s.push('\n');
-
-    s.push_str("## Acceptance Criteria\n");
-    if work.acceptance_criteria.is_empty() {
-        s.push_str("(none specified)\n");
-    } else {
-        for (i, ac) in work.acceptance_criteria.0.iter().enumerate() {
-            let _ = writeln!(s, "{}. {}", i + 1, ac);
-        }
-    }
-    s.push('\n');
-
-    if let Some(reason) = &state.rejected_bundle_reason {
-        s.push_str("## Prior Bundle Was Rejected\n");
-        s.push_str(reason);
-        s.push('\n');
-        s.push('\n');
-    }
-
-    if !history.is_empty() {
-        s.push_str("## Prior Iterations\n");
-        for entry in history {
-            let _ = writeln!(s, "### Iteration {}", entry.iteration);
-            let capped = cap_chars(&entry.actions_summary, ITERATION_SUMMARY_CAP);
-            s.push_str(&capped);
-            s.push('\n');
-            s.push('\n');
-        }
-    }
-
-    s.push_str("## Respond\n");
-    s.push_str("Emit a JSON array of actions for this iteration.\n");
-    s
 }
 
 /// Truncate to at most `cap` bytes, respecting UTF-8 boundaries. If

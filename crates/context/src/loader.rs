@@ -96,6 +96,17 @@ impl PromptLoader {
         Ok(Self { registry })
     }
 
+    /// Construct a loader for a target repository, resolving the
+    /// project layer to `<target>/.loopr/prompts/` and the user layer
+    /// to `dirs::config_dir()/loopr/prompts/`. Either layer is
+    /// included only if its directory exists; the baked layer is
+    /// always available.
+    pub fn for_target(target: &Path) -> Result<Self, PromptError> {
+        let target_root = Some(target.join(".loopr").join("prompts"));
+        let user_root = dirs::config_dir().map(|p| p.join("loopr").join("prompts"));
+        Self::new(target_root, user_root)
+    }
+
     /// Render a `.pmt` template by name with the given context. The
     /// name is the relative path under `prompts/` (e.g.
     /// `"agents/implementer/system.pmt"`). Lookup uses the highest-

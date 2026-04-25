@@ -2,8 +2,7 @@
 
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, PlanId, Role, Work, WorkId};
 
-use crate::reviewer::REVIEWER_SYSTEM_PROMPT;
-use crate::{ContextBuilder, InlineContextBuilder};
+use crate::{ContextBuilder, InlineContextBuilder, PromptLoader};
 
 fn sample_work() -> Work {
     let mut w = Work::new(PlanId::new(), "add --version flag".to_string());
@@ -28,6 +27,15 @@ fn sample_bundle(work_id: WorkId, head_commit: Option<&str>) -> Bundle {
     // production call shape.
     b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
     b
+}
+
+/// Render the reviewer system prompt directly from the loader for
+/// content-only assertions (verdict-schema markers, guidance keywords).
+fn rendered_reviewer_system() -> String {
+    let loader = PromptLoader::new(None, None).unwrap();
+    loader
+        .render("agents/reviewer/system.pmt", &serde_json::json!({}))
+        .unwrap()
 }
 
 #[test]
@@ -175,32 +183,37 @@ fn empty_ac_does_not_crash() {
 
 #[test]
 fn system_prompt_contains_tagged_schema_marker() {
-    assert!(REVIEWER_SYSTEM_PROMPT.contains(r#""kind": "accept""#));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains(r#""kind": "change_requested""#));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains(r#""kind": "reject""#));
+    let s = rendered_reviewer_system();
+    assert!(s.contains(r#""kind": "accept""#));
+    assert!(s.contains(r#""kind": "change_requested""#));
+    assert!(s.contains(r#""kind": "reject""#));
 }
 
 #[test]
 fn system_prompt_contains_reasons_requirement() {
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("reasons"));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("change_requested"));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("at least one issue"));
+    let s = rendered_reviewer_system();
+    assert!(s.contains("reasons"));
+    assert!(s.contains("change_requested"));
+    assert!(s.contains("at least one issue"));
 }
 
 #[test]
 fn system_prompt_mentions_force_proposed_guidance() {
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("force_proposed"));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("heightened skepticism"));
+    let s = rendered_reviewer_system();
+    assert!(s.contains("force_proposed"));
+    assert!(s.contains("heightened skepticism"));
 }
 
 #[test]
 fn system_prompt_mentions_empty_patch_body_structural_corruption() {
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("empty patch body"));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("structural"));
+    let s = rendered_reviewer_system();
+    assert!(s.contains("empty patch body"));
+    assert!(s.contains("structural"));
 }
 
 #[test]
 fn system_prompt_mentions_truncation_awareness() {
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("truncated"));
-    assert!(REVIEWER_SYSTEM_PROMPT.contains("visible portion"));
+    let s = rendered_reviewer_system();
+    assert!(s.contains("truncated"));
+    assert!(s.contains("visible portion"));
 }
