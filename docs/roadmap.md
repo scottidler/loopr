@@ -153,9 +153,13 @@ The daemon decomposes, implements, reviews, integrates, and produces a Tick that
 
 **Crates touched:** all of them, integration only.
 
-**Exit criterion:** running the above command on a fresh `rust-version` clone produces a merged commit that adds the flag; `rust-version --version` prints the crate version; and a `loopr sessions list` run against the target shows an active session whose `session-fanout.log` references the Plan, Work(s), Bundle, and Tick ids emitted by the pipeline (i.e., session-id indexes the E2E's records).
+**Exit criterion:** running the above command on a fresh `rust-version` clone produces a merged commit that adds the flag; `rust-version --version` prints the crate version; and a `loopr sessions list` run against the target shows an active session whose `session-fanout.log` references the Plan, Work(s), Bundle, and Tick ids emitted by the pipeline (i.e., session-id indexes the E2E's records). Per the 2026-04-24 instrumentation-sweep doc, every non-trivial function in every crate touched by the run carries `#[tracing::instrument]` per `rules/log.md`; reviewing a failed run reads the events.log without restarting the daemon at `-l debug`.
 
 ---
+
+## Cross-cutting exit criterion (every stage)
+
+`#[tracing::instrument]` coverage on non-trivial public + crate-private functions ≥95%, scope-field discipline matches each crate's `CLAUDE.md` "Instrumentation" section, per-crate acceptance test asserts representative span names. Added by the 2026-04-24 instrumentation-sweep design doc; applies retroactively to every existing stage and forward to every future stage.
 
 ## Beyond First Gate (earned features)
 
