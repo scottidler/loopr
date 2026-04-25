@@ -13,7 +13,11 @@ tools = { path = "../tools" }
 telemetry = { path = "../telemetry" }
 thiserror = "2.0.18"
 tracing.workspace = true
+handlebars = "6.4.0"
+include_dir = "0.7.4"
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile = "3.27.0"
 tracing-subscriber = { workspace = true }

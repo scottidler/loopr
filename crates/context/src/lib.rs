@@ -11,9 +11,11 @@
 //! whichever LLM backend is in use.
 
 mod implementer;
+mod loader;
 mod reviewer;
 
 pub use implementer::InlineContextBuilder;
+pub use loader::{BAKED_PROMPTS, PromptError, PromptLoader, baked_prompts};
 pub use reviewer::REVIEWER_SYSTEM_PROMPT;
 
 use std::path::Path;
@@ -56,6 +58,8 @@ pub const ITERATION_SUMMARY_CAP: usize = 4000;
 pub enum ContextError {
     #[error("context assembly failed: {0}")]
     Assembly(String),
+    #[error(transparent)]
+    Prompt(#[from] PromptError),
 }
 
 /// Single entry point for prompt assembly. One method per role/stage.
