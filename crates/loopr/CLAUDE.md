@@ -29,6 +29,26 @@ The driver. Binary crate: daemon process, IPC transport, CLI dispatch, source-gu
 
 This crate orchestrates. It does not implement any pipeline stage. If you catch yourself writing decomposition logic or an agent loop here, move it to the stage crate and call it from the driver.
 
+## Transcripts
+
+`crates/loopr/src/transcript/` holds the LLM round-trip transcript writers. Layout:
+
+- `model.rs` — `TranscriptIteration` struct (model, started_at, latency_ms, prompt/completion tokens, session/process ids, events.log path, system prompt, user prompt, response, parsed actions, dispatcher outcomes, lifeguard decision).
+- `render.rs` — `render_iteration(&TranscriptIteration) -> String` produces the markdown block; `redact_paths(text, &[String]) -> String` replaces lines containing any deny-pattern substring with `[redacted: pattern=<p>]`. Per-section cap: `ITERATION_BYTE_CAP / 4` (25 KB), enforced at render time. Truncation marker is the literal `>[truncated: N KB original; sha=<8>]<` from the design doc Q5.
+- `mod.rs` — `append_iteration(path, &iter)` opens the file with `create+append`, writes the rendered block, and emits a `tracing::debug!("transcript_appended", path, iteration, bytes)` event after each append.
+
+Paths under `<target>/.loopr/records/`:
+
+- Decomposer: `plans/<plan-id>/decomposition.md`
+- Implementer: `works/<work-id>/transcript.md` (append-only across iterations)
+- Reviewer: `bundles/<bundle-id>/review.md`
+
+`.git/info/exclude` is updated by `worktree::ensure_loopr_excludes` to cover `.loopr/records/`. Transcripts never get committed.
+
+**Wiring status:** the model + renderer + atomic-append surface ships in this phase; agent-side population (decomposer / implementer / reviewer) remains a follow-up tracked alongside the summary-callsite wiring. The contract is: agents construct a `TranscriptIteration` with everything they have at the end of an LLM call, then call `append_iteration(transcript_path, &iter)`. Failures emit a `warn!` and the agent continues.
+
+**System-prompt elision** (the design doc's "leaning yes" open question) is not implemented yet; iterations 2..N currently re-render the full system prompt. Tracked as a follow-up.
+
 ## Summary generators
 
 Per-record markdown digests live under `<target>/.loopr/records/<kind>/<id>/summary.md`. The renderers in `crates/loopr/src/summary/` are pure (input record + extra context = `String`); the writers atomic (write-to-temp + rename). Renderers covered: `render_bundle`, `render_work`, `render_plan(plan, &[Work])`. Each has a unit test asserting required sections + post-write file existence.

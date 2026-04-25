@@ -25,6 +25,11 @@ const LOOPR_EXCLUDES: &[&str] = &[
     ".loopr/socket",
     ".loopr/daemon.pid",
     ".loopr/config.yml",
+    // `.loopr/records/` holds derived markdown summaries (Phase 8.5) and
+    // append-only LLM transcripts (Phase 8.6). Transcripts can run to
+    // multiple MB and may capture redacted-but-still-debug-grade prompt
+    // text; never commit.
+    ".loopr/records/",
 ];
 
 #[instrument(name = "worktree.ensure_loopr_excludes", level = "debug", skip_all, fields(repo_path = %repo_path.display()), err)]

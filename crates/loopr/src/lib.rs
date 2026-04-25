@@ -11,6 +11,7 @@ pub mod output;
 pub mod session;
 pub mod summary;
 pub mod target;
+pub mod transcript;
 pub mod transport;
 
 pub use cli::{Cli, Command, DaemonCmd, LogsCmd, SessionsCmd};
