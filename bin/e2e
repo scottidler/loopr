@@ -1,0 +1,603 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/e2e - End-to-end runner for loopr-v5
+#
+# Modeled on v3's bin/test-run.sh: one self-contained script that scaffolds a
+# fresh target into /tmp, starts the daemon, submits a Plan, monitors progress,
+# verifies the outcome, and snapshots results.
+#
+# Usage:
+#   bin/e2e                           # default target: rust-version
+#   bin/e2e ls                        # list available targets
+#   bin/e2e rust-version              # run a specific target
+#   bin/e2e rust-version --timeout 1200
+#   bin/e2e --no-build rust-version   # skip cargo install --path crates/loopr
+#   bin/e2e --build rust-version      # force re-install of the loopr binary
+#
+# The installed binary at ~/.cargo/bin/loopr is exercised throughout. Use
+# --build to refresh it from this workspace before the run.
+
+LOOPR_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LOOPR_BIN="${HOME}/.cargo/bin/loopr"
+DAEMON_PID=""
+# E2E always runs at DEBUG so events.log carries every span (lifeguard,
+# tools, decomposer, integrator). Override with --log-level if needed.
+LOG_LEVEL="debug"
+
+###############################################################################
+# Colors
+###############################################################################
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+DIM='\033[2m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+log()  { echo -e "${CYAN}[e2e]${NC} $*"; }
+ok()   { echo -e "${GREEN}[e2e]${NC} $*"; }
+warn() { echo -e "${YELLOW}[e2e]${NC} $*"; }
+err()  { echo -e "${RED}[e2e]${NC} $*" >&2; }
+
+###############################################################################
+# Usage
+###############################################################################
+
+usage() {
+    echo -e "${BOLD}Usage:${NC} bin/e2e [options] [target]"
+    echo ""
+    echo -e "${BOLD}Options:${NC}"
+    echo "  ls, --list          List available targets"
+    echo "  --target <name>     Target to run (default: rust-version)"
+    echo "  --timeout <secs>    Override the target's default timeout"
+    echo "  --build             cargo install --path crates/loopr --force before running"
+    echo "  --no-build          Use whatever binary is at ~/.cargo/bin/loopr (default)"
+    echo "  --skip-eval         Skip the optional Claude evaluation step"
+    echo "  --log-level <lvl>   Override log level (default: debug). Use 'info' for terse output."
+    echo "  -h, --help          Show this help"
+    echo ""
+    echo -e "${BOLD}Examples:${NC}"
+    echo "  bin/e2e"
+    echo "  bin/e2e ls"
+    echo "  bin/e2e rust-version"
+    echo "  bin/e2e --build rust-version --timeout 1200"
+}
+
+list_targets() {
+    echo -e "${BOLD}${CYAN}Available E2E targets:${NC}"
+    echo ""
+    local default="rust-version"
+    for f in "${LOOPR_ROOT}"/bin/e2e-targets/*.md; do
+        local name marker
+        name="$(basename "${f}" .md)"
+        marker=""
+        if [[ "${name}" == "${default}" ]]; then
+            marker=" ${YELLOW}(default)${NC}"
+        fi
+        printf "  ${CYAN}%-22s${NC}%b\n" "${name}" "${marker}"
+    done
+    echo ""
+    echo -e "Run with: ${BOLD}bin/e2e <target>${NC}"
+}
+
+###############################################################################
+# Args
+###############################################################################
+
+E2E_TARGET=""
+E2E_TIMEOUT=""
+DO_BUILD=false
+SKIP_EVAL=false
+SUBCOMMAND=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        ls|--list)   SUBCOMMAND="ls"; shift ;;
+        -h|--help)   usage; exit 0 ;;
+        --target)    E2E_TARGET="$2"; shift 2 ;;
+        --timeout)   E2E_TIMEOUT="$2"; shift 2 ;;
+        --build)     DO_BUILD=true; shift ;;
+        --no-build)  DO_BUILD=false; shift ;;
+        --skip-eval) SKIP_EVAL=true; shift ;;
+        --log-level) LOG_LEVEL="$2"; shift 2 ;;
+        -*)          err "Unknown flag: $1"; usage; exit 1 ;;
+        *)           E2E_TARGET="$1"; shift ;;
+    esac
+done
+
+if [[ "${SUBCOMMAND}" == "ls" ]]; then
+    list_targets
+    exit 0
+fi
+
+E2E_TARGET="${E2E_TARGET:-rust-version}"
+TIMEOUT="${E2E_TIMEOUT:-900}"
+
+PLAN_MD="${LOOPR_ROOT}/bin/e2e-targets/${E2E_TARGET}.md"
+if [[ ! -f "${PLAN_MD}" ]]; then
+    err "Unknown target: ${E2E_TARGET}"
+    err "No plan markdown at ${PLAN_MD}"
+    err ""
+    err "Run 'bin/e2e ls' to see available targets."
+    exit 1
+fi
+
+###############################################################################
+# Pre-flight
+###############################################################################
+
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    err "ANTHROPIC_API_KEY is not set"
+    exit 1
+fi
+
+if [[ "${DO_BUILD}" == "true" ]]; then
+    log "Re-installing loopr from ${LOOPR_ROOT}/crates/loopr ..."
+    (cd "${LOOPR_ROOT}" && cargo install --path crates/loopr --force 2>&1 | /usr/bin/tail -3)
+fi
+
+if [[ ! -x "${LOOPR_BIN}" ]]; then
+    err "loopr binary not found at ${LOOPR_BIN}"
+    err "Run: bin/e2e --build, or 'cargo install --path crates/loopr' from ${LOOPR_ROOT}"
+    exit 1
+fi
+ok "Binary: ${LOOPR_BIN} ($("${LOOPR_BIN}" --version 2>/dev/null || echo unknown))"
+
+###############################################################################
+# Run dirs
+###############################################################################
+
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+TARGET_BASE="/tmp/loopr/e2e/${E2E_TARGET}"
+RUN_DIR="${TARGET_BASE}/${TIMESTAMP}"
+LATEST_LINK="${TARGET_BASE}/latest"
+MONITOR_DIR="${RUN_DIR}/.monitor"
+
+###############################################################################
+# Cleanup
+###############################################################################
+
+BG_TAIL_PID=""
+BG_MONITOR_PID=""
+
+cleanup() {
+    log "Cleaning up..."
+
+    for pid in "${BG_TAIL_PID}" "${BG_MONITOR_PID}"; do
+        [[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null || true
+    done
+
+    if [[ -d "${RUN_DIR}/.loopr" ]]; then
+        log "Stopping daemon..."
+        "${LOOPR_BIN}" -C "${RUN_DIR}" daemon stop 2>/dev/null || true
+        "${LOOPR_BIN}" -C "${RUN_DIR}" sessions end 2>/dev/null || true
+    fi
+
+    if [[ -n "${DAEMON_PID}" ]] && kill -0 "${DAEMON_PID}" 2>/dev/null; then
+        kill "${DAEMON_PID}" 2>/dev/null || true
+    fi
+
+    wait 2>/dev/null || true
+    log "Run dir: ${RUN_DIR}"
+    log "Latest:  ${LATEST_LINK}"
+}
+trap cleanup EXIT
+
+###############################################################################
+# Reap any prior run for this target
+###############################################################################
+
+if [[ -L "${LATEST_LINK}" ]]; then
+    PREV_DIR="$(readlink -f "${LATEST_LINK}")"
+    if [[ -d "${PREV_DIR}" && "${PREV_DIR}" == /tmp/loopr/e2e/* ]]; then
+        log "Reaping previous run: ${PREV_DIR}"
+        if [[ -d "${PREV_DIR}/.loopr" ]]; then
+            "${LOOPR_BIN}" -C "${PREV_DIR}" daemon stop 2>/dev/null || true
+        fi
+        # Sockets cannot be archived by rkvr; remove the dir directly. The
+        # parent /tmp/loopr/ is a scratch tree (not user data).
+        find "${PREV_DIR}" -type s -delete 2>/dev/null || true
+        rm -rf "${PREV_DIR}"
+    fi
+    rm -f "${LATEST_LINK}"
+fi
+
+mkdir -p "${TARGET_BASE}"
+ln -sfn "${RUN_DIR}" "${LATEST_LINK}"
+ok "Run dir:    ${RUN_DIR} (will be created by scaffold)"
+ok "Latest:     ${LATEST_LINK}"
+
+###############################################################################
+# Scaffold the target
+###############################################################################
+
+log "Scaffolding ${E2E_TARGET} at ${RUN_DIR} ..."
+case "${E2E_TARGET}" in
+    rust-version)
+        # cargo init refuses non-empty dirs; let it create RUN_DIR fresh.
+        cargo init --quiet --name e2e-target "${RUN_DIR}"
+        (
+            cd "${RUN_DIR}"
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init"
+        )
+        ok "Scaffold: $(wc -l < "${RUN_DIR}/src/main.rs") lines in src/main.rs"
+        ;;
+    *)
+        err "Scaffold for target '${E2E_TARGET}' is not implemented in bin/e2e."
+        err "Add a case for it above the default '*' branch."
+        exit 1
+        ;;
+esac
+
+###############################################################################
+# Run-dir setup
+###############################################################################
+
+# v5 Config::default() (incl. LlmConfig::default()) covers Stage 9. No
+# config.yml needed; writing a partial llm: block fails serde parse because
+# LlmConfig has deny_unknown_fields and no per-field defaults at the
+# deserializer layer (only the manual impl Default).
+mkdir -p "${MONITOR_DIR}"
+ok "Monitor dir: ${MONITOR_DIR}"
+
+###############################################################################
+# init + session + daemon
+###############################################################################
+
+log "Allocating session..."
+"${LOOPR_BIN}" -C "${RUN_DIR}" sessions new 2>&1 | sed 's/^/  /'
+
+# Daemon fork-mode parent times out at START_TIMEOUT_SECS=3; cold caches can
+# push grandchild socket-bind past that. Retry once on failure.
+SOCKET="${RUN_DIR}/.loopr/socket"
+START_OK=false
+for attempt in 1 2; do
+    log "Starting daemon (forks, attempt ${attempt})..."
+    if "${LOOPR_BIN}" -C "${RUN_DIR}" -l "${LOG_LEVEL}" daemon start 2>&1 | sed 's/^/  /'; then
+        if [[ -S "${SOCKET}" ]]; then
+            START_OK=true
+            break
+        fi
+    fi
+    sleep 1
+    rm -f "${SOCKET}" "${RUN_DIR}/.loopr/daemon.pid" 2>/dev/null || true
+done
+
+if [[ "${START_OK}" == "false" ]]; then
+    err "Daemon socket never appeared at ${SOCKET} after 2 attempts"
+    exit 1
+fi
+
+DAEMON_PID="$(cat "${RUN_DIR}/.loopr/daemon.pid" 2>/dev/null || echo unknown)"
+ok "Daemon ready (PID ${DAEMON_PID})"
+
+# Resolve XDG-rooted log paths for this run. v5 writes events.log under
+# ~/.local/share/loopr/sessions/<sid>/targets/<slug>/runs/<process-id>/,
+# NOT under <target>/.loopr/runs/. The slug is the absolute target path
+# with all '/' replaced by '-'. The session id is in active-session;
+# the daemon's process-id is in daemon.process-id.
+SESSION_ID="$(cat "${RUN_DIR}/.loopr/active-session" 2>/dev/null || echo "")"
+PROCESS_ID="$(cat "${RUN_DIR}/.loopr/daemon.process-id" 2>/dev/null || echo "")"
+TARGET_SLUG="$(echo "${RUN_DIR}" | tr '/' '-')"
+XDG_TARGET_DIR="${HOME}/.local/share/loopr/sessions/${SESSION_ID}/targets/${TARGET_SLUG}"
+EVENTS_LOG="${XDG_TARGET_DIR}/runs/${PROCESS_ID}/events.log"
+FANOUT_LOG="${XDG_TARGET_DIR}/session-fanout.log"
+
+if [[ -n "${SESSION_ID}" && -n "${PROCESS_ID}" ]]; then
+    ok "Events log:  ${EVENTS_LOG}"
+    ok "Fanout log:  ${FANOUT_LOG}"
+else
+    EVENTS_LOG=""
+    FANOUT_LOG=""
+    warn "session_id or process_id missing; log paths unresolved"
+fi
+
+###############################################################################
+# Submit the Plan
+###############################################################################
+
+log "Submitting plan from ${PLAN_MD} ..."
+GOAL="$(cat "${PLAN_MD}")"
+"${LOOPR_BIN}" -C "${RUN_DIR}" plan "${GOAL}" 2>&1 | sed 's/^/  /' || warn "plan submission returned non-zero"
+
+###############################################################################
+# Print key paths
+###############################################################################
+
+echo ""
+echo -e "${BOLD}${CYAN}=== E2E paths ===${NC}"
+echo -e "  Run dir:     ${RUN_DIR}"
+echo -e "  Latest:      ${LATEST_LINK}"
+echo -e "  Config:      <none — using v5 defaults>"
+echo -e "  TaskStore:   ${RUN_DIR}/.loopr/taskstore/"
+echo -e "  Records:     ${RUN_DIR}/.loopr/records/"
+echo -e "  Events log:  ${EVENTS_LOG:-<unresolved>}"
+echo -e "  Fanout log:  ${FANOUT_LOG:-<unresolved>}"
+echo -e "  Worktrees:   ${RUN_DIR}/.loopr/worktrees/"
+echo -e "${CYAN}=================${NC}"
+echo ""
+
+###############################################################################
+# Background monitors
+###############################################################################
+
+# 1) Tail the human-readable session-fanout log (DEBUG-formatted). The
+# structured JSON events.log carries the same content for retrospective
+# analysis but is too noisy to live-tail.
+if [[ -n "${FANOUT_LOG}" ]]; then
+    log "Tailing session-fanout.log ..."
+    (
+        for _ in $(seq 1 20); do
+            [[ -f "${FANOUT_LOG}" ]] && break
+            sleep 0.5
+        done
+        if [[ -f "${FANOUT_LOG}" ]]; then
+            /usr/bin/tail -f "${FANOUT_LOG}" | sed 's/^/[fanout] /'
+        else
+            warn "session-fanout.log never appeared at ${FANOUT_LOG}"
+        fi
+    ) &
+    BG_TAIL_PID=$!
+fi
+
+# 2) Periodic taskstore + record snapshot every 30s
+(
+    TS_DIR="${RUN_DIR}/.loopr/taskstore"
+    while true; do
+        sleep 30
+        echo ""
+        echo -e "${BOLD}${CYAN}=== TaskStore snapshot ($(date +%H:%M:%S)) ===${NC}"
+        if [[ -d "${TS_DIR}" ]]; then
+            for jsonl in "${TS_DIR}"/*.jsonl; do
+                [[ -f "${jsonl}" ]] || continue
+                name="$(basename "${jsonl}" .jsonl)"
+                count="$(wc -l < "${jsonl}")"
+                if [[ "${count}" -gt 0 ]]; then
+                    last="$("/usr/bin/tail" -1 "${jsonl}" | python3 -c '
+import sys, json
+try:
+    r = json.loads(sys.stdin.read())
+    parts = []
+    for k in ("id","status","goal","title"):
+        if k in r:
+            v = str(r[k])
+            if len(v) > 50:
+                v = v[:47] + "..."
+            parts.append(f"{k}={v}")
+    print(" | ".join(parts))
+except Exception as e:
+    print(f"<parse error: {e}>")
+' 2>/dev/null || echo "<parse failed>")"
+                    echo -e "  ${BOLD}${name}${NC} (${count}): ${last}"
+                fi
+            done
+        fi
+        echo -e "${CYAN}===========================================${NC}"
+
+        # Records-derived summaries (per-record markdown digests)
+        REC_DIR="${RUN_DIR}/.loopr/records"
+        if [[ -d "${REC_DIR}" ]]; then
+            local_count="$(find "${REC_DIR}" -name "summary.md" 2>/dev/null | wc -l)"
+            if [[ "${local_count}" -gt 0 ]]; then
+                echo -e "  ${DIM}records: ${local_count} summary.md file(s) under ${REC_DIR}${NC}"
+            fi
+        fi
+    done
+) &
+BG_MONITOR_PID=$!
+
+###############################################################################
+# Wait for completion or timeout
+###############################################################################
+
+log "Daemon running. Timeout: ${TIMEOUT}s. Watching for a Tick on main..."
+echo ""
+
+SECONDS=0
+TICK_LANDED=false
+while (( SECONDS < TIMEOUT )); do
+    if ! kill -0 "${DAEMON_PID}" 2>/dev/null; then
+        warn "Daemon exited early after ${SECONDS}s"
+        break
+    fi
+    if [[ -f "${RUN_DIR}/.loopr/taskstore/ticks.jsonl" ]]; then
+        if [[ "$(wc -l < "${RUN_DIR}/.loopr/taskstore/ticks.jsonl")" -gt 0 ]]; then
+            TICK_LANDED=true
+            ok "Tick landed at ${SECONDS}s — goal complete"
+            break
+        fi
+    fi
+    sleep 5
+done
+
+if [[ "${TICK_LANDED}" == "false" && ${SECONDS} -ge ${TIMEOUT} ]]; then
+    warn "Timeout reached (${TIMEOUT}s). No Tick landed."
+fi
+
+# Stop background monitors before result collection so output is clean
+kill "${BG_TAIL_PID}" "${BG_MONITOR_PID}" 2>/dev/null || true
+wait 2>/dev/null || true
+echo ""
+
+###############################################################################
+# Collect results
+###############################################################################
+
+echo -e "${BOLD}${CYAN}=== Plans ===${NC}"
+"${LOOPR_BIN}" -C "${RUN_DIR}" plans 2>&1 | sed 's/^/  /' || warn "plans list failed"
+echo ""
+echo -e "${BOLD}${CYAN}=== Works ===${NC}"
+"${LOOPR_BIN}" -C "${RUN_DIR}" works 2>&1 | sed 's/^/  /' || warn "works list failed"
+echo ""
+echo -e "${BOLD}${CYAN}=== Bundles ===${NC}"
+"${LOOPR_BIN}" -C "${RUN_DIR}" bundles 2>&1 | sed 's/^/  /' || warn "bundles list failed"
+echo ""
+echo -e "${BOLD}${CYAN}=== Ticks ===${NC}"
+"${LOOPR_BIN}" -C "${RUN_DIR}" ticks 2>&1 | sed 's/^/  /' || warn "ticks list failed"
+echo ""
+echo -e "${BOLD}${CYAN}=== Sessions ===${NC}"
+"${LOOPR_BIN}" -C "${RUN_DIR}" sessions list 2>&1 | sed 's/^/  /' || warn "sessions list failed"
+echo ""
+echo -e "${BOLD}${CYAN}=== Git log ===${NC}"
+git -C "${RUN_DIR}" log --oneline --all 2>&1 | sed 's/^/  /' || warn "git log failed"
+echo ""
+
+###############################################################################
+# Verify the goal
+###############################################################################
+
+EXIT_CODE=0
+echo -e "${BOLD}${CYAN}=== Verification ===${NC}"
+case "${E2E_TARGET}" in
+    rust-version)
+        if (cd "${RUN_DIR}" && cargo build --quiet 2>/dev/null); then
+            VERSION_OUTPUT="$(cd "${RUN_DIR}" && cargo run --quiet -- --version 2>&1 || true)"
+            if [[ -n "${VERSION_OUTPUT}" ]]; then
+                ok "--version output: ${VERSION_OUTPUT}"
+                if [[ "${VERSION_OUTPUT}" == *"0.1.0"* ]]; then
+                    ok "Version string contains 0.1.0"
+                else
+                    warn "Version string does not contain 0.1.0"
+                    EXIT_CODE=3
+                fi
+            else
+                err "--version produced no output"
+                EXIT_CODE=3
+            fi
+        else
+            err "cargo build failed on the target"
+            EXIT_CODE=3
+        fi
+
+        echo ""
+        if (cd "${RUN_DIR}" && cargo test 2>&1 | /usr/bin/tail -10); then
+            ok "cargo test completed"
+        else
+            warn "cargo test had failures"
+            EXIT_CODE=3
+        fi
+        ;;
+esac
+
+if [[ "${TICK_LANDED}" == "false" ]]; then
+    EXIT_CODE=$(( EXIT_CODE == 0 ? 1 : EXIT_CODE ))
+fi
+echo ""
+
+###############################################################################
+# Snapshot results
+###############################################################################
+
+RESULTS_FILE="${MONITOR_DIR}/results.md"
+{
+    echo "# Loopr v5 E2E Results"
+    echo ""
+    echo "- **Target:**     ${E2E_TARGET}"
+    echo "- **Timestamp:**  ${TIMESTAMP}"
+    echo "- **Run dir:**    ${RUN_DIR}"
+    echo "- **Duration:**   ${SECONDS}s"
+    echo "- **Tick landed:** ${TICK_LANDED}"
+    echo "- **Exit code:**  ${EXIT_CODE}"
+    echo ""
+
+    echo "## TaskStore"
+    echo ""
+    TS_DIR="${RUN_DIR}/.loopr/taskstore"
+    if [[ -d "${TS_DIR}" ]]; then
+        for jsonl in "${TS_DIR}"/*.jsonl; do
+            [[ -f "${jsonl}" ]] || continue
+            name="$(basename "${jsonl}" .jsonl)"
+            count="$(wc -l < "${jsonl}")"
+            echo "### ${name} (${count} records)"
+            echo ""
+            if [[ "${count}" -gt 0 ]]; then
+                echo '```json'
+                cat "${jsonl}"
+                echo '```'
+            fi
+            echo ""
+        done
+    fi
+
+    echo "## Project tree"
+    echo ""
+    echo '```'
+    (cd "${RUN_DIR}" && find . -not -path './.git/*' -not -path './.loopr/*' -not -path './target/*' -not -path './.monitor/*' -type f | sort)
+    echo '```'
+    echo ""
+
+    echo "## Git log"
+    echo ""
+    echo '```'
+    git -C "${RUN_DIR}" log --oneline --all 2>/dev/null || echo "(no commits)"
+    echo '```'
+    echo ""
+
+    if [[ -n "${FANOUT_LOG}" && -f "${FANOUT_LOG}" ]]; then
+        echo "## session-fanout.log (last 200 lines)"
+        echo ""
+        echo '```'
+        /usr/bin/tail -200 "${FANOUT_LOG}"
+        echo '```'
+    fi
+
+    if [[ -n "${EVENTS_LOG}" && -f "${EVENTS_LOG}" ]]; then
+        echo ""
+        echo "## events.log path (JSON, full detail)"
+        echo ""
+        echo "${EVENTS_LOG}"
+    fi
+} > "${RESULTS_FILE}"
+
+ok "Results snapshot: ${RESULTS_FILE}"
+
+###############################################################################
+# Optional Claude evaluation
+###############################################################################
+
+if [[ "${SKIP_EVAL}" == "false" ]] && command -v claude >/dev/null 2>&1; then
+    log "Running Claude evaluation ..."
+    EVAL_PROMPT="You are evaluating an end-to-end run of the loopr-v5 orchestrator.
+The goal was: see ${PLAN_MD}.
+The run dir is ${RUN_DIR}.
+
+Examine ${RESULTS_FILE} and the run dir. Report:
+1. Did the daemon decompose, implement, review, and integrate?
+2. Did a Tick land on main?
+3. Does the target's '--version' output match expectations?
+4. Look at events.log for these spans (added in 2026-04-24 instrumentation sweep):
+   - lifeguard.check_action: action_hash / action_count / max_repeat — did the lifeguard fire?
+   - decomposer.decompose: outcome (ok/cycle_detected/llm_failed/...) — did decomposition succeed?
+   - integrator.integrate: phase (preflight/git_sequence/commit) — how far did integration get?
+   - tool.<name>: which tools ran in which lanes?
+5. Verdict: SUCCESS, PARTIAL, or FAILURE with explanation.
+
+Just read files and report. Do not write code or modify anything."
+
+    claude -p "${EVAL_PROMPT}" \
+        --allowedTools "Read,Glob,Grep,Bash(read-only commands)" \
+        2>&1 | tee "${MONITOR_DIR}/evaluation.md"
+    ok "Evaluation: ${MONITOR_DIR}/evaluation.md"
+fi
+
+###############################################################################
+# Summary
+###############################################################################
+
+echo ""
+echo -e "${BOLD}${CYAN}=== Summary ===${NC}"
+echo -e "  Target:     ${E2E_TARGET}"
+echo -e "  Run dir:    ${RUN_DIR}"
+echo -e "  Latest:     ${LATEST_LINK}"
+echo -e "  Duration:   ${SECONDS}s"
+echo -e "  Tick:       ${TICK_LANDED}"
+echo -e "  Exit code:  ${EXIT_CODE} (0=ok, 1=timeout, 3=verify-failed)"
+echo -e "  Events log: ${EVENTS_LOG:-<unresolved>}"
+echo -e "  Results:    ${RESULTS_FILE}"
+echo -e "${CYAN}===============${NC}"
+
+exit "${EXIT_CODE}"

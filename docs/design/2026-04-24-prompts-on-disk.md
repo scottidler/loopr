@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-04-24
-**Status:** Draft
+**Status:** Implemented (infrastructure); Phase 6 e2e gate deferred — see "Post-Implementation Findings" at end
 **Crates touched:** context, decomposer, loopr
 **Review Passes Completed:** 5/5
 
@@ -356,3 +356,53 @@ Handlebars rendering is not a code-execution vector; it's pure string substituti
 - v4 prompts and structure: `~/repos/scottidler/loopr-v4/resources/`
 - v4 placeholder cross-check: `~/repos/scottidler/loopr-v4/bin/check-pmt-placeholders`
 - Inline placeholders being replaced: `crates/context/src/implementer.rs:122-191`, `crates/context/src/reviewer.rs:33-105`, `crates/decomposer/src/prompt.rs:24-58`
+
+## Post-Implementation Findings (2026-04-25)
+
+Phases 1-5 landed and `otto ci` is green. The full commit chain on branch `v5`:
+
+| Commit | Phase | What landed |
+|---|---|---|
+| `5ed5556` | (spec) | This design doc |
+| `5418076` | 1 | `crates/context/prompts/` themed source tree (11 files: implementer + reviewer + decompose + tools-list partial + .gitkeep slots) |
+| `b3e8197` | 2 | `PromptLoader` + handlebars + 3-layer override (10 unit tests) |
+| `31df012` | 3 | `InlineContextBuilder` + `decomposer::prompt` flipped to loader; inline strings deleted |
+| `acb6620` | 3 | (lockfile-tracked-by-mistake fix) |
+| `49970d4` | 4 | `loopr init` seeds `<target>/.loopr/prompts/` with `--force` and `.gitkeep` skip |
+| `bb765a6` | 5 | `crates/context/tests/baked_canary.rs` enumerates required templates |
+
+### Phase 6 outcome: e2e reproduced the implementer regression
+
+The e2e at `/tmp/loopr/e2e/rust-version/20260425-001938` ran with the freshly-built loopr binary (`cargo install --path crates/loopr --force` + `bin/e2e --build rust-version`). Decomposition succeeded (1 Work, AC well-formed). Implementer launched and ran 3 iterations in 6 seconds, then the lifeguard escalated:
+
+```
+00:19:55  ERROR escalation needed: same action repeated 3 times (max_repeat=3)
+00:19:55  WARN  implementer escalated; marking Work Blocked
+```
+
+Final state: `Work=blocked`, no Bundle, no Tick, `src/main.rs` unmodified, exit code 3.
+
+This is the same failure pattern that motivated the design. The new prompts (v3 discipline language ported verbatim, v5 action shape) did not cure it.
+
+### Why we cannot diagnose further from this run
+
+1. **Lifeguard's escalation message is not self-describing.** The current message reads "same action repeated 3 times (max_repeat=3)" — it does not include `action_kind` or `action_hash`. Those fields exist on the `agents.lifeguard.check_action` span, but at INFO-level filtering the span open/close events are dropped while the implementer's ERROR survives. The operator sees only the diff-less escalation.
+2. **Implementer transcripts are not yet wired.** `crates/loopr/CLAUDE.md` already documents this as a follow-up: "agents construct a `TranscriptIteration` ... then call `append_iteration(...)`. ... agent-side population (decomposer / implementer / reviewer) remains a follow-up." Without transcripts, there is no record of the system prompt, user message, raw LLM response, or parsed actions per iteration.
+
+Both gaps are orthogonal to this design's scope (prompts on disk) but block its empirical verification.
+
+### Salvage available on branch `wip-debug-residue-2026-04-24`
+
+Inspecting the wip branch (commit `f05f34d`, the dirty-tree residue from session `38cb1fba`'s implementer-regression investigation) found the previous agent had already addressed both gaps:
+
+- **`crates/agents/src/lifeguard.rs`** embeds `action_kind` and `action_hash` directly in the escalation message ("`same action repeated 3 times (action_kind=run_tool, action_hash=0x..., max_repeat=3)`"). Visible at any log level. ~10 LOC.
+- **Transcript module move** from `crates/loopr/src/transcript/` → `crates/telemetry/src/transcript/` (so agents can depend on it without depending on `loopr`), plus **+159 LOC of wiring in `crates/agents/src/implementer.rs`** that calls `append_iteration` at every return point (parse-failure escalation, lifeguard escalation, bundle creation, done, need_help, corrected actions), plus matching wiring in `reviewer.rs` (+18 LOC).
+- Plus `crates/worktree/src/handle.rs` `target_path()` accessor needed by the transcript wiring.
+- Plus `clippy.toml` (`too-many-arguments-threshold = 16`) per `rust.md`.
+- Plus dead-code cleanups in `daemon/context.rs`, `transport/handler.rs`, `store/error.rs`.
+
+NOT to take: the wip branch's `loopr/src/daemon.rs` reverts the Phase 3 `PromptLoader::for_target(&target)` wiring; that hunk is obsolete now that Phase 3 has shipped.
+
+### Next-step recommendation
+
+Cherry-pick the lifeguard message enrichment first (single small file, no module-shape change, immediately diagnostic). Re-run the e2e — the next escalation will name the action. With that data in hand, decide whether the action that loops is a prompt issue (fix the .pmt files; trivial because prompts are now on disk) or a deeper agent bug (transcript wiring becomes necessary). Either way, Phase 6's verification re-opens with telemetry.
