@@ -14,6 +14,8 @@
 use std::fmt::Write;
 use std::path::Path;
 
+use tracing::instrument;
+
 use domain::{Bundle, Work};
 use tools::ToolSchema;
 
@@ -40,6 +42,22 @@ impl InlineContextBuilder {
 }
 
 impl ContextBuilder for InlineContextBuilder {
+    #[instrument(
+        name = "context.build_for_implementer",
+        level = "debug",
+        skip_all,
+        fields(
+            role = "implementer",
+            work_id = %work.id,
+            iteration = iteration,
+            history_len = history.len(),
+            tool_count = tool_schemas.len(),
+            system_chars = tracing::field::Empty,
+            user_chars = tracing::field::Empty,
+            token_estimate = tracing::field::Empty,
+        ),
+        err,
+    )]
     fn build_for_implementer(
         &self,
         work: &Work,
@@ -52,6 +70,10 @@ impl ContextBuilder for InlineContextBuilder {
         let system_prompt = render_system_prompt(tool_schemas);
         let user_message = render_user_message(work, worktree_path, history, state, iteration);
         let token_estimate = (system_prompt.len() + user_message.len()) / CHARS_PER_TOKEN;
+        let span = tracing::Span::current();
+        span.record("system_chars", system_prompt.len());
+        span.record("user_chars", user_message.len());
+        span.record("token_estimate", token_estimate);
         Ok(AssembledContext {
             system_prompt,
             user_message,
@@ -59,6 +81,22 @@ impl ContextBuilder for InlineContextBuilder {
         })
     }
 
+    #[instrument(
+        name = "context.build_for_reviewer",
+        level = "debug",
+        skip_all,
+        fields(
+            role = "reviewer",
+            bundle_id = %bundle.id,
+            work_id = %work.id,
+            diff_chars = diff.len(),
+            noop_files_count = noop_files.map(|f| f.len()).unwrap_or(0),
+            system_chars = tracing::field::Empty,
+            user_chars = tracing::field::Empty,
+            token_estimate = tracing::field::Empty,
+        ),
+        err,
+    )]
     fn build_for_reviewer(
         &self,
         bundle: &Bundle,
@@ -69,6 +107,10 @@ impl ContextBuilder for InlineContextBuilder {
         let system_prompt = REVIEWER_SYSTEM_PROMPT.to_string();
         let user_message = render_reviewer_user_message(bundle, work, diff, noop_files);
         let token_estimate = (system_prompt.len() + user_message.len()) / CHARS_PER_TOKEN;
+        let span = tracing::Span::current();
+        span.record("system_chars", system_prompt.len());
+        span.record("user_chars", user_message.len());
+        span.record("token_estimate", token_estimate);
         Ok(AssembledContext {
             system_prompt,
             user_message,

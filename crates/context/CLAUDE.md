@@ -30,6 +30,14 @@ This crate was extracted after the Architect's Round 3 finding: originally `Cont
 
 Notably does NOT depend on `llm` — `context` produces ready-to-send Messages; `llm` consumes them. Keeps the prompt-assembly layer independent of which LLM backend is in use.
 
+## Instrumentation
+
+`InlineContextBuilder::build_for_implementer` opens `context.build_for_implementer` at `debug` with `err` carrying `role = "implementer"`, `work_id`, `iteration`, `history_len`, `tool_count`. After rendering, `system_chars`, `user_chars`, and `token_estimate` are recorded via `Span::current().record()` so a reader sees the budget the assembled context consumed.
+
+`build_for_reviewer` mirrors the shape with `role = "reviewer"`, `bundle_id`, `work_id`, `diff_chars`, `noop_files_count`, plus the same post-render `system_chars` / `user_chars` / `token_estimate`.
+
+Acceptance test: `tests/instrumentation.rs` drives both builders and asserts the spans + post-record fields.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

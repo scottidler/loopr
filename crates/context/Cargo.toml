@@ -12,6 +12,8 @@ store = { path = "../store" }
 tools = { path = "../tools" }
 telemetry = { path = "../telemetry" }
 thiserror = "2.0.18"
+tracing.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tracing-subscriber = { workspace = true }

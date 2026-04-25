@@ -335,6 +335,8 @@ dependencies = [
  "telemetry",
  "thiserror 2.0.18",
  "tools",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
