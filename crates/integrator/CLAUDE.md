@@ -33,6 +33,23 @@ This crate must not depend on `llm`. Compile-time enforced via Cargo: `integrato
 
 Given the same bundles and the same base commit, `integrate` produces the same Tick SHA or the same typed error. That determinism is the invariant; keep it.
 
+## Instrumentation
+
+`integrate` opens `integrator.integrate` at `info` with `err` and the following scope fields, inherited by every nested span:
+
+- `plan_id`, `bundle_count`, `target` — set at span open.
+- `integration_branch` — recorded after `verify_branch` resolves the actual branch name.
+- `phase` — recorded as the function walks `preflight` -> `git_sequence` -> `commit`. A failing run leaves `phase` at the last point reached, so a reader can tell where the failure happened from the span alone.
+
+Inner spans:
+
+- `integrator.preflight_plan_consistency` (`debug`, `err`) — pre-flight per-bundle Plan check.
+- `integrator.transition_bundle` (`debug`, `err`) — Bundle FSM transitions; carries `bundle_id`, `work_id`, `from`, `target_status`, `expected_updated_at` (the OCC version snapshot).
+- `integrator.fail_all` / `integrator.fail_all_without_reset` (`warn`) — the rollback paths; carry `bundle_count` + `error`.
+- `integrator.git.checkout`, `integrator.git.merge_no_ff`, `integrator.git.is_ancestor`, `integrator.git.reset_hard` (`debug`, `err`) — the Phase 2 git operations. The lower-level `run_git` wrapper sits at `trace` with `git_args` recorded.
+
+Acceptance test: `tests/instrumentation.rs::integrator_smoke_spans_happy_path` drives `integrate` against a real git tempdir and asserts `integrator.integrate` carries `plan_id`, `bundle_count`, `integration_branch`, the final `phase=commit`, plus the nested transition + git spans.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

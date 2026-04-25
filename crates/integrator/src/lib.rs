@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, TickId, Work};
 use store::{BundleUpdateSink, StoreError};
@@ -189,6 +190,19 @@ impl MergeOutcome {
 /// (`git merge-base --is-ancestor`) adopts an existing merge commit
 /// if the prior call succeeded before the crash, and falls through
 /// to the normal merge path otherwise.
+#[instrument(
+    name = "integrator.integrate",
+    level = "info",
+    skip_all,
+    fields(
+        plan_id = %plan.id,
+        bundle_count = bundles.len(),
+        target = %deps.target.display(),
+        integration_branch = tracing::field::Empty,
+        phase = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn integrate<U, W, T>(
     bundles: &[Bundle],
     plan: &Plan,
@@ -199,17 +213,21 @@ where
     W: WorkLookup,
     T: TickSink,
 {
+    let span = tracing::Span::current();
+    span.record("phase", "preflight");
     // Phase 1: pre-flight
     preflight_shape(bundles, deps.config.allow_multi_bundle)?;
     preflight_status(bundles)?;
     preflight_plan_consistency(bundles, plan, &deps.works).await?;
 
     let integ_branch = format!("loopr/plan-{}", plan.id);
+    span.record("integration_branch", integ_branch.as_str());
     if !git::verify_branch(&deps.target, &integ_branch, deps.config.git_timeout).await? {
         return Err(IntegrationError::IntegrationBranchMissing { branch: integ_branch });
     }
 
     // Phase 2: git sequence (serialize against the working tree)
+    span.record("phase", "git_sequence");
     let _git_guard = deps.git_lock.lock().await;
 
     // Phase 2 prologue: transition every Accepted Bundle to Integrating.
@@ -342,6 +360,7 @@ where
     let sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
 
     // Phase 3: commit (batched store writes)
+    span.record("phase", "commit");
     // Tick first. On `DuplicateTick`, adopt the existing Tick (prior
     // crashed call wrote it) and continue to the Merged transitions.
     let tick = Tick::new(
@@ -421,6 +440,13 @@ fn preflight_status(bundles: &[Bundle]) -> Result<(), IntegrationError> {
     Ok(())
 }
 
+#[instrument(
+    name = "integrator.preflight_plan_consistency",
+    level = "debug",
+    skip_all,
+    fields(plan_id = %plan.id, bundle_count = bundles.len()),
+    err,
+)]
 async fn preflight_plan_consistency<W: WorkLookup>(
     bundles: &[Bundle],
     plan: &Plan,
@@ -461,6 +487,19 @@ async fn transition_bundle<U: BundleUpdateSink>(
 /// Transition a Bundle and return the mutated clone with its fresh
 /// `updated_at`. Used by the Phase 2 prologue so subsequent Phase 3
 /// writes have the correct OCC expected-version.
+#[instrument(
+    name = "integrator.transition_bundle",
+    level = "debug",
+    skip_all,
+    fields(
+        bundle_id = %bundle.id,
+        work_id = %bundle.work_id,
+        from = ?bundle.status,
+        target_status = ?target,
+        expected_updated_at = bundle.updated_at,
+    ),
+    err,
+)]
 async fn transition_bundle_returning<U: BundleUpdateSink>(
     sink: &U,
     bundle: &Bundle,
@@ -478,6 +517,12 @@ async fn transition_bundle_returning<U: BundleUpdateSink>(
 /// On git-sequence failure: roll git back to `pre_merge`, then
 /// transition every Bundle in the slice to `IntegrationFailed` in one
 /// batch. A failure inside `reset_hard` is fatal and bubbles.
+#[instrument(
+    name = "integrator.fail_all",
+    level = "warn",
+    skip_all,
+    fields(bundle_count = bundles.len(), pre_merge_sha = pre_merge, error = %err),
+)]
 async fn fail_all<U, W, T>(
     bundles: &[Bundle],
     pre_merge: &str,
@@ -496,6 +541,12 @@ where
 
 /// Variant used inside the merge-failure arm: the merge path already
 /// called `merge_abort` + `reset_hard` before invoking this.
+#[instrument(
+    name = "integrator.fail_all_without_reset",
+    level = "warn",
+    skip_all,
+    fields(bundle_count = bundles.len(), error = %err),
+)]
 async fn fail_all_without_reset<U, W, T>(
     bundles: &[Bundle],
     deps: &IntegratorDeps<U, W, T>,

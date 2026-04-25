@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::time::timeout;
+use tracing::instrument;
 
 use crate::error::IntegrationError;
 
@@ -33,6 +34,7 @@ pub(crate) async fn verify_branch(
 /// Check out a branch via `git checkout <branch>`. Fatal on failure
 /// (a dirty working tree, a missing branch, or a permission error
 /// all surface here).
+#[instrument(name = "integrator.git.checkout", level = "debug", skip_all, fields(branch), err)]
 pub(crate) async fn checkout(target: &Path, branch: &str, git_timeout: Duration) -> Result<(), IntegrationError> {
     let out = run_git(target, &["checkout", branch], git_timeout).await?;
     if !out.status.success() {
@@ -105,6 +107,13 @@ pub(crate) async fn assert_nontrivial_branch(
 /// `integrate` call merged the Bundle's `head_commit` before crashing,
 /// that commit will be an ancestor of the integration branch's
 /// current `HEAD`.
+#[instrument(
+    name = "integrator.git.is_ancestor",
+    level = "debug",
+    skip_all,
+    fields(commit, ref_name),
+    err
+)]
 pub(crate) async fn is_ancestor(
     target: &Path,
     commit: &str,
@@ -167,6 +176,7 @@ pub(crate) async fn merge_commit_sha_for(
 /// On success returns the new `HEAD` SHA (via a follow-up `rev-parse HEAD`).
 /// On non-zero exit returns the stderr for the caller to classify; the
 /// caller is responsible for running `merge_abort` + `reset_hard`.
+#[instrument(name = "integrator.git.merge_no_ff", level = "debug", skip_all, fields(branch), err)]
 pub(crate) async fn merge_no_ff(
     target: &Path,
     branch: &str,
@@ -191,6 +201,7 @@ pub(crate) async fn merge_abort(target: &Path, git_timeout: Duration) {
 /// Reset the current branch hard to the given SHA. A failure here is
 /// fatal: rollback could not restore the integration branch, and the
 /// daemon's worktree-crash-recovery pass at restart owns the repair.
+#[instrument(name = "integrator.git.reset_hard", level = "debug", skip_all, fields(sha), err)]
 pub(crate) async fn reset_hard(target: &Path, sha: &str, git_timeout: Duration) -> Result<(), IntegrationError> {
     let out = run_git(target, &["reset", "--hard", sha], git_timeout).await?;
     if !out.status.success() {
@@ -212,6 +223,7 @@ struct CapturedOutput {
     stderr: Vec<u8>,
 }
 
+#[instrument(level = "trace", skip_all, fields(target = %target.display(), git_args = ?args, timeout_ms = git_timeout.as_millis() as u64), err)]
 async fn run_git(target: &Path, args: &[&str], git_timeout: Duration) -> Result<CapturedOutput, IntegrationError> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(target);
