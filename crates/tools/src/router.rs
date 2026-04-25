@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::Semaphore;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::env::scrub_command;
 use crate::error::ToolError;
@@ -107,6 +107,18 @@ impl LaneRouter {
     ///
     /// Kill strategy is chosen from the wrap decision (bwrap-wrapped =>
     /// `KillStrategy::BwrapChild`; plain => `KillStrategy::Pgid`), per D16.
+    #[instrument(
+        name = "router.spawn",
+        level = "debug",
+        skip_all,
+        fields(
+            lane = lane.as_str(),
+            working_dir = %working_dir.display(),
+            timeout_secs = ?timeout_secs,
+            sandbox = ?self.sandbox,
+        ),
+        err,
+    )]
     pub async fn spawn(
         &self,
         cmd: tokio::process::Command,

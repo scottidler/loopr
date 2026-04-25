@@ -23,3 +23,4 @@ uuid = { version = "1.23.1", features = ["v7"] }
 [dev-dependencies]
 serde_yaml.workspace = true
 tempfile = "3.27.0"
+tracing-subscriber = { workspace = true }

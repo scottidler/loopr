@@ -4,6 +4,8 @@ use ::glob::{MatchOptions, Pattern, glob_with};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 use crate::error::ToolError;
 use crate::sandbox::SandboxMode;
 use crate::tool::ToolContext;
@@ -42,6 +44,18 @@ impl From<Error> for ToolError {
     }
 }
 
+#[instrument(
+    name = "tool.glob",
+    level = "debug",
+    skip_all,
+    fields(
+        tool_name = "glob",
+        lane = "local",
+        pattern = %input.pattern,
+        working_dir = %ctx.working_dir.display(),
+    ),
+    err,
+)]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
     // Validate the pattern parses before walking.
     let _ = Pattern::new(&input.pattern).map_err(|e| Error::InvalidPattern(e.to_string()))?;

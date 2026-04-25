@@ -5,6 +5,17 @@ pub enum Lane {
     Heavy,
 }
 
+impl Lane {
+    /// Stable lowercase string for span fields and log lines.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lane::Local => "local",
+            Lane::Net => "net",
+            Lane::Heavy => "heavy",
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct LanePolicy {
     pub lane: Lane,

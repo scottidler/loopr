@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 use crate::builtin::path::{PathError, resolve};
 use crate::error::ToolError;
 use crate::tool::ToolContext;
@@ -46,6 +48,19 @@ impl From<Error> for ToolError {
     }
 }
 
+#[instrument(
+    name = "tool.write",
+    level = "debug",
+    skip_all,
+    fields(
+        tool_name = "write",
+        lane = "local",
+        path = %input.path.display(),
+        bytes = input.content.len(),
+        working_dir = %ctx.working_dir.display(),
+    ),
+    err,
+)]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
     let resolved = resolve(&input.path, ctx).map_err(|e| match e {
         PathError::Escape(s) => Error::SandboxViolation(s),

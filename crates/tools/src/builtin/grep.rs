@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 use crate::builtin::path::{PathError, resolve};
 use crate::error::ToolError;
 use crate::lane::Lane;
@@ -39,6 +41,20 @@ pub struct Output {
     pub persisted_output_path: Option<PathBuf>,
 }
 
+#[instrument(
+    name = "tool.grep",
+    level = "debug",
+    skip_all,
+    fields(
+        tool_name = "grep",
+        lane = "local",
+        pattern = %input.pattern,
+        path = ?input.path,
+        glob = ?input.glob,
+        working_dir = %ctx.working_dir.display(),
+    ),
+    err,
+)]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolError> {
     let search_path = match input.path {
         Some(p) => resolve(&p, ctx).map_err(map_path_err)?,

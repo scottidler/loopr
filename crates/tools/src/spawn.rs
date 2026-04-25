@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::ChildStderr;
 use tokio::process::ChildStdout;
-use tracing::debug;
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 /// Maximum inline output size per captured stream (stdout/stderr/combined) in
@@ -67,6 +67,17 @@ pub struct PersistConfig<'a> {
 /// process's pgid does not reliably cascade into the PID namespace bwrap owns;
 /// children inside the sandbox can `setsid()` and escape. SIGKILL on bwrap's
 /// outer PID is the only move the kernel honors unconditionally.
+#[instrument(
+    name = "spawn.process_group",
+    level = "debug",
+    skip_all,
+    fields(
+        timeout_secs,
+        kill_strategy = ?kill_strategy,
+        invocation_id = ?persist.invocation_id,
+    ),
+    err,
+)]
 pub async fn spawn_with_process_group(
     mut cmd: tokio::process::Command,
     timeout_secs: u64,

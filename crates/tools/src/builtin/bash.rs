@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 use tree_sitter::{Node, Tree};
 
 use crate::error::ToolError;
@@ -36,6 +37,19 @@ pub struct Output {
     pub persisted_output_path: Option<PathBuf>,
 }
 
+#[instrument(
+    name = "tool.bash",
+    level = "debug",
+    skip_all,
+    fields(
+        tool_name = "bash",
+        lane = tracing::field::Empty,
+        command_chars = input.command.len(),
+        timeout_secs = ?input.timeout_secs,
+        working_dir = %ctx.working_dir.display(),
+    ),
+    err,
+)]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolError> {
     // Parse the command via tree-sitter-bash ONCE; reuse the CST for both
     // the denylist check (step 1) and the lane-routing decision (step 2).
@@ -60,6 +74,7 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolErro
         Some(tree) => lane_for_tree(tree, &input.command),
         None => Lane::Net,
     };
+    tracing::Span::current().record("lane", lane.as_str());
 
     // 3. Build the shell command and hand off to the router.
     let cmd = sh_command(&input.command, &ctx.working_dir);

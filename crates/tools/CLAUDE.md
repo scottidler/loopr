@@ -44,6 +44,19 @@ Subprocess output (e.g., `cargo test`, `npm install`) can exceed the `ipc` crate
 
 Decide in the Stage 7 design doc (`docs/design/2026-04-21-tool-registry.md`). User preference is chunked multi-message; raise on the design doc review if that becomes impractical.
 
+## Instrumentation
+
+Each builtin's `execute()` opens a `tool.<name>` span at `debug` with `err`. Required scope fields, inherited by every event below:
+
+- `tool_name` — `read` / `write` / `edit` / `bash` / `grep` / `glob`. Mirrors `Tool::name()`.
+- `lane` — `local` / `net` / `heavy`. For `bash`, recorded after tree-sitter classification (it's `Empty` at span open, filled when the lane is decided). For others, set at span open.
+- Tool-specific keys: `path` for read/write/edit, `pattern` for grep/glob, `command_chars` for bash. Heavy payloads (full command bytes, file contents) are summarized to length, never inlined per `rules/log.md`.
+- `working_dir` on every tool span so a path-resolution error names the directory it was working from.
+
+The router's `spawn` opens `router.spawn` (`debug`, `err`) carrying `lane`, `working_dir`, `timeout_secs`, `sandbox`. The subprocess wrapper opens `spawn.process_group` (`debug`, `err`) carrying `timeout_secs`, `kill_strategy`, `invocation_id`.
+
+The acceptance test `tests/instrumentation.rs` drives each builtin through `dispatch` and asserts its span and required fields appear. Removing an `#[instrument]` from a builtin's `execute()` fails that test.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
