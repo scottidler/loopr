@@ -7,6 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use tracing::instrument;
+
 use domain::WorkId;
 
 use crate::error::WorktreeError;
@@ -42,6 +44,13 @@ pub(crate) fn git_cmd(repo_path: &Path) -> Command {
 /// One attempt at creating the worktree for `(work_id, seq)`. Returns
 /// `CreateOutcome::SeqTaken` on the retryable "already exists" class; any
 /// other non-zero exit surfaces as `WorktreeError::GitCommand`.
+#[instrument(
+    name = "worktree.ops.try_create_at_seq",
+    level = "debug",
+    skip_all,
+    fields(work_id = %work_id, seq, base_sha = sha),
+    err,
+)]
 pub(crate) fn try_create_at_seq(
     repo_path: &Path,
     worktree_root: &Path,
@@ -82,6 +91,13 @@ pub(crate) fn try_create_at_seq(
 ///
 /// Idempotent: a path that is not a registered worktree (or has already been
 /// removed) returns `Ok(())`.
+#[instrument(
+    name = "worktree.ops.remove_worktree",
+    level = "debug",
+    skip_all,
+    fields(repo_path = %repo_path.display(), worktree_path = %path.display()),
+    err,
+)]
 pub(crate) fn remove_worktree(repo_path: &Path, path: &Path) -> Result<(), WorktreeError> {
     let output = git_cmd(repo_path)
         .args([
@@ -110,6 +126,13 @@ pub(crate) fn remove_worktree(repo_path: &Path, path: &Path) -> Result<(), Workt
 
 /// Delete a local branch. `git branch -D <branch>` is force-delete so a
 /// branch that has unmerged commits still goes away. Idempotent on missing.
+#[instrument(
+    name = "worktree.ops.delete_branch",
+    level = "debug",
+    skip_all,
+    fields(repo_path = %repo_path.display(), branch),
+    err,
+)]
 pub(crate) fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let output = git_cmd(repo_path).args(["branch", "-D", branch]).output()?;
 
@@ -129,6 +152,7 @@ pub(crate) fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), Worktr
 /// `$GIT_DIR/worktrees/` left behind by crashed sessions. Non-fatal: on
 /// failure we log a warning and return `Ok` — prune is a best-effort hygiene
 /// sweep, not a correctness-critical step.
+#[instrument(name = "worktree.ops.prune", level = "debug", skip_all, fields(repo_path = %repo_path.display()), err)]
 pub(crate) fn prune(repo_path: &Path) -> Result<(), WorktreeError> {
     let output = git_cmd(repo_path).args(["worktree", "prune"]).output()?;
 
@@ -145,6 +169,13 @@ pub(crate) fn prune(repo_path: &Path) -> Result<(), WorktreeError> {
 /// Resolve `base_ref` to a 40-char SHA. D10: run in **repo** context, never
 /// inside the worktree, because `HEAD` inside a worktree resolves to the
 /// worktree's own branch tip rather than the caller's intended base.
+#[instrument(
+    name = "worktree.ops.resolve_sha",
+    level = "debug",
+    skip_all,
+    fields(repo_path = %repo_path.display(), base_ref),
+    err,
+)]
 pub(crate) fn resolve_sha(repo_path: &Path, base_ref: &str) -> Result<String, WorktreeError> {
     let output = git_cmd(repo_path).args(["rev-parse", base_ref]).output()?;
 
@@ -174,6 +205,7 @@ pub(crate) fn show_current_branch(worktree_path: &Path) -> Result<String, Worktr
 }
 
 /// List porcelain output of `git worktree list` executed in `repo_path`.
+#[instrument(name = "worktree.ops.list_porcelain", level = "debug", skip_all, fields(repo_path = %repo_path.display()), err)]
 pub(crate) fn list_porcelain(repo_path: &Path) -> Result<String, WorktreeError> {
     let output = git_cmd(repo_path).args(["worktree", "list", "--porcelain"]).output()?;
 

@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use tracing::instrument;
+
 use domain::WorkId;
 
 use crate::error::WorktreeError;
@@ -59,6 +61,13 @@ impl Worktree {
     /// Explicit cleanup. Removes the worktree (`git worktree remove --force`)
     /// and **keeps the branch** (integrator merges it after a Tick publishes).
     /// After this returns, the handle is marked consumed and `Drop` is a no-op.
+    #[instrument(
+        name = "worktree.cleanup",
+        level = "info",
+        skip_all,
+        fields(work_id = %self.work_id, branch = %self.branch, worktree_path = %self.path.display(), seq = self.seq),
+        err,
+    )]
     pub fn cleanup(mut self) -> Result<(), WorktreeError> {
         ops::remove_worktree(&self.repo_path, &self.path)?;
         self.consumed = true;
@@ -78,6 +87,20 @@ impl Worktree {
     ///
     /// `git worktree prune` runs ONCE at entry (D9). It is NOT called inside
     /// the retry loop: pruning mid-loop would create new race conditions.
+    #[instrument(
+        name = "worktree.create",
+        level = "info",
+        skip_all,
+        fields(
+            work_id = %work_id,
+            repo_path = %repo_path.display(),
+            worktree_root = %worktree_root.display(),
+            base_sha = sha,
+            seq = tracing::field::Empty,
+            branch = tracing::field::Empty,
+        ),
+        err,
+    )]
     pub fn create(repo_path: &Path, worktree_root: &Path, work_id: WorkId, sha: &str) -> Result<Self, WorktreeError> {
         std::fs::create_dir_all(worktree_root)?;
 
@@ -85,10 +108,13 @@ impl Worktree {
         // $GIT_DIR/worktrees/. Non-fatal; logs-only on failure.
         ops::prune(repo_path)?;
 
+        let span = tracing::Span::current();
         for seq in 1..=MAX_SEQ {
             match ops::try_create_at_seq(repo_path, worktree_root, &work_id, seq, sha)? {
                 CreateOutcome::Created { path, branch } => {
                     verify_branch(&path, &branch)?;
+                    span.record("seq", seq);
+                    span.record("branch", branch.as_str());
                     return Ok(Self {
                         path,
                         branch,

@@ -9,6 +9,8 @@
 
 use std::path::Path;
 
+use tracing::instrument;
+
 use domain::WorkId;
 
 mod config;
@@ -29,9 +31,18 @@ pub use info::WorktreeInfo;
 /// filtered to paths under `worktree_root`. Entries for user-created
 /// worktrees and the main checkout are dropped. Detached-HEAD entries are
 /// also dropped (ours always carry a `loopr/wk-*` branch).
+#[instrument(
+    name = "worktree.list",
+    level = "debug",
+    skip_all,
+    fields(repo_path = %repo_path.display(), worktree_root = %worktree_root.display(), count = tracing::field::Empty),
+    err,
+)]
 pub fn list(repo_path: &Path, worktree_root: &Path) -> Result<Vec<WorktreeInfo>, WorktreeError> {
     let raw = ops::list_porcelain(repo_path)?;
-    Ok(parse::porcelain(&raw, worktree_root))
+    let result = parse::porcelain(&raw, worktree_root);
+    tracing::Span::current().record("count", result.len());
+    Ok(result)
 }
 
 /// Parse `loopr/wk-<work-id>-<seq>` → `(WorkId, seq)`. Returns `None` on
@@ -46,6 +57,13 @@ pub fn parse_branch(branch: &str) -> Option<(WorkId, u32)> {
 /// which has a `WorktreeInfo` from `list()` but no `Worktree` handle. Keeps
 /// the branch alive; call [`delete_branch`] explicitly if the branch should
 /// also go.
+#[instrument(
+    name = "worktree.cleanup_at",
+    level = "info",
+    skip_all,
+    fields(repo_path = %repo_path.display(), worktree_path = %worktree_path.display()),
+    err,
+)]
 pub fn cleanup_at(repo_path: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
     ops::remove_worktree(repo_path, worktree_path)
 }
@@ -54,6 +72,13 @@ pub fn cleanup_at(repo_path: &Path, worktree_path: &Path) -> Result<(), Worktree
 /// publishes (the Bundle's commits have landed on the integration branch),
 /// and by reconcile for terminal `Done` Works as belt-and-suspenders.
 /// Idempotent on missing.
+#[instrument(
+    name = "worktree.delete_branch",
+    level = "info",
+    skip_all,
+    fields(repo_path = %repo_path.display(), branch),
+    err,
+)]
 pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError> {
     ops::delete_branch(repo_path, branch)
 }
@@ -64,6 +89,13 @@ pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError
 /// tip, which is exactly wrong when the coordinator wants the current
 /// integration-branch tip to use as `sha` for the next attempt (D10;
 /// v4 NO-OP-LOOP bug, commit `120c29b`).
+#[instrument(
+    name = "worktree.resolve_sha",
+    level = "debug",
+    skip_all,
+    fields(repo_path = %repo_path.display(), base_ref),
+    err,
+)]
 pub fn resolve_sha(repo_path: &Path, base_ref: &str) -> Result<String, WorktreeError> {
     ops::resolve_sha(repo_path, base_ref)
 }

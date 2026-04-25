@@ -14,6 +14,8 @@
 
 use std::path::Path;
 
+use tracing::instrument;
+
 use crate::error::WorktreeError;
 
 const LOOPR_EXCLUDE_MARKER: &str = "# loopr-managed";
@@ -25,6 +27,7 @@ const LOOPR_EXCLUDES: &[&str] = &[
     ".loopr/config.yml",
 ];
 
+#[instrument(name = "worktree.ensure_loopr_excludes", level = "debug", skip_all, fields(repo_path = %repo_path.display()), err)]
 pub fn ensure_loopr_excludes(repo_path: &Path) -> Result<(), WorktreeError> {
     let exclude_path = repo_path.join(".git").join("info").join("exclude");
     let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();

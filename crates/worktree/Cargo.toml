@@ -17,3 +17,4 @@ tracing.workspace = true
 [dev-dependencies]
 serde_yaml.workspace = true
 tempfile = "3.27.0"
+tracing-subscriber = { workspace = true }

@@ -40,6 +40,16 @@ Design doc: [`docs/design/2026-04-21-worktree-lifecycle.md`](../../docs/design/2
 
 `domain` (for `WorkId`), `telemetry` (for span emission), workspace-shared (`serde`, `thiserror`, `clap`, `tracing`). Added via `cargo add`.
 
+## Instrumentation
+
+`Worktree::create` opens `worktree.create` at `info` with `err`. `work_id`, `repo_path`, `worktree_root`, `base_sha` set at span open; `seq` and `branch` filled via `Span::current().record()` once the seq-allocation loop succeeds. Reading the closing span answers "what worktree, on which branch, at which base SHA, on which seq."
+
+`Worktree::cleanup` opens `worktree.cleanup` at `info` with `err` carrying `work_id`, `branch`, `worktree_path`, `seq`. The free functions `worktree::list`, `worktree::cleanup_at`, `worktree::delete_branch`, `worktree::resolve_sha`, `worktree::ensure_loopr_excludes` each open spans at `info`/`debug` with their own scope keys; `list` also records `count` post-parse.
+
+Internal git wrappers (`ops::try_create_at_seq`, `ops::remove_worktree`, `ops::delete_branch`, `ops::prune`, `ops::resolve_sha`, `ops::list_porcelain`) open `worktree.ops.<op>` at `debug` with `err`. The pre-existing `Worktree::Drop` `tracing::warn!` stays as the safety-net signal.
+
+Acceptance test: `tests/instrumentation.rs::worktree_smoke_spans_create_then_cleanup` creates and cleans up a real worktree, asserts both span names and the post-creation `seq` + `branch` fields.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
