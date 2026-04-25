@@ -27,6 +27,7 @@ use crate::tool::DecomposeChild;
 /// itself starts with `in_degree >= 1` from its self-edge and never
 /// reaches zero, so Kahn's visits it zero times and the final
 /// `visited < nodes.len()` check trips.
+#[tracing::instrument(level = "debug", skip_all, fields(node_count = nodes.len()), err)]
 pub(crate) fn detect_cycles(nodes: &HashMap<String, Vec<String>>) -> Result<(), String> {
     let mut in_degree: HashMap<&str, usize> = HashMap::new();
     for title in nodes.keys() {
@@ -79,6 +80,12 @@ pub(crate) fn detect_cycles(nodes: &HashMap<String, Vec<String>>) -> Result<(), 
 /// `children`. `title_to_id`'s keys must already be normalized per
 /// `normalize` (trim + lowercase). Each child's dependency strings
 /// are normalized here before lookup.
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(child_count = children.len(), title_count = title_to_id.len()),
+    err,
+)]
 pub(crate) fn resolve_deps(
     children: &[DecomposeChild],
     title_to_id: &HashMap<String, WorkId>,

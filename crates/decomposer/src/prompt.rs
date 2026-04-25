@@ -59,6 +59,7 @@ The target repository currently contains these files:
 Use this to ground your decomposition in the actual codebase: name real files when referring to them, do not propose creating files that already exist, and do not propose removing files you cannot see.
 "#;
 
+#[tracing::instrument(level = "debug", skip_all, fields(tree_chars = tree.len()))]
 pub(crate) fn assemble_system(tree: &str) -> String {
     SYSTEM_TEMPLATE.replace("{{ TREE }}", tree)
 }
@@ -67,6 +68,7 @@ pub(crate) fn assemble_system(tree: &str) -> String {
 /// `None`. On retry, the previous attempt's error is interpolated
 /// under `## Previous Attempt Failed`, capped at `RETRY_ERROR_MAX_BYTES`
 /// with a truncation suffix to prevent prompt-size blowup.
+#[tracing::instrument(level = "debug", skip_all, fields(goal_len = goal.len(), retry = prev_error.is_some()))]
 pub(crate) fn assemble_user(goal: &str, prev_error: Option<&str>) -> String {
     match prev_error {
         None => format!("## Plan\n\n{goal}"),

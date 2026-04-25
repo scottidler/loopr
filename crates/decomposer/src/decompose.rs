@@ -173,6 +173,7 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     Ok(works)
 }
 
+#[instrument(level = "debug", skip_all, fields(system_chars = system.len(), user_chars = user.len()), err)]
 async fn try_llm_once<L: LlmClient>(llm: &L, system: &str, user: &str) -> Result<ToolCall, llm::LlmError> {
     llm.complete_with_tool(system, user, submit_decomposition_schema())
         .await

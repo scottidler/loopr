@@ -20,3 +20,4 @@ tracing.workspace = true
 tempfile = "3.27.0"
 tokio = { version = "1.52.1", features = ["rt", "macros"] }
 llm = { path = "../llm", features = ["stub"] }
+tracing-subscriber = { workspace = true }

@@ -53,6 +53,7 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".venv", "dist", 
 ///
 /// `target` must exist and be a directory. Missing / non-directory
 /// targets surface as `DecomposerError::WorkspaceScanFailed`.
+#[tracing::instrument(level = "debug", skip_all, fields(target = %target.display(), tree_chars = tracing::field::Empty), err)]
 pub(crate) fn collect_workspace_tree(target: &Path) -> Result<String, DecomposerError> {
     if !target.exists() {
         return Err(DecomposerError::WorkspaceScanFailed(format!(
@@ -72,7 +73,9 @@ pub(crate) fn collect_workspace_tree(target: &Path) -> Result<String, Decomposer
         Err(_) => collect_via_walk(target)?,
     };
 
-    Ok(format_entries(entries))
+    let result = format_entries(entries);
+    tracing::Span::current().record("tree_chars", result.len());
+    Ok(result)
 }
 
 /// Primary path: `git ls-files -z --cached --others --exclude-standard`
