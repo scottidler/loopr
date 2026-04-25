@@ -268,6 +268,13 @@ fn daemon_status(target: &Path) -> Result<(), LooprError> {
 /// typed `MethodName::PlanCreate` request. Stage 5 replaces Stage 4's
 /// `request_raw` escape hatch with this typed path; the daemon persists
 /// the plan through its `Store` and returns the created record.
+#[tracing::instrument(
+    name = "client.plan_command",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), goal_len = goal.len(), subcommand = "plan"),
+    err,
+)]
 fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -15,6 +15,13 @@ use crate::output::{self, Format};
 use crate::transport;
 
 /// `loopr plans` body.
+#[tracing::instrument(
+    name = "client.list",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), kind = ?kind, subcommand = "list"),
+    err,
+)]
 pub fn run(target: &Path, explicit_format: Option<Format>, kind: RecordKind) -> Result<(), LooprError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

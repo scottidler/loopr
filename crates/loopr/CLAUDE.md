@@ -29,6 +29,15 @@ The driver. Binary crate: daemon process, IPC transport, CLI dispatch, source-gu
 
 This crate orchestrates. It does not implement any pipeline stage. If you catch yourself writing decomposition logic or an agent loop here, move it to the stage crate and call it from the driver.
 
+## Instrumentation (client side)
+
+The client-side IPC and CLI bodies open spans so a `loopr <subcommand>` invocation produces a self-describing trace under its own per-process run dir:
+
+- `client.connect_or_wait`, `client.connect`, `client.handshake`, `client.request` — debug/info+err with socket path / method / session_id.
+- `client.plan_command`, `client.list`, `client.show` — info+err with `target`, `subcommand`, and the command-specific payload (`goal_len`, `kind`, `record_id`).
+
+The handshake span carries the caller's `session_id` so the daemon-side `ipc.connection` span records it as `client_session_id` (see Phase 6 of the layout doc). That is the correlation key for stitching client-side and daemon-side logs of the same request.
+
 ## Instrumentation (daemon side)
 
 The daemon's IPC dispatch and pipeline-spawn methods carry `#[tracing::instrument]`:

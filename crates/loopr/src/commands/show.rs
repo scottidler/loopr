@@ -17,6 +17,13 @@ use crate::error::LooprError;
 use crate::output::{self, Format};
 use crate::transport;
 
+#[tracing::instrument(
+    name = "client.show",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), record_id = %id, subcommand = "show"),
+    err,
+)]
 pub fn run(target: &Path, explicit_format: Option<Format>, id: String) -> Result<(), LooprError> {
     // Local prefix check so a bad id doesn't trigger a pointless IPC
     // round-trip. The `_kind` is kept as documentation (and as a

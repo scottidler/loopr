@@ -32,6 +32,7 @@ impl IpcClient {
     /// Connect to the daemon's socket. Returns `ClientIo` on any
     /// failure; callers that expect "daemon might still be starting up"
     /// should use `transport::connect_or_wait` instead.
+    #[tracing::instrument(name = "client.connect", level = "debug", skip_all, fields(socket = %socket.display()), err)]
     pub async fn connect(socket: &Path) -> Result<Self, LooprError> {
         let stream = UnixStream::connect(socket)
             .await
@@ -49,6 +50,13 @@ impl IpcClient {
     /// `session_id`, when present, is forwarded to the daemon so every
     /// server-side span emitted for requests on this connection inherits
     /// the caller's session scope (Phase 6 additive extension).
+    #[tracing::instrument(
+        name = "client.handshake",
+        level = "info",
+        skip_all,
+        fields(session_id = session_id.unwrap_or("")),
+        err,
+    )]
     pub async fn handshake(&mut self, session_id: Option<&str>) -> Result<HandshakeResult, LooprError> {
         let params = HandshakeParams {
             protocol_version: protocol_version_or_override(),
@@ -69,6 +77,7 @@ impl IpcClient {
     /// Typed request: common path. `MethodName` round-trips to the wire
     /// via `strum::Display`; adding a variant to `MethodName` in a
     /// future stage picks up here for free.
+    #[tracing::instrument(name = "client.request", level = "debug", skip_all, fields(method = ?method), err)]
     pub async fn request(
         &mut self,
         method: MethodName,

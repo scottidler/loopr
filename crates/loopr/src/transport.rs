@@ -34,6 +34,7 @@ pub const START_TIMEOUT_SECS: u64 = 3;
 /// already decided whether to fork a daemon, so this function only
 /// needs to wait for the grandchild's `bind`. It never forks: that
 /// authority lives in `daemon::ensure_daemon[_if_needed]`.
+#[tracing::instrument(name = "client.connect_or_wait", level = "debug", skip_all, fields(target = %target.display()), err)]
 pub async fn connect_or_wait(target: &Path) -> Result<IpcClient, LooprError> {
     let socket = sentinel::socket_path(target);
     let deadline = Instant::now() + Duration::from_secs(START_TIMEOUT_SECS);
