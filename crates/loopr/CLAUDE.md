@@ -29,6 +29,16 @@ The driver. Binary crate: daemon process, IPC transport, CLI dispatch, source-gu
 
 This crate orchestrates. It does not implement any pipeline stage. If you catch yourself writing decomposition logic or an agent loop here, move it to the stage crate and call it from the driver.
 
+## Summary generators
+
+Per-record markdown digests live under `<target>/.loopr/records/<kind>/<id>/summary.md`. The renderers in `crates/loopr/src/summary/` are pure (input record + extra context = `String`); the writers atomic (write-to-temp + rename). Renderers covered: `render_bundle`, `render_work`, `render_plan(plan, &[Work])`. Each has a unit test asserting required sections + post-write file existence.
+
+Best-effort `write_<kind>_summary_best_effort` helpers in `crates/loopr/src/daemon/context.rs` log a `warn!` on failure and return; transcripts and FSM transitions never propagate a summary error.
+
+**Wiring status:** the renderer + atomic-write surface ships in this phase; per-transition callsite wiring at `spawn_implementer_for_work`, `spawn_reviewer_for_bundle`, and `spawn_integrator_for_bundle` remains a focused follow-up. The design doc Phase 8.5 assumed `WorkUpdateSink` / `PlanUpdateSink` traits that mirror `BundleUpdateSink`; only the latter exists, so per-transition fanout is best added once the daemon is being touched anyway. No regression: a missing summary is regenerated on the next transition that does touch the right callsite, and the renderers are deterministic given taskstore state.
+
+**Process / session digests** (`runs/<process-id>/summary.md` and `sessions/<session-id>/summary.md`) are not yet built; the design doc itself notes these depend on the daemon shutdown hook and `loopr sessions end`. Tracked as a follow-up alongside the wiring.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

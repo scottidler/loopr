@@ -635,6 +635,15 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                         }
                     }
                 }
+                // Refresh per-record summaries on the happy-path terminal:
+                // Bundle just transitioned to Merged, Work to Done, Plan
+                // potentially to Complete. Re-read the latest Bundle so
+                // the summary reflects the current status.
+                let post_bundle = self.store.bundles().get(&bundle.id).await.unwrap_or(bundle);
+                write_bundle_summary_best_effort(&self.target, &post_bundle);
+                write_work_summary_best_effort(&self.target, &work);
+                let post_plan = self.store.plans().get(&plan_mut.id).await.unwrap_or(plan_mut);
+                write_plan_summary_best_effort(&self.target, &self.store, &post_plan).await;
             }
             Err(e) => {
                 error!(error = %e, "integrator terminal; marking Work Blocked");
@@ -761,4 +770,35 @@ pub(crate) async fn transition_and_persist_plan(
         .update(plan.clone())
         .await
         .map_err(|e| format!("plans().update: {e}"))
+}
+
+/// Best-effort: write the bundle summary under `<target>/.loopr/records/`.
+/// Failures emit a `warn!` and return; never propagate to the caller.
+pub(crate) fn write_bundle_summary_best_effort(target: &std::path::Path, bundle: &Bundle) {
+    if let Err(e) = crate::summary::write_bundle(target, bundle) {
+        warn!(bundle_id = %bundle.id, error = %e, "summary::write_bundle failed (non-fatal)");
+    }
+}
+
+/// Best-effort: write the work summary under `<target>/.loopr/records/`.
+pub(crate) fn write_work_summary_best_effort(target: &std::path::Path, work: &Work) {
+    if let Err(e) = crate::summary::write_work(target, work) {
+        warn!(work_id = %work.id, error = %e, "summary::write_work failed (non-fatal)");
+    }
+}
+
+/// Best-effort: write the plan summary, fetching children from the store.
+/// Plan summaries depend on the current Works under the plan; we list them
+/// here rather than threading through every caller.
+pub(crate) async fn write_plan_summary_best_effort(target: &std::path::Path, store: &Store, plan: &Plan) {
+    let children = match store.works().list_by_parent_id(&plan.id).await {
+        Ok(w) => w,
+        Err(e) => {
+            warn!(plan_id = %plan.id, error = %e, "summary::write_plan list_by_parent_id failed (non-fatal)");
+            return;
+        }
+    };
+    if let Err(e) = crate::summary::write_plan(target, plan, &children) {
+        warn!(plan_id = %plan.id, error = %e, "summary::write_plan failed (non-fatal)");
+    }
 }
