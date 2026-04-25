@@ -35,6 +35,7 @@ use context::ContextBuilder;
 use domain::{Bundle, BundleStatus, ReviewIssue, Role, Verdict, Work};
 use llm::{ChatMessage, LlmClient};
 use store::{BundleUpdateError, BundleUpdateSink};
+use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
 
 use crate::config::ReviewerConfig;
 
@@ -160,6 +161,23 @@ where
         &assembled.user_message,
     )
     .await?;
+
+    // Best-effort transcript write. Reviewer is single-turn (modulo
+    // parse-retry sub-loop, which we collapse to "the verdict that
+    // came out"). Failures emit a warn and continue.
+    let mut iter = TranscriptIteration::new_single_turn(String::new(), String::new());
+    iter.system_prompt = assembled.system_prompt.clone();
+    iter.user_prompt = assembled.user_message.clone();
+    iter.response = render_verification(&verdict);
+    iter.parsed_actions = vec![match &verdict {
+        Verdict::Accept { .. } => "verdict=accept".to_string(),
+        Verdict::ChangeRequested { reasons, .. } => format!("verdict=change_requested ({} reasons)", reasons.len()),
+        Verdict::Reject { .. } => "verdict=reject".to_string(),
+    }];
+    let transcript_path = reviewer_path(&deps.target, bundle.id.as_ref());
+    if let Err(e) = append_iteration(&transcript_path, &iter) {
+        warn!(error = %e, path = %transcript_path.display(), "reviewer transcript append failed");
+    }
 
     // OCC snapshot BEFORE mutation: the snapshot freezes the on-disk
     // updated_at the caller last observed; `Bundle::transition` below

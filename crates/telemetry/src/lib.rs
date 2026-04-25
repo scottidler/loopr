@@ -17,6 +17,7 @@ mod session;
 mod session_fanout;
 mod slug;
 mod subscriber;
+pub mod transcript;
 mod xdg;
 
 /// Environment variable that shadows the CLI `--log-level` flag default.

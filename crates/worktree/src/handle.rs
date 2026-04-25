@@ -58,6 +58,14 @@ impl Worktree {
         &self.sha
     }
 
+    /// The target repository path that this worktree was branched from.
+    /// Used by callers that need to write target-local artifacts
+    /// (e.g., transcript files at `<target>/.loopr/records/...`) while
+    /// running inside the sibling worktree.
+    pub fn repo_path(&self) -> &Path {
+        &self.repo_path
+    }
+
     /// Explicit cleanup. Removes the worktree (`git worktree remove --force`)
     /// and **keeps the branch** (integrator merges it after a Tick publishes).
     /// After this returns, the handle is marked consumed and `Drop` is a no-op.

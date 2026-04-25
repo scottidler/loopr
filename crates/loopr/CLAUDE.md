@@ -52,7 +52,7 @@ Per-request scope fields available on the daemon's `ipc.connection` span (set in
 
 ## Transcripts
 
-`crates/loopr/src/transcript/` holds the LLM round-trip transcript writers. Layout:
+The LLM round-trip transcript writers live in `crates/telemetry/src/transcript/` (moved from this crate on 2026-04-24 so agents/decomposer can depend on them — `loopr` is the binary crate and cannot be a dependency of library crates). The agents and decomposer crates wire `append_iteration` calls themselves; this crate no longer has a transcript module. Layout:
 
 - `model.rs` — `TranscriptIteration` struct (model, started_at, latency_ms, prompt/completion tokens, session/process ids, events.log path, system prompt, user prompt, response, parsed actions, dispatcher outcomes, lifeguard decision).
 - `render.rs` — `render_iteration(&TranscriptIteration) -> String` produces the markdown block; `redact_paths(text, &[String]) -> String` replaces lines containing any deny-pattern substring with `[redacted: pattern=<p>]`. Per-section cap: `ITERATION_BYTE_CAP / 4` (25 KB), enforced at render time. Truncation marker is the literal `>[truncated: N KB original; sha=<8>]<` from the design doc Q5.
@@ -66,7 +66,7 @@ Paths under `<target>/.loopr/records/`:
 
 `.git/info/exclude` is updated by `worktree::ensure_loopr_excludes` to cover `.loopr/records/`. Transcripts never get committed.
 
-**Wiring status:** the model + renderer + atomic-append surface ships in this phase; agent-side population (decomposer / implementer / reviewer) remains a follow-up tracked alongside the summary-callsite wiring. The contract is: agents construct a `TranscriptIteration` with everything they have at the end of an LLM call, then call `append_iteration(transcript_path, &iter)`. Failures emit a `warn!` and the agent continues.
+**Wiring status:** `agents::implementer::run_implementer` and `agents::reviewer::run_reviewer` construct a `TranscriptIteration` and call `append_iteration` at every iteration / return-path. The decomposer is NOT yet wired — `decomposer::decompose` does not call `append_iteration`; `plans/<plan-id>/decomposition.md` will not be written until that follow-up lands. Failures in the wired agents emit a `warn!` and the agent continues.
 
 **System-prompt elision** (the design doc's "leaning yes" open question) is not implemented yet; iterations 2..N currently re-render the full system prompt. Tracked as a follow-up.
 

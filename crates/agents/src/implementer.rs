@@ -24,12 +24,42 @@ use tracing::{debug, info, instrument, warn};
 use context::{ContextBuilder, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
 use domain::{Bundle, BundleId, Work};
 use llm::{ChatMessage, LlmClient};
+use telemetry::transcript::{TranscriptIteration, append_iteration, implementer_path};
 use worktree::Worktree;
 
+use crate::action::AgentAction;
 use crate::config::ImplementerConfig;
 use crate::dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action};
 use crate::lifeguard::{Decision, Lifeguard};
 use crate::parse::{parse_actions, parse_one};
+
+/// Append one iteration's transcript block. Best-effort: failures emit
+/// a warn and continue. Capturing this in a helper lets every return
+/// path inside `run_implementer` write the transcript cheaply.
+fn write_implementer_transcript(
+    target: &Path,
+    work_id: &str,
+    iteration: u32,
+    system_prompt: &str,
+    user_prompt: &str,
+    raw_response: &str,
+    parsed_actions: &[AgentAction],
+    dispatcher_outcomes: &[String],
+    lifeguard_decision: Option<String>,
+) {
+    let mut iter = TranscriptIteration::new_single_turn(String::new(), String::new());
+    iter.iteration = iteration;
+    iter.system_prompt = system_prompt.to_string();
+    iter.user_prompt = user_prompt.to_string();
+    iter.response = raw_response.to_string();
+    iter.parsed_actions = parsed_actions.iter().map(|a| a.kind().to_string()).collect();
+    iter.dispatcher_outcomes = dispatcher_outcomes.to_vec();
+    iter.lifeguard_decision = lifeguard_decision;
+    let path = implementer_path(target, work_id);
+    if let Err(e) = append_iteration(&path, &iter) {
+        warn!(error = %e, path = %path.display(), "implementer transcript append failed");
+    }
+}
 
 /// Minimal store-write interface. Abstracting just the
 /// `Bundle`-create surface (not the full `Store`) keeps the
@@ -149,11 +179,20 @@ where
             iteration,
         )?;
 
+        // Track the last raw LLM response of this iteration. The parse-
+        // retry sub-loop overwrites it on each call; whichever was
+        // last is what the iteration's transcript records. The empty
+        // initial assignment is overwritten on the first LLM call
+        // below.
+        #[allow(unused_assignments)]
+        let mut last_raw = String::new();
+
         // Self-correction sub-loop: parse failures append to this
         // vec and re-prompt; reset_parse_failures ONLY on Ok.
         let mut messages = vec![ChatMessage::user(assembled.user_message.clone())];
         let actions = loop {
             let raw = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
+            last_raw = raw.clone();
             match parse_actions(&raw) {
                 Ok(actions) => {
                     lifeguard.reset_parse_failures();
@@ -168,6 +207,17 @@ where
                     let requeries_used = (messages.len() - 1) / 2;
                     if requeries_used as u32 >= deps.config.max_requeries {
                         if let Decision::Escalate(reason) = lifeguard.record_parse_failure() {
+                            write_implementer_transcript(
+                                worktree.repo_path(),
+                                work.id.as_ref(),
+                                iteration,
+                                &assembled.system_prompt,
+                                &assembled.user_message,
+                                &last_raw,
+                                &[],
+                                &[],
+                                Some(format!("Escalate (parse-failures): {reason}")),
+                            );
                             return Err(ImplementerError::EscalationNeeded(reason));
                         }
                         break Vec::new();
@@ -177,6 +227,17 @@ where
         };
 
         if actions.is_empty() {
+            write_implementer_transcript(
+                worktree.repo_path(),
+                work.id.as_ref(),
+                iteration,
+                &assembled.system_prompt,
+                &assembled.user_message,
+                &last_raw,
+                &[],
+                &["(all parse attempts failed this iteration)".to_string()],
+                None,
+            );
             history.push(IterationSummary {
                 iteration,
                 actions_summary: "(all parse attempts failed this iteration)".to_string(),
@@ -188,23 +249,71 @@ where
         // parse_one against the same local messages vec.
         let mut summaries: Vec<String> = Vec::new();
         let mut broke_loop = false;
+        let parsed_actions_snapshot = actions.clone();
         for action in actions {
             if let Decision::Escalate(reason) = lifeguard.check_action(&action) {
+                write_implementer_transcript(
+                    worktree.repo_path(),
+                    work.id.as_ref(),
+                    iteration,
+                    &assembled.system_prompt,
+                    &assembled.user_message,
+                    &last_raw,
+                    &parsed_actions_snapshot,
+                    &summaries,
+                    Some(format!("Escalate (lifeguard): {reason}")),
+                );
                 return Err(ImplementerError::EscalationNeeded(reason));
             }
             let result = dispatch_action(action.clone(), worktree, &deps.tools).await?;
             match result {
                 ActionResult::BundleCreated(mut bundle) => {
+                    summaries.push("propose_bundle (id pending persistence)".to_string());
+                    write_implementer_transcript(
+                        worktree.repo_path(),
+                        work.id.as_ref(),
+                        iteration,
+                        &assembled.system_prompt,
+                        &assembled.user_message,
+                        &last_raw,
+                        &parsed_actions_snapshot,
+                        &summaries,
+                        None,
+                    );
                     let id = deps.bundles.persist(bundle.clone()).await?;
                     bundle.id = id;
                     return Ok(bundle);
                 }
                 ActionResult::Done(mut bundle) => {
+                    summaries.push("done".to_string());
+                    write_implementer_transcript(
+                        worktree.repo_path(),
+                        work.id.as_ref(),
+                        iteration,
+                        &assembled.system_prompt,
+                        &assembled.user_message,
+                        &last_raw,
+                        &parsed_actions_snapshot,
+                        &summaries,
+                        None,
+                    );
                     let id = deps.bundles.persist(bundle.clone()).await?;
                     bundle.id = id;
                     return Ok(bundle);
                 }
                 ActionResult::NeedHelp(reason) => {
+                    summaries.push(format!("need_help: {reason}"));
+                    write_implementer_transcript(
+                        worktree.repo_path(),
+                        work.id.as_ref(),
+                        iteration,
+                        &assembled.system_prompt,
+                        &assembled.user_message,
+                        &last_raw,
+                        &parsed_actions_snapshot,
+                        &summaries,
+                        Some(format!("Escalate (need_help): {reason}")),
+                    );
                     return Err(ImplementerError::EscalationNeeded(reason));
                 }
                 ActionResult::Committed(sha) => {
@@ -230,16 +339,52 @@ where
                             let corrected_result = dispatch_action(corrected, worktree, &deps.tools).await?;
                             match corrected_result {
                                 ActionResult::BundleCreated(mut bundle) => {
+                                    summaries.push("corrected -> propose_bundle".to_string());
+                                    write_implementer_transcript(
+                                        worktree.repo_path(),
+                                        work.id.as_ref(),
+                                        iteration,
+                                        &assembled.system_prompt,
+                                        &assembled.user_message,
+                                        &last_raw,
+                                        &parsed_actions_snapshot,
+                                        &summaries,
+                                        None,
+                                    );
                                     let id = deps.bundles.persist(bundle.clone()).await?;
                                     bundle.id = id;
                                     return Ok(bundle);
                                 }
                                 ActionResult::Done(mut bundle) => {
+                                    summaries.push("corrected -> done".to_string());
+                                    write_implementer_transcript(
+                                        worktree.repo_path(),
+                                        work.id.as_ref(),
+                                        iteration,
+                                        &assembled.system_prompt,
+                                        &assembled.user_message,
+                                        &last_raw,
+                                        &parsed_actions_snapshot,
+                                        &summaries,
+                                        None,
+                                    );
                                     let id = deps.bundles.persist(bundle.clone()).await?;
                                     bundle.id = id;
                                     return Ok(bundle);
                                 }
                                 ActionResult::NeedHelp(reason) => {
+                                    summaries.push(format!("corrected -> need_help: {reason}"));
+                                    write_implementer_transcript(
+                                        worktree.repo_path(),
+                                        work.id.as_ref(),
+                                        iteration,
+                                        &assembled.system_prompt,
+                                        &assembled.user_message,
+                                        &last_raw,
+                                        &parsed_actions_snapshot,
+                                        &summaries,
+                                        Some(format!("Escalate (corrected -> need_help): {reason}")),
+                                    );
                                     return Err(ImplementerError::EscalationNeeded(reason));
                                 }
                                 ActionResult::ToolOutput(out) => {
@@ -267,6 +412,20 @@ where
                 }
             }
         }
+
+        // Iteration completes naturally (continuing to next iteration).
+        // Write a transcript covering this iteration's full story.
+        write_implementer_transcript(
+            worktree.repo_path(),
+            work.id.as_ref(),
+            iteration,
+            &assembled.system_prompt,
+            &assembled.user_message,
+            &last_raw,
+            &parsed_actions_snapshot,
+            &summaries,
+            None,
+        );
 
         let summary = cap_str(&summaries.join("\n"), ITERATION_SUMMARY_CAP);
         history.push(IterationSummary {

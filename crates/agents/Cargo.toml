@@ -13,6 +13,7 @@ llm = { path = "../llm" }
 tools = { path = "../tools" }
 worktree = { path = "../worktree" }
 context = { path = "../context" }
+telemetry = { path = "../telemetry" }
 serde_json.workspace = true
 tracing.workspace = true
 thiserror = "2.0.18"
