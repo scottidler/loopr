@@ -92,6 +92,13 @@ impl Plan {
     /// `validate_transition`. On any state-changing result (`Changed`),
     /// updates `self.status` and `self.updated_at`. `Unchanged` (from == to)
     /// leaves state intact. Invalid transitions return `FsmError`.
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(record_kind = "plan", record_id = %self.id, from = ?self.status, target = ?target, role = ?role),
+        ret,
+        err,
+    )]
     pub fn transition(&mut self, target: PlanStatus, role: Role) -> Result<Transition, FsmError<PlanStatus>> {
         let result = PlanStatus::validate_transition(self.status, target, role)?;
         if result != Transition::Unchanged {
@@ -106,6 +113,13 @@ impl Plan {
     /// and falls through to the override table only on rejection. Any
     /// state-changing result (`Changed` or `Override`) updates `self.status`
     /// and `self.updated_at`; only `Unchanged` leaves state intact.
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(record_kind = "plan", record_id = %self.id, from = ?self.status, target = ?target, role = ?role, override_ = true),
+        ret,
+        err,
+    )]
     pub fn override_status(&mut self, target: PlanStatus, role: Role) -> Result<Transition, FsmError<PlanStatus>> {
         let result = PlanStatus::validate_override(self.status, target, role)?;
         if result != Transition::Unchanged {

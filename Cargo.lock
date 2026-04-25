@@ -498,6 +498,7 @@ dependencies = [
  "serde_json",
  "strum",
  "taskstore-traits",
+ "tracing",
 ]
 
 [[package]]

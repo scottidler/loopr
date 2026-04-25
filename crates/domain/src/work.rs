@@ -160,6 +160,13 @@ impl Work {
     /// updates `self.status` and `self.updated_at`. `Unchanged`
     /// (from == to) leaves state intact. Invalid transitions return
     /// `FsmError`.
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", record_id = %self.id, from = ?self.status, target = ?target, role = ?role),
+        ret,
+        err,
+    )]
     pub fn transition(&mut self, target: WorkStatus, role: Role) -> Result<Transition, FsmError<WorkStatus>> {
         let result = WorkStatus::validate_transition(self.status, target, role)?;
         if result != Transition::Unchanged {
@@ -175,6 +182,13 @@ impl Work {
     /// rejection. Any state-changing result (`Changed` or `Override`)
     /// updates `self.status` and `self.updated_at`; only `Unchanged`
     /// leaves state intact.
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(record_kind = "work", record_id = %self.id, from = ?self.status, target = ?target, role = ?role, override_ = true),
+        ret,
+        err,
+    )]
     pub fn override_status(&mut self, target: WorkStatus, role: Role) -> Result<Transition, FsmError<WorkStatus>> {
         let result = WorkStatus::validate_override(self.status, target, role)?;
         if result != Transition::Unchanged {

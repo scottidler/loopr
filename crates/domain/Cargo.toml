@@ -12,6 +12,7 @@ rand = "0.10.1"
 serde = { workspace = true, features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
 taskstore-traits = { workspace = true }
+tracing.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

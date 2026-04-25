@@ -31,6 +31,12 @@ Source code in this crate must not `use` anything from `tokio`, `reqwest`, `ureq
 
 The dep is declared in the root `[workspace.dependencies]` block as a git source pinned to a flat tag (`tag = "v0.5.0"`; all three taskstore crates share the same workspace tag) and inherited here via `workspace = true`. Never declare a second independent source for `taskstore-traits` in this crate — the root declaration is load-bearing for the same-commit guarantee (see `../../docs/taskstore-integration.md` for the split-brain failure mode and why branch-tracking is rejected here).
 
+## Instrumentation
+
+Every FSM transition method (`Plan::transition`, `Plan::override_status`, `Work::transition`, `Work::override_status`, `Bundle::transition`, `Bundle::override_status`) opens a `debug` span with `ret` + `err` carrying `record_kind`, `record_id`, `from`, `target`, `role`. Override variants additionally carry `override_ = true`. A rejected transition's `err` line records the FSM failure with both states present, so the caller's `warn!`/`error!` does not need to re-format the FSM error to be useful.
+
+This is the only crate-internal instrumentation in `domain`. The crate stays I/O-free: events emit through the caller's tracing subscriber via `tracing` (workspace dep, no I/O of its own at this layer).
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
