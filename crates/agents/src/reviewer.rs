@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
 use domain::{Bundle, BundleStatus, ReviewIssue, Role, Verdict, Work};
@@ -103,6 +103,18 @@ where
 // run_reviewer
 // ---------------------------------------------------------------------------
 
+#[instrument(
+    level = "info",
+    skip_all,
+    fields(
+        bundle_id = %bundle.id,
+        work_id = %work.id,
+        head_commit = bundle.head_commit.as_deref().unwrap_or("(none)"),
+        force_proposed = bundle.force_proposed,
+        path_count = bundle.paths.len(),
+    ),
+    err,
+)]
 pub async fn run_reviewer<L, S, C>(
     bundle: &Bundle,
     work: &Work,
@@ -172,6 +184,16 @@ where
 
 /// Inner parse-retry loop. Broken out so the outer function reads
 /// top-down as one story and the retry mechanics live in one place.
+#[instrument(
+    level = "debug",
+    skip_all,
+    fields(
+        system_chars = system_prompt.len(),
+        user_chars = user_message.len(),
+        max_requeries = config.max_requeries,
+    ),
+    err,
+)]
 async fn call_llm_with_retry<L>(
     llm: &L,
     config: &ReviewerConfig,
@@ -230,6 +252,7 @@ where
 /// `Schema` (belt-and-suspenders with the prompt; this is enforced
 /// here so the daemon never sees a ChangeRequested with nothing to
 /// feed back to a retry Implementer).
+#[instrument(level = "debug", skip_all, fields(raw_chars = raw.len()), err)]
 pub fn parse_verdict(raw: &str) -> Result<Verdict, ParseError> {
     let stripped = strip_markdown_fences(raw);
     if let Some(v) = try_parse_full(stripped) {
@@ -381,6 +404,7 @@ pub fn render_issue_summary(summary: &str, reasons: &[ReviewIssue]) -> String {
 /// Run `git -C <target> show --format=medium --no-color --patch <sha> -- <paths...>`.
 /// Returns stdout as a String. `paths` may be empty (full commit
 /// diff). Non-zero exit returns `ReviewerError::Git(stderr)`.
+#[instrument(level = "debug", skip_all, fields(target = %target.display(), head_commit, path_count = paths.len()), err)]
 pub async fn git_show(target: &Path, head_commit: &str, paths: &[String]) -> Result<String, ReviewerError> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(target);
@@ -443,6 +467,7 @@ pub fn truncate_diff(body: &str, cap: usize) -> String {
 /// render as `(file not found)`; on an I/O error other than missing,
 /// the entry renders `(read error: ...)` so a single unreadable path
 /// does not fail the whole invocation.
+#[instrument(level = "debug", skip_all, fields(target = %target.display(), path_count = paths.len(), cap), err)]
 pub async fn read_file_contents(
     target: &Path,
     paths: &[String],

@@ -15,7 +15,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
 use domain::Bundle;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
@@ -68,6 +68,16 @@ pub trait ToolExecutor: Send + Sync {
     ) -> impl Future<Output = Result<String, DispatchError>> + Send + 'a;
 }
 
+#[instrument(
+    level = "debug",
+    skip_all,
+    fields(
+        action_kind = action.kind(),
+        worktree_path = %worktree.path().display(),
+        work_id = %worktree.work_id(),
+    ),
+    err,
+)]
 pub async fn dispatch_action<T: ToolExecutor>(
     action: AgentAction,
     worktree: &Worktree,
@@ -100,6 +110,7 @@ pub async fn dispatch_action<T: ToolExecutor>(
 /// Stage all changes (including untracked new files) and commit.
 /// Returns `NothingToCommit` if `git status --porcelain` shows a
 /// clean tree.
+#[instrument(level = "debug", skip_all, fields(path = %path.display(), message_chars = message.len()), err)]
 async fn commit_changes(path: &Path, message: &str) -> Result<ActionResult, DispatchError> {
     if is_working_tree_clean(path).await? {
         return Ok(ActionResult::NothingToCommit);
@@ -113,6 +124,7 @@ async fn commit_changes(path: &Path, message: &str) -> Result<ActionResult, Disp
 /// Commit any in-progress work for human inspection and keep going.
 /// `git add -u` is intentional: only tracked modifications, so a
 /// runaway agent dropping garbage files doesn't pollute the branch.
+#[instrument(level = "debug", skip_all, fields(path = %path.display()), err)]
 async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError> {
     run_git(path, &["add", "-u"]).await?;
     if is_staging_empty(path).await? {
@@ -128,6 +140,17 @@ async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError>
 
 /// Construct the Bundle, computing `loc_changed` from base SHA and
 /// capturing HEAD SHA as `head_commit`. Does NOT persist.
+#[instrument(
+    level = "debug",
+    skip_all,
+    fields(
+        work_id = %worktree.work_id(),
+        branch = worktree.branch(),
+        worktree_path = %worktree.path().display(),
+        claim_count = claims.len(),
+    ),
+    err,
+)]
 async fn propose_bundle(worktree: &Worktree, claims: Vec<String>) -> Result<ActionResult, DispatchError> {
     let staging_dirty = !is_working_tree_clean(worktree.path()).await?;
     if staging_dirty {
@@ -153,6 +176,7 @@ async fn propose_bundle(worktree: &Worktree, claims: Vec<String>) -> Result<Acti
     Ok(ActionResult::BundleCreated(bundle))
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn is_working_tree_clean(path: &Path) -> Result<bool, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
@@ -171,6 +195,7 @@ async fn is_working_tree_clean(path: &Path) -> Result<bool, DispatchError> {
     Ok(output.stdout.is_empty())
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn is_staging_empty(path: &Path) -> Result<bool, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
@@ -189,6 +214,7 @@ async fn is_staging_empty(path: &Path) -> Result<bool, DispatchError> {
     Ok(output.stdout.is_empty())
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
@@ -209,6 +235,7 @@ async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
 /// `git diff --numstat`. Binary files show `-\t-\t<file>` in numstat
 /// output and contribute 0 to the total. If `sha` is empty
 /// (test-only constructor), returns 0.
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), base_sha = sha), err)]
 async fn compute_loc_changed(path: &Path, sha: &str) -> Result<u32, DispatchError> {
     if sha.is_empty() {
         return Ok(0);
@@ -247,6 +274,7 @@ fn parse_numstat(s: &str) -> u32 {
     total
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), git_args = ?args), err)]
 async fn run_git(path: &Path, args: &[&str]) -> Result<(), DispatchError> {
     let output = Command::new("git").arg("-C").arg(path).args(args).output().await?;
     if !output.status.success() {
@@ -302,6 +330,12 @@ impl ToolExecutor for RealTools {
         working_dir: &'a Path,
     ) -> impl Future<Output = Result<String, DispatchError>> + Send + 'a {
         async move {
+            let span = tracing::debug_span!(
+                "real_tools.execute",
+                tool_name = tool_name,
+                working_dir = %working_dir.display(),
+            );
+            let _enter = span.enter();
             let ctx = ToolContext {
                 working_dir: working_dir.to_path_buf(),
                 router: self.router.clone(),

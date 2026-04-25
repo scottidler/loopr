@@ -12,6 +12,8 @@
 //! prose. `rfind(']')` would be wrong: it greedily captures any
 //! trailing `]` in surrounding text.
 
+use tracing::instrument;
+
 use crate::action::AgentAction;
 
 #[derive(Debug, thiserror::Error)]
@@ -35,12 +37,18 @@ pub enum ParseError {
 ///
 /// Returns `Err(EmptyArray)` if parsing succeeds but the array has
 /// zero elements (the LLM emitted nothing actionable).
+#[instrument(level = "debug", skip_all, fields(raw_chars = raw.len(), action_count = tracing::field::Empty), err)]
 pub fn parse_actions(raw: &str) -> Result<Vec<AgentAction>, ParseError> {
     let stripped = strip_markdown_fences(raw);
     let normalized = normalize_action_key(stripped);
+    let span = tracing::Span::current();
 
     if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(&normalized) {
-        return finalize(actions);
+        let result = finalize(actions);
+        if let Ok(ref a) = result {
+            span.record("action_count", a.len());
+        }
+        return result;
     }
 
     // Scan every `[` position in order; first that yields a balanced
@@ -51,7 +59,13 @@ pub fn parse_actions(raw: &str) -> Result<Vec<AgentAction>, ParseError> {
     for start in bracket_start_positions(&normalized) {
         if let Some(candidate) = extract_array_substring_from(&normalized, start) {
             match serde_json::from_str::<Vec<AgentAction>>(candidate) {
-                Ok(actions) => return finalize(actions),
+                Ok(actions) => {
+                    let result = finalize(actions);
+                    if let Ok(ref a) = result {
+                        span.record("action_count", a.len());
+                    }
+                    return result;
+                }
                 Err(e) => last_serde_err = Some(e.to_string()),
             }
         }
@@ -73,6 +87,7 @@ fn bracket_start_positions(input: &str) -> impl Iterator<Item = usize> + '_ {
 /// Parse a single action (used by the correctable-tool-error
 /// re-prompt path: the LLM is asked for exactly one corrected
 /// action, not an array).
+#[instrument(level = "debug", skip_all, fields(raw_chars = raw.len()), err)]
 pub fn parse_one(raw: &str) -> Result<AgentAction, ParseError> {
     let stripped = strip_markdown_fences(raw);
     let normalized = normalize_action_key(stripped);

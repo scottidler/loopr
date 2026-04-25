@@ -50,3 +50,18 @@ pub enum AgentAction {
     /// `Err(EscalationNeeded)` to the coordinator.
     NeedHelp { reason: String },
 }
+
+impl AgentAction {
+    /// Discriminator string for span fields and log lines. Mirrors the
+    /// serde tag (`snake_case`) so an event field's `action_kind` value
+    /// matches what appears on the wire.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            AgentAction::RunTool { .. } => "run_tool",
+            AgentAction::CommitChanges { .. } => "commit_changes",
+            AgentAction::ProposeBundle { .. } => "propose_bundle",
+            AgentAction::Done { .. } => "done",
+            AgentAction::NeedHelp { .. } => "need_help",
+        }
+    }
+}

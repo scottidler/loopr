@@ -17,6 +17,7 @@ dependencies = [
  "tokio",
  "tools",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "worktree",
 ]

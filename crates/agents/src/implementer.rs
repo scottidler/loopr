@@ -19,7 +19,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use context::{ContextBuilder, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
 use domain::{Bundle, BundleId, Work};
@@ -112,6 +112,17 @@ where
     pub state: StateSummary,
 }
 
+#[instrument(
+    level = "info",
+    skip_all,
+    fields(
+        work_id = %work.id,
+        worktree_path = %worktree.path().display(),
+        branch = worktree.branch(),
+        max_iterations = deps.config.max_iterations,
+    ),
+    err,
+)]
 pub async fn run_implementer<L, T, S, C>(
     work: &Work,
     worktree: &Worktree,
@@ -277,6 +288,17 @@ where
 /// return a Bundle with `force_proposed: true`. Guard: if the
 /// modified-file count or any staged-file size exceeds the configured
 /// limits, escalate instead of committing.
+#[instrument(
+    level = "info",
+    skip_all,
+    fields(
+        work_id = %work.id,
+        worktree_path = %worktree.path().display(),
+        max_force_propose_files = deps.config.max_force_propose_files,
+        max_force_propose_file_size_bytes = deps.config.max_force_propose_file_size_bytes,
+    ),
+    err,
+)]
 async fn force_propose<L, T, S, C>(
     work: &Work,
     worktree: &Worktree,
@@ -346,6 +368,7 @@ where
     Ok(bundle)
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn list_modified_tracked(path: &Path) -> Result<Vec<String>, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
@@ -366,6 +389,7 @@ async fn list_modified_tracked(path: &Path) -> Result<Vec<String>, DispatchError
         .collect())
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
@@ -382,6 +406,7 @@ async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), base_sha = sha), err)]
 async fn compute_loc_changed(path: &Path, sha: &str) -> Result<u32, DispatchError> {
     let spec = format!("{sha}..HEAD");
     let output = Command::new("git")
@@ -415,6 +440,7 @@ fn parse_numstat(s: &str) -> u32 {
     total
 }
 
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), git_args = ?args), err)]
 async fn run_git(path: &Path, args: &[&str]) -> Result<(), DispatchError> {
     let output = Command::new("git").arg("-C").arg(path).args(args).output().await?;
     if !output.status.success() {

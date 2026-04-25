@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::Hasher;
 
 use serde_json::Value;
+use tracing::instrument;
 
 use crate::action::AgentAction;
 
@@ -59,11 +60,25 @@ impl Lifeguard {
     /// this is the same hash as the last recorded action and the
     /// count has hit `max_repeat`, return Escalate. Otherwise
     /// Continue.
+    #[instrument(
+        level = "debug",
+        skip_all,
+        fields(
+            action_kind = action.kind(),
+            action_hash = tracing::field::Empty,
+            action_count = tracing::field::Empty,
+            max_repeat = self.max_repeat,
+        ),
+        ret,
+    )]
     pub fn check_action(&mut self, action: &AgentAction) -> Decision {
+        let span = tracing::Span::current();
         let hash = canonical_hash(action);
+        span.record("action_hash", hash);
         let count = self.action_counts.entry(hash).or_insert(0);
         *count += 1;
         let my_count = *count;
+        span.record("action_count", my_count);
         self.last_hash = Some(hash);
         if my_count >= self.max_repeat {
             return Decision::Escalate(format!(
@@ -78,8 +93,18 @@ impl Lifeguard {
     /// requery budget without producing a parseable response.
     /// Returns Escalate once `max_parse_failures` consecutive
     /// iterations have done so.
+    #[instrument(
+        level = "debug",
+        skip_all,
+        fields(
+            consecutive_parse_failures = tracing::field::Empty,
+            max_parse_failures = self.max_parse_failures,
+        ),
+        ret,
+    )]
     pub fn record_parse_failure(&mut self) -> Decision {
         self.consecutive_parse_failures += 1;
+        tracing::Span::current().record("consecutive_parse_failures", self.consecutive_parse_failures);
         if self.consecutive_parse_failures >= self.max_parse_failures {
             Decision::Escalate(format!(
                 "LLM produced unparseable output for {} consecutive iterations (max_parse_failures={})",

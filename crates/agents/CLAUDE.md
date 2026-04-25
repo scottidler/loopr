@@ -58,6 +58,20 @@ One generic parameter flows through signatures; concrete trait bounds live on th
 
 **Per-role crate split is a deferred option.** If `src/` pushes 1500 lines (see `rules/dealing-with-large-files.md`), first split per-role as module directories (`implementer/`, `reviewer/`, etc.); escalate to per-role sub-crates only if the module split proves insufficient.
 
+## Instrumentation
+
+Required scope fields, inherited by every `warn!` / `error!` emitted under an agents span:
+
+- `work_id` — set by `run_implementer` (the outer span). Every `dispatch_action`, `propose_bundle`, lifeguard span, and inner git helper carries it via inheritance or as an explicit field.
+- `iteration` — emitted as an event field on each iteration's `info!` ("implementer iteration start"). Not a span scope key today; the per-iteration body is async with early-returns and a span guard across awaits is unsafe in tokio. Events still carry it so log readers can group by iteration.
+- `bundle_id` — set by `run_reviewer`'s outer span and by `propose_bundle`'s span.
+- `action_kind` — set by `dispatch_action` and `check_action`; mirrors the serde tag (`run_tool`, `commit_changes`, `propose_bundle`, `done`, `need_help`).
+- `action_hash`, `action_count`, `max_repeat` — set by `check_action`. Reading these from the span answers "which action repeated, and how many times?" without a debug-level rerun.
+
+Levels: `run_implementer` and `run_reviewer` are `info`; per-iteration helpers (`dispatch_action`, `parse_actions`, `parse_verdict`, `check_action`, `commit_changes`, `propose_bundle`) are `debug`; subprocess wrappers (`run_git`, `rev_parse_head`, `compute_loc_changed`, `is_working_tree_clean`) are `trace` and carry `err`.
+
+The acceptance test `tests/instrumentation.rs::agents_smoke_spans_lifeguard_escalation` drives the Stage 9 lifeguard-repeat shape and asserts the four entry-point spans exist with their required fields. If you remove an `#[instrument]` attribute or change a field name, that test fails.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

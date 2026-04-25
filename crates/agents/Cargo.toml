@@ -23,3 +23,4 @@ uuid = { version = "1.23.1", features = ["v7"] }
 [dev-dependencies]
 tempfile = "3.27.0"
 llm = { path = "../llm", features = ["stub"] }
+tracing-subscriber = { workspace = true }
