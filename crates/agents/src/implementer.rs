@@ -102,6 +102,18 @@ impl<B: BundleSink + ?Sized> BundleSink for &B {
     }
 }
 
+/// Forwarding `BundleSink` for `Arc<B>`. Phase 6 of the Tier-1
+/// cleanup wraps `Store` in `Arc<Store>` so the daemon's
+/// `SummaryFanout` decorator can clone it; this impl lets the
+/// implementer take `bundles: &*self.store` (where `self.store:
+/// Arc<Store>`) without unwrapping.
+impl<B: BundleSink + ?Sized> BundleSink for std::sync::Arc<B> {
+    #[allow(clippy::manual_async_fn)]
+    fn persist<'a>(&'a self, bundle: Bundle) -> impl Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a {
+        async move { (**self).persist(bundle).await }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ImplementerError {
     #[error("escalation needed: {0}")]

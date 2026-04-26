@@ -626,13 +626,44 @@ where
     let _ = tokio::time::timeout(Duration::from_secs(WATCHER_JOIN_TIMEOUT_SECS), watcher_handle).await;
 
     // Every other `Arc<DaemonContext>` clone (accept loop's parameter,
-    // watcher task, every handler task) should be dropped by now. Try to
-    // unwrap the Arc to recover the owned Store and close it async.
+    // watcher task, every handler task) should be dropped by now. Try
+    // to unwrap the Arc to recover the owned Store and close it async.
+    //
+    // Phase 6 introduced `Arc<Store>` ownership inside DaemonContext
+    // (the SummaryFanout decorator holds two Arc<Store> clones
+    // alongside the field). The shutdown sequence is now:
+    //
+    //   1. `Arc::try_unwrap(ctx)`           — owns the DaemonContext
+    //   2. clone `owned.store` (bumps Arc<Store> strong_count)
+    //   3. `drop(owned)`                    — releases owned.store +
+    //                                         the 2 SummaryFanout
+    //                                         clones inside owned
+    //   4. `Arc::try_unwrap(store_clone)`   — owns the underlying Store
+    //   5. `store.close().await`            — async close
+    //
+    // INVARIANT: every Arc<Store> clone outside of `DaemonContext`
+    // (i.e. anywhere other than `ctx.store` and the two clones inside
+    // `ctx.summary_fanout`) MUST drop before this shutdown's first
+    // `try_unwrap`. A future contributor adding a long-lived
+    // Arc<Store> clone elsewhere will trip the second `try_unwrap`'s
+    // fallback path.
     match Arc::try_unwrap(ctx) {
-        Ok(owned) => match owned.store.close().await {
-            Ok(()) => tracing::info!("daemon.store.closed"),
-            Err(e) => tracing::warn!(error = %e, "daemon.store.close failed"),
-        },
+        Ok(owned) => {
+            let store_clone = Arc::clone(&owned.store);
+            drop(owned);
+            match Arc::try_unwrap(store_clone) {
+                Ok(store) => match store.close().await {
+                    Ok(()) => tracing::info!("daemon.store.closed"),
+                    Err(e) => tracing::warn!(error = %e, "daemon.store.close failed"),
+                },
+                Err(still_shared) => {
+                    tracing::warn!(
+                        strong_count = Arc::strong_count(&still_shared),
+                        "Arc<Store> still shared after DaemonContext drop; falling back to Store::Drop"
+                    );
+                }
+            }
+        }
         Err(still_shared) => {
             tracing::warn!(
                 strong_count = Arc::strong_count(&still_shared),

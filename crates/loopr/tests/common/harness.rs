@@ -77,12 +77,27 @@ impl<L: LlmClient + Send + Sync + 'static> TestDaemon<L> {
             .task
             .await
             .map_err(|e| LooprError::DaemonStartup(format!("test task join: {e}")))??;
+        // Phase 6: nested unwrap pattern (mirrors production
+        // `daemon::serve` shutdown). DaemonContext now holds
+        // `Arc<Store>` plus a `SummaryFanout` decorator that itself
+        // holds two more `Arc<Store>` clones.
         match Arc::try_unwrap(ctx) {
-            Ok(owned) => owned
-                .store
-                .close()
-                .await
-                .map_err(|e| LooprError::DaemonStartup(format!("test store close: {e}")))?,
+            Ok(owned) => {
+                let store_clone = Arc::clone(&owned.store);
+                drop(owned);
+                match Arc::try_unwrap(store_clone) {
+                    Ok(store) => store
+                        .close()
+                        .await
+                        .map_err(|e| LooprError::DaemonStartup(format!("test store close: {e}")))?,
+                    Err(still_shared) => {
+                        eprintln!(
+                            "TestDaemon::shutdown: Arc<Store> still shared (strong_count={}); store falls back to sync Drop",
+                            Arc::strong_count(&still_shared)
+                        );
+                    }
+                }
+            }
             Err(still_shared) => {
                 eprintln!(
                     "TestDaemon::shutdown: DaemonContext Arc still shared (strong_count={}); store falls back to sync Drop",

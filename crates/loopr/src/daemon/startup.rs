@@ -272,8 +272,13 @@ where
                 // Coordinator transitions Reviewed -> Accepted in place so
                 // the Integrator's pre-flight accepts the Bundle.
                 let mut b = bundle.clone();
-                if let Err(e) =
-                    transition_and_persist_bundle(&ctx.store, &mut b, BundleStatus::Accepted, Role::Coordinator).await
+                if let Err(e) = transition_and_persist_bundle(
+                    &*ctx.summary_fanout,
+                    &mut b,
+                    BundleStatus::Accepted,
+                    Role::Coordinator,
+                )
+                .await
                 {
                     tracing::warn!(
                         bundle_id = %bundle.id,

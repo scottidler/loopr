@@ -43,13 +43,6 @@ use crate::summary;
 /// production; tests inject `MockStore` fakes). The split exists so
 /// the decorator can swap test fakes per-trait without re-coupling
 /// every impl to the concrete `Store` type.
-///
-/// `#[allow(dead_code)]` is load-bearing for Phase 5: the decorator
-/// is introduced here and consumed at every transition site in Phase
-/// 6 (`docs/design/2026-04-25-tier1-cleanup.md`). Phase 6 removes
-/// these allowances. The crate's `#![deny(dead_code)]` would
-/// otherwise block Phase 5 from shipping in isolation.
-#[allow(dead_code)]
 pub struct SummaryFanout<S> {
     inner: S,
     target: PathBuf,
@@ -57,7 +50,6 @@ pub struct SummaryFanout<S> {
 }
 
 impl<S> SummaryFanout<S> {
-    #[allow(dead_code)]
     pub fn new(inner: S, target: PathBuf, store: Arc<Store>) -> Self {
         Self { inner, target, store }
     }
@@ -92,7 +84,6 @@ where
 }
 
 impl<S> SummaryFanout<S> {
-    #[allow(dead_code)]
     async fn refresh_parent_plan(&self, work: &Work) {
         // `Work::parent_id` is typed as `PlanId` today; the resolve is
         // therefore expected to succeed when the Work is well-formed.

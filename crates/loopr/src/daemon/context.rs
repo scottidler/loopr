@@ -91,7 +91,12 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// before returning, and the signal-watcher task is joined with a
     /// short timeout after the accept loop returns, specifically to make
     /// this contract hold.
-    pub store: Store,
+    pub store: Arc<Store>,
+    /// Per-transition summary-write decorator. Holds an `Arc::clone` of
+    /// `store` for both the inner sink write-through and the
+    /// c-extended Work-update path's parent-Plan + siblings reads.
+    /// Constructed once at boot in `DaemonContext::new`.
+    pub summary_fanout: Arc<crate::daemon::summary_fanout::SummaryFanout<Arc<Store>>>,
     /// Handle to the process-wide LLM client. Built once at daemon
     /// startup and shared across handler tasks via `Arc`. Generic on
     /// `L: LlmClient` so production can instantiate with
@@ -189,6 +194,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         worktree_cleanup_policy: AttemptCleanupPolicy,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
+        let store = Arc::new(store);
+        let summary_fanout = Arc::new(crate::daemon::summary_fanout::SummaryFanout::new(
+            Arc::clone(&store),
+            target.clone(),
+            Arc::clone(&store),
+        ));
         Self {
             target,
             session_id,
@@ -200,6 +211,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             shutting_down: Arc::new(AtomicBool::new(false)),
             shutdown_notify: Arc::new(Notify::new()),
             store,
+            summary_fanout,
             llm,
             router,
             bash_denylist,
@@ -256,16 +268,27 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         // Advance Work through the pipeline-start transitions via the FSM.
         // Guarded: reconcile or a prior call may have advanced us already.
         if work.status == WorkStatus::Pending
-            && let Err(e) =
-                transition_and_persist_work(&self.store, &mut work, WorkStatus::Ready, Role::Coordinator, false).await
+            && let Err(e) = transition_and_persist_work(
+                &*self.summary_fanout,
+                &mut work,
+                WorkStatus::Ready,
+                Role::Coordinator,
+                false,
+            )
+            .await
         {
             error!(error = %e, "Pending -> Ready transition failed; abandoning task");
             return;
         }
         if work.status == WorkStatus::Ready
-            && let Err(e) =
-                transition_and_persist_work(&self.store, &mut work, WorkStatus::InProgress, Role::Coordinator, false)
-                    .await
+            && let Err(e) = transition_and_persist_work(
+                &*self.summary_fanout,
+                &mut work,
+                WorkStatus::InProgress,
+                Role::Coordinator,
+                false,
+            )
+            .await
         {
             error!(error = %e, "Ready -> InProgress transition failed; abandoning task");
             return;
@@ -297,9 +320,14 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             Ok(Ok(wt)) => wt,
             Ok(Err(e)) => {
                 error!(error = %e, "Worktree::create failed");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, false)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    false,
+                )
+                .await;
                 return;
             }
             Err(e) => {
@@ -337,9 +365,14 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 // `InProgress -> InReview by (Implementer)`, which is exactly
                 // the semantic we want; the "Role as identifier" invariant
                 // from the Reviewer doc generalizes here.
-                if let Err(e) =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::InReview, Role::Implementer, false)
-                        .await
+                if let Err(e) = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::InReview,
+                    Role::Implementer,
+                    false,
+                )
+                .await
                 {
                     error!(error = %e, "InProgress -> InReview transition failed after successful implementer");
                 }
@@ -354,15 +387,25 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             }
             Err(ImplementerError::EscalationNeeded(reason)) => {
                 warn!(%reason, "implementer escalated; marking Work Blocked");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, false)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    false,
+                )
+                .await;
             }
             Err(other) => {
                 error!(error = %other, "implementer error; marking Work Blocked");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, false)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    false,
+                )
+                .await;
             }
         }
 
@@ -452,9 +495,13 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         }
 
         // Step 4: build ReviewerDeps.
+        // Phase 6: pass the SummaryFanout decorator as the BundleUpdateSink
+        // so per-Bundle summaries land transactionally with the OCC
+        // update; the inner sink is `Arc<Store>` and the decorator's
+        // BundleUpdateSink impl writes the summary on Ok.
         let deps = ReviewerDeps {
             llm: Arc::clone(&self.llm),
-            store: &self.store,
+            store: &*self.summary_fanout,
             context: Arc::clone(&self.context_builder),
             config: self.reviewer_config.clone(),
             target: self.target.clone(),
@@ -465,16 +512,26 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             Ok(v) => v,
             Err(ReviewerError::EscalationNeeded(reason)) => {
                 warn!(%reason, "reviewer escalated; marking Work Blocked");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    true,
+                )
+                .await;
                 return;
             }
             Err(other) => {
                 error!(error = %other, "reviewer error; marking Work Blocked");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    true,
+                )
+                .await;
                 return;
             }
         };
@@ -513,15 +570,25 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             }
             Verdict::ChangeRequested { summary, reasons } => {
                 warn!(summary = %summary, reason_count = reasons.len(), "reviewer requested changes; Work -> Blocked");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    true,
+                )
+                .await;
             }
             Verdict::Reject { reason } => {
                 warn!(reason = %reason, "reviewer rejected bundle; Work -> Blocked");
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    true,
+                )
+                .await;
             }
         }
     }
@@ -569,9 +636,14 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         };
 
         let deps = IntegratorDeps {
-            bundle_sink: &self.store,
-            works: &self.store,
-            ticks: &self.store,
+            // Phase 6: BundleUpdateSink goes through the fanout so the
+            // Integrator's `Reviewed -> Merged` write produces an
+            // up-to-date Bundle summary in lockstep with the OCC
+            // update. `works` and `ticks` are read paths (resolved on
+            // `Store` directly) and stay on the underlying store.
+            bundle_sink: &*self.summary_fanout,
+            works: &*self.store,
+            ticks: &*self.store,
             config: self.integrator_config.clone(),
             target: self.target.clone(),
             git_lock: Arc::clone(&self.git_lock),
@@ -618,16 +690,26 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             Ok(tick) => {
                 info!(tick_id = %tick.id, sha = %tick.sha, "integration succeeded");
                 // Work: InReview -> Integrated -> Done.
-                if let Err(e) =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Integrated, Role::Integrator, false)
-                        .await
+                if let Err(e) = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Integrated,
+                    Role::Integrator,
+                    false,
+                )
+                .await
                 {
                     error!(error = %e, "InReview -> Integrated transition failed after Tick persisted");
                     return;
                 }
-                if let Err(e) =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Done, Role::Coordinator, false)
-                        .await
+                if let Err(e) = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Done,
+                    Role::Coordinator,
+                    false,
+                )
+                .await
                 {
                     error!(error = %e, "Integrated -> Done transition failed after Tick persisted");
                     return;
@@ -640,9 +722,14 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     let all_terminal = !siblings.is_empty() && siblings.iter().all(|w| w.status.is_terminal());
                     let any_done = siblings.iter().any(|w| w.status == WorkStatus::Done);
                     if all_terminal && any_done {
+                        // Phase 6: c-extended (option c) — pass siblings as
+                        // the children arg so SummaryFanout's PlanUpdateSink
+                        // impl can render the Plan summary against the
+                        // current child set without a separate read.
                         match transition_and_persist_plan(
-                            &self.store,
+                            &*self.summary_fanout,
                             &mut plan_mut,
+                            siblings,
                             PlanStatus::Complete,
                             Role::Coordinator,
                         )
@@ -653,22 +740,25 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                         }
                     }
                 }
-                // Refresh per-record summaries on the happy-path terminal:
-                // Bundle just transitioned to Merged, Work to Done, Plan
-                // potentially to Complete. Re-read the latest Bundle so
-                // the summary reflects the current status.
-                let post_bundle = self.store.bundles().get(&bundle.id).await.unwrap_or(bundle);
-                write_bundle_summary_best_effort(&self.target, &post_bundle);
-                write_work_summary_best_effort(&self.target, &work);
-                let post_plan = self.store.plans().get(&plan_mut.id).await.unwrap_or(plan_mut);
-                write_plan_summary_best_effort(&self.target, &self.store, &post_plan).await;
+                // Per-record summaries are now written transactionally
+                // by SummaryFanout inside each transition's `update`
+                // call. The post-Integrator inline `write_*_summary_best_effort`
+                // helpers (and the post-fetch reads used to build them)
+                // are gone — kept as a comment for the historical record.
+                let _ = bundle; // bundle was previously re-fetched here for the inline summary
+                let _ = work;
             }
             Err(e) => {
                 error!(error = %e, "integrator terminal; marking Work Blocked");
                 // One-step via the Phase 1 InReview -> Blocked override.
-                let _ =
-                    transition_and_persist_work(&self.store, &mut work, WorkStatus::Blocked, Role::Coordinator, true)
-                        .await;
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Coordinator,
+                    true,
+                )
+                .await;
             }
         }
     }
@@ -716,13 +806,16 @@ async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Err
 /// which mutated `work.status = ...` by raw assignment and bypassed the
 /// FSM entirely. Every Work-state change in the pipeline flows through
 /// this helper.
-pub(crate) async fn transition_and_persist_work(
-    store: &Store,
+pub(crate) async fn transition_and_persist_work<S>(
+    sink: &S,
     work: &mut Work,
     target: WorkStatus,
     role: Role,
     override_: bool,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: store::WorkUpdateSink,
+{
     let result = if override_ {
         work.override_status(target, role)
             .map_err(|e| format!("fsm override rejected: {e}"))?
@@ -733,9 +826,7 @@ pub(crate) async fn transition_and_persist_work(
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
-    store
-        .works()
-        .update(work.clone())
+    sink.update(work.clone())
         .await
         .map_err(|e| format!("works().update: {e}"))
 }
@@ -746,12 +837,15 @@ pub(crate) async fn transition_and_persist_work(
 /// `sweep_bundles` to transition `Reviewed -> Accepted` during
 /// crash-recovery (the Reviewer already fired that transition on the
 /// happy path, so this helper exists for the reconcile path only).
-pub(crate) async fn transition_and_persist_bundle(
-    store: &Store,
+pub(crate) async fn transition_and_persist_bundle<S>(
+    sink: &S,
     bundle: &mut Bundle,
     target: BundleStatus,
     role: Role,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: store::BundleUpdateSink,
+{
     let expected = bundle.updated_at;
     let result = bundle
         .transition(target, role)
@@ -759,9 +853,7 @@ pub(crate) async fn transition_and_persist_bundle(
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
-    store
-        .bundles()
-        .update(bundle.clone(), expected)
+    sink.update(bundle.clone(), expected)
         .await
         .map_err(|e| format!("bundles().update: {e}"))
 }
@@ -769,52 +861,28 @@ pub(crate) async fn transition_and_persist_bundle(
 /// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
 /// the Integrator spawn's `Active -> Complete` check once every sibling
 /// Work is terminal.
-pub(crate) async fn transition_and_persist_plan(
-    store: &Store,
+///
+/// Phase 6 widened the signature to take `children: Vec<Work>` per design
+/// Alternatives §4 option (c-extended): the caller fetches children
+/// before invoking this helper, and the sink (typically a
+/// `SummaryFanout`) renders the Plan summary from `(plan, children)`.
+pub(crate) async fn transition_and_persist_plan<S>(
+    sink: &S,
     plan: &mut Plan,
+    children: Vec<Work>,
     target: PlanStatus,
     role: Role,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: store::PlanUpdateSink,
+{
     let result = plan
         .transition(target, role)
         .map_err(|e| format!("fsm transition rejected: {e}"))?;
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
-    store
-        .plans()
-        .update(plan.clone())
+    sink.update(plan.clone(), children)
         .await
         .map_err(|e| format!("plans().update: {e}"))
-}
-
-/// Best-effort: write the bundle summary under `<target>/.loopr/records/`.
-/// Failures emit a `warn!` and return; never propagate to the caller.
-pub(crate) fn write_bundle_summary_best_effort(target: &std::path::Path, bundle: &Bundle) {
-    if let Err(e) = crate::summary::write_bundle(target, bundle) {
-        warn!(bundle_id = %bundle.id, error = %e, "summary::write_bundle failed (non-fatal)");
-    }
-}
-
-/// Best-effort: write the work summary under `<target>/.loopr/records/`.
-pub(crate) fn write_work_summary_best_effort(target: &std::path::Path, work: &Work) {
-    if let Err(e) = crate::summary::write_work(target, work) {
-        warn!(work_id = %work.id, error = %e, "summary::write_work failed (non-fatal)");
-    }
-}
-
-/// Best-effort: write the plan summary, fetching children from the store.
-/// Plan summaries depend on the current Works under the plan; we list them
-/// here rather than threading through every caller.
-pub(crate) async fn write_plan_summary_best_effort(target: &std::path::Path, store: &Store, plan: &Plan) {
-    let children = match store.works().list_by_parent_id(&plan.id).await {
-        Ok(w) => w,
-        Err(e) => {
-            warn!(plan_id = %plan.id, error = %e, "summary::write_plan list_by_parent_id failed (non-fatal)");
-            return;
-        }
-    };
-    if let Err(e) = crate::summary::write_plan(target, plan, &children) {
-        warn!(plan_id = %plan.id, error = %e, "summary::write_plan failed (non-fatal)");
-    }
 }
