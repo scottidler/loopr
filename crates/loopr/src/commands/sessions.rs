@@ -67,9 +67,21 @@ fn resume(target: &Path, id: &str) -> Result<(), LooprError> {
 /// `loopr sessions end`. Marks the active session's manifest as ended
 /// and clears the pointer. No-op (prints "no active session") if the
 /// pointer is absent or names a session that was already ended.
+///
+/// Phase 8 of the Tier-1 cleanup: after `end_active` returns
+/// `Some(id)`, write the per-session digest by aggregating every
+/// per-process digest under that session id. Best-effort — a failure
+/// here emits `warn!` and the verb still returns Ok so the operator
+/// observes "ended" output regardless.
 fn end(target: &Path) -> Result<(), LooprError> {
     match session::end_active(target)? {
-        Some(id) => println!("{id} ended"),
+        Some(id) => {
+            println!("{id} ended");
+            match telemetry::digest::session::write_session_digest(&id) {
+                Ok(path) => tracing::info!(path = %path.display(), "session digest written"),
+                Err(e) => tracing::warn!(session_id = %id, error = %e, "session digest write failed"),
+            }
+        }
         None => println!("no active session"),
     }
     Ok(())
