@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
 use llm::LlmClient;
 use store::{BundleUpdateError, Store};
+use telemetry::digest::process::ProcessSnapshot;
 use telemetry::{ProcessId, SessionId};
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::{AttemptCleanupPolicy, Worktree};
@@ -163,6 +165,13 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// shutdown so in-flight Reviewers with an Accept verdict can
     /// enqueue their Integrator before the Integrator drain begins.
     pub integrator_tasks: Mutex<JoinSet<()>>,
+    /// Per-process counter snapshot. Held in a `std::sync::Mutex`
+    /// because every emitter is short, non-async, and the value is
+    /// shared with the panic hook and SIGQUIT handler (both of which
+    /// run on threads that aren't part of the tokio reactor and
+    /// can't .await). Phase 7 of the Tier-1 cleanup wires this in;
+    /// the daemon writes a per-process digest at exit.
+    pub snapshot: Arc<StdMutex<ProcessSnapshot>>,
 }
 
 impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
@@ -192,6 +201,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         reviewer_config: ReviewerConfig,
         integrator_config: IntegratorConfig,
         worktree_cleanup_policy: AttemptCleanupPolicy,
+        snapshot: Arc<StdMutex<ProcessSnapshot>>,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         let store = Arc::new(store);
@@ -226,6 +236,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             implementer_tasks: Mutex::new(JoinSet::new()),
             reviewer_tasks: Mutex::new(JoinSet::new()),
             integrator_tasks: Mutex::new(JoinSet::new()),
+            snapshot,
         }
     }
 

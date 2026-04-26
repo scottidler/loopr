@@ -45,6 +45,9 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
     let store = Store::open(&target).await.unwrap();
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
+    let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+        "test-stub-model",
+    )));
     Arc::new(DaemonContext::new(
         target,
         SessionId::parse("20260419-000000").unwrap(),
@@ -62,6 +65,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
         AttemptCleanupPolicy::default(),
+        snapshot,
     ))
 }
 

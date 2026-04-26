@@ -63,6 +63,9 @@ async fn run_build(target: &Path, accept_corruption: bool) -> Result<(), LooprEr
     let mut config = Config::default();
     config.tools.sandbox = SandboxMode::Off;
 
+    let snapshot = std::sync::Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+        "test-stub-model",
+    )));
     let _ctx = build_context(
         target.to_path_buf(),
         session_id,
@@ -72,6 +75,7 @@ async fn run_build(target: &Path, accept_corruption: bool) -> Result<(), LooprEr
         ScriptedLlm::new(),
         config,
         accept_corruption,
+        snapshot,
     )
     .await?;
     Ok(())

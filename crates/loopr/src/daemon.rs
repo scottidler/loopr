@@ -383,15 +383,26 @@ async fn run_active_daemon(
     let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
         .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
 
+    // Phase 7: process-wide ProcessSnapshot accumulates counters
+    // through the daemon's lifetime; wrap the AnthropicClient in
+    // MeteredLlmClient so every LLM call's Usage feeds the snapshot.
+    // The snapshot is also handed to DaemonContext for non-LLM
+    // counters (plan/work/bundle/tick lifecycle).
+    let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+        config.llm.model.clone(),
+    )));
+    let metered = llm::MeteredLlmClient::new(anthropic, Arc::clone(&snapshot));
+
     let ctx = build_context(
         target,
         session_id,
         target_slug,
         process_id,
         pid,
-        anthropic,
+        metered,
         config,
         accept_corruption,
+        Arc::clone(&snapshot),
     )
     .await?;
     serve(ctx).await
@@ -429,6 +440,7 @@ pub async fn build_context<L>(
     llm: L,
     config: Config,
     accept_corruption: bool,
+    snapshot: Arc<std::sync::Mutex<telemetry::digest::process::ProcessSnapshot>>,
 ) -> Result<Arc<DaemonContext<L>>, LooprError>
 where
     L: LlmClient + Send + Sync + 'static,
@@ -499,6 +511,7 @@ where
         reviewer_config,
         integrator_config,
         worktree_cleanup_policy,
+        snapshot,
     ));
 
     tracing::info!(
@@ -520,6 +533,14 @@ where
         corruption_count = report.corruption_count,
         "daemon.startup.reconcile.complete"
     );
+
+    // Mirror reconcile's corruption_count onto the per-process
+    // ProcessSnapshot so the per-process digest records the boot's
+    // corruption tally even when the operator passed
+    // `--accept-corruption`.
+    if let Ok(mut snap) = ctx.snapshot.lock() {
+        snap.corruption_count = u32::try_from(report.corruption_count).unwrap_or(u32::MAX);
+    }
 
     // Post-sweep corruption gate. Runs between `reconcile` returning and
     // any IPC listener binding (which happens later in `serve_core`).
@@ -601,8 +622,38 @@ where
     // Integrator before the pool drains.
     drain_integrator_tasks(&ctx).await;
 
+    // Phase 7: write the per-process digest after the task pools
+    // drain and before the caller's `Arc::try_unwrap`. Best-effort:
+    // failures emit `warn!` and proceed; the rest of the shutdown
+    // sequence still runs.
+    write_process_digest_best_effort(&ctx);
+
     accept_result?;
     Ok(ctx)
+}
+
+/// Compute the per-process digest path under XDG and write the
+/// rendered digest. Best-effort: any error emits `warn!` and the
+/// shutdown continues.
+fn write_process_digest_best_effort<L>(ctx: &Arc<DaemonContext<L>>)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    let run_dir = match telemetry::session_run_dir(&ctx.session_id, &ctx.target_slug, &ctx.process_id) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "session_run_dir failed; skipping per-process digest");
+            return;
+        }
+    };
+    let snap = match ctx.snapshot.lock() {
+        Ok(g) => g.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    match telemetry::digest::process::write_process_digest(&run_dir, &snap) {
+        Ok(path) => tracing::info!(path = %path.display(), "daemon.digest.process.written"),
+        Err(e) => tracing::warn!(error = %e, "daemon.digest.process.write_failed"),
+    }
 }
 
 /// Production wrapper around `serve_core`: installs the SIGTERM/SIGINT

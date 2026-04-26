@@ -41,6 +41,9 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
     let store = Store::open(td.path()).await.unwrap();
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
+    let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+        "test-stub-model",
+    )));
     let ctx = Arc::new(DaemonContext::new(
         td.path().to_path_buf(),
         SessionId::parse("20260419-000000").unwrap(),
@@ -58,6 +61,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
         AttemptCleanupPolicy::default(),
+        snapshot,
     ));
     (td, ctx)
 }

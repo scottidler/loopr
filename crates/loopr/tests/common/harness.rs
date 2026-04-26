@@ -137,6 +137,11 @@ where
     // by default (no JSONL exists yet). Pass `false` to keep the
     // production-default semantics — tests that want to exercise
     // corruption can write a malformed JSONL pre-boot and pass `true`.
+    // Phase 7: tests use a fresh ProcessSnapshot per spawn; no metering
+    // happens by default (the test passes the unmetered LLM stub).
+    let snapshot = std::sync::Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+        "test-stub-model",
+    )));
     let ctx = build_context(
         target.clone(),
         session_id,
@@ -146,6 +151,7 @@ where
         llm,
         config,
         false,
+        snapshot,
     )
     .await?;
     let handle = DaemonHandle::from_context(&ctx);

@@ -10,6 +10,7 @@
 //! conventions subsection of `docs/design/2026-04-19-telemetry-stage-2.md`
 //! is its permanent contract.
 
+pub mod digest;
 mod fanout;
 mod process;
 mod query;

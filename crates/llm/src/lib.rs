@@ -12,6 +12,7 @@ mod client;
 mod config;
 mod error;
 mod message;
+mod metered;
 mod tool;
 mod usage;
 
@@ -23,6 +24,7 @@ pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
 pub use message::ChatMessage;
+pub use metered::MeteredLlmClient;
 pub use tool::{ToolCall, ToolSchema};
 pub use usage::Usage;
 
