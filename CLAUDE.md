@@ -36,10 +36,9 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 
 ## Working rules (v5-specific; user global rules still apply)
 
-1. **One design doc at a time, motivated by a failing run.** No detailed spec without a failing E2E that motivates it. `docs/vision.md` is the exception, the seed.
-2. **Seam tests, not only unit tests.** Every crate boundary has at least one round-trip serde test and one integration test that crosses the seam with real types.
-3. **No coexistence migrations.** A paradigm change replaces its predecessor in one commit, not dual-pathed. v3 to v4 coexistence failed; v5 does not repeat that.
-4. **The crate is the unit of blast radius.** A mistake in one crate must be recoverable without touching the others. A PR that touches two or more crates is a deliberate cross-cutting change and needs a top-level design doc.
+1. **Seam tests, not only unit tests.** Every crate boundary has at least one round-trip serde test and one integration test that crosses the seam with real types.
+2. **No coexistence migrations.** A paradigm change replaces its predecessor in one commit, not dual-pathed. v3 to v4 coexistence failed; v5 does not repeat that.
+3. **The crate is the unit of blast radius.** A mistake in one crate must be recoverable without touching the others. A PR that touches two or more crates is a deliberate cross-cutting change and needs a top-level design doc.
 
 ## Build
 

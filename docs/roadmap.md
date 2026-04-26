@@ -1,8 +1,6 @@
 # Loopr v5 Roadmap
 
-**Status:** living index of design docs that need to exist. Each stage has an exit criterion that must pass before the next stage begins. Design docs inside each stage are placeholders until their stage's time comes; actual content is written motivated by the failing run that stage exists to fix.
-
-**Rule #1 preserved.** This file enumerates *where design docs will go*, not their contents. A placeholder is not a spec.
+**Status:** living index of design docs that need to exist. Each stage has an exit criterion that must pass before the next stage begins. Design docs inside each stage are placeholders until their stage's time comes; actual content is written when the stage is ready to ship - whether that's motivated by a failing run, a known gap, or a coherent next-feature plan.
 
 **Build direction: loopr outward.** Stage 1 gets a working binary (`loopr --version`). Each later stage teaches that binary one new trick. First gate (Stage 9) reproduces v4's single successful E2E with v5's typed pipeline.
 
