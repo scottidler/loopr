@@ -158,7 +158,7 @@ async fn drain_integrator_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<
 ///
 /// Contract: the parent returns cleanly; the grandchild does NOT return
 /// from this function - it runs `daemon_main` and `process::exit`s.
-pub fn ensure_daemon(target: &Path) -> Result<(), LooprError> {
+pub fn ensure_daemon(target: &Path, accept_corruption: bool) -> Result<(), LooprError> {
     // Clean stale sentinel state first so the grandchild's atomic pid
     // claim can succeed. If a live daemon is already running,
     // `ensure_daemon_if_needed` handles that earlier; here we assume the
@@ -167,7 +167,7 @@ pub fn ensure_daemon(target: &Path) -> Result<(), LooprError> {
 
     match fork::double_fork()? {
         fork::ForkOutcome::Parent => wait_for_socket(target),
-        fork::ForkOutcome::Daemon => run_grandchild(target.to_path_buf()),
+        fork::ForkOutcome::Daemon => run_grandchild(target.to_path_buf(), accept_corruption),
     }
 }
 
@@ -190,7 +190,9 @@ pub fn ensure_daemon_if_needed(target: &Path) -> Result<(), LooprError> {
         let _ = sentinel::kill_stale(target);
     }
 
-    ensure_daemon(target)
+    // Auto-fork triggered by a client subcommand — the operator never had a
+    // chance to opt into corruption-tolerant boot, so default to gated.
+    ensure_daemon(target, false)
 }
 
 /// Client-side blocking poll. `connect_or_wait` is the async version used
@@ -231,12 +233,12 @@ fn preflight_clean(target: &Path) {
 /// pre-fork) and block on `daemon_main`. The grandchild never returns to
 /// the caller; it `process::exit`s to keep its stack from unwinding back
 /// through `lib::run`'s telemetry-init block.
-fn run_grandchild(target: PathBuf) -> ! {
+fn run_grandchild(target: PathBuf, accept_corruption: bool) -> ! {
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(_) => process::exit(1),
     };
-    let exit_code = match rt.block_on(daemon_main(target)) {
+    let exit_code = match rt.block_on(daemon_main(target, accept_corruption)) {
         Ok(()) => 0,
         Err(LooprError::LockLost) => {
             // Another grandchild won the pid-file race. Silent exit(0);
@@ -244,10 +246,21 @@ fn run_grandchild(target: PathBuf) -> ! {
             // intact.
             0
         }
+        Err(LooprError::CorruptionGate { count }) => {
+            // Daemon refused to start because reconcile surfaced corrupt
+            // JSONL rows. Stable non-zero exit code lets scripts detect
+            // the gate-trip without parsing stderr.
+            eprintln!("daemon: refusing to start ({count} corrupt record(s))");
+            CORRUPTION_GATE_EXIT_CODE
+        }
         Err(_) => 1,
     };
     process::exit(exit_code);
 }
+
+/// Stable exit code for `LooprError::CorruptionGate`. Tests + scripts can
+/// match on this without parsing stderr. Distinct from the generic `1`.
+const CORRUPTION_GATE_EXIT_CODE: i32 = 78;
 
 /// Grandchild's async body. Split into two phases per the Phase 3 design:
 ///
@@ -260,7 +273,7 @@ fn run_grandchild(target: PathBuf) -> ! {
 ///    bind the Unix listener, spawn the signal watcher, run the accept
 ///    loop. On normal shutdown flush the telemetry guard and
 ///    `sentinel::clean`.
-pub async fn daemon_main(target: PathBuf) -> Result<(), LooprError> {
+pub async fn daemon_main(target: PathBuf, accept_corruption: bool) -> Result<(), LooprError> {
     let pid = std::process::id();
 
     // ---- Phase A: lock-acquire (no cleanup on failure) ----
@@ -286,7 +299,15 @@ pub async fn daemon_main(target: PathBuf) -> Result<(), LooprError> {
     sentinel::write_process_id(&process_id_file, &process_id.to_string())?;
 
     // ---- Phase B: active-daemon (cleanup on exit) ----
-    let outcome = run_active_daemon(target.clone(), session_id, target_slug, process_id, pid).await;
+    let outcome = run_active_daemon(
+        target.clone(),
+        session_id,
+        target_slug,
+        process_id,
+        pid,
+        accept_corruption,
+    )
+    .await;
 
     // Normal shutdown cleanup: only runs if we're the lock winner (we
     // wouldn't have reached here otherwise).
@@ -337,6 +358,7 @@ async fn run_active_daemon(
     target_slug: String,
     process_id: ProcessId,
     pid: u32,
+    accept_corruption: bool,
 ) -> Result<(), LooprError> {
     // Init the daemon's own telemetry subscriber. Safe because `lib::run`'s
     // pre-telemetry hoist guarantees the parent never called
@@ -360,7 +382,17 @@ async fn run_active_daemon(
     let anthropic = AnthropicClient::new(config.llm.clone(), api_key)
         .map_err(|e| LooprError::DaemonStartup(format!("anthropic client: {e}")))?;
 
-    let ctx = build_context(target, session_id, target_slug, process_id, pid, anthropic, config).await?;
+    let ctx = build_context(
+        target,
+        session_id,
+        target_slug,
+        process_id,
+        pid,
+        anthropic,
+        config,
+        accept_corruption,
+    )
+    .await?;
     serve(ctx).await
 }
 
@@ -395,6 +427,7 @@ pub async fn build_context<L>(
     pid: u32,
     llm: L,
     config: Config,
+    accept_corruption: bool,
 ) -> Result<Arc<DaemonContext<L>>, LooprError>
 where
     L: LlmClient + Send + Sync + 'static,
@@ -483,8 +516,29 @@ where
         orphans = report.orphans_logged,
         carried_forward = report.carried_forward,
         foreign = report.foreign_skipped,
+        corruption_count = report.corruption_count,
         "daemon.startup.reconcile.complete"
     );
+
+    // Post-sweep corruption gate. Runs between `reconcile` returning and
+    // any IPC listener binding (which happens later in `serve_core`).
+    // Without `--accept-corruption`, refuse to bring up the daemon if
+    // any JSONL row was skipped during the sweep — see
+    // `docs/design/2026-04-25-tier1-cleanup.md` "Daemon-boot policy on
+    // corruption" for the rationale (skip-and-refuse-to-listen by
+    // default; `--accept-corruption` flips to warn-and-proceed).
+    if report.corruption_count > 0 {
+        if accept_corruption {
+            tracing::warn!(
+                count = report.corruption_count,
+                "starting with corrupt records skipped (--accept-corruption)"
+            );
+        } else {
+            return Err(LooprError::CorruptionGate {
+                count: report.corruption_count,
+            });
+        }
+    }
 
     Ok(ctx)
 }

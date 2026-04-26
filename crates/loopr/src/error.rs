@@ -42,6 +42,14 @@ pub enum LooprError {
 
     #[error("the TUI is not built into this binary; install the `loopr-tui` crate or run `loopr <subcommand>`")]
     TuiNotInstalled,
+
+    #[error(
+        "daemon refused to start: {count} corrupt record(s) detected during sweep.\n  \
+         Logs:    loopr -C <target> logs tail\n  \
+         Restore: git -C <target> checkout HEAD -- .loopr/taskstore/  (taskstore is JSONL+SQLite-as-cache; JSONL is git-tracked)\n  \
+         Override: re-run with --accept-corruption to start in degraded mode"
+    )]
+    CorruptionGate { count: usize },
 }
 
 fn parent_hint(path: &Path) -> String {

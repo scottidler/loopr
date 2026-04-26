@@ -746,7 +746,6 @@ pub(crate) async fn transition_and_persist_work(
 /// `sweep_bundles` to transition `Reviewed -> Accepted` during
 /// crash-recovery (the Reviewer already fired that transition on the
 /// happy path, so this helper exists for the reconcile path only).
-#[allow(dead_code)]
 pub(crate) async fn transition_and_persist_bundle(
     store: &Store,
     bundle: &mut Bundle,
@@ -770,7 +769,6 @@ pub(crate) async fn transition_and_persist_bundle(
 /// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
 /// the Integrator spawn's `Active -> Complete` check once every sibling
 /// Work is terminal.
-#[allow(dead_code)]
 pub(crate) async fn transition_and_persist_plan(
     store: &Store,
     plan: &mut Plan,

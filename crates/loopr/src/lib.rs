@@ -42,7 +42,10 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     let command = cli.command.unwrap_or(Command::Tui);
     match &command {
         Command::Daemon {
-            cmd: DaemonCmd::Start { foreground: false },
+            cmd: DaemonCmd::Start {
+                foreground: false,
+                accept_corruption,
+            },
         } => {
             // Idempotency (AC 11): if a live, version-matching daemon is
             // already running, this is a no-op. Otherwise clean stale
@@ -58,12 +61,15 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                 println!("daemon already running at pid {pid}");
                 return Ok(());
             }
-            daemon::ensure_daemon(&effective)?;
+            daemon::ensure_daemon(&effective, *accept_corruption)?;
             println!("daemon started");
             return Ok(());
         }
         Command::Daemon {
-            cmd: DaemonCmd::Start { foreground: true },
+            cmd: DaemonCmd::Start {
+                foreground: true,
+                accept_corruption,
+            },
         } => {
             // AC 14: a background daemon already running must block a
             // foreground start with a clear error; we don't want the
@@ -83,7 +89,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                 .enable_all()
                 .build()
                 .map_err(|e| LooprError::DaemonStartup(format!("runtime build: {e}")))?;
-            return rt.block_on(daemon::daemon_main(effective));
+            return rt.block_on(daemon::daemon_main(effective, *accept_corruption));
         }
         Command::Plan { .. }
         | Command::Plans

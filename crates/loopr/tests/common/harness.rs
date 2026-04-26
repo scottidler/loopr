@@ -118,7 +118,21 @@ where
     let mut config = Config::default();
     config.tools.sandbox = SandboxMode::Off;
 
-    let ctx = build_context(target.clone(), session_id, target_slug, process_id, 0, llm, config).await?;
+    // Tests boot with a clean target, so the corruption gate is a no-op
+    // by default (no JSONL exists yet). Pass `false` to keep the
+    // production-default semantics — tests that want to exercise
+    // corruption can write a malformed JSONL pre-boot and pass `true`.
+    let ctx = build_context(
+        target.clone(),
+        session_id,
+        target_slug,
+        process_id,
+        0,
+        llm,
+        config,
+        false,
+    )
+    .await?;
     let handle = DaemonHandle::from_context(&ctx);
 
     let task = tokio::spawn(async move { serve_core(ctx).await });

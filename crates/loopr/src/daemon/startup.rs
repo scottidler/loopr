@@ -61,6 +61,26 @@ pub struct ReconcileReport {
     pub integrators_requeued: usize,
     /// Stage 8 wiring capstone: Bundles already terminal; noop.
     pub bundles_terminal: usize,
+    /// Tier-1-cleanup: corrupt JSONL rows surfaced by `list_tolerant`
+    /// during the sweep. Aggregated across the Work and Bundle passes.
+    /// Drives the daemon-boot corruption gate (refuse-to-listen unless
+    /// `--accept-corruption`).
+    pub corruption_count: usize,
+}
+
+/// Emit one structured `error!` per corrupt JSONL row surfaced by a
+/// `list_tolerant` call. Shared between the Work and Bundle sweeps so
+/// the log shape is identical.
+fn log_corruption(record_kind: &'static str, corruption: &[store::CorruptionEntry]) {
+    for entry in corruption {
+        tracing::error!(
+            record_kind,
+            file = %entry.file.display(),
+            line = entry.line,
+            error = ?entry.error,
+            "corrupt record skipped during sweep"
+        );
+    }
 }
 
 #[tracing::instrument(name = "daemon.reconcile", level = "info", skip_all, fields(target = %ctx.target.display()), err)]
@@ -84,6 +104,7 @@ where
         reviewers_requeued = report.reviewers_requeued,
         integrators_requeued = report.integrators_requeued,
         bundles_terminal = report.bundles_terminal,
+        corruption_count = report.corruption_count,
         "reconcile: pass complete"
     );
     Ok(report)
@@ -120,6 +141,25 @@ pub fn check_legacy_runs_dir(target: &Path) -> bool {
 /// effects. `reconcile` calls this then `sweep_bundles`.
 #[tracing::instrument(name = "daemon.sweep_worktrees", level = "debug", skip_all, fields(target = %target.display()), err)]
 pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileReport, LooprError> {
+    let mut report = ReconcileReport::default();
+
+    // Tolerant pre-pass over the Work JSONL: surface any malformed rows
+    // as `corruption_count` BEFORE any SQLite-cache-backed lookup runs.
+    // A JSONL-malformed Work is silently dropped by `sync()` and never
+    // reaches SQLite, so the per-id `get(work_id)` path below would
+    // return `Ok(None)` and the gate would otherwise stay blind. The
+    // returned records are intentionally ignored: per-worktree matching
+    // still uses parsed branch names below, not a flat scan.
+    match store.works().list_tolerant(&[]).await {
+        Ok(result) => {
+            log_corruption("work", &result.corruption);
+            report.corruption_count += result.corruption.len();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "sweep_worktrees: works().list_tolerant failed; corruption gate may be undercounted");
+        }
+    }
+
     let worktree_root = target.join(".loopr").join("worktrees");
 
     // Empty target (no worktrees yet) is the steady state for a fresh daemon
@@ -129,13 +169,11 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
             worktree_root = %worktree_root.display(),
             "reconcile: worktree_root absent; nothing to sweep"
         );
-        return Ok(ReconcileReport::default());
+        return Ok(report);
     }
 
     let infos = worktree::list(target, &worktree_root)
         .map_err(|e| LooprError::DaemonStartup(format!("worktree::list: {e}")))?;
-
-    let mut report = ReconcileReport::default();
     for info in infos {
         let Some((work_id, seq)) = worktree::parse_branch(&info.branch) else {
             tracing::warn!(
@@ -205,10 +243,14 @@ async fn sweep_bundles<L>(ctx: &Arc<DaemonContext<L>>, report: &mut ReconcileRep
 where
     L: LlmClient + Send + Sync + 'static,
 {
-    let bundles = match ctx.store.bundles().list().await {
-        Ok(b) => b,
+    let bundles = match ctx.store.bundles().list_tolerant(&[]).await {
+        Ok(result) => {
+            log_corruption("bundle", &result.corruption);
+            report.corruption_count += result.corruption.len();
+            result.records
+        }
         Err(e) => {
-            tracing::warn!(error = %e, "sweep_bundles: bundles().list() failed; skipping sweep");
+            tracing::warn!(error = %e, "sweep_bundles: bundles().list_tolerant() failed; skipping sweep");
             return Ok(());
         }
     };

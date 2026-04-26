@@ -89,9 +89,13 @@ fn test_cli_parses_daemon_start() {
     let cli = Cli::parse_from(["loopr", "daemon", "start"]);
     match cli.command.unwrap() {
         Command::Daemon {
-            cmd: DaemonCmd::Start { foreground },
+            cmd: DaemonCmd::Start {
+                foreground,
+                accept_corruption,
+            },
         } => {
             assert!(!foreground);
+            assert!(!accept_corruption);
         }
         _ => panic!("expected Daemon Start"),
     }
@@ -102,9 +106,13 @@ fn test_cli_parses_daemon_start_foreground() {
     let cli = Cli::parse_from(["loopr", "daemon", "start", "--foreground"]);
     match cli.command.unwrap() {
         Command::Daemon {
-            cmd: DaemonCmd::Start { foreground },
+            cmd: DaemonCmd::Start {
+                foreground,
+                accept_corruption,
+            },
         } => {
             assert!(foreground);
+            assert!(!accept_corruption);
         }
         _ => panic!("expected Daemon Start --foreground"),
     }

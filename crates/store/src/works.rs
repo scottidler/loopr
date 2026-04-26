@@ -99,6 +99,33 @@ impl<'a> WorksStore<'a> {
         Ok(result)
     }
 
+    /// Corruption-tolerant list. Reads the JSONL files directly,
+    /// bypassing the SQLite cache, and returns every line that
+    /// parsed plus a sidecar list of every line that did not.
+    ///
+    /// Used by the daemon's reconcile sweep so that a JSONL-malformed
+    /// Work surfaces as a `CorruptionEntry` instead of being silently
+    /// dropped at `sync()` (the SQLite cache path) and showing up as
+    /// `Ok(None)` from a subsequent `get(work_id)`.
+    #[instrument(
+        name = "works.list_tolerant",
+        level = "debug",
+        skip_all,
+        fields(
+            record_kind = "work",
+            op = "list_tolerant",
+            count = tracing::field::Empty,
+            corruption_count = tracing::field::Empty,
+        ),
+        err,
+    )]
+    pub async fn list_tolerant(&self, filters: &[Filter]) -> Result<taskstore_async::ListResult<Work>, StoreError> {
+        let result = self.inner.list_tolerant::<Work>(filters).await?;
+        tracing::Span::current().record("count", result.records.len());
+        tracing::Span::current().record("corruption_count", result.corruption.len());
+        Ok(result)
+    }
+
     /// Return every Work whose `parent_id == plan_id`. Backed by the SQLite
     /// index on `parent_id` (`#[record(indexed)]` on the struct field).
     /// Ordered by `updated_at` descending per `AsyncStore::list`'s contract.

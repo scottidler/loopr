@@ -45,6 +45,9 @@ pub enum StoreError {
     },
 }
 
+// `taskstore_async::Error` is a re-export of `taskstore::Error` (the
+// workspace unified its error type at v0.6.0). Naming the re-exported
+// path here avoids dragging the `taskstore` crate into our direct deps.
 impl From<taskstore_async::Error> for StoreError {
     fn from(e: taskstore_async::Error) -> Self {
         match e {

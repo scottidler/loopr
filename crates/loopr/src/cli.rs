@@ -170,6 +170,14 @@ pub enum DaemonCmd {
     Start {
         #[arg(long)]
         foreground: bool,
+
+        /// Override the post-sweep corruption gate. Without this flag,
+        /// the daemon refuses to bind the IPC listener if reconcile
+        /// surfaced any corrupt JSONL rows; with it, the daemon emits a
+        /// `warn!` and proceeds in degraded mode. Daemon-scoped: does
+        /// not persist past this process's lifetime.
+        #[arg(long = "accept-corruption")]
+        accept_corruption: bool,
     },
     /// Stop the running daemon (SIGTERM, escalate to SIGKILL after 3s).
     Stop,

@@ -15,3 +15,9 @@ pub use plans::PlansStore;
 pub use store::{Store, TASKSTORE_SUBPATH};
 pub use ticks::TicksStore;
 pub use works::WorksStore;
+
+// Re-exports from taskstore for the corruption-tolerant read path used by
+// the daemon's reconcile sweep. Surfacing them via `store::*` keeps the
+// downstream `loopr` crate from naming `taskstore_traits` directly.
+// `taskstore_async` re-exports these from `taskstore_traits`.
+pub use taskstore_async::{Category, CorruptionEntry, CorruptionError, ListResult};

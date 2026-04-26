@@ -84,6 +84,33 @@ impl<'a> BundlesStore<'a> {
         Ok(result)
     }
 
+    /// Corruption-tolerant list. Reads the JSONL files directly,
+    /// bypassing the SQLite cache, and returns every line that
+    /// parsed plus a sidecar list of every line that did not.
+    ///
+    /// Used by the daemon's reconcile sweep so that a corrupt JSONL
+    /// row surfaces as a `CorruptionEntry` instead of either failing
+    /// the whole sweep (the `list` path) or being silently dropped
+    /// (the SQLite cache path that `sync` populates).
+    #[instrument(
+        name = "bundles.list_tolerant",
+        level = "debug",
+        skip_all,
+        fields(
+            record_kind = "bundle",
+            op = "list_tolerant",
+            count = tracing::field::Empty,
+            corruption_count = tracing::field::Empty,
+        ),
+        err,
+    )]
+    pub async fn list_tolerant(&self, filters: &[Filter]) -> Result<taskstore_async::ListResult<Bundle>, StoreError> {
+        let result = self.inner.list_tolerant::<Bundle>(filters).await?;
+        tracing::Span::current().record("count", result.records.len());
+        tracing::Span::current().record("corruption_count", result.corruption.len());
+        Ok(result)
+    }
+
     /// Return every Bundle whose `work_id` matches the given
     /// `WorkId`. Backed by the SQLite index on `work_id`
     /// (`#[record(indexed)]` on the struct field), so this is an
