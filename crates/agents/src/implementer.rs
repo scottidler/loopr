@@ -335,7 +335,7 @@ where
                     summaries.push("commit_changes: nothing to commit".to_string());
                 }
                 ActionResult::ToolOutput(out) => {
-                    summaries.push(format!("tool output ({} bytes)", out.len()));
+                    summaries.push(out);
                 }
                 ActionResult::Error(err_msg) => {
                     warn!(iteration, error = %err_msg, "correctable tool error; re-prompting");
@@ -400,7 +400,7 @@ where
                                     return Err(ImplementerError::EscalationNeeded(reason));
                                 }
                                 ActionResult::ToolOutput(out) => {
-                                    summaries.push(format!("corrected tool output ({} bytes)", out.len()));
+                                    summaries.push(out);
                                 }
                                 ActionResult::Committed(sha) => {
                                     summaries.push(format!("corrected commit {sha}"));

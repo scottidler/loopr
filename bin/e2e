@@ -114,7 +114,12 @@ if [[ "${SUBCOMMAND}" == "ls" ]]; then
 fi
 
 E2E_TARGET="${E2E_TARGET:-rust-version}"
-TIMEOUT="${E2E_TIMEOUT:-900}"
+case "${E2E_TARGET}" in
+    python-api|python-scraper|rust-cli|node-api|react-todo)
+        TIMEOUT="${E2E_TIMEOUT:-1200}" ;;
+    *)
+        TIMEOUT="${E2E_TIMEOUT:-900}" ;;
+esac
 
 PLAN_MD="${LOOPR_ROOT}/bin/e2e-targets/${E2E_TARGET}.md"
 if [[ ! -f "${PLAN_MD}" ]]; then
@@ -226,6 +231,747 @@ case "${E2E_TARGET}" in
         )
         ok "Scaffold: $(wc -l < "${RUN_DIR}/src/main.rs") lines in src/main.rs"
         ;;
+
+    python-todo)
+        mkdir -p "${RUN_DIR}"
+        if ! command -v python3 &>/dev/null; then err "python3 is not installed"; exit 1; fi
+        if ! command -v uv &>/dev/null; then err "uv is not installed"; exit 1; fi
+        cat > "${RUN_DIR}/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "todo-app"
+requires-python = ">=3.10"
+dependencies = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+PYPROJECT
+        cat > "${RUN_DIR}/README.md" <<'README'
+# Todo App
+
+A command-line todo application in Python.
+
+## Requirements
+
+- Add a todo item with a title
+- List all todo items (with optional filter: all, active, done)
+- Mark a todo item as done by ID
+- Delete a todo item by ID
+- Persist todos to a JSON file (todos.json)
+- Include tests using pytest
+
+## Run
+
+    uv run python cli.py add "Buy milk"
+    uv run python cli.py list
+
+## Test
+
+    uv run pytest test_todo.py -v
+README
+        cat > "${RUN_DIR}/test_todo.py" <<'TEST'
+def test_stub():
+    pass
+TEST
+        (
+            cd "${RUN_DIR}"
+            uv sync --quiet
+            printf ".venv/\ntodos.json\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
+            git init -q
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init"
+        )
+        ok "Python todo target ready at ${RUN_DIR}"
+        ;;
+
+    python-api)
+        mkdir -p "${RUN_DIR}"
+        if ! command -v docker &>/dev/null; then err "docker is not installed"; exit 1; fi
+        if ! docker compose version &>/dev/null 2>&1; then err "docker compose is not available"; exit 1; fi
+        log "Found: $(docker compose version)"
+        cat > "${RUN_DIR}/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "bookmarks-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.28",
+    "pytest>=8.3",
+]
+PYPROJECT
+        cat > "${RUN_DIR}/Dockerfile" <<'DOCKER'
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+WORKDIR /app
+COPY pyproject.toml .
+RUN uv sync
+COPY . .
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+DOCKER
+        cat > "${RUN_DIR}/docker-compose.yml" <<'COMPOSE'
+services:
+  api:
+    build: .
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_PATH=/app/data/bookmarks.db
+
+  test:
+    build: .
+    command: uv run pytest test_api.py -v
+    environment:
+      - DATABASE_PATH=/tmp/test_bookmarks.db
+COMPOSE
+        cat > "${RUN_DIR}/test_api.py" <<'TEST'
+def test_stub():
+    pass
+TEST
+        cat > "${RUN_DIR}/main.py" <<'MAIN'
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+MAIN
+        cat > "${RUN_DIR}/README.md" <<'README'
+# Bookmarks API
+
+A REST API for managing bookmarks, built with FastAPI and SQLite.
+
+## Endpoints
+
+- GET    /health          - health check
+- GET    /bookmarks       - list all bookmarks
+- POST   /bookmarks       - create a bookmark
+- GET    /bookmarks/{id}  - get a bookmark by ID
+- PUT    /bookmarks/{id}  - update a bookmark
+- DELETE /bookmarks/{id}  - delete a bookmark
+
+## Run
+
+    docker compose up api
+    curl http://localhost:8081/health
+
+## Test
+
+    docker compose run --rm test
+README
+        mkdir -p "${RUN_DIR}/data"
+        (
+            cd "${RUN_DIR}"
+            git init -q
+            printf "data/*.db\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: FastAPI skeleton and Docker config"
+        )
+        ok "Python API target ready at ${RUN_DIR}"
+        ;;
+
+    python-scraper)
+        mkdir -p "${RUN_DIR}"
+        if ! command -v docker &>/dev/null; then err "docker is not installed"; exit 1; fi
+        if ! docker compose version &>/dev/null 2>&1; then err "docker compose is not available"; exit 1; fi
+        log "Found: $(docker compose version)"
+        cat > "${RUN_DIR}/requirements.txt" <<'REQ'
+beautifulsoup4>=4.12
+pytest>=8.3
+REQ
+        cat > "${RUN_DIR}/Dockerfile" <<'DOCKER'
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+CMD ["python", "main.py"]
+DOCKER
+        cat > "${RUN_DIR}/docker-compose.yml" <<'COMPOSE'
+services:
+  harvester:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./report.md:/app/report.md
+    environment:
+      - INPUT_DIR=/app/input
+      - DATABASE_PATH=/app/data/links.db
+      - REPORT_PATH=/app/report.md
+
+  test:
+    build: .
+    command: python -m pytest test_scraper.py -v
+    environment:
+      - INPUT_DIR=/app/input
+      - DATABASE_PATH=/tmp/test_links.db
+      - REPORT_PATH=/tmp/test_report.md
+COMPOSE
+        mkdir -p "${RUN_DIR}/input" "${RUN_DIR}/data"
+        cat > "${RUN_DIR}/input/page-a.html" <<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Page A</title></head>
+<body>
+  <h1>Links from Page A</h1>
+  <a href="https://python.org">Python</a>
+  <a href="https://docs.python.org/3/">Python Docs</a>
+  <a href="https://pypi.org">PyPI</a>
+  <a href="https://github.com/python/cpython">CPython on GitHub</a>
+  <a href="#top">Back to top</a>
+  <a href="">Empty href</a>
+</body>
+</html>
+HTML
+        cat > "${RUN_DIR}/input/page-b.html" <<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Page B</title></head>
+<body>
+  <h1>Links from Page B</h1>
+  <a href="https://github.com/rust-lang/rust">Rust</a>
+  <a href="https://crates.io">Crates.io</a>
+  <a href="https://doc.rust-lang.org">Rust Docs</a>
+  <a href="https://github.com/tokio-rs/tokio">Tokio</a>
+  <a href="https://github.com/serde-rs/serde">Serde</a>
+  <a href="mailto:admin@example.com">Contact</a>
+</body>
+</html>
+HTML
+        cat > "${RUN_DIR}/input/page-c.html" <<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Page C</title></head>
+<body>
+  <h1>Links from Page C</h1>
+  <a href="https://nodejs.org">Node.js</a>
+  <a href="https://npmjs.com">npm</a>
+  <a href="https://github.com/expressjs/express">Express</a>
+  <a href="https://github.com/facebook/react">React</a>
+  <a href="https://python.org/downloads">Python Downloads</a>
+</body>
+</html>
+HTML
+        cat > "${RUN_DIR}/test_scraper.py" <<'TEST'
+def test_stub():
+    pass
+TEST
+        cat > "${RUN_DIR}/README.md" <<'README'
+# Link Harvester
+
+Reads HTML files from the `input/` directory, extracts all `<a href>` links,
+stores them in SQLite, and generates a markdown report.
+
+## Run
+
+    docker compose run harvester
+    cat report.md
+
+## Test
+
+    docker compose run --rm test
+README
+        (
+            cd "${RUN_DIR}"
+            git init -q
+            printf "data/*.db\nreport.md\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: fixtures, Dockerfile, and Docker config"
+        )
+        ok "Python scraper target ready at ${RUN_DIR}"
+        ;;
+
+    lua-todo)
+        mkdir -p "${RUN_DIR}"
+        if ! command -v lua &>/dev/null; then err "lua is not installed"; exit 1; fi
+        log "Found: $(lua -v 2>&1 | head -1)"
+        cat > "${RUN_DIR}/README.md" <<'README'
+# Todo App
+
+A command-line todo application in Lua.
+
+## Requirements
+
+- Add a todo item with a title
+- List all todo items (with optional filter: all, active, done)
+- Mark a todo item as done by ID
+- Delete a todo item by ID
+- Persist todos to a file (todos.json) using a simple JSON format
+- Include tests in test_todo.lua that verify all operations
+- Pure Lua only - no external dependencies or package managers
+
+## Pre-provided
+
+- `json.lua` - JSON encoder/decoder (use `local json = require("json")`)
+- `test.lua` - minimal test runner (use `local test = require("test")`)
+
+## Run
+
+    lua cli.lua add "Buy milk"
+    lua cli.lua list
+
+## Test
+
+    lua test_todo.lua
+README
+        cat > "${RUN_DIR}/json.lua" <<'JSONLUA'
+-- json.lua: minimal JSON encoder/decoder for todo data
+local json = {}
+
+local function is_array(t)
+  local i = 0
+  for _ in pairs(t) do
+    i = i + 1
+    if t[i] == nil then return false end
+  end
+  return true
+end
+
+local function encode_value(val)
+  local t = type(val)
+  if val == nil then
+    return "null"
+  elseif t == "boolean" then
+    return tostring(val)
+  elseif t == "number" then
+    return tostring(val)
+  elseif t == "string" then
+    return '"' .. val:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t') .. '"'
+  elseif t == "table" then
+    if is_array(val) then
+      local items = {}
+      for _, v in ipairs(val) do items[#items + 1] = encode_value(v) end
+      return "[" .. table.concat(items, ",") .. "]"
+    else
+      local parts = {}
+      for k, v in pairs(val) do
+        parts[#parts + 1] = '"' .. tostring(k) .. '":' .. encode_value(v)
+      end
+      return "{" .. table.concat(parts, ",") .. "}"
+    end
+  end
+  error("cannot encode type: " .. t)
+end
+
+function json.encode(val) return encode_value(val) end
+
+local function skip_ws(s, i)
+  while i <= #s and s:sub(i, i):match('%s') do i = i + 1 end
+  return i
+end
+
+local function decode_value(s, i)
+  i = skip_ws(s, i)
+  local c = s:sub(i, i)
+  if c == '"' then
+    local j = i + 1
+    local chars = {}
+    while j <= #s do
+      local ch = s:sub(j, j)
+      if ch == '"' then return table.concat(chars), j + 1
+      elseif ch == '\\' then
+        local esc = s:sub(j + 1, j + 1)
+        local map = { n='\n', r='\r', t='\t', ['"']='"', ['\\']='\\'  }
+        chars[#chars + 1] = map[esc] or esc
+        j = j + 2
+      else chars[#chars + 1] = ch; j = j + 1 end
+    end
+    error("unterminated string")
+  elseif c == '[' then
+    local arr = {}
+    i = skip_ws(s, i + 1)
+    if s:sub(i, i) == ']' then return arr, i + 1 end
+    while true do
+      local val; val, i = decode_value(s, i); arr[#arr + 1] = val
+      i = skip_ws(s, i)
+      local sep = s:sub(i, i)
+      if sep == ']' then return arr, i + 1 end
+      if sep ~= ',' then error("expected , or ] at " .. i) end
+      i = i + 1
+    end
+  elseif c == '{' then
+    local obj = {}
+    i = skip_ws(s, i + 1)
+    if s:sub(i, i) == '}' then return obj, i + 1 end
+    while true do
+      local key; key, i = decode_value(s, i)
+      i = skip_ws(s, i)
+      if s:sub(i, i) ~= ':' then error("expected : at " .. i) end
+      local val; val, i = decode_value(s, i + 1)
+      obj[key] = val
+      i = skip_ws(s, i)
+      local sep = s:sub(i, i)
+      if sep == '}' then return obj, i + 1 end
+      if sep ~= ',' then error("expected , or } at " .. i) end
+      i = i + 1
+    end
+  elseif c == 't' and s:sub(i, i + 3) == 'true'  then return true,  i + 4
+  elseif c == 'f' and s:sub(i, i + 4) == 'false' then return false, i + 5
+  elseif c == 'n' and s:sub(i, i + 3) == 'null'  then return nil,   i + 4
+  elseif c:match('[%-0-9]') then
+    local numstr = s:match('^-?%d+%.?%d*[eE]?[+-]?%d*', i)
+    return tonumber(numstr), i + #numstr
+  else error("unexpected character '" .. c .. "' at position " .. i) end
+end
+
+function json.decode(s) local val, _ = decode_value(s, 1); return val end
+
+return json
+JSONLUA
+        cat > "${RUN_DIR}/test.lua" <<'TESTLUA'
+-- test.lua: minimal test runner
+local M = {}
+local passes = 0
+local failures = 0
+
+function M.run(name, fn)
+  local ok, err = pcall(fn)
+  if ok then
+    print("PASS: " .. name); passes = passes + 1
+  else
+    print("FAIL: " .. name .. ": " .. tostring(err)); failures = failures + 1
+  end
+end
+
+setmetatable(M, { __call = function(_, name, fn) return M.run(name, fn) end })
+
+function M.summary()
+  local total = passes + failures
+  print(string.format("%d/%d tests passed", passes, total))
+  os.exit(failures > 0 and 1 or 0)
+end
+
+return M
+TESTLUA
+        cat > "${RUN_DIR}/test_todo.lua" <<'TESTTODO'
+local test = require("test")
+
+test("stub", function()
+    assert(true)
+end)
+
+test.summary()
+TESTTODO
+        (
+            cd "${RUN_DIR}"
+            git init -q
+            printf "todos.json\ntest_todo_*.json\n" > .gitignore
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: scaffold with json.lua and test.lua"
+        )
+        ok "Lua todo target ready at ${RUN_DIR}"
+        ;;
+
+    rust-cli)
+        if ! command -v cargo &>/dev/null; then err "cargo is not installed"; exit 1; fi
+        log "Found: $(cargo --version)"
+        cargo init "${RUN_DIR}" --name notes --quiet
+        (
+            cd "${RUN_DIR}"
+            cargo add clap --features derive --quiet
+            cargo add rusqlite --features bundled --quiet
+            cargo add eyre --quiet
+            cargo add --dev tempfile --quiet
+            mkdir -p tests
+            cat > README.md <<'README'
+# notes
+
+A command-line notes manager backed by SQLite.
+
+## Usage
+
+    notes add "My Note" [--content "..."] [--tags "tag1,tag2"]
+    notes list
+    notes get <id>
+    notes delete <id>
+    notes search <query>
+
+## Options
+
+    --db <path>   Path to SQLite database (default: notes.db)
+
+## Test
+
+    cargo test
+README
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: cargo project with clap, rusqlite, eyre"
+        )
+        ok "Rust CLI target ready at ${RUN_DIR}"
+        ;;
+
+    node-api)
+        mkdir -p "${RUN_DIR}"
+        if ! command -v node &>/dev/null; then err "node is not installed"; exit 1; fi
+        if ! command -v docker &>/dev/null; then err "docker is not installed"; exit 1; fi
+        if ! docker compose version &>/dev/null 2>&1; then err "docker compose is not available"; exit 1; fi
+        log "Found: node $(node --version), $(docker compose version)"
+        cat > "${RUN_DIR}/package.json" <<'PKG'
+{
+  "name": "notes-api",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node server.js",
+    "test": "jest --forceExit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  }
+}
+PKG
+        cat > "${RUN_DIR}/Dockerfile" <<'DOCKER'
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+CMD ["node", "server.js"]
+DOCKER
+        cat > "${RUN_DIR}/docker-compose.yml" <<'COMPOSE'
+services:
+  api:
+    build: .
+    ports:
+      - "8082:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_PATH=/app/data/notes.db
+
+  test:
+    build: .
+    command: npm test
+    environment:
+      - DATABASE_PATH=/tmp/test_notes.db
+COMPOSE
+        cat > "${RUN_DIR}/app.js" <<'APP'
+const express = require('express');
+const app = express();
+app.use(express.json());
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+module.exports = app;
+APP
+        cat > "${RUN_DIR}/server.js" <<'SERVER'
+const app = require('./app');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Notes API listening on port ${PORT}`));
+SERVER
+        cat > "${RUN_DIR}/README.md" <<'README'
+# Notes API
+
+A REST API for managing notes, built with Express and SQLite.
+
+## Endpoints
+
+- GET    /health      - health check
+- GET    /notes       - list all notes
+- POST   /notes       - create a note
+- GET    /notes/:id   - get a note by ID
+- PUT    /notes/:id   - update a note
+- DELETE /notes/:id   - delete a note
+
+## Run
+
+    docker compose up api
+    curl http://localhost:8082/health
+
+## Test
+
+    docker compose run --rm test
+README
+        mkdir -p "${RUN_DIR}/test" "${RUN_DIR}/data"
+        cat > "${RUN_DIR}/test/notes.test.js" <<'TEST'
+const app = require('../app');
+describe('stub', () => {
+  test('health returns ok', async () => {
+    const supertest = require('supertest');
+    const res = await supertest(app).get('/health');
+    expect(res.body.status).toBe('ok');
+  });
+});
+TEST
+        log "Installing npm dependencies..."
+        (cd "${RUN_DIR}" && npm install --silent 2>&1 | /usr/bin/tail -3)
+        (
+            cd "${RUN_DIR}"
+            git init -q
+            printf "node_modules/\ndata/*.db\n.env\n" > .gitignore
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: Express skeleton, Docker config, npm deps"
+        )
+        ok "Node API target ready at ${RUN_DIR}"
+        ;;
+
+    react-todo)
+        mkdir -p "${RUN_DIR}"
+        if ! command -v node &>/dev/null; then err "node is not installed"; exit 1; fi
+        if ! command -v docker &>/dev/null; then err "docker is not installed"; exit 1; fi
+        log "Found: node $(node --version)"
+        cat > "${RUN_DIR}/package.json" <<'PKG'
+{
+  "name": "todo-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "echo 'no linter configured'",
+    "test": "echo 'no tests configured'"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2"
+  }
+}
+PKG
+        cat > "${RUN_DIR}/tsconfig.json" <<'TSCONFIG'
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true
+  },
+  "include": ["src"]
+}
+TSCONFIG
+        cat > "${RUN_DIR}/vite.config.ts" <<'VITE'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: { port: 5173 },
+  preview: { port: 4173 },
+})
+VITE
+        cat > "${RUN_DIR}/tailwind.config.js" <<'TAILWIND'
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  theme: { extend: {} },
+  plugins: [],
+}
+TAILWIND
+        cat > "${RUN_DIR}/postcss.config.js" <<'POSTCSS'
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+POSTCSS
+        cat > "${RUN_DIR}/index.html" <<'HTML'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Todo App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+HTML
+        mkdir -p "${RUN_DIR}/src"
+        cat > "${RUN_DIR}/src/main.tsx" <<'MAIN'
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import './index.css'
+
+function App() {
+  return <div>Todo App</div>
+}
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
+MAIN
+        cat > "${RUN_DIR}/src/index.css" <<'CSS'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+CSS
+        cat > "${RUN_DIR}/src/vite-env.d.ts" <<'DTS'
+/// <reference types="vite/client" />
+DTS
+        cat > "${RUN_DIR}/Dockerfile" <<'DOCKER'
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+DOCKER
+        cat > "${RUN_DIR}/.dockerignore" <<'DOCKERIGNORE'
+node_modules
+dist
+.git
+.gitignore
+DOCKERIGNORE
+        cat > "${RUN_DIR}/README.md" <<'README'
+# Todo App
+
+A todo web application built with Vite, React, and Tailwind CSS.
+
+## Build
+
+    npm run build
+
+## Docker
+
+    docker build -t loopr-e2e-react-todo .
+    docker run -d -p 14173:80 loopr-e2e-react-todo
+    curl -s http://localhost:14173 | grep root
+README
+        log "Installing npm dependencies..."
+        (cd "${RUN_DIR}" && npm install --silent 2>&1 | /usr/bin/tail -5)
+        (
+            cd "${RUN_DIR}"
+            git init -q
+            printf "node_modules/\ndist/\n.env\n" > .gitignore
+            git add -A
+            git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init"
+        )
+        ok "React todo target ready at ${RUN_DIR}"
+        ;;
+
     *)
         err "Scaffold for target '${E2E_TARGET}' is not implemented in bin/e2e."
         err "Add a case for it above the default '*' branch."
@@ -479,6 +1225,249 @@ case "${E2E_TARGET}" in
         else
             warn "cargo test had failures"
             EXIT_CODE=3
+        fi
+        ;;
+
+    python-todo)
+        for f in todo.py cli.py test_todo.py; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && uv run python cli.py add "Test item from e2e" 2>&1); then
+            ok "cli.py add succeeded"
+            if (cd "${RUN_DIR}" && uv run python cli.py list 2>&1 | grep -q "Test item"); then
+                ok "cli.py list shows the added item"
+            else
+                warn "cli.py list did not show the added item"; EXIT_CODE=3
+            fi
+        else
+            warn "cli.py add failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && uv run pytest test_todo.py -v 2>&1 | /usr/bin/tail -15); then
+            ok "pytest completed"
+        else
+            warn "pytest had failures"; EXIT_CODE=3
+        fi
+        ;;
+
+    python-api)
+        for f in database.py main.py test_api.py; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose build 2>&1 | /usr/bin/tail -5); then
+            ok "docker compose build succeeded"
+        else
+            warn "docker compose build failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose run --rm test 2>&1 | /usr/bin/tail -20); then
+            ok "docker compose run --rm test passed"
+        else
+            warn "tests had failures"; EXIT_CODE=3
+        fi
+        echo ""
+        (cd "${RUN_DIR}" && docker compose up -d api 2>&1 | /usr/bin/tail -3) || true
+        sleep 3
+        if curl -sf http://localhost:8081/health | grep -q "ok"; then
+            ok "GET /health returned ok"
+            CREATED=$(curl -sf -X POST http://localhost:8081/bookmarks \
+                -H "Content-Type: application/json" \
+                -d '{"title":"E2E Test","url":"https://example.com","tags":"e2e"}' 2>/dev/null || true)
+            if echo "${CREATED}" | grep -q "E2E Test"; then
+                ok "POST /bookmarks created a bookmark"
+                if curl -sf http://localhost:8081/bookmarks | grep -q "E2E Test"; then
+                    ok "GET /bookmarks returned the created bookmark"
+                else
+                    warn "GET /bookmarks did not return expected bookmark"; EXIT_CODE=3
+                fi
+            else
+                warn "POST /bookmarks did not return expected data"; EXIT_CODE=3
+            fi
+        else
+            warn "GET /health failed (API may not have started)"; EXIT_CODE=3
+        fi
+        (cd "${RUN_DIR}" && docker compose down 2>/dev/null || true)
+        ;;
+
+    python-scraper)
+        for f in scraper.py database.py report.py main.py test_scraper.py; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose build 2>&1 | /usr/bin/tail -5); then
+            ok "docker compose build succeeded"
+        else
+            warn "docker compose build failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose run --rm test 2>&1 | /usr/bin/tail -20); then
+            ok "docker compose run --rm test passed"
+        else
+            warn "tests had failures"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose run --rm \
+                -e DATABASE_PATH=/tmp/verify_links.db \
+                -e REPORT_PATH=/tmp/verify_report.md \
+                harvester 2>&1 | /usr/bin/tail -5); then
+            ok "harvester ran without error"
+        else
+            warn "harvester run failed"; EXIT_CODE=3
+        fi
+        if [[ -f "${RUN_DIR}/report.md" ]]; then
+            ok "report.md was generated"
+            grep -q "Total links" "${RUN_DIR}/report.md" && ok "report contains 'Total links'" || { warn "report missing 'Total links'"; EXIT_CODE=3; }
+            grep -q "Top Domains" "${RUN_DIR}/report.md" && ok "report contains 'Top Domains'" || { warn "report missing 'Top Domains'"; EXIT_CODE=3; }
+        else
+            warn "report.md was not generated"; EXIT_CODE=3
+        fi
+        ;;
+
+    lua-todo)
+        for f in todo.lua cli.lua test_todo.lua; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && lua cli.lua add "Test item from e2e" 2>&1); then
+            ok "cli.lua add succeeded"
+            if (cd "${RUN_DIR}" && lua cli.lua list 2>&1 | grep -q "Test item"); then
+                ok "cli.lua list shows the added item"
+            else
+                warn "cli.lua list did not show the added item"; EXIT_CODE=3
+            fi
+        else
+            warn "cli.lua add failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && lua test_todo.lua 2>&1 | /usr/bin/tail -15); then
+            ok "tests completed"
+        else
+            warn "tests had failures"; EXIT_CODE=3
+        fi
+        ;;
+
+    rust-cli)
+        for f in src/main.rs src/db.rs tests/cli.rs; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && cargo build --quiet 2>&1); then
+            ok "cargo build succeeded"
+        else
+            warn "cargo build failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && cargo test 2>&1 | /usr/bin/tail -15); then
+            ok "cargo test passed"
+        else
+            warn "cargo test had failures"; EXIT_CODE=3
+        fi
+        echo ""
+        BINARY="${RUN_DIR}/target/debug/notes"
+        DB="${RUN_DIR}/verify_test.db"
+        if [[ -x "${BINARY}" ]]; then
+            ADD_OUT=$("${BINARY}" --db "${DB}" add "Verify Test" 2>&1 || true)
+            if echo "${ADD_OUT}" | grep -q "Verify Test"; then
+                ok "notes add works: ${ADD_OUT}"
+            else
+                warn "notes add did not produce expected output: ${ADD_OUT}"; EXIT_CODE=3
+            fi
+            LIST_OUT=$("${BINARY}" --db "${DB}" list 2>&1 || true)
+            if echo "${LIST_OUT}" | grep -q "Verify Test"; then
+                ok "notes list shows the added note"
+            else
+                warn "notes list did not show expected note: ${LIST_OUT}"; EXIT_CODE=3
+            fi
+            SEARCH_OUT=$("${BINARY}" --db "${DB}" search "Verify" 2>&1 || true)
+            if echo "${SEARCH_OUT}" | grep -q "Verify Test"; then
+                ok "notes search finds matching note"
+            else
+                warn "notes search did not find expected note: ${SEARCH_OUT}"; EXIT_CODE=3
+            fi
+            rm -f "${DB}"
+        else
+            warn "Binary not found at ${BINARY}"; EXIT_CODE=3
+        fi
+        ;;
+
+    node-api)
+        for f in db.js app.js test/notes.test.js; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose build 2>&1 | /usr/bin/tail -5); then
+            ok "docker compose build succeeded"
+        else
+            warn "docker compose build failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && docker compose run --rm test 2>&1 | /usr/bin/tail -20); then
+            ok "docker compose run --rm test passed"
+        else
+            warn "tests had failures"; EXIT_CODE=3
+        fi
+        echo ""
+        (cd "${RUN_DIR}" && docker compose up -d api 2>&1 | /usr/bin/tail -3) || true
+        sleep 3
+        if curl -sf http://localhost:8082/health | grep -q "ok"; then
+            ok "GET /health returned ok"
+            CREATED=$(curl -sf -X POST http://localhost:8082/notes \
+                -H "Content-Type: application/json" \
+                -d '{"title":"E2E Test","content":"hello","tags":"e2e"}' 2>/dev/null || true)
+            if echo "${CREATED}" | grep -q "E2E Test"; then
+                ok "POST /notes created a note"
+                if curl -sf http://localhost:8082/notes | grep -q "E2E Test"; then
+                    ok "GET /notes returned the created note"
+                else
+                    warn "GET /notes did not return expected note"; EXIT_CODE=3
+                fi
+            else
+                warn "POST /notes did not return expected data"; EXIT_CODE=3
+            fi
+        else
+            warn "GET /health failed (API may not have started)"; EXIT_CODE=3
+        fi
+        (cd "${RUN_DIR}" && docker compose down 2>/dev/null || true)
+        ;;
+
+    react-todo)
+        for f in src/App.tsx src/main.tsx Dockerfile; do
+            if [[ -f "${RUN_DIR}/${f}" ]]; then ok "${f} exists"
+            else warn "${f} missing"; EXIT_CODE=3; fi
+        done
+        echo ""
+        if (cd "${RUN_DIR}" && npm run build 2>&1 | /usr/bin/tail -10); then
+            ok "npm run build succeeded"
+        else
+            warn "npm run build failed"; EXIT_CODE=3
+        fi
+        echo ""
+        if (cd "${RUN_DIR}" && docker build -t loopr-e2e-react-todo . 2>&1 | /usr/bin/tail -10); then
+            ok "docker build succeeded"
+        else
+            warn "docker build failed"; EXIT_CODE=3
+        fi
+        echo ""
+        CONTAINER_ID=$(docker run -d -p 14173:80 loopr-e2e-react-todo 2>/dev/null || true)
+        if [[ -n "${CONTAINER_ID}" ]]; then
+            sleep 2
+            if curl -s http://localhost:14173 | grep -q "root"; then
+                ok "curl returned HTML with root div"
+            else
+                warn "curl did not find root div in response"; EXIT_CODE=3
+            fi
+            docker stop "${CONTAINER_ID}" >/dev/null 2>&1 || true
+            docker rm "${CONTAINER_ID}" >/dev/null 2>&1 || true
+        else
+            warn "docker run failed"; EXIT_CODE=3
         fi
         ;;
 esac
