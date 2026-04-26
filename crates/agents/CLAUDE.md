@@ -24,6 +24,14 @@ Ralph Wiggum loops per role. The execute stages of the pipeline. Prompt assembly
 
 A Ralph loop here takes a typed input, uses injected trait impls for side-effects, and returns a typed output. If a function is making orchestration decisions ("also spawn a reviewer", "escalate to director"), pull that into the driver in `loopr` and emit an event instead.
 
+## System-prompt cache locality
+
+The Anthropic prompt-cache (Phase 4 of `docs/design/2026-04-25-tier1-cleanup.md`) attaches `cache_control: { "type": "ephemeral" }` to the system block at every LLM call. The cache hits when the system prompt is **byte-stable** across calls, so:
+
+- Iteration-specific state (current Work id, retry counter, parse-error context) MUST live in the user message, not in the system prompt. Mutating the system prompt per-iteration invalidates the cache and pays the full input-token cost on every call.
+- The system prompt's structure is fixed; only `assemble_system`'s template is allowed to vary it (e.g. baked tools list, baked guardrails). Per-iteration tweaks belong in `assemble_user`.
+- Below per-model thresholds (1024 tokens for Haiku, 2048 for Sonnet/Opus 4.x) the cache silently no-ops. Cache hit ratio is recorded on `llm.anthropic` and `llm.anthropic.free` spans for telemetry; below-threshold roles leak no warnings.
+
 ## Dependency injection: `Deps<L, T, W, S, C>` over bare generic params
 
 Per `rules/rust.md`, agents are generic over their dependencies; `dyn` dispatch is forbidden. To avoid "contagious boilerplate" (Architect Round 3 warning) where every function drags `<L: LlmClient, T: ToolExecutor, W: WorktreeManager, S: Store, C: ContextBuilder>` through its signature, we use the `Deps` struct pattern that `rules/rust.md` already sanctions:

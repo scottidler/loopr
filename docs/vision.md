@@ -30,7 +30,7 @@ Explicit non-goals, extracted from v1–v4 post-mortems:
 - **Not a YAML-composable orchestration engine.** v4's composition engine turned every stage boundary into a `HashMap<String, Value>` and produced a class of seam-drift bugs (kebab/snake mismatch, uncalled `validate_params`, ignored idempotency declarations) that cannot exist when seams are typed Rust functions.
 - **Not a durable workflow engine.** Loopr is reactive: the daemon holds state, receives events, runs relevant stages incrementally. No Temporal-style suspend/resume, no saga rollback. Self-healing comes from the daemon re-evaluating state each tick, same as v3/v4.
 - **Not a coexistence migration.** v1 to v2 was a rewrite. v2 to v3 was a rewrite. v3 to v4 was a coexistence migration and it failed. v5 does not dual-path with v4. If v5 earns its place, v4 gets archived.
-- **Not a pre-designed spec for every stage.** One shape doc (this one). Detailed design docs are motivated by failing runs, not written in advance. Self-reviewed "5/5 review passes" on unverified specs is the failure mode to avoid.
+- **Not a pre-designed spec for every stage.** One shape doc (this one). Detailed design docs are written when needed - to plan a non-trivial change, fix a real defect, or ship a coherent feature. Self-reviewed "5/5 review passes" on speculative specs are the failure mode to avoid; design docs against real, identified problems (failing runs, wired-but-broken behavior, lying-by-omission code) are the failure mode to embrace.
 - **Not a rebuild of everything from first principles.** Worktree management, TUI rendering, IPC framing, tool registry, LLM streaming, context budgeting — these were v3 wins and they carry over inside `runtime` without reargument.
 
 ## Crate Layout
@@ -58,7 +58,7 @@ Directory structure:
 ```
 loopr-v5/
 ├── Cargo.toml                    workspace manifest
-├── docs/                         shape docs, design docs (motivated by runs)
+├── docs/                         shape docs, design docs
 ├── crates/
 │   ├── derive/
 │   ├── telemetry/
@@ -255,7 +255,7 @@ Novel strategies mean writing a new `impl RetryStrategy` in Rust. Novel topologi
 
 v5 overrides the `rules/rust.md` default of `log` + `env_logger` and uses **`tracing` + `tracing-subscriber` + `tracing-appender`**. Reason: a multi-crate daemon with long-lived async stages needs span-level context that survives across tasks and crate boundaries. The `log` crate gives flat events; `tracing` gives the span hierarchy that makes "follow one Work from Plan through Tick" tractable. Observability is a first-class concern in v5, owned by its own crate (`telemetry`).
 
-### Four-layer log strategy
+### Five-layer log strategy
 
 Per-process telemetry lives under `$XDG_DATA_HOME/loopr/sessions/<session-id>/targets/<target-slug>/runs/<process-id>/`; fanout files live under the same session-id root so they aggregate across processes.
 
@@ -263,6 +263,7 @@ Per-process telemetry lives under `$XDG_DATA_HOME/loopr/sessions/<session-id>/ta
 2. **Pretty per-process log** at `runs/<process-id>/loopr.log`, same events formatted for humans. Mirrored to console at INFO+ during interactive runs.
 3. **Per-Work fanout files** at `runs/<process-id>/work/<work-id>.log`. `WorkFanoutLayer` watches the `work_id` span and splits a file per Work.
 4. **Per-Session fanout file** at `sessions/<session-id>/targets/<target-slug>/session-fanout.log`. `SessionFanoutLayer` routes events carrying `session_id` (client) or `client_session_id` (daemon post-handshake) to a single file that aggregates activity across every process touching the session. LRU-capped writer cache.
+5. **Digests** at `runs/<process-id>/summary.md` (per-process) and `sessions/<session-id>/summary.md` (per-session). Markdown rollups with YAML frontmatter (machine-parseable for the session aggregator); cumulative counters for plans / works / bundles / ticks created and transitioned, LLM call counts + tokens + cost, escalations, and corruption_count. Per-process digest written by the daemon at graceful exit; per-session digest written by `loopr sessions end`.
 
 ### Identifier taxonomy
 
@@ -588,11 +589,10 @@ Target-level extension via `.loopr/config.yml`: targets can add project-specific
 
 The rules that change the failure mode of v1–v4, not the rules that the architecture already enforces:
 
-1. **One design doc at a time, motivated by a failing run.** No new detailed doc until the previous one has produced a passing E2E against a real target repo. `docs/vision.md` is the exception - it's the seed.
-2. **Seam tests, not only unit tests.** Every crate boundary has at least one golden-file test: given this input serialized, produce this output. Serde round-trip tests cover `deny_unknown_fields`. Unit tests on one side of a seam are not enough.
-3. **No coexistence migrations.** If a stage needs to change, change it in place or replace it in one commit. No dual paths. No "both systems run during migration."
-4. **One architectural pivot per quarter, at most.** And only after three consecutive passing E2Es against real projects. v3/v4's four paradigm shifts in 55 days is the exact tempo not to repeat.
-5. **CLI is plumbing, TUI is porcelain.** A CLI verb must have a real user story outside an interactive UI (scripts, cron, CI, git hooks, one-off shell invocations). Interactive management flows (retry, approve, reject, inspect-with-context, live-watch) live in the TUI as keybindings, not in the CLI as verbs. Added by amendment `a6`; see `docs/design/2026-04-23-cli-plumbing-shape.md` for the rationale and the verb surface.
+1. **Seam tests, not only unit tests.** Every crate boundary has at least one golden-file test: given this input serialized, produce this output. Serde round-trip tests cover `deny_unknown_fields`. Unit tests on one side of a seam are not enough.
+2. **No coexistence migrations.** If a stage needs to change, change it in place or replace it in one commit. No dual paths. No "both systems run during migration."
+3. **One architectural pivot per quarter, at most.** And only after three consecutive passing E2Es against real projects. v3/v4's four paradigm shifts in 55 days is the exact tempo not to repeat.
+4. **CLI is plumbing, TUI is porcelain.** A CLI verb must have a real user story outside an interactive UI (scripts, cron, CI, git hooks, one-off shell invocations). Interactive management flows (retry, approve, reject, inspect-with-context, live-watch) live in the TUI as keybindings, not in the CLI as verbs. See `docs/design/2026-04-23-cli-plumbing-shape.md` for rationale and the verb surface.
 
 ## First Gate
 
@@ -621,16 +621,16 @@ This is the same scenario that succeeded once on v4 (`rust-version`, v0.1.121). 
 To avoid scope creep into v4.2:
 
 - No Plan/Spec/Phase/Work hierarchy with >1 level (start with flat Work list until flat proves insufficient).
-- No Director (escalation turns into exit-with-error until escalation is motivated by a real stuck run).
+- No Director (escalation exits with error until the Director role gets its own design doc).
 - No AutoResearch harness (wire configs, but no sweep/score loop until the baseline runs).
 - No parallel worktrees (one Work at a time until serial proves the shape).
 - No semantic bubble-up / coverage evaluator.
 
-These are earned features, added when a real run fails for lack of them.
+These are deferred features. They get added when there's a concrete reason to add them - either a real failure mode that requires them, or a coherent piece of work where they fall in scope.
 
 ## Deferred Enhancements
 
-Ideas evaluated and not first-gate scope, kept here so future sessions don't re-derive them from scratch. Each line is a pointer, not a design - the detailed design doc gets written when the enhancement is motivated by a real run.
+Ideas evaluated and not first-gate scope, kept here so future sessions don't re-derive them from scratch. Each line is a pointer, not a design - the detailed design doc gets written when the enhancement is the next thing to ship.
 
 1. **Typed event bus inside the daemon.** Pattern #6 from the leaked Claude Code architecture: structured streaming events (`WorkStatusChanged { work_id, from, to }`-style) that subscriber agents react to instead of polling TaskStore. Earn it when polling becomes the bottleneck, or when the TUI needs to watch the same stream agents do.
 

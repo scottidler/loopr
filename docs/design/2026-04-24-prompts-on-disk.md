@@ -357,6 +357,13 @@ Handlebars rendering is not a code-execution vector; it's pure string substituti
 - v4 placeholder cross-check: `~/repos/scottidler/loopr-v4/bin/check-pmt-placeholders`
 - Inline placeholders being replaced: `crates/context/src/implementer.rs:122-191`, `crates/context/src/reviewer.rs:33-105`, `crates/decomposer/src/prompt.rs:24-58`
 
+## Updates (2026-04-25, Tier-1 cleanup)
+
+The two follow-ups this doc flagged shipped in the Tier-1 cleanup batch (`docs/design/2026-04-25-tier1-cleanup.md`):
+
+- **Decomposer transcripts** — `decomposer::decompose` now constructs a `TranscriptIteration` and calls `telemetry::transcript::append_iteration` on every code path that reached the LLM (success, retry, every validation-error variant, both-calls-failed). Transcripts land at `<target>/.loopr/records/plans/<plan-id>/decomposition.md`.
+- **System-prompt elision** — Anthropic prompt caching is now wired on the system block via `cache_control: { "type": "ephemeral" }`. Both span types (`llm.anthropic`, `llm.anthropic.free`) record `cache_creation_input_tokens`, `cache_read_input_tokens`, and `cache_hit_ratio`; a debug event under target `llm.anthropic.cache` mirrors the same triple.
+
 ## Post-Implementation Findings (2026-04-25)
 
 Phases 1-5 landed and `otto ci` is green. The full commit chain on branch `v5`:

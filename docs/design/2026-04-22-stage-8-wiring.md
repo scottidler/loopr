@@ -7,6 +7,8 @@
 **Shipped in:** v0.5.29
 **Crates touched:** `loopr` (primary), `domain` (one FSM-edge addition: `WorkStatus: InReview => Blocked by Coordinator` in the overrides table), `store` (one new accessor: `WorksStore::list_by_parent_id`), `integrator` (consumer), `agents` (consumer).
 
+**Shipped: `WorkUpdateSink`, `PlanUpdateSink`, `SummaryFanout` decorator** in `docs/design/2026-04-25-tier1-cleanup.md` (Phases 5 + 6). The sink-trait family this doc's Phase 8.5 implicitly assumed now exists alongside the Phase-8 `BundleUpdateSink`; per-Work / per-Bundle / per-Plan summaries land on every transition.
+
 ## Summary
 
 Wire the daemon so an approved Bundle actually reaches the integration branch and produces a Tick. Stage 8 shipped the Reviewer and Integrator as per-crate designs; neither is reachable from `handle_plan_create`. This doc owns the cross-crate glue: integration-branch creation at Plan time, the Work-FSM orchestration the pipeline has been silently missing, Reviewer and Integrator `spawn_*_for_*` methods parallel to `spawn_implementer_for_work`, a circuit-broken retry policy for `Integrating` Bundles, and a restart-reconcile sweep that re-enqueues Bundles stranded at every intermediate state.

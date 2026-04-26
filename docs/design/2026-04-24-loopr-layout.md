@@ -6,6 +6,8 @@
 **Review Passes Completed:** 5/5
 **Crates touched:** telemetry, loopr, ipc
 
+**Shipped: per-process digest, session digest** in `docs/design/2026-04-25-tier1-cleanup.md` (Phases 7 + 8). The reserved paths `runs/<pid>/summary.md` and `sessions/<sid>/summary.md` are now written: the daemon emits a per-process digest at graceful exit (post-loop tail in `serve_core`), and `loopr sessions end` aggregates every per-process digest under the session into a session-level rollup. Frontmatter shape is YAML so the aggregator can `sum` counters; abnormal-exit handling (panic hook + SIGQUIT) is a follow-up.
+
 ## Summary
 
 Commits a layout for loopr's on-disk state. Two structural changes: (1) promote the existing `run-id` to `session-id` as a first-class user-facing concept analogous to Claude's session handle, keeping its timestamp format (`YYYYMMDD-HHMMSS[-N]`) because that format is already session-shaped (meaningful at a glance, one per daemon boot) and was only misnamed. Introduce a new `process-id` type (`pc-<6char>` short slug) for genuinely per-process handles. (2) Externalize process-level telemetry from `<target>/.loopr/` to the user's XDG data directory, keyed by session-id and target-slug, so target repos stay uncluttered and sessions can (later) aggregate activity across multiple targets. Target-local `.loopr/` retains exactly the things a human would open, edit, or commit: config, prompts, the typed record truth, in-flight worktrees, runtime handles, and a small derived-records tree for local debugging. Everything else moves to XDG.

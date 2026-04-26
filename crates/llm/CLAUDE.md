@@ -29,7 +29,7 @@ The Architect's Round 2 finding motivates this boundary: `ContextBuilder` placed
 
 ## Instrumentation
 
-`AnthropicClient::complete_with_tool` and `complete_free` keep their existing manual `info_span!("llm.anthropic", ...)` shape: model, system_len, user_len, system_preview / user_preview (truncated to PROMPT_PREVIEW_MAX_BYTES), duration_ms, outcome (`ok` / `retryable` / `fatal`). Never emit tool schemas, ToolCall.input, headers, or the API key.
+`AnthropicClient::complete_with_tool` and `complete_free` keep their existing manual `info_span!("llm.anthropic", ...)` shape: model, system_len, user_len, system_preview / user_preview (truncated to PROMPT_PREVIEW_MAX_BYTES), duration_ms, outcome (`ok` / `retryable` / `fatal`). Phase 4 of the Tier-1 cleanup added prompt-cache fields: `cache_creation_input_tokens`, `cache_read_input_tokens`, and `cache_hit_ratio` are recorded on every `Ok` outcome. A debug event under target `llm.anthropic.cache` mirrors the same triple so log readers can grep for cache activity without parsing span fields. Never emit tool schemas, ToolCall.input, headers, or the API key.
 
 `AnthropicClient::new` now opens `llm.anthropic.new` (`info`, `err`) carrying model + api_base_url + max_tokens. Helper functions `validate_api_base_url`, `classify_response`, `classify_free_response` open their own `debug` spans with `err` so an HTTP-level failure carries status + body length on the span without inlining the response body. The existing `tests/span.rs` snapshot covers the manual outer spans; the new `#[instrument]` attributes are exercised via the test suite's mock-server flows.
 

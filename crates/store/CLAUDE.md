@@ -24,6 +24,14 @@ This crate is the anti-corruption layer between loopr's domain types and tasksto
 
 The Round 1 Architect critique — "domain should not depend on an I/O-bound persistence engine" — is precisely this crate's reason to exist. `domain` keeps records + FSM pure; `store` holds everything else.
 
+## Update sinks
+
+The crate exposes three `*UpdateSink` traits — `BundleUpdateSink`, `WorkUpdateSink`, `PlanUpdateSink` — that mirror the per-collection `update` methods at a per-record granularity. Real impls forward to the corresponding `Store::*` methods; `&S` and `Arc<S>` forwarding impls let callers pass `&self.store` or `Arc::clone(&self.store)` without unwrapping. The daemon's `SummaryFanout` decorator implements all three so per-record `summary.md` files land transactionally with each FSM transition. `PlanUpdateSink::update(plan, children)` carries siblings explicitly (option (c-extended) in the design): the caller fetches children before invoking, the renderer sees both arguments. Bundles use OCC and surface `BundleUpdateError::Stale` separately so the Reviewer/Integrator retry path can match on it.
+
+## Corruption-tolerant reads
+
+`BundlesStore::list_tolerant(&[Filter])` and `WorksStore::list_tolerant(&[Filter])` forward to `taskstore_async::AsyncStore::list_tolerant`, which reads the JSONL files directly (bypassing the SQLite cache) and returns `ListResult<T> { records, corruption }`. Per-row failures surface as `CorruptionEntry` instead of either failing the whole list or silently dropping at `sync()`. `StoreError::Corruption` is reserved for future failure modes that don't have a per-row fallback; the current daemon uses `list_tolerant`'s data-as-corruption shape exclusively. Recovery path: `git -C <target> checkout HEAD -- .loopr/taskstore/` (the JSONL files are git-tracked; SQLite is just a cache).
+
 ## Dependencies
 
 `taskstore` (git dep, inherited via `workspace = true` from the root `[workspace.dependencies]` block), `derive`, and workspace-shared crates (`eyre`, `tracing`, `serde`). Added via `cargo add` at the time the first code needs them, not speculatively.

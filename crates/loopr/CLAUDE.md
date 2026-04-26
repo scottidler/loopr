@@ -66,9 +66,9 @@ Paths under `<target>/.loopr/records/`:
 
 `.git/info/exclude` is updated by `worktree::ensure_loopr_excludes` to cover `.loopr/records/`. Transcripts never get committed.
 
-**Wiring status:** `agents::implementer::run_implementer` and `agents::reviewer::run_reviewer` construct a `TranscriptIteration` and call `append_iteration` at every iteration / return-path. The decomposer is NOT yet wired — `decomposer::decompose` does not call `append_iteration`; `plans/<plan-id>/decomposition.md` will not be written until that follow-up lands. Failures in the wired agents emit a `warn!` and the agent continues.
+**Wiring status:** `agents::implementer::run_implementer`, `agents::reviewer::run_reviewer`, AND `decomposer::decompose` all construct a `TranscriptIteration` and call `append_iteration` at every iteration / return-path. Decomposer transcripts land at `plans/<plan-id>/decomposition.md` (one block per LLM call; success + every validation-error variant + retry path + final llm-failed). Failures emit a `warn!` and the agent/decomposer continues.
 
-**System-prompt elision** (the design doc's "leaning yes" open question) is not implemented yet; iterations 2..N currently re-render the full system prompt. Tracked as a follow-up.
+**System-prompt elision via Anthropic prompt caching:** the system block now ships with `cache_control: { "type": "ephemeral" }`. Cache-creation tokens land on the first call; cache-read tokens on subsequent matching calls. Both surfaces (`llm.anthropic` and `llm.anthropic.free` spans, plus the `llm.anthropic.cache` debug event) record `cache_creation_input_tokens`, `cache_read_input_tokens`, and `cache_hit_ratio`. Below-threshold prompts no-op silently — Anthropic charges and reads the cache only above 1024 tokens (Haiku) / 2048 tokens (Sonnet+Opus 4.x).
 
 ## Summary generators
 
@@ -76,9 +76,9 @@ Per-record markdown digests live under `<target>/.loopr/records/<kind>/<id>/summ
 
 Best-effort `write_<kind>_summary_best_effort` helpers in `crates/loopr/src/daemon/context.rs` log a `warn!` on failure and return; transcripts and FSM transitions never propagate a summary error.
 
-**Wiring status:** the renderer + atomic-write surface ships in this phase; per-transition callsite wiring at `spawn_implementer_for_work`, `spawn_reviewer_for_bundle`, and `spawn_integrator_for_bundle` remains a focused follow-up. The design doc Phase 8.5 assumed `WorkUpdateSink` / `PlanUpdateSink` traits that mirror `BundleUpdateSink`; only the latter exists, so per-transition fanout is best added once the daemon is being touched anyway. No regression: a missing summary is regenerated on the next transition that does touch the right callsite, and the renderers are deterministic given taskstore state.
+**Wiring status:** `WorkUpdateSink` and `PlanUpdateSink` ship alongside `BundleUpdateSink`. The `SummaryFanout<S>` decorator (in `crates/loopr/src/daemon/summary_fanout.rs`) implements all three sink traits and writes the matching `summary.md` after every successful inner update. Per option (c-extended) the Work-update path also re-renders the parent Plan summary so child-Work transitions are reflected without waiting on a Plan-level FSM change. `DaemonContext` constructs the fanout in `new()` and threads `&*self.summary_fanout` into every `transition_and_persist_*` call site plus the `IntegratorDeps::bundle_sink` and `ReviewerDeps::store` injections.
 
-**Process / session digests** (`runs/<process-id>/summary.md` and `sessions/<session-id>/summary.md`) are not yet built; the design doc itself notes these depend on the daemon shutdown hook and `loopr sessions end`. Tracked as a follow-up alongside the wiring.
+**Process / session digests** ship in `crates/telemetry/src/digest/`. `ProcessSnapshot` accumulates per-process counters (records, Bundle/Tick lifecycle, LLM calls + tokens + cost via `MeteredLlmClient<L>`, escalations, corruption_count). `serve_core` writes `runs/<pid>/summary.md` at graceful exit; `loopr sessions end` aggregates every per-process digest under the session and writes `sessions/<sid>/summary.md`. Both renderers emit YAML frontmatter (machine-parseable for the session aggregator) plus a markdown body. Abnormal-exit handling (panic hook + SIGQUIT) is a follow-up; the graceful-exit path is wired.
 
 ## See also
 
