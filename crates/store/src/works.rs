@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
@@ -167,5 +168,60 @@ impl<'a> WorksStore<'a> {
     pub async fn update(&self, work: Work) -> Result<(), StoreError> {
         self.inner.update(work).await?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `WorkUpdateSink` trait + impls
+//
+// Phase 5 of the Tier-1 cleanup. Mirrors `BundleUpdateSink`'s shape so
+// the daemon's `SummaryFanout` decorator can implement all three sink
+// traits with the same pattern. Work updates are NOT OCC-tracked
+// today (only Bundle is), so the trait surface omits
+// `expected_updated_at`. Re-evaluate when a real Work-OCC pattern
+// shows up in production logs.
+// ---------------------------------------------------------------------------
+
+/// Minimal Work-update interface for sink-generic transition helpers.
+#[allow(clippy::manual_async_fn)]
+pub trait WorkUpdateSink: Send + Sync {
+    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WorkUpdateError {
+    #[error("work update failed: {0}")]
+    Update(String),
+}
+
+/// Real `WorkUpdateSink` backed by `store::Store`. Delegates to
+/// `WorksStore::update`.
+impl WorkUpdateSink for crate::Store {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+        async move {
+            self.works()
+                .update(work)
+                .await
+                .map_err(|e| WorkUpdateError::Update(e.to_string()))
+        }
+    }
+}
+
+/// Forwarding impl for any reference to a `WorkUpdateSink`. Mirrors
+/// `BundleUpdateSink`'s borrowed-store helper.
+impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+        async move { (*self).update(work).await }
+    }
+}
+
+/// Forwarding impl for `Arc<W>`. Lets the daemon construct
+/// `SummaryFanout::new(Arc::clone(&store), ...)` without unwrapping.
+impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for std::sync::Arc<W> {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+        async move { (**self).update(work).await }
     }
 }

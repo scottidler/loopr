@@ -25,6 +25,7 @@ pub(crate) mod git;
 pub mod handle;
 pub(crate) mod sentinel;
 pub(crate) mod startup;
+pub(crate) mod summary_fanout;
 
 use std::path::{Path, PathBuf};
 use std::process;

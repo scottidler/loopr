@@ -1,9 +1,10 @@
+use std::future::Future;
 use std::str::FromStr;
 
 use taskstore_async::AsyncStore;
 use tracing::instrument;
 
-use domain::{Plan, PlanId};
+use domain::{Plan, PlanId, Work};
 
 use crate::error::StoreError;
 
@@ -105,5 +106,81 @@ impl<'a> PlansStore<'a> {
     pub async fn update(&self, plan: Plan) -> Result<(), StoreError> {
         self.inner.update(plan).await?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `PlanUpdateSink` trait + impls
+//
+// Phase 5 of the Tier-1 cleanup. The Plan summary renderer needs both
+// the Plan and its child Works (`summary::write_plan(target, plan,
+// &children)`). Per design Alternatives §4 option (c-extended), the
+// caller fetches children before invoking `update`; the decorator
+// forwards both args into the renderer. Plan updates are not OCC-
+// tracked today (only Bundle is), so the trait surface omits
+// `expected_updated_at`.
+// ---------------------------------------------------------------------------
+
+/// Minimal Plan-update interface for sink-generic transition helpers.
+/// Carries `children` so the `SummaryFanout` decorator's `PlanUpdateSink`
+/// impl can render the Plan summary without the decorator gaining a
+/// concrete-store dependency. The real impl on `Store` ignores
+/// `children` for persistence (only `plan` is updated via
+/// `PlansStore::update`).
+#[allow(clippy::manual_async_fn)]
+pub trait PlanUpdateSink: Send + Sync {
+    fn update<'a>(
+        &'a self,
+        plan: Plan,
+        children: Vec<Work>,
+    ) -> impl Future<Output = Result<(), PlanUpdateError>> + Send + 'a;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PlanUpdateError {
+    #[error("plan update failed: {0}")]
+    Update(String),
+}
+
+/// Real `PlanUpdateSink` backed by `store::Store`. Delegates to
+/// `PlansStore::update`; `children` is unused at this layer (the
+/// decorator's render path uses it).
+impl PlanUpdateSink for crate::Store {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(
+        &'a self,
+        plan: Plan,
+        _children: Vec<Work>,
+    ) -> impl Future<Output = Result<(), PlanUpdateError>> + Send + 'a {
+        async move {
+            self.plans()
+                .update(plan)
+                .await
+                .map_err(|e| PlanUpdateError::Update(e.to_string()))
+        }
+    }
+}
+
+/// Forwarding impl for any reference to a `PlanUpdateSink`.
+impl<P: PlanUpdateSink + ?Sized> PlanUpdateSink for &P {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(
+        &'a self,
+        plan: Plan,
+        children: Vec<Work>,
+    ) -> impl Future<Output = Result<(), PlanUpdateError>> + Send + 'a {
+        async move { (*self).update(plan, children).await }
+    }
+}
+
+/// Forwarding impl for `Arc<P>`.
+impl<P: PlanUpdateSink + ?Sized> PlanUpdateSink for std::sync::Arc<P> {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(
+        &'a self,
+        plan: Plan,
+        children: Vec<Work>,
+    ) -> impl Future<Output = Result<(), PlanUpdateError>> + Send + 'a {
+        async move { (**self).update(plan, children).await }
     }
 }

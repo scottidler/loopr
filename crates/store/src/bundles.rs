@@ -261,5 +261,17 @@ impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for &B {
     }
 }
 
+/// Forwarding impl for `Arc<B>`.
+impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for std::sync::Arc<B> {
+    #[allow(clippy::manual_async_fn)]
+    fn update<'a>(
+        &'a self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
+        async move { (**self).update(bundle, expected_updated_at).await }
+    }
+}
+
 #[cfg(test)]
 mod tests;
