@@ -328,3 +328,182 @@ async fn every_work_has_parent_id_equal_to_plan_id() {
         assert_eq!(w.status, domain::WorkStatus::Pending);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 (Tier-1 cleanup): Decomposer transcripts.
+//
+// Every code path that reaches the LLM must write
+// `<target>/.loopr/records/plans/<plan-id>/decomposition.md`. The skipped
+// path is `collect_workspace_tree` failure, which never makes the LLM
+// call. Workspace scan failure is hard to provoke in a unit test from
+// outside — `collect_workspace_tree` only fails on IO errors against
+// the target — so the "skipped" assertion is by construction (the only
+// pre-LLM error variant in `decompose` is the workspace scan one,
+// which we don't synthesize here).
+// ---------------------------------------------------------------------------
+
+fn decomposer_transcript_path(target: &Path, plan: &Plan) -> std::path::PathBuf {
+    target
+        .join(".loopr")
+        .join("records")
+        .join("plans")
+        .join(plan.id.as_ref())
+        .join("decomposition.md")
+}
+
+#[tokio::test]
+async fn transcript_written_on_success() {
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [{
+            "title": "A", "content": "a",
+            "dependencies": [], "acceptance_criteria": ["assert a"]
+        }]
+    }));
+    let plan = fresh_plan("happy");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response));
+
+    super::decompose(&plan, dir.path(), &llm).await.expect("ok");
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    assert!(path.exists(), "transcript should exist at {}", path.display());
+    let body = std::fs::read_to_string(&path).expect("read transcript");
+    assert!(body.contains("ok"), "outcome ok should appear in body");
+    assert!(body.contains("(deps: [])"), "rendered child line should appear");
+}
+
+#[tokio::test]
+async fn transcript_written_with_two_iterations_on_retry() {
+    let dir = TempDir::new().expect("tempdir");
+    let success = tool_call(json!({
+        "children": [{
+            "title": "A", "content": "a",
+            "dependencies": [], "acceptance_criteria": ["assert a"]
+        }]
+    }));
+    let plan = fresh_plan("retry");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(retryable_err("first call boom"));
+    llm.queue_tool(ok(success));
+
+    super::decompose(&plan, dir.path(), &llm).await.expect("ok");
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    let body = std::fs::read_to_string(&path).expect("read transcript");
+    // The transcript renderer emits one block per call; the failing
+    // first call lands as `llm_failed_retrying`, the success as `ok`.
+    assert!(
+        body.contains("llm_failed_retrying"),
+        "first iteration's failure should be in transcript"
+    );
+    assert!(
+        body.contains("ok"),
+        "second iteration's success should be in transcript"
+    );
+}
+
+#[tokio::test]
+async fn transcript_written_on_zero_children() {
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({"children": []}));
+    let plan = fresh_plan("zero");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response));
+
+    let err = super::decompose(&plan, dir.path(), &llm)
+        .await
+        .expect_err("zero children rejected");
+    assert!(matches!(err, DecomposerError::ZeroChildren(_)));
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    let body = std::fs::read_to_string(&path).expect("transcript exists");
+    assert!(body.contains("zero_children"));
+}
+
+#[tokio::test]
+async fn transcript_written_on_malformed_children() {
+    let dir = TempDir::new().expect("tempdir");
+    // Schema-valid JSON but not the DecomposeResponse shape: causes
+    // `serde_json::from_value::<DecomposeResponse>` to fail.
+    let response = tool_call(json!({"not_children": "wrong"}));
+    let plan = fresh_plan("bad shape");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response));
+
+    let err = super::decompose(&plan, dir.path(), &llm)
+        .await
+        .expect_err("malformed children rejected");
+    assert!(matches!(err, DecomposerError::MalformedChildren(_)));
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    let body = std::fs::read_to_string(&path).expect("transcript exists");
+    assert!(body.contains("malformed_children"));
+}
+
+#[tokio::test]
+async fn transcript_written_on_duplicate_titles() {
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {"title": "Same", "content": "x", "dependencies": [], "acceptance_criteria": ["assert x"]},
+            {"title": "same", "content": "y", "dependencies": [], "acceptance_criteria": ["assert y"]}
+        ]
+    }));
+    let plan = fresh_plan("dups");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response));
+
+    let err = super::decompose(&plan, dir.path(), &llm)
+        .await
+        .expect_err("duplicate titles rejected");
+    assert!(matches!(err, DecomposerError::DuplicateTitles(_)));
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    let body = std::fs::read_to_string(&path).expect("transcript exists");
+    assert!(body.contains("duplicate_titles"));
+}
+
+#[tokio::test]
+async fn transcript_written_on_cycle_detected() {
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {"title": "A", "content": "a", "dependencies": ["B"], "acceptance_criteria": ["assert a"]},
+            {"title": "B", "content": "b", "dependencies": ["A"], "acceptance_criteria": ["assert b"]}
+        ]
+    }));
+    let plan = fresh_plan("cyclic");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response));
+
+    let err = super::decompose(&plan, dir.path(), &llm)
+        .await
+        .expect_err("cycle rejected");
+    assert!(matches!(err, DecomposerError::CycleDetected(_)));
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    let body = std::fs::read_to_string(&path).expect("transcript exists");
+    assert!(body.contains("cycle"));
+}
+
+#[tokio::test]
+async fn transcript_written_on_llm_failed_after_retry() {
+    let dir = TempDir::new().expect("tempdir");
+    let plan = fresh_plan("both fail");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(retryable_err("first"));
+    llm.queue_tool(schema_validation_err("second"));
+
+    let err = super::decompose(&plan, dir.path(), &llm)
+        .await
+        .expect_err("both calls failed");
+    assert!(matches!(err, DecomposerError::LlmFailed(_)));
+
+    let path = decomposer_transcript_path(dir.path(), &plan);
+    let body = std::fs::read_to_string(&path).expect("transcript exists");
+    // Both iterations should have transcripts — first is
+    // `llm_failed_retrying`, second is `llm_failed`.
+    assert!(body.contains("llm_failed_retrying"));
+    assert!(body.contains("llm_failed"));
+}

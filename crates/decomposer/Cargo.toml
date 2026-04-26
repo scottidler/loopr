@@ -11,6 +11,7 @@ domain = { path = "../domain" }
 store = { path = "../store" }
 llm = { path = "../llm" }
 context = { path = "../context" }
+telemetry = { path = "../telemetry" }
 thiserror = "2.0.18"
 serde.workspace = true
 serde_json.workspace = true

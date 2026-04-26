@@ -20,18 +20,81 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 
 use tracing::{info, instrument, warn};
 
 use context::PromptLoader;
 use domain::{AcceptanceCriteria, Plan, Work, WorkId};
 use llm::{LlmClient, ToolCall};
+use telemetry::transcript::{TranscriptIteration, append_iteration, decomposer_path};
 
 use crate::cycles::{detect_cycles, normalize, resolve_deps};
 use crate::error::DecomposerError;
 use crate::prompt::{assemble_system, assemble_user};
 use crate::tool::{DecomposeChild, DecomposeResponse, submit_decomposition_schema};
 use crate::tree::collect_workspace_tree;
+
+/// Render one `DecomposeResponse` summary line per child, the way the
+/// transcript's "Parsed Actions" section expects: `<title> (deps: [...]) ac=<n>`.
+/// On the failure paths (no parsed response yet) this returns an empty
+/// vec; the caller passes whatever it has.
+fn render_decompose_response(response: &DecomposeResponse) -> Vec<String> {
+    response
+        .children
+        .iter()
+        .map(|c| {
+            let deps_joined = c.dependencies.join(", ");
+            let ac_count = c.acceptance_criteria.len();
+            format!("{} (deps: [{}]) ac={}", c.title, deps_joined, ac_count)
+        })
+        .collect()
+}
+
+/// Append one iteration's transcript block. Best-effort: failures emit
+/// `warn!` and continue. Mirrors `agents::implementer::write_implementer_transcript`
+/// but writes to `<target>/.loopr/records/plans/<plan-id>/decomposition.md`.
+#[allow(clippy::too_many_arguments)]
+fn write_decomposer_transcript(
+    target: &Path,
+    plan_id: &str,
+    iteration: u32,
+    system_prompt: &str,
+    user_prompt: &str,
+    raw_response: &str,
+    parsed_actions: Vec<String>,
+    outcome: &str,
+    started_at: &str,
+    latency_ms: u64,
+) {
+    let mut iter = TranscriptIteration::new_single_turn(String::new(), started_at);
+    iter.iteration = iteration;
+    iter.latency_ms = latency_ms;
+    iter.system_prompt = system_prompt.to_string();
+    iter.user_prompt = user_prompt.to_string();
+    iter.response = raw_response.to_string();
+    iter.parsed_actions = parsed_actions;
+    iter.dispatcher_outcomes = vec![outcome.to_string()];
+    let path = decomposer_path(target, plan_id);
+    if let Err(e) = append_iteration(&path, &iter) {
+        warn!(error = %e, path = %path.display(), "decomposer transcript append failed");
+    }
+}
+
+/// Format an instant as a coarse ISO-8601-ish timestamp without pulling
+/// `chrono` into the decomposer just for the transcript's `started_at`
+/// field. Telemetry already owns the precise timestamp via the spans;
+/// this is the human-readable convenience field on the rendered block.
+fn now_iso8601() -> String {
+    let now = std::time::SystemTime::now();
+    let unix = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Coarse format: seconds-since-epoch is enough for the "Raw" link in
+    // the rendered iteration. Tests do not assert on the exact string.
+    format!("{unix}")
+}
 
 /// Decompose a `Plan` into a batch of child `Work`s.
 ///
@@ -69,28 +132,116 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     let system = assemble_system(&loader, &tree)?;
     let first_user = assemble_user(&loader, &plan.goal, None)?;
 
+    let plan_id_str = plan.id.as_ref().to_string();
+
+    // First LLM call. The success path runs through validation below
+    // before we have a parsed response to put in the transcript; the
+    // failure path writes its own transcript entry and returns. The
+    // retry path overwrites `iteration_used` / `user_used` so the
+    // success-path transcript carries iteration 2's prompts when the
+    // first call failed.
+    let mut iteration_used: u32 = 1;
+    let mut user_used: String = first_user.clone();
+    let started_at_initial = now_iso8601();
+    let t0_first = Instant::now();
     let tool_call = match try_llm_once(llm, &system, &first_user).await {
-        Ok(tc) => tc,
+        Ok(tc) => {
+            tracing::debug!(
+                latency_ms = t0_first.elapsed().as_millis() as u64,
+                "decomposer: first LLM call ok"
+            );
+            tc
+        }
         Err(first_err) => {
+            let first_latency = t0_first.elapsed().as_millis() as u64;
             warn!(error = %first_err, "decompose: first LLM call failed, retrying once");
+            // Best-effort: log iteration 1's failed call before the retry.
+            write_decomposer_transcript(
+                target,
+                &plan_id_str,
+                1,
+                &system,
+                &first_user,
+                &first_err.to_string(),
+                Vec::new(),
+                "llm_failed_retrying",
+                &started_at_initial,
+                first_latency,
+            );
             let retry_user = assemble_user(&loader, &plan.goal, Some(&first_err.to_string()))?;
+            iteration_used = 2;
+            user_used = retry_user.clone();
+            let started_at_retry = now_iso8601();
+            let t0_retry = Instant::now();
             match try_llm_once(llm, &system, &retry_user).await {
-                Ok(tc) => tc,
+                Ok(tc) => {
+                    tracing::debug!(
+                        latency_ms = t0_retry.elapsed().as_millis() as u64,
+                        "decomposer: retry LLM call ok"
+                    );
+                    tc
+                }
                 Err(retry_err) => {
+                    let retry_latency = t0_retry.elapsed().as_millis() as u64;
                     span.record("outcome", "llm_failed");
+                    write_decomposer_transcript(
+                        target,
+                        &plan_id_str,
+                        2,
+                        &system,
+                        &retry_user,
+                        &retry_err.to_string(),
+                        Vec::new(),
+                        "llm_failed",
+                        &started_at_retry,
+                        retry_latency,
+                    );
                     return Err(DecomposerError::LlmFailed(retry_err));
                 }
             }
         }
     };
 
-    let response: DecomposeResponse = serde_json::from_value(tool_call.input).map_err(|e| {
-        span.record("outcome", "malformed_children");
-        DecomposerError::MalformedChildren(e.to_string())
-    })?;
+    // The successful tool_call's input is re-serialized for the
+    // transcript regardless of whether the response parses cleanly
+    // below; raw text in the transcript is the whole point.
+    let raw_response = serde_json::to_string_pretty(&tool_call.input).unwrap_or_else(|_| tool_call.input.to_string());
+    let total_latency_ms = t0_first.elapsed().as_millis() as u64;
+
+    let response: DecomposeResponse = match serde_json::from_value::<DecomposeResponse>(tool_call.input.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            span.record("outcome", "malformed_children");
+            write_decomposer_transcript(
+                target,
+                &plan_id_str,
+                iteration_used,
+                &system,
+                &user_used,
+                &raw_response,
+                Vec::new(),
+                "malformed_children",
+                &started_at_initial,
+                total_latency_ms,
+            );
+            return Err(DecomposerError::MalformedChildren(e.to_string()));
+        }
+    };
 
     if response.children.is_empty() {
         span.record("outcome", "zero_children");
+        write_decomposer_transcript(
+            target,
+            &plan_id_str,
+            iteration_used,
+            &system,
+            &user_used,
+            &raw_response,
+            Vec::new(),
+            "zero_children",
+            &started_at_initial,
+            total_latency_ms,
+        );
         return Err(DecomposerError::ZeroChildren(plan.id.clone()));
     }
 
@@ -101,6 +252,18 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     for (idx, child) in response.children.iter().enumerate() {
         if normalize(&child.title).is_empty() {
             span.record("outcome", "empty_title");
+            write_decomposer_transcript(
+                target,
+                &plan_id_str,
+                iteration_used,
+                &system,
+                &user_used,
+                &raw_response,
+                render_decompose_response(&response),
+                "empty_title",
+                &started_at_initial,
+                total_latency_ms,
+            );
             return Err(DecomposerError::EmptyTitle(idx));
         }
     }
@@ -109,6 +272,18 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     let dupes = find_duplicates(&normalized_titles);
     if !dupes.is_empty() {
         span.record("outcome", "duplicate_titles");
+        write_decomposer_transcript(
+            target,
+            &plan_id_str,
+            iteration_used,
+            &system,
+            &user_used,
+            &raw_response,
+            render_decompose_response(&response),
+            "duplicate_titles",
+            &started_at_initial,
+            total_latency_ms,
+        );
         return Err(DecomposerError::DuplicateTitles(dupes));
     }
 
@@ -131,6 +306,18 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     if let Err(cycle_desc) = detect_cycles(&dep_graph) {
         span.record("outcome", "cycle");
         warn!(cycle = %cycle_desc, "decompose: dependency cycle detected");
+        write_decomposer_transcript(
+            target,
+            &plan_id_str,
+            iteration_used,
+            &system,
+            &user_used,
+            &raw_response,
+            render_decompose_response(&response),
+            "cycle",
+            &started_at_initial,
+            total_latency_ms,
+        );
         return Err(DecomposerError::CycleDetected(cycle_desc));
     }
 
@@ -143,6 +330,18 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
             if let DecomposerError::UnresolvedDeps(msg) = &e {
                 warn!(unresolved = %msg, "decompose: unresolved sibling deps");
             }
+            write_decomposer_transcript(
+                target,
+                &plan_id_str,
+                iteration_used,
+                &system,
+                &user_used,
+                &raw_response,
+                render_decompose_response(&response),
+                "unresolved_deps",
+                &started_at_initial,
+                total_latency_ms,
+            );
             return Err(e);
         }
     };
@@ -160,6 +359,18 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         let ac = non_empty_ac_for(child);
         if ac.is_empty() {
             span.record("outcome", "empty_ac");
+            write_decomposer_transcript(
+                target,
+                &plan_id_str,
+                iteration_used,
+                &system,
+                &user_used,
+                &raw_response,
+                render_decompose_response(&response),
+                "empty_ac",
+                &started_at_initial,
+                total_latency_ms,
+            );
             return Err(DecomposerError::EmptyAcceptanceCriteria(child.title.clone()));
         }
         let mut work = Work::new(plan.id.clone(), child.title.clone());
@@ -172,6 +383,18 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     span.record("outcome", "ok");
     span.record("child_count", works.len());
     info!(child_count = works.len(), "decompose: produced works");
+    write_decomposer_transcript(
+        target,
+        &plan_id_str,
+        iteration_used,
+        &system,
+        &user_used,
+        &raw_response,
+        render_decompose_response(&response),
+        "ok",
+        &started_at_initial,
+        total_latency_ms,
+    );
     Ok(works)
 }
 
