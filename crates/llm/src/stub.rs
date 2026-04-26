@@ -15,6 +15,7 @@ use crate::client::LlmClient;
 use crate::error::LlmError;
 use crate::message::ChatMessage;
 use crate::tool::{ToolCall, ToolSchema};
+use crate::usage::Usage;
 
 #[derive(Clone, Default)]
 pub struct ScriptedLlm {
@@ -60,11 +61,12 @@ impl LlmClient for ScriptedLlm {
         _system: &'a str,
         _user: &'a str,
         _tool: ToolSchema,
-    ) -> impl std::future::Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+    ) -> impl std::future::Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
         async move {
             let popped = self.tool_responses.lock().expect("tool_responses lock").pop_front();
             match popped {
-                Some(r) => r,
+                Some(Ok(tc)) => Ok((tc, Usage::default())),
+                Some(Err(e)) => Err(e),
                 None => {
                     let (t, f) = self.remaining();
                     panic!(
@@ -80,11 +82,12 @@ impl LlmClient for ScriptedLlm {
         &'a self,
         _system: &'a str,
         _messages: &'a [ChatMessage],
-    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send + 'a {
+    ) -> impl std::future::Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let popped = self.free_responses.lock().expect("free_responses lock").pop_front();
             match popped {
-                Some(r) => r,
+                Some(Ok(s)) => Ok((s, Usage::default())),
+                Some(Err(e)) => Err(e),
                 None => {
                     let (t, f) = self.remaining();
                     panic!(
@@ -120,9 +123,9 @@ mod tests {
             description: "".to_string(),
             input_schema: json!({}),
         };
-        let first = stub.complete_with_tool("", "", schema.clone()).await.unwrap();
+        let (first, _u) = stub.complete_with_tool("", "", schema.clone()).await.unwrap();
         assert_eq!(first.input, json!({"i": 1}));
-        let second = stub.complete_with_tool("", "", schema).await.unwrap();
+        let (second, _u) = stub.complete_with_tool("", "", schema).await.unwrap();
         assert_eq!(second.input, json!({"i": 2}));
         assert!(stub.is_empty());
     }
@@ -133,8 +136,8 @@ mod tests {
         stub.queue_free(Ok("first".to_string()));
         stub.queue_free(Ok("second".to_string()));
 
-        assert_eq!(stub.complete_free("", &[]).await.unwrap(), "first");
-        assert_eq!(stub.complete_free("", &[]).await.unwrap(), "second");
+        assert_eq!(stub.complete_free("", &[]).await.unwrap().0, "first");
+        assert_eq!(stub.complete_free("", &[]).await.unwrap().0, "second");
         assert!(stub.is_empty());
     }
 
@@ -144,7 +147,7 @@ mod tests {
         let probe = stub.clone();
         stub.queue_free(Ok("hello".to_string()));
         assert_eq!(probe.remaining(), (0, 1));
-        assert_eq!(stub.complete_free("", &[]).await.unwrap(), "hello");
+        assert_eq!(stub.complete_free("", &[]).await.unwrap().0, "hello");
         assert!(probe.is_empty());
     }
 

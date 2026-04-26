@@ -400,8 +400,13 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
 
 #[instrument(level = "debug", skip_all, fields(system_chars = system.len(), user_chars = user.len()), err)]
 async fn try_llm_once<L: LlmClient>(llm: &L, system: &str, user: &str) -> Result<ToolCall, llm::LlmError> {
-    llm.complete_with_tool(system, user, submit_decomposition_schema())
-        .await
+    // Phase 4 widened the trait to return `(ToolCall, Usage)`; the
+    // decomposer doesn't consume `Usage` directly (the metering wrapper
+    // owns counter accumulation), so discard it at this call site.
+    let (tool_call, _usage) = llm
+        .complete_with_tool(system, user, submit_decomposition_schema())
+        .await?;
+    Ok(tool_call)
 }
 
 /// Return the set of duplicate normalized titles. A title appears in

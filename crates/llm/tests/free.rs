@@ -45,7 +45,7 @@ async fn free_happy_path_returns_text() {
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
     let messages = vec![ChatMessage::user("say hi")];
-    let result = client.complete_free("sys", &messages).await.unwrap();
+    let (result, _usage) = client.complete_free("sys", &messages).await.unwrap();
 
     assert_eq!(result, "hello world");
 }
@@ -70,7 +70,13 @@ async fn free_request_body_has_no_tools_or_tool_choice() {
     let reqs = server.received_requests().await.unwrap();
     assert_eq!(reqs.len(), 1);
     let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
-    assert_eq!(body["system"], "S");
+    // Phase 4: `system` is now an array of content blocks carrying
+    // `cache_control`, not a bare string. Assert the new shape.
+    let system = body["system"].as_array().expect("system must be an array");
+    assert_eq!(system.len(), 1);
+    assert_eq!(system[0]["type"], "text");
+    assert_eq!(system[0]["text"], "S");
+    assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
     assert!(body.get("tools").is_none(), "free request must not carry tools");
     assert!(
         body.get("tool_choice").is_none(),
@@ -112,7 +118,7 @@ async fn free_picks_first_text_block_skipping_thinking() {
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
     let msgs = vec![ChatMessage::user("q")];
-    let out = client.complete_free("s", &msgs).await.unwrap();
+    let (out, _usage) = client.complete_free("s", &msgs).await.unwrap();
     assert_eq!(out, "the answer", "first text block wins, thinking skipped");
 }
 

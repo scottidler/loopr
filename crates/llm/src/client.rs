@@ -18,16 +18,23 @@ use std::future::Future;
 use crate::error::LlmError;
 use crate::message::ChatMessage;
 use crate::tool::{ToolCall, ToolSchema};
+use crate::usage::Usage;
 
 /// Swappable LLM backend. Implementations MUST be cancel-safe at the
 /// boundary: callers may drop the returned future without leaking
 /// state.
+///
+/// Phase 4 of the Tier-1 cleanup widened both methods to return
+/// `Usage` alongside the existing payload so the daemon's per-process
+/// digest can record cache-hit ratios without re-instrumenting every
+/// call site. Callers that don't care about token counts destructure
+/// with `let (payload, _usage) = ...`.
 #[allow(clippy::manual_async_fn)] // explicit `+ Send` bound required for tokio::spawn (design doc Alt 2)
 pub trait LlmClient {
     /// Send a tool-constrained completion. The backend forces the
     /// model to invoke exactly the supplied tool (`tool_choice = {type:
     /// "tool", name: tool.name}` in Anthropic's shape) and returns
-    /// the extracted `ToolCall`.
+    /// the extracted `ToolCall` plus the response's `Usage`.
     ///
     /// `system` and `user` are fully-assembled prompt strings; this
     /// crate does NOT touch them beyond forwarding.
@@ -36,7 +43,7 @@ pub trait LlmClient {
         system: &'a str,
         user: &'a str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a;
+    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a;
 
     /// Send a free-form multi-turn completion. No `tool_choice`, no
     /// `tools`: the model replies with plain text (possibly JSON, at
@@ -49,12 +56,13 @@ pub trait LlmClient {
     /// `role = "user"` (Anthropic's Messages API requires the turn
     /// list to end with user). The returned `String` is the first
     /// `{"type": "text"}` content block from the response; thinking
-    /// blocks are discarded by the backend.
+    /// blocks are discarded by the backend. The returned `Usage`
+    /// carries the same per-call counts as `complete_with_tool`.
     fn complete_free<'a>(
         &'a self,
         system: &'a str,
         messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a;
+    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a;
 }
 
 /// Forwarding impl for `Arc<L>` so daemon code can build
@@ -66,7 +74,7 @@ impl<L: LlmClient + ?Sized> LlmClient for std::sync::Arc<L> {
         system: &'a str,
         user: &'a str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
         (**self).complete_with_tool(system, user, tool)
     }
 
@@ -74,7 +82,7 @@ impl<L: LlmClient + ?Sized> LlmClient for std::sync::Arc<L> {
         &'a self,
         system: &'a str,
         messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         (**self).complete_free(system, messages)
     }
 }

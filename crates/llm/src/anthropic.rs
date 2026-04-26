@@ -21,6 +21,7 @@ use crate::config::LlmConfig;
 use crate::error::{FatalReason, LlmError};
 use crate::message::ChatMessage;
 use crate::tool::{ToolCall, ToolSchema};
+use crate::usage::Usage;
 
 /// Maximum bytes of `system` / `user` prompt to emit as a span field.
 /// Beyond this, the span records a truncated preview plus the
@@ -106,12 +107,18 @@ impl AnthropicClient {
 
 /// Request-body shape for Anthropic's Messages API. Serialized via
 /// `serde_json`; field order is the Messages-API documented order.
+///
+/// `system` is a `serde_json::Value` holding a one-element array of
+/// content blocks (so we can attach `cache_control: ephemeral` to the
+/// system block). The Messages API also accepts a bare string for
+/// `system`; the array form is required when any block carries
+/// `cache_control`. See `build_system_block`.
 #[derive(Serialize)]
 struct AnthropicRequest<'a> {
     model: &'a str,
     max_tokens: u32,
     temperature: f32,
-    system: &'a str,
+    system: Value,
     messages: [AnthropicMessage<'a>; 1],
     tools: [ToolSchemaWire<'a>; 1],
     tool_choice: ToolChoiceWire<'a>,
@@ -139,13 +146,31 @@ struct ToolChoiceWire<'a> {
 
 /// Request-body shape for `complete_free`. No `tools`, no
 /// `tool_choice`: the model replies with plain content blocks.
+/// Same `system: Value` shape as `AnthropicRequest` so the cached
+/// system block carries across both call paths.
 #[derive(Serialize)]
 struct AnthropicFreeRequest<'a> {
     model: &'a str,
     max_tokens: u32,
     temperature: f32,
-    system: &'a str,
+    system: Value,
     messages: Vec<AnthropicMessage<'a>>,
+}
+
+/// Build the `system` field as a one-element content-block array with
+/// `cache_control: { "type": "ephemeral" }`. Anthropic charges for the
+/// first request that crosses the per-model cacheable threshold (1024
+/// tokens for Haiku, 2048 for Sonnet/Opus 4.x) and reads from the
+/// cache on subsequent matching requests, surfacing the result in
+/// `usage.cache_creation_input_tokens` / `usage.cache_read_input_tokens`.
+/// Below the threshold, the cache silently no-ops; the wire shape is
+/// the same either way.
+fn build_system_block(system: &str) -> Value {
+    serde_json::json!([{
+        "type": "text",
+        "text": system,
+        "cache_control": { "type": "ephemeral" }
+    }])
 }
 
 impl LlmClient for AnthropicClient {
@@ -155,7 +180,7 @@ impl LlmClient for AnthropicClient {
         system: &'a str,
         user: &'a str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
         async move {
             // Span fields per design doc Security → Telemetry rules:
             // model + prompt byte-lengths + previews (truncated to
@@ -171,6 +196,9 @@ impl LlmClient for AnthropicClient {
                 tool_name = %tool.name,
                 duration_ms = tracing::field::Empty,
                 outcome = tracing::field::Empty,
+                cache_creation_input_tokens = tracing::field::Empty,
+                cache_read_input_tokens = tracing::field::Empty,
+                cache_hit_ratio = tracing::field::Empty,
             );
             let _enter = span.enter();
             let started = Instant::now();
@@ -180,9 +208,18 @@ impl LlmClient for AnthropicClient {
             let elapsed = started.elapsed().as_millis() as u64;
             span.record("duration_ms", elapsed);
             match &result {
-                Ok(_) => {
+                Ok((_, usage)) => {
                     span.record("outcome", "ok");
-                    debug!("llm.anthropic call succeeded");
+                    span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
+                    span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
+                    span.record("cache_hit_ratio", usage.cache_hit_ratio());
+                    debug!(
+                        target: "llm.anthropic.cache",
+                        created = usage.cache_creation_input_tokens,
+                        read = usage.cache_read_input_tokens,
+                        ratio = usage.cache_hit_ratio(),
+                        "llm.anthropic call succeeded"
+                    );
                 }
                 Err(LlmError::Retryable { reason }) => {
                     span.record("outcome", "retryable");
@@ -202,7 +239,7 @@ impl LlmClient for AnthropicClient {
         &'a self,
         system: &'a str,
         messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let last_user_preview = messages
                 .last()
@@ -217,6 +254,9 @@ impl LlmClient for AnthropicClient {
                 last_user_preview = %last_user_preview,
                 duration_ms = tracing::field::Empty,
                 outcome = tracing::field::Empty,
+                cache_creation_input_tokens = tracing::field::Empty,
+                cache_read_input_tokens = tracing::field::Empty,
+                cache_hit_ratio = tracing::field::Empty,
             );
             let _enter = span.enter();
             let started = Instant::now();
@@ -226,9 +266,18 @@ impl LlmClient for AnthropicClient {
             let elapsed = started.elapsed().as_millis() as u64;
             span.record("duration_ms", elapsed);
             match &result {
-                Ok(_) => {
+                Ok((_, usage)) => {
                     span.record("outcome", "ok");
-                    debug!("llm.anthropic.free call succeeded");
+                    span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
+                    span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
+                    span.record("cache_hit_ratio", usage.cache_hit_ratio());
+                    debug!(
+                        target: "llm.anthropic.cache",
+                        created = usage.cache_creation_input_tokens,
+                        read = usage.cache_read_input_tokens,
+                        ratio = usage.cache_hit_ratio(),
+                        "llm.anthropic.free call succeeded"
+                    );
                 }
                 Err(LlmError::Retryable { reason }) => {
                     span.record("outcome", "retryable");
@@ -245,7 +294,7 @@ impl LlmClient for AnthropicClient {
 }
 
 impl AnthropicClient {
-    async fn send_free_request(&self, system: &str, messages: &[ChatMessage]) -> Result<String, LlmError> {
+    async fn send_free_request(&self, system: &str, messages: &[ChatMessage]) -> Result<(String, Usage), LlmError> {
         let url = format!("{}/v1/messages", self.config.api_base_url);
         let wire_messages: Vec<AnthropicMessage<'_>> = messages
             .iter()
@@ -258,7 +307,7 @@ impl AnthropicClient {
             model: &self.config.model,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            system,
+            system: build_system_block(system),
             messages: wire_messages,
         };
 
@@ -278,13 +327,13 @@ impl AnthropicClient {
         classify_free_response(status, &body_bytes, self.config.max_tokens)
     }
 
-    async fn send_request(&self, system: &str, user: &str, tool: &ToolSchema) -> Result<ToolCall, LlmError> {
+    async fn send_request(&self, system: &str, user: &str, tool: &ToolSchema) -> Result<(ToolCall, Usage), LlmError> {
         let url = format!("{}/v1/messages", self.config.api_base_url);
         let body = AnthropicRequest {
             model: &self.config.model,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            system,
+            system: build_system_block(system),
             messages: [AnthropicMessage {
                 role: "user",
                 content: user,
@@ -413,7 +462,7 @@ fn classify_response(
     body: &[u8],
     expected_tool_name: &str,
     max_tokens: u32,
-) -> Result<ToolCall, LlmError> {
+) -> Result<(ToolCall, Usage), LlmError> {
     if status.is_success() {
         let parsed: Value = serde_json::from_slice(body).map_err(|_| LlmError::Retryable {
             reason: "non-JSON response body".into(),
@@ -446,7 +495,11 @@ fn classify_response(
     fields(status = status.as_u16(), body_bytes = body.len()),
     err,
 )]
-fn classify_free_response(status: reqwest::StatusCode, body: &[u8], max_tokens: u32) -> Result<String, LlmError> {
+fn classify_free_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    max_tokens: u32,
+) -> Result<(String, Usage), LlmError> {
     if status.is_success() {
         let parsed: Value = serde_json::from_slice(body).map_err(|_| LlmError::Retryable {
             reason: "non-JSON response body".into(),
@@ -472,12 +525,22 @@ fn classify_free_response(status: reqwest::StatusCode, body: &[u8], max_tokens: 
     }
 }
 
+/// Pull the `usage` object out of a Messages-API response.
+/// `serde_json` deserialization defaults missing cache fields to
+/// zero (see `Usage` field annotations).
+fn extract_usage(response: &Value) -> Usage {
+    response
+        .get("usage")
+        .and_then(|v| serde_json::from_value::<Usage>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
 /// Extract the first `{"type": "text"}` content block from a
 /// Messages-API response. Thinking blocks (`{"type": "thinking"}`)
 /// are skipped at debug level; they appear when the model's
 /// extended-thinking mode is enabled upstream and we do not surface
 /// that content to the Implementer.
-fn extract_text_block(response: &Value, max_tokens: u32) -> Result<String, LlmError> {
+fn extract_text_block(response: &Value, max_tokens: u32) -> Result<(String, Usage), LlmError> {
     if response.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
         let used = response
             .get("usage")
@@ -491,6 +554,8 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<String, LlmEr
             },
         });
     }
+
+    let usage = extract_usage(response);
 
     let content = response
         .get("content")
@@ -509,7 +574,7 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<String, LlmEr
                     .ok_or_else(|| LlmError::Fatal {
                         reason: FatalReason::SchemaValidation("text block missing `text` field".into()),
                     })?;
-                return Ok(text.to_string());
+                return Ok((text.to_string(), usage));
             }
             Some("thinking") => {
                 debug!("llm.anthropic.free: thinking block discarded");
@@ -524,7 +589,11 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<String, LlmEr
     })
 }
 
-fn extract_tool_call(response: &Value, expected_tool_name: &str, max_tokens: u32) -> Result<ToolCall, LlmError> {
+fn extract_tool_call(
+    response: &Value,
+    expected_tool_name: &str,
+    max_tokens: u32,
+) -> Result<(ToolCall, Usage), LlmError> {
     if response.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
         let used = response
             .get("usage")
@@ -538,6 +607,8 @@ fn extract_tool_call(response: &Value, expected_tool_name: &str, max_tokens: u32
             },
         });
     }
+
+    let usage = extract_usage(response);
 
     let content = response
         .get("content")
@@ -569,10 +640,13 @@ fn extract_tool_call(response: &Value, expected_tool_name: &str, max_tokens: u32
                 )),
             });
         }
-        return Ok(ToolCall {
-            tool_name: name,
-            input: input.clone(),
-        });
+        return Ok((
+            ToolCall {
+                tool_name: name,
+                input: input.clone(),
+            },
+            usage,
+        ));
     }
 
     Err(LlmError::Fatal {

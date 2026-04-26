@@ -67,7 +67,7 @@ async fn happy_path_returns_tool_call() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let result = client.complete_with_tool("sys", "usr", test_tool()).await.unwrap();
+    let (result, _usage) = client.complete_with_tool("sys", "usr", test_tool()).await.unwrap();
 
     assert_eq!(result.tool_name, "submit_decomposition");
     assert_eq!(result.input, input);
@@ -97,7 +97,13 @@ async fn request_body_shape_matches_messages_api() {
     assert_eq!(body["model"], "claude-sonnet-4-6");
     assert_eq!(body["max_tokens"], 8192);
     assert_eq!(body["temperature"], 0.3);
-    assert_eq!(body["system"], "SYS-PROMPT");
+    // Phase 4: `system` is an array of content blocks carrying
+    // `cache_control`, not a bare string.
+    let system = body["system"].as_array().expect("system must be an array");
+    assert_eq!(system.len(), 1);
+    assert_eq!(system[0]["type"], "text");
+    assert_eq!(system[0]["text"], "SYS-PROMPT");
+    assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
     assert_eq!(body["messages"][0]["role"], "user");
     assert_eq!(body["messages"][0]["content"], "USR-PROMPT");
     assert_eq!(body["tools"][0]["name"], "submit_decomposition");

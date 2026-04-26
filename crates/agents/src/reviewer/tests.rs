@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, Verdict, Work, WorkId};
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
+use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
 
 use store::{BundleUpdateError, BundleUpdateSink};
 
@@ -50,7 +50,7 @@ impl LlmClient for FakeLlm {
         _system: &'a str,
         _user: &'a str,
         _tool: LlmToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
         async move { panic!("FakeLlm: complete_with_tool not used in Reviewer tests") }
     }
 
@@ -59,18 +59,19 @@ impl LlmClient for FakeLlm {
         &'a self,
         _system: &'a str,
         _messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let mut q = self.responses.lock().unwrap();
-            if q.len() > 1 {
-                Ok(q.remove(0))
+            let payload = if q.len() > 1 {
+                q.remove(0)
             } else if self.repeat_last {
-                Ok(q[0].clone())
+                q[0].clone()
             } else if q.is_empty() {
                 panic!("FakeLlm: response queue exhausted");
             } else {
-                Ok(q.remove(0))
-            }
+                q.remove(0)
+            };
+            Ok((payload, Usage::default()))
         }
     }
 }

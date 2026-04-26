@@ -17,7 +17,7 @@ use tokio::sync::Barrier;
 use agents::{ReviewerConfig, ReviewerDeps, ReviewerError, run_reviewer};
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, Role, Work};
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema};
+use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use store::{BundleUpdateError, Store};
 
 // Gated fake LLM: both tasks block on a shared barrier after entering
@@ -36,7 +36,7 @@ impl LlmClient for GatedLlm {
         _system: &'a str,
         _user: &'a str,
         _tool: LlmToolSchema,
-    ) -> impl Future<Output = Result<ToolCall, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
         async move { panic!("unused") }
     }
 
@@ -45,10 +45,10 @@ impl LlmClient for GatedLlm {
         &'a self,
         _system: &'a str,
         _messages: &'a [ChatMessage],
-    ) -> impl Future<Output = Result<String, LlmError>> + Send + 'a {
+    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             self.barrier.wait().await;
-            Ok(self.response.clone())
+            Ok((self.response.clone(), Usage::default()))
         }
     }
 }

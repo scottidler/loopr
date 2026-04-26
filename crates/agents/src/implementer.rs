@@ -191,7 +191,7 @@ where
         // vec and re-prompt; reset_parse_failures ONLY on Ok.
         let mut messages = vec![ChatMessage::user(assembled.user_message.clone())];
         let actions = loop {
-            let raw = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
+            let (raw, _usage) = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
             last_raw = raw.clone();
             match parse_actions(&raw) {
                 Ok(actions) => {
@@ -333,7 +333,7 @@ where
                     messages.push(ChatMessage::user(format!(
                         "action failed: {err_msg}. Return one corrected JSON action (single object, not array)."
                     )));
-                    let corrected_raw = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
+                    let (corrected_raw, _usage) = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
                     match parse_one(&corrected_raw) {
                         Ok(corrected) => {
                             let corrected_result = dispatch_action(corrected, worktree, &deps.tools).await?;

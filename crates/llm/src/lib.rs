@@ -13,6 +13,7 @@ mod config;
 mod error;
 mod message;
 mod tool;
+mod usage;
 
 #[cfg(feature = "stub")]
 mod stub;
@@ -23,6 +24,7 @@ pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
 pub use message::ChatMessage;
 pub use tool::{ToolCall, ToolSchema};
+pub use usage::Usage;
 
 #[cfg(feature = "stub")]
 pub use stub::ScriptedLlm;
