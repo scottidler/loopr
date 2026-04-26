@@ -64,3 +64,66 @@ fn seed_force_overwrites_existing_edits() {
     assert!(content.contains("You are an Implementer agent"));
     assert!(!content.contains("USER EDITED CONTENT"));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 9 (Tier-1 cleanup): six-step init.
+// `run` is sync; it spins up a small tokio runtime internally for the
+// async steps. We exercise the full sequence end-to-end against a
+// synthetic git repo.
+// ---------------------------------------------------------------------------
+
+fn init_git_repo(path: &std::path::Path) {
+    use std::process::Command;
+    let run = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(path).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "test"]);
+    run(&["config", "commit.gpgsign", "false"]);
+    run(&["commit", "--allow-empty", "-q", "-m", "initial"]);
+}
+
+#[test]
+fn run_creates_loopr_dir_taskstore_excludes_and_prompts_on_fresh_target() {
+    let td = tempfile::tempdir().unwrap();
+    init_git_repo(td.path());
+
+    super::run(td.path(), false).unwrap();
+
+    assert!(td.path().join(".loopr").is_dir());
+    assert!(td.path().join(".loopr/taskstore").is_dir());
+    assert!(td.path().join(".loopr/prompts").is_dir());
+    assert!(td.path().join(".loopr/prompts/agents/implementer/system.pmt").exists());
+    assert!(td.path().join(".git/info/exclude").exists());
+}
+
+#[test]
+fn run_is_idempotent_on_already_initialized_target() {
+    let td = tempfile::tempdir().unwrap();
+    init_git_repo(td.path());
+    super::run(td.path(), false).unwrap();
+    // Second run must not error and must preserve everything.
+    super::run(td.path(), false).unwrap();
+    assert!(td.path().join(".loopr/taskstore").is_dir());
+}
+
+#[test]
+fn step_create_loopr_dir_reports_preserved_when_dir_exists() {
+    let td = tempfile::tempdir().unwrap();
+    std::fs::create_dir(td.path().join(".loopr")).unwrap();
+    let outcome = super::step_create_loopr_dir(td.path()).unwrap();
+    assert!(matches!(outcome, super::StepOutcome::Preserved { .. }));
+}
+
+#[test]
+fn step_create_loopr_dir_reports_created_when_fresh() {
+    let td = tempfile::tempdir().unwrap();
+    let outcome = super::step_create_loopr_dir(td.path()).unwrap();
+    assert!(matches!(outcome, super::StepOutcome::Created { .. }));
+}

@@ -1,18 +1,23 @@
-//! `loopr init` body. Seeds `<target>/.loopr/prompts/` from the
-//! baked `.pmt` tree (embedded in the binary via `include_dir!()` at
-//! the `context` crate). Idempotent merge by default: existing files
-//! are preserved; missing files are written. `--force` overwrites.
+//! `loopr init` body.
 //!
-//! `.gitkeep` files in the baked tree are placeholders for git only;
-//! the seeder skips writing them but still creates their parent
-//! directories so the user sees the empty-slot layout for unbuilt
-//! agents and decomposer tiers.
+//! Phase 9 of the Tier-1 cleanup expanded init from "seed prompts"
+//! into the six-step orchestrator the design doc had always
+//! described:
 //!
-//! Defense-in-depth: every computed destination path is asserted to
-//! be a descendant of `<target>/.loopr/prompts/` before writing. The
-//! baked tree's relative paths contain no `..` components by
-//! construction (we control the source files), but the assertion
-//! documents the invariant.
+//! 1. `verify_source_guard(target)` — re-confirm we are not pointing
+//!    at a loopr source tree.
+//! 2. `create_loopr_dir(target)` — mkdir `<target>/.loopr/`.
+//! 3. `open_taskstore(target)` — `Store::open` materializes
+//!    `<target>/.loopr/taskstore/` on first call.
+//! 4. `install_taskstore_hooks(target)` — `Store::install_git_hooks`
+//!    in-process. Idempotent; already-installed hooks Pre-served.
+//! 5. `ensure_git_excludes(target)` — `worktree::ensure_loopr_excludes`.
+//! 6. `seed_prompts(target, force)` — existing seeder, unchanged.
+//!
+//! Each step returns a `StepOutcome` and the final report prints one
+//! human-readable line per step plus a totals line. Idempotent: a
+//! re-run on a fully-initialized target prints `preserved` lines and
+//! exits 0.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +25,19 @@ use include_dir::{Dir, DirEntry};
 
 use crate::error::LooprError;
 
-/// Outcome summary printed at the end of `loopr init`.
+/// Per-step result. The detail string is rendered into the output
+/// line; `Skipped { reason }` is reserved for steps that intentionally
+/// did nothing (e.g. a non-git target where `install_git_hooks` has
+/// nothing to attach to).
+#[derive(Debug)]
+pub enum StepOutcome {
+    Created { detail: String },
+    Preserved { detail: String },
+    Skipped { reason: String },
+}
+
+/// Outcome summary printed at the end of `loopr init`. Carries one
+/// `StepOutcome` per step plus a tally of seed-prompts results.
 #[derive(Debug, Default)]
 pub struct InitOutcome {
     pub written: usize,
@@ -29,16 +46,183 @@ pub struct InitOutcome {
 
 #[tracing::instrument(name = "client.init", level = "info", skip_all, fields(target = %target.display(), force), err)]
 pub fn run(target: &Path, force: bool) -> Result<(), LooprError> {
+    // The four new steps need an async runtime for the taskstore
+    // calls; the existing seed_prompts is sync and runs after.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| LooprError::DaemonStartup(format!("init runtime build: {e}")))?;
+
+    let report = rt.block_on(async {
+        let guard = step_verify_source_guard(target)?;
+        let loopr_dir = step_create_loopr_dir(target)?;
+        let taskstore = step_open_taskstore(target).await?;
+        let hooks = step_install_taskstore_hooks(target).await?;
+        let excludes = step_ensure_git_excludes(target)?;
+        let prompts = step_seed_prompts(target, force)?;
+        Ok::<_, LooprError>([guard, loopr_dir, taskstore, hooks, excludes, prompts])
+    })?;
+
+    for (label, outcome) in [
+        "source-guard",
+        "loopr-dir",
+        "taskstore",
+        "git-hooks",
+        "git-excludes",
+        "prompts",
+    ]
+    .iter()
+    .zip(report.iter())
+    {
+        match outcome {
+            StepOutcome::Created { detail } => println!("[created] {label}: {detail}"),
+            StepOutcome::Preserved { detail } => println!("[preserved] {label}: {detail}"),
+            StepOutcome::Skipped { reason } => println!("[skipped] {label}: {reason}"),
+        }
+    }
+    let created = report
+        .iter()
+        .filter(|o| matches!(o, StepOutcome::Created { .. }))
+        .count();
+    let preserved = report
+        .iter()
+        .filter(|o| matches!(o, StepOutcome::Preserved { .. }))
+        .count();
+    println!(
+        "init complete: {created} created, {preserved} preserved at {}",
+        target.display()
+    );
+    Ok(())
+}
+
+fn step_verify_source_guard(target: &Path) -> Result<StepOutcome, LooprError> {
+    crate::guard::check(target)?;
+    Ok(StepOutcome::Created {
+        detail: "source-guard passed".to_string(),
+    })
+}
+
+fn step_create_loopr_dir(target: &Path) -> Result<StepOutcome, LooprError> {
+    let dir = target.join(".loopr");
+    let preexisting = dir.try_exists().unwrap_or(false);
+    std::fs::create_dir_all(&dir).map_err(|e| LooprError::DaemonStartup(format!("mkdir {dir:?}: {e}")))?;
+    if preexisting {
+        Ok(StepOutcome::Preserved {
+            detail: format!(".loopr/ already at {}", dir.display()),
+        })
+    } else {
+        Ok(StepOutcome::Created {
+            detail: format!(".loopr/ at {}", dir.display()),
+        })
+    }
+}
+
+async fn step_open_taskstore(target: &Path) -> Result<StepOutcome, LooprError> {
+    let taskstore_dir = target.join(store::TASKSTORE_SUBPATH);
+    let preexisting = taskstore_dir.try_exists().unwrap_or(false);
+    let store = store::Store::open(target)
+        .await
+        .map_err(|e| LooprError::DaemonStartup(format!("Store::open: {e}")))?;
+    // Best-effort close; init's purpose is to materialize the
+    // directory, not to keep the Store open. Failure here is non-fatal.
+    if let Err(e) = store.close().await {
+        tracing::warn!(error = %e, "Store::close after init open failed (non-fatal)");
+    }
+    if preexisting {
+        Ok(StepOutcome::Preserved {
+            detail: format!(".loopr/taskstore/ already initialized at {}", taskstore_dir.display()),
+        })
+    } else {
+        Ok(StepOutcome::Created {
+            detail: format!(".loopr/taskstore/ initialized at {}", taskstore_dir.display()),
+        })
+    }
+}
+
+async fn step_install_taskstore_hooks(target: &Path) -> Result<StepOutcome, LooprError> {
+    let git_dir = target.join(".git");
+    if !git_dir.is_dir() {
+        // Non-git target: hooks have nothing to attach to. The
+        // source-guard already accepts non-git targets for testing
+        // purposes, so we report Skipped rather than failing.
+        return Ok(StepOutcome::Skipped {
+            reason: "target is not a git repository; nothing to install hooks against".to_string(),
+        });
+    }
+
+    // Detect already-installed hooks by looking for the canonical hook
+    // files taskstore writes. If all three are present, treat the step
+    // as Preserved without re-invoking install (which is itself idempotent
+    // but emits a noisier log on each call).
+    let hooks_dir = git_dir.join("hooks");
+    let canonical = ["pre-commit", "post-commit", "post-merge"];
+    let all_present = canonical
+        .iter()
+        .all(|name| hooks_dir.join(name).try_exists().unwrap_or(false));
+    if all_present {
+        return Ok(StepOutcome::Preserved {
+            detail: format!("hooks already installed at {}", hooks_dir.display()),
+        });
+    }
+
+    let store = store::Store::open(target)
+        .await
+        .map_err(|e| LooprError::DaemonStartup(format!("Store::open for hooks: {e}")))?;
+    store
+        .install_git_hooks()
+        .await
+        .map_err(|e| LooprError::DaemonStartup(format!("install_git_hooks: {e}")))?;
+    if let Err(e) = store.close().await {
+        tracing::warn!(error = %e, "Store::close after install_git_hooks failed (non-fatal)");
+    }
+    Ok(StepOutcome::Created {
+        detail: format!("hooks installed at {}", hooks_dir.display()),
+    })
+}
+
+fn step_ensure_git_excludes(target: &Path) -> Result<StepOutcome, LooprError> {
+    let exclude_path = target.join(".git").join("info").join("exclude");
+    let before_lines = read_line_count(&exclude_path);
+    worktree::ensure_loopr_excludes(target)
+        .map_err(|e| LooprError::DaemonStartup(format!("ensure_loopr_excludes: {e}")))?;
+    let after_lines = read_line_count(&exclude_path);
+    if after_lines > before_lines {
+        Ok(StepOutcome::Created {
+            detail: format!("{} new lines in {}", after_lines - before_lines, exclude_path.display()),
+        })
+    } else {
+        Ok(StepOutcome::Preserved {
+            detail: ".git/info/exclude already up to date".to_string(),
+        })
+    }
+}
+
+fn step_seed_prompts(target: &Path, force: bool) -> Result<StepOutcome, LooprError> {
     let prompts_dir = target.join(".loopr").join("prompts");
     let baked = ::context::baked_prompts();
     let outcome = seed_prompts(&prompts_dir, baked, force)?;
-    println!(
-        "Wrote {} files, preserved {} existing files in {}",
-        outcome.written,
-        outcome.preserved,
-        prompts_dir.display()
-    );
-    Ok(())
+    if outcome.written == 0 && outcome.preserved > 0 {
+        Ok(StepOutcome::Preserved {
+            detail: format!(
+                "{} prompt files preserved at {}",
+                outcome.preserved,
+                prompts_dir.display()
+            ),
+        })
+    } else {
+        Ok(StepOutcome::Created {
+            detail: format!(
+                "{} written, {} preserved at {}",
+                outcome.written,
+                outcome.preserved,
+                prompts_dir.display()
+            ),
+        })
+    }
+}
+
+fn read_line_count(path: &Path) -> usize {
+    std::fs::read_to_string(path).map(|s| s.lines().count()).unwrap_or(0)
 }
 
 /// Walk the baked tree and write each `.pmt` file under `<dest>`.
@@ -75,7 +259,6 @@ fn seed_dir(
                         .map_err(|e| LooprError::DaemonStartup(format!("mkdir {parent:?}: {e}")))?;
                 }
                 if file_name == ".gitkeep" {
-                    // Parent dir already created above; nothing to write.
                     continue;
                 }
                 if sub_dest.exists() && !force {
@@ -91,10 +274,6 @@ fn seed_dir(
     Ok(())
 }
 
-/// Compute the destination path for a baked tree entry, asserting it
-/// stays under `seed_root`. Returns `LooprError::DaemonStartup` if a
-/// path traversal would escape the seed root (defense-in-depth; the
-/// baked tree's paths cannot contain `..` by construction).
 fn dest_for(seed_root: &Path, dest: &Path, baked_rel: &Path) -> Result<PathBuf, LooprError> {
     let candidate = dest.join(baked_rel);
     if !candidate.starts_with(seed_root) {

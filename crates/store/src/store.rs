@@ -92,6 +92,16 @@ impl Store {
         TicksStore::new(&self.inner, &self.tick_lock)
     }
 
+    /// Install taskstore's git hooks under `.git/hooks/`. Idempotent;
+    /// safe to call on every boot. Phase 9 of the Tier-1 cleanup
+    /// surfaces this through `loopr init`'s six-step orchestrator so
+    /// the merge-driver hooks are present on every new target.
+    #[instrument(name = "store.install_git_hooks", level = "info", skip_all, err)]
+    pub async fn install_git_hooks(&self) -> Result<(), StoreError> {
+        self.inner.install_git_hooks().await?;
+        Ok(())
+    }
+
     /// Graceful async shutdown. Drops the writer queue, awaits the writer
     /// thread's drain signal, joins cleanly. Consumes `self` so the wrapper
     /// cannot be used after close.
