@@ -148,6 +148,7 @@ The daemon decomposes, implements, reviews, integrates, and produces a Tick that
 
 **Design docs:**
 - `docs/design/first-gate-e2e.md` — end-to-end happy path, target repo setup, validation script, what counts as "passed."
+- [`docs/design/2026-04-26-scoped-staging.md`](design/2026-04-26-scoped-staging.md) — scoped staging for `commit_changes` and `propose_bundle`. Replaces unconditional `git add -A` with `git status --porcelain --untracked-files=all` + scope-partition + `git commit --only`; adds per-Work `files` allow-list emitted by the decomposer; populates `bundle.paths` from the branch-vs-base diff. Defense-in-depth against the 2026-04-26 `python-api` `.venv/` regression. **Implemented** 2026-04-27.
 
 **Crates touched:** all of them, integration only.
 
