@@ -365,7 +365,7 @@ README
         (
             cd "${RUN_DIR}"
             git init -q
-            printf "data/*.db\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
+            printf ".venv/\ndata/*.db\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
             git add -A
             git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: FastAPI skeleton and Docker config"
         )
@@ -476,7 +476,7 @@ README
         (
             cd "${RUN_DIR}"
             git init -q
-            printf "data/*.db\nreport.md\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
+            printf ".venv/\ndata/*.db\nreport.md\n__pycache__/\n.pytest_cache/\n*.pyc\n" > .gitignore
             git add -A
             git -c user.email="e2e@loopr" -c user.name="e2e" commit -q -m "init: fixtures, Dockerfile, and Docker config"
         )
