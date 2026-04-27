@@ -9,6 +9,7 @@ Use the submit_decomposition tool. For each Work, provide:
 - content: Full markdown content (template-free; prose is fine)
 - dependencies: Titles of sibling Works this one depends on
 - acceptance_criteria: Concrete, testable assertions (assert statements)
+- files: List of files (paths relative to the repo root) this Work is expected to create or modify. The implementer agent's commit will be restricted to these paths; out-of-scope edits will be flagged in the iteration result. List every file you expect this Work to touch.
 
 ## Rules
 

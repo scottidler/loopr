@@ -377,6 +377,7 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         work.id = title_to_id[norm_title].clone();
         work.dependencies = deps;
         work.acceptance_criteria = AcceptanceCriteria(ac);
+        work.files = child.files.clone();
         works.push(work);
     }
 

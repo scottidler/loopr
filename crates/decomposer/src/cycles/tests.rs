@@ -16,6 +16,7 @@ fn child(title: &str, deps: &[&str]) -> DecomposeChild {
         content: String::new(),
         dependencies: deps.iter().map(|s| s.to_string()).collect(),
         acceptance_criteria: Vec::new(),
+        files: Vec::new(),
     }
 }
 

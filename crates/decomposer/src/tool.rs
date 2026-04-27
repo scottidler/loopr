@@ -24,6 +24,11 @@ pub(crate) struct DecomposeChild {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
+    /// Files this Work is expected to create or modify, relative to
+    /// the worktree root. Used as the staging allow-list at commit
+    /// time. Empty falls back to artifact-only filtering.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 /// The top-level shape of the tool call's `input` JSON.
@@ -63,6 +68,11 @@ pub(crate) fn submit_decomposition_schema() -> ToolSchema {
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Concrete, testable assertions for this Work"
+                            },
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Files this Work will create or modify (paths relative to repo root). The implementer's commit will be restricted to these paths; out-of-scope edits will be flagged in the iteration result."
                             }
                         },
                         "required": ["title", "content"]
