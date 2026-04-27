@@ -9,6 +9,7 @@ mod implementer;
 mod lifeguard;
 mod parse;
 mod reviewer;
+pub mod scope;
 
 pub use action::AgentAction;
 pub use config::{AgentsConfig, ImplementerConfig, ReviewerConfig};
