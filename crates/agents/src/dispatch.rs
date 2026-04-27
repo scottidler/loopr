@@ -15,13 +15,14 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tokio::process::Command;
-use tracing::{debug, instrument, warn};
+use tracing::{Span, debug, instrument, warn};
 
 use domain::Bundle;
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::Worktree;
 
 use crate::action::AgentAction;
+use crate::scope;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchError {
@@ -102,8 +103,8 @@ pub async fn dispatch_action<T: ToolExecutor>(
                 Err(e) => Ok(ActionResult::Error(format!("tool {tool} failed: {e}"))),
             }
         }
-        AgentAction::CommitChanges { message } => commit_changes(worktree.path(), &message).await,
-        AgentAction::ProposeBundle { claims } => propose_bundle(worktree, claims).await,
+        AgentAction::CommitChanges { message } => commit_changes(worktree.path(), &[], &message).await,
+        AgentAction::ProposeBundle { claims } => propose_bundle(worktree, &[], claims).await,
         AgentAction::Done { message } => {
             let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), vec![]);
             bundle.noop_reason = Some(message);
@@ -118,18 +119,63 @@ pub async fn dispatch_action<T: ToolExecutor>(
     }
 }
 
-/// Stage all changes (including untracked new files) and commit.
-/// Returns `NothingToCommit` if `git status --porcelain` shows a
-/// clean tree.
-#[instrument(level = "debug", skip_all, fields(path = %path.display(), message_chars = message.len()), err)]
-async fn commit_changes(path: &Path, message: &str) -> Result<ActionResult, DispatchError> {
-    if is_working_tree_clean(path).await? {
+/// Stage and commit only the dirty paths matching the Work's scope.
+///
+/// Pipeline: `git status --porcelain --untracked-files=all` -> partition
+/// against `scope_files` (with `.loopr/` always filtered to out-of-scope) ->
+/// `git commit --only -- <in_scope...>`. `--only` snapshots the working-tree
+/// contents of the listed paths into the commit, ignoring any other staged
+/// entries. This eliminates the index-leak class of bugs where prior
+/// `git add` invocations from `bash` actions would otherwise be folded in.
+///
+/// `scope_files` empty falls back to artifact-only filtering: every
+/// non-`.loopr/` dirty path is in-scope.
+#[instrument(
+    level = "debug",
+    skip_all,
+    fields(
+        path = %path.display(),
+        message_chars = message.len(),
+        scope_count = scope_files.len(),
+        in_scope_count = tracing::field::Empty,
+        out_of_scope_count = tracing::field::Empty,
+    ),
+    err,
+)]
+async fn commit_changes(path: &Path, scope_files: &[String], message: &str) -> Result<ActionResult, DispatchError> {
+    let dirty = git_status_porcelain(path).await?;
+    if dirty.is_empty() {
+        Span::current().record("in_scope_count", 0u64);
+        Span::current().record("out_of_scope_count", 0u64);
         return Ok(ActionResult::NothingToCommit { dropped: vec![] });
     }
-    run_git(path, &["add", "-A"]).await?;
-    run_git(path, &["commit", "--message", message, "--no-gpg-sign"]).await?;
+    let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty, scope_files);
+    Span::current().record("in_scope_count", in_scope.len() as u64);
+    Span::current().record("out_of_scope_count", out_of_scope.len() as u64);
+    if !out_of_scope.is_empty() {
+        warn!(
+            out_of_scope = ?out_of_scope,
+            "commit_changes: dropping out-of-scope dirty paths"
+        );
+    }
+    if in_scope.is_empty() {
+        return Ok(ActionResult::NothingToCommit { dropped: out_of_scope });
+    }
+    // Stage only the in-scope paths so untracked new files become known
+    // to git before the `--only` commit. `--only` then snapshots exactly
+    // those paths into the commit, ignoring any other stale index
+    // entries (the index-leak fix).
+    let mut add_args: Vec<&str> = vec!["add", "--"];
+    add_args.extend(in_scope.iter().map(String::as_str));
+    run_git(path, &add_args).await?;
+    let mut commit_args: Vec<&str> = vec!["commit", "--only", "--message", message, "--no-gpg-sign", "--"];
+    commit_args.extend(in_scope.iter().map(String::as_str));
+    run_git(path, &commit_args).await?;
     let sha = rev_parse_head(path).await?;
-    Ok(ActionResult::Committed { sha, dropped: vec![] })
+    Ok(ActionResult::Committed {
+        sha,
+        dropped: out_of_scope,
+    })
 }
 
 /// Commit any in-progress work for human inspection and keep going.
@@ -150,7 +196,13 @@ async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError>
 }
 
 /// Construct the Bundle, computing `loc_changed` from base SHA and
-/// capturing HEAD SHA as `head_commit`. Does NOT persist.
+/// capturing HEAD SHA as `head_commit`. If the worktree is dirty at
+/// propose time, stage and commit any in-scope paths via `git commit
+/// --only`. `bundle.paths` is populated from the branch-vs-base diff
+/// so the reviewer's `git_show` filter and the integrator's collision
+/// detector see every path the bundle touches (including those landed
+/// by earlier `commit_changes` actions on the same iteration), not
+/// just the last staging step.
 #[instrument(
     level = "debug",
     skip_all,
@@ -159,54 +211,127 @@ async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError>
         branch = worktree.branch(),
         worktree_path = %worktree.path().display(),
         claim_count = claims.len(),
+        scope_count = scope_files.len(),
+        in_scope_count = tracing::field::Empty,
+        out_of_scope_count = tracing::field::Empty,
     ),
     err,
 )]
-async fn propose_bundle(worktree: &Worktree, claims: Vec<String>) -> Result<ActionResult, DispatchError> {
-    let staging_dirty = !is_working_tree_clean(worktree.path()).await?;
-    if staging_dirty {
-        run_git(worktree.path(), &["add", "-A"]).await?;
-        run_git(
-            worktree.path(),
-            &[
+async fn propose_bundle(
+    worktree: &Worktree,
+    scope_files: &[String],
+    claims: Vec<String>,
+) -> Result<ActionResult, DispatchError> {
+    let mut total_dropped: Vec<String> = vec![];
+    let dirty = git_status_porcelain(worktree.path()).await?;
+    if !dirty.is_empty() {
+        let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty, scope_files);
+        Span::current().record("in_scope_count", in_scope.len() as u64);
+        Span::current().record("out_of_scope_count", out_of_scope.len() as u64);
+        if !out_of_scope.is_empty() {
+            warn!(
+                out_of_scope = ?out_of_scope,
+                "propose_bundle: dropping out-of-scope dirty paths"
+            );
+            total_dropped = out_of_scope;
+        }
+        if !in_scope.is_empty() {
+            // Stage only the in-scope paths so untracked new files become
+            // known to git before the `--only` commit. See `commit_changes`
+            // for the index-leak rationale.
+            let mut add_args: Vec<&str> = vec!["add", "--"];
+            add_args.extend(in_scope.iter().map(String::as_str));
+            run_git(worktree.path(), &add_args).await?;
+            let mut commit_args: Vec<&str> = vec![
                 "commit",
+                "--only",
                 "--message",
                 "propose_bundle: stage remaining changes",
                 "--no-gpg-sign",
-            ],
-        )
-        .await?;
+                "--",
+            ];
+            commit_args.extend(in_scope.iter().map(String::as_str));
+            run_git(worktree.path(), &commit_args).await?;
+        }
+    } else {
+        Span::current().record("in_scope_count", 0u64);
+        Span::current().record("out_of_scope_count", 0u64);
     }
 
     let head_commit = rev_parse_head(worktree.path()).await.ok();
     let loc_changed = compute_loc_changed(worktree.path(), worktree.sha()).await.ok();
+    // Branch-vs-base diff: every path the bundle touches across all the
+    // implementer's commits, not just the last staging step. With an
+    // empty worktree base sha (test-only construction), skip the diff.
+    let branch_paths = if worktree.sha().is_empty() {
+        Vec::new()
+    } else {
+        git_diff_name_only(worktree.path(), worktree.sha())
+            .await
+            .unwrap_or_default()
+    };
 
     let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), claims);
     bundle.head_commit = head_commit;
     bundle.loc_changed = loc_changed;
+    bundle.paths = branch_paths;
     Ok(ActionResult::BundleCreated {
         bundle,
-        dropped: vec![],
+        dropped: total_dropped,
     })
 }
 
+/// Run `git status --porcelain --untracked-files=all` and parse the
+/// result via `scope::parse_porcelain_status`. The `-uall` flag is
+/// load-bearing: without it, untracked directories collapse into a
+/// single `?? new_dir/` entry that exact-path scope matching cannot
+/// resolve to any file under it.
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
-async fn is_working_tree_clean(path: &Path) -> Result<bool, DispatchError> {
+async fn git_status_porcelain(path: &Path) -> Result<Vec<String>, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=all"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await?;
     if !output.status.success() {
         return Err(DispatchError::Git(format!(
-            "git status failed: {}",
+            "git status --porcelain failed: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-    Ok(output.stdout.is_empty())
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(scope::parse_porcelain_status(&text))
+}
+
+/// Run `git diff --name-only <base_sha>..HEAD`. Used by `propose_bundle`
+/// to populate `bundle.paths` with the canonical set of paths the
+/// branch touched across all of the implementer's commits, not just
+/// the final staging step.
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), base_sha = base_sha), err)]
+async fn git_diff_name_only(path: &Path, base_sha: &str) -> Result<Vec<String>, DispatchError> {
+    let spec = format!("{base_sha}..HEAD");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["diff", "--name-only", &spec])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(DispatchError::Git(format!(
+            "git diff --name-only failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
