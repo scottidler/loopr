@@ -35,16 +35,27 @@ pub enum DispatchError {
 
 /// Outcome of dispatching one action. The `Bundle`-carrying variants
 /// hold an unpersisted Bundle; the caller writes to the store.
+///
+/// `Committed`, `NothingToCommit`, and `BundleCreated` carry a
+/// `dropped` field listing out-of-scope paths the partition filter
+/// excluded from staging. A non-empty `dropped` is a soft warning the
+/// implementer renders to the LLM via the iteration-history summary
+/// so the agent can react (re-edit in scope, or emit `need_help`).
 #[derive(Debug)]
 pub enum ActionResult {
     /// `RunTool` stdout/stderr as a string.
     ToolOutput(String),
-    /// `CommitChanges` succeeded with the resulting commit SHA.
-    Committed(String),
-    /// `CommitChanges` found nothing staged; no commit made.
-    NothingToCommit,
+    /// `CommitChanges` succeeded. `dropped` lists out-of-scope paths
+    /// the partition filter excluded from this commit.
+    Committed { sha: String, dropped: Vec<String> },
+    /// `CommitChanges` produced no commit. `dropped` lists paths the
+    /// partition filter excluded; non-empty `dropped` means there was
+    /// dirty content but none of it matched the Work's scope.
+    NothingToCommit { dropped: Vec<String> },
     /// `ProposeBundle` constructed a Bundle (not yet persisted).
-    BundleCreated(Bundle),
+    /// `dropped` lists out-of-scope paths left uncommitted in the
+    /// worktree at propose time.
+    BundleCreated { bundle: Bundle, dropped: Vec<String> },
     /// `Done` constructed a no-op Bundle (not yet persisted).
     Done(Bundle),
     /// `NeedHelp` — caller escalates. Partial-work commit (if any)
@@ -113,12 +124,12 @@ pub async fn dispatch_action<T: ToolExecutor>(
 #[instrument(level = "debug", skip_all, fields(path = %path.display(), message_chars = message.len()), err)]
 async fn commit_changes(path: &Path, message: &str) -> Result<ActionResult, DispatchError> {
     if is_working_tree_clean(path).await? {
-        return Ok(ActionResult::NothingToCommit);
+        return Ok(ActionResult::NothingToCommit { dropped: vec![] });
     }
     run_git(path, &["add", "-A"]).await?;
     run_git(path, &["commit", "--message", message, "--no-gpg-sign"]).await?;
     let sha = rev_parse_head(path).await?;
-    Ok(ActionResult::Committed(sha))
+    Ok(ActionResult::Committed { sha, dropped: vec![] })
 }
 
 /// Commit any in-progress work for human inspection and keep going.
@@ -173,7 +184,10 @@ async fn propose_bundle(worktree: &Worktree, claims: Vec<String>) -> Result<Acti
     let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), claims);
     bundle.head_commit = head_commit;
     bundle.loc_changed = loc_changed;
-    Ok(ActionResult::BundleCreated(bundle))
+    Ok(ActionResult::BundleCreated {
+        bundle,
+        dropped: vec![],
+    })
 }
 
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]

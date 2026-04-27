@@ -33,6 +33,24 @@ use crate::dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action
 use crate::lifeguard::{Decision, Lifeguard};
 use crate::parse::{parse_actions, parse_one};
 
+/// Render a multi-line LLM-visible note when the partition filter
+/// dropped paths from a commit / propose. The note restates the Work's
+/// scope so the agent can decide whether to re-edit in scope or emit
+/// `need_help`. Empty `dropped` is the no-op caller's responsibility:
+/// this returns a non-empty string only when there's something to say.
+fn format_dropped_note(action_label: &str, dropped: &[String], scope: &[String]) -> String {
+    if dropped.is_empty() {
+        return String::new();
+    }
+    format!(
+        "note: {n} out-of-scope path(s) were dropped from {action_label} \
+because they are not in the Work's `files` scope: {dropped:?}\n\
+The Work's scope is: {scope:?}\n\
+If you need to edit those files, emit `need_help` with the reason.",
+        n = dropped.len(),
+    )
+}
+
 /// Append one iteration's transcript block. Best-effort: failures emit
 /// a warn and continue. Capturing this in a helper lets every return
 /// path inside `run_implementer` write the transcript cheaply.
@@ -279,8 +297,12 @@ where
             }
             let result = dispatch_action(action.clone(), worktree, &deps.tools).await?;
             match result {
-                ActionResult::BundleCreated(mut bundle) => {
+                ActionResult::BundleCreated { mut bundle, dropped } => {
                     summaries.push("propose_bundle (id pending persistence)".to_string());
+                    let note = format_dropped_note("propose_bundle", &dropped, &work.files);
+                    if !note.is_empty() {
+                        summaries.push(note);
+                    }
                     write_implementer_transcript(
                         worktree.repo_path(),
                         work.id.as_ref(),
@@ -328,11 +350,22 @@ where
                     );
                     return Err(ImplementerError::EscalationNeeded(reason));
                 }
-                ActionResult::Committed(sha) => {
+                ActionResult::Committed { sha, dropped } => {
                     summaries.push(format!("committed {sha}"));
+                    let note = format_dropped_note("this commit", &dropped, &work.files);
+                    if !note.is_empty() {
+                        summaries.push(note);
+                    }
                 }
-                ActionResult::NothingToCommit => {
-                    summaries.push("commit_changes: nothing to commit".to_string());
+                ActionResult::NothingToCommit { dropped } => {
+                    if dropped.is_empty() {
+                        summaries.push("commit_changes: nothing to commit".to_string());
+                    } else {
+                        summaries
+                            .push("commit_changes: nothing to commit (all dirty paths were out of scope)".to_string());
+                        let note = format_dropped_note("this commit", &dropped, &work.files);
+                        summaries.push(note);
+                    }
                 }
                 ActionResult::ToolOutput(out) => {
                     summaries.push(out);
@@ -350,8 +383,12 @@ where
                         Ok(corrected) => {
                             let corrected_result = dispatch_action(corrected, worktree, &deps.tools).await?;
                             match corrected_result {
-                                ActionResult::BundleCreated(mut bundle) => {
+                                ActionResult::BundleCreated { mut bundle, dropped } => {
                                     summaries.push("corrected -> propose_bundle".to_string());
+                                    let note = format_dropped_note("propose_bundle", &dropped, &work.files);
+                                    if !note.is_empty() {
+                                        summaries.push(note);
+                                    }
                                     write_implementer_transcript(
                                         worktree.repo_path(),
                                         work.id.as_ref(),
@@ -402,11 +439,23 @@ where
                                 ActionResult::ToolOutput(out) => {
                                     summaries.push(out);
                                 }
-                                ActionResult::Committed(sha) => {
+                                ActionResult::Committed { sha, dropped } => {
                                     summaries.push(format!("corrected commit {sha}"));
+                                    let note = format_dropped_note("this commit", &dropped, &work.files);
+                                    if !note.is_empty() {
+                                        summaries.push(note);
+                                    }
                                 }
-                                ActionResult::NothingToCommit => {
-                                    summaries.push("corrected commit_changes: nothing".to_string());
+                                ActionResult::NothingToCommit { dropped } => {
+                                    if dropped.is_empty() {
+                                        summaries.push("corrected commit_changes: nothing".to_string());
+                                    } else {
+                                        summaries.push(
+                                            "corrected commit_changes: nothing (all dirty paths were out of scope)"
+                                                .to_string(),
+                                        );
+                                        summaries.push(format_dropped_note("this commit", &dropped, &work.files));
+                                    }
                                 }
                                 ActionResult::Error(e2) => {
                                     summaries.push(format!("corrected action also errored: {e2}"));

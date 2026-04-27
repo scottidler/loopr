@@ -140,7 +140,7 @@ async fn commit_changes_on_clean_tree_returns_nothing_to_commit() {
     let action = AgentAction::CommitChanges { message: "noop".into() };
     let result = dispatch_action(action, &wt, &tools).await.unwrap();
     assert!(
-        matches!(result, ActionResult::NothingToCommit),
+        matches!(result, ActionResult::NothingToCommit { .. }),
         "expected NothingToCommit, got {result:?}"
     );
 }
@@ -163,7 +163,8 @@ async fn commit_changes_stages_new_file_via_add_minus_a_flag() {
     };
     let result = dispatch_action(action, &wt, &tools).await.unwrap();
     match result {
-        ActionResult::Committed(sha) => {
+        ActionResult::Committed { sha, dropped } => {
+            assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
             assert_eq!(sha.len(), 40, "expected full SHA, got: {sha}");
             // Verify the commit message and file are in the commit.
             let msg = run_capture(wt_path, &["log", "-1", "--format=%s"]);
@@ -190,7 +191,8 @@ async fn propose_bundle_captures_head_and_loc_changed() {
     };
     let result = dispatch_action(action, &wt, &tools).await.unwrap();
     match result {
-        ActionResult::BundleCreated(bundle) => {
+        ActionResult::BundleCreated { bundle, dropped } => {
+            assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
             assert!(bundle.head_commit.is_some(), "head_commit must be captured");
             assert_eq!(bundle.head_commit.as_ref().unwrap().len(), 40, "full SHA expected");
             assert_eq!(bundle.claims, vec!["changed readme".to_string()]);
@@ -213,7 +215,8 @@ async fn propose_bundle_with_no_changes_still_captures_head() {
     let action = AgentAction::ProposeBundle { claims: vec![] };
     let result = dispatch_action(action, &wt, &tools).await.unwrap();
     match result {
-        ActionResult::BundleCreated(bundle) => {
+        ActionResult::BundleCreated { bundle, dropped } => {
+            assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
             assert!(bundle.head_commit.is_some());
             assert_eq!(bundle.loc_changed, Some(0), "no changes = 0 loc");
         }
