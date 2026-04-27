@@ -303,6 +303,176 @@ async fn need_help_on_clean_tree_does_not_commit() {
     assert_eq!(before, after, "clean tree must not produce a commit");
 }
 
+// ---------------------------------------------------------------
+// Scoped-staging tests (docs/design/2026-04-26-scoped-staging.md)
+// ---------------------------------------------------------------
+
+#[tokio::test]
+async fn commit_changes_with_nonempty_scope_drops_out_of_scope_files() {
+    // (a) commit_changes with non-empty scope drops out-of-scope files;
+    // the resulting Committed.dropped lists them.
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+    std::fs::write(wt_path.join("main.py"), "x = 1\n").unwrap();
+    std::fs::write(wt_path.join("database.py"), "y = 2\n").unwrap();
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let action = AgentAction::CommitChanges {
+        message: "scoped commit".into(),
+    };
+    let work = test_work(vec!["main.py".to_string()]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
+    match result {
+        ActionResult::Committed { sha, dropped } => {
+            assert_eq!(sha.len(), 40);
+            assert_eq!(dropped, vec!["database.py".to_string()]);
+            // HEAD's diff against the previous commit should list main.py and not database.py.
+            let names = run_capture(wt_path, &["show", "--name-only", "--format=", "HEAD"]);
+            let names_set: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+            assert_eq!(names_set, vec!["main.py"]);
+        }
+        other => panic!("expected Committed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn commit_changes_with_empty_scope_still_drops_loopr_artifacts() {
+    // (b) Empty scope still drops `.loopr/` artifacts (defensive parity).
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+    std::fs::write(wt_path.join("main.py"), "x = 1\n").unwrap();
+    std::fs::create_dir_all(wt_path.join(".loopr/runs/r-1")).unwrap();
+    std::fs::write(wt_path.join(".loopr/runs/r-1/log"), "noise\n").unwrap();
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let action = AgentAction::CommitChanges {
+        message: "scoped commit".into(),
+    };
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
+    match result {
+        ActionResult::Committed { dropped, .. } => {
+            assert_eq!(dropped, vec![".loopr/runs/r-1/log".to_string()]);
+            let names = run_capture(wt_path, &["show", "--name-only", "--format=", "HEAD"]);
+            let names_set: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+            assert_eq!(names_set, vec!["main.py"]);
+        }
+        other => panic!("expected Committed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn commit_changes_does_not_commit_previously_staged_out_of_scope_file() {
+    // (c) Index-leak regression: pre-stage `database.py` via `git add`,
+    // then call commit_changes with scope ["main.py"]. HEAD's
+    // `git show --name-only` must list only main.py.
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+    std::fs::write(wt_path.join("database.py"), "old\n").unwrap();
+    run(wt_path, &["add", "database.py"]);
+    std::fs::write(wt_path.join("main.py"), "x = 1\n").unwrap();
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let action = AgentAction::CommitChanges {
+        message: "scoped commit".into(),
+    };
+    let work = test_work(vec!["main.py".to_string()]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
+    match result {
+        ActionResult::Committed { dropped, .. } => {
+            // database.py was pre-staged so porcelain reports it; partition
+            // drops it for being out-of-scope.
+            assert!(
+                dropped.iter().any(|p| p == "database.py"),
+                "database.py must appear in dropped: {dropped:?}"
+            );
+            let names = run_capture(wt_path, &["show", "--name-only", "--format=", "HEAD"]);
+            let names_set: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+            assert_eq!(
+                names_set,
+                vec!["main.py"],
+                "only main.py should land in HEAD; database.py must NOT leak through the index"
+            );
+        }
+        other => panic!("expected Committed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn propose_bundle_paths_reflect_full_branch_diff() {
+    // (d) propose_bundle populates `bundle.paths` from the full branch-vs-base
+    // diff, including paths landed by earlier commit_changes actions on the
+    // same iteration.
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+
+    // Iteration 1: commit_changes against scope ["main.py"].
+    std::fs::write(wt_path.join("main.py"), "x = 1\n").unwrap();
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let work = test_work(vec!["main.py".to_string(), "test_api.py".to_string()]);
+    let action1 = AgentAction::CommitChanges {
+        message: "iter 1".into(),
+    };
+    let _ = dispatch_action(action1, &work, &wt, &tools).await.unwrap();
+
+    // Iteration 2: write test_api.py, then propose_bundle.
+    std::fs::write(wt_path.join("test_api.py"), "assert True\n").unwrap();
+    let action2 = AgentAction::ProposeBundle { claims: vec![] };
+    let result = dispatch_action(action2, &work, &wt, &tools).await.unwrap();
+    match result {
+        ActionResult::BundleCreated { bundle, .. } => {
+            let mut paths = bundle.paths.clone();
+            paths.sort();
+            assert_eq!(
+                paths,
+                vec!["main.py".to_string(), "test_api.py".to_string()],
+                "bundle.paths must reflect full branch diff: got {:?}",
+                bundle.paths
+            );
+        }
+        other => panic!("expected BundleCreated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn commit_changes_enumerates_files_in_untracked_dir() {
+    // (e) `--untracked-files=all` regression test: writing a new file
+    // inside a brand-new untracked directory must let scope ["new_dir/main.py"]
+    // match it. Without `-uall` git would emit `?? new_dir/` and the
+    // exact-path partition would treat the file as out-of-scope.
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+    std::fs::create_dir_all(wt_path.join("new_dir")).unwrap();
+    std::fs::write(wt_path.join("new_dir/main.py"), "x = 1\n").unwrap();
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let work = test_work(vec!["new_dir/main.py".to_string()]);
+    let action = AgentAction::CommitChanges {
+        message: "untracked dir".into(),
+    };
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
+    match result {
+        ActionResult::Committed { dropped, .. } => {
+            assert!(dropped.is_empty(), "no drops expected: {dropped:?}");
+            let names = run_capture(wt_path, &["show", "--name-only", "--format=", "HEAD"]);
+            let names_set: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+            assert_eq!(names_set, vec!["new_dir/main.py"]);
+        }
+        other => panic!("expected Committed, got {other:?}"),
+    }
+}
+
 #[test]
 fn parse_numstat_sums_text_rows() {
     use super::parse_numstat;
