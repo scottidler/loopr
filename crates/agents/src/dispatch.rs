@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tracing::{Span, debug, instrument, warn};
 
-use domain::Bundle;
+use domain::{Bundle, Work};
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
 use worktree::Worktree;
 
@@ -92,6 +92,7 @@ pub trait ToolExecutor: Send + Sync {
 )]
 pub async fn dispatch_action<T: ToolExecutor>(
     action: AgentAction,
+    work: &Work,
     worktree: &Worktree,
     tools: &T,
 ) -> Result<ActionResult, DispatchError> {
@@ -103,8 +104,8 @@ pub async fn dispatch_action<T: ToolExecutor>(
                 Err(e) => Ok(ActionResult::Error(format!("tool {tool} failed: {e}"))),
             }
         }
-        AgentAction::CommitChanges { message } => commit_changes(worktree.path(), &[], &message).await,
-        AgentAction::ProposeBundle { claims } => propose_bundle(worktree, &[], claims).await,
+        AgentAction::CommitChanges { message } => commit_changes(worktree.path(), &work.files, &message).await,
+        AgentAction::ProposeBundle { claims } => propose_bundle(worktree, &work.files, claims).await,
         AgentAction::Done { message } => {
             let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), vec![]);
             bundle.noop_reason = Some(message);

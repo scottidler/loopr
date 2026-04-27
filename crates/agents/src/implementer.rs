@@ -295,7 +295,7 @@ where
                 );
                 return Err(ImplementerError::EscalationNeeded(reason));
             }
-            let result = dispatch_action(action.clone(), worktree, &deps.tools).await?;
+            let result = dispatch_action(action.clone(), work, worktree, &deps.tools).await?;
             match result {
                 ActionResult::BundleCreated { mut bundle, dropped } => {
                     summaries.push("propose_bundle (id pending persistence)".to_string());
@@ -381,7 +381,7 @@ where
                     let (corrected_raw, _usage) = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
                     match parse_one(&corrected_raw) {
                         Ok(corrected) => {
-                            let corrected_result = dispatch_action(corrected, worktree, &deps.tools).await?;
+                            let corrected_result = dispatch_action(corrected, work, worktree, &deps.tools).await?;
                             match corrected_result {
                                 ActionResult::BundleCreated { mut bundle, dropped } => {
                                     summaries.push("corrected -> propose_bundle".to_string());

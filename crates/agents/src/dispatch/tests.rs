@@ -6,11 +6,21 @@ use std::process::Command as StdCommand;
 use serde_json::json;
 use tempfile::TempDir;
 
-use domain::WorkId;
+use domain::{PlanId, Work, WorkId};
 use worktree::Worktree;
 
 use crate::action::AgentAction;
 use crate::dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action};
+
+/// Build a `Work` with the given scope `files`. Tests that don't care
+/// about scope pass `vec![]` and rely on the empty-scope fallback
+/// (artifact-only filtering, which still commits every non-`.loopr/`
+/// dirty path).
+fn test_work(files: Vec<String>) -> Work {
+    let mut w = Work::new(PlanId::new(), "test work".to_string());
+    w.files = files;
+    w
+}
 
 /// In-memory tool executor fake. Records each call and returns a
 /// canned string. Never touches real subprocesses.
@@ -105,7 +115,8 @@ async fn run_tool_happy_path_returns_tool_output() {
         tool: "bash".into(),
         input: json!({"command": "echo hi"}),
     };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::ToolOutput(s) => assert_eq!(s, "hi from fake"),
         other => panic!("expected ToolOutput, got {other:?}"),
@@ -123,7 +134,8 @@ async fn run_tool_correctable_error_returns_error_variant() {
         tool: "fail".into(),
         input: json!({}),
     };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::Error(msg) => assert!(msg.contains("synthetic tool failure"), "got: {msg}"),
         other => panic!("expected Error variant, got {other:?}"),
@@ -138,7 +150,8 @@ async fn commit_changes_on_clean_tree_returns_nothing_to_commit() {
         response: String::new(),
     };
     let action = AgentAction::CommitChanges { message: "noop".into() };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     assert!(
         matches!(result, ActionResult::NothingToCommit { .. }),
         "expected NothingToCommit, got {result:?}"
@@ -146,11 +159,11 @@ async fn commit_changes_on_clean_tree_returns_nothing_to_commit() {
 }
 
 #[tokio::test]
-async fn commit_changes_stages_new_file_via_add_minus_a_flag() {
-    // Architect-R1 decision: CommitChanges uses `git add -A` so new
-    // files the agent created are staged. Without that, writing a
-    // new file and calling CommitChanges would fail with "nothing
-    // added to commit".
+async fn commit_changes_with_empty_scope_stages_new_files() {
+    // Empty `Work.files` triggers the artifact-only filter: every
+    // non-`.loopr/` dirty path is in-scope, including untracked new
+    // files. Verifies that `git add -- <in_scope> && git commit --only`
+    // promotes a new file into the commit.
     let (_dir, _path, base) = init_repo();
     let wt = fake_worktree(&_path, base);
     let wt_path = wt.path();
@@ -161,7 +174,8 @@ async fn commit_changes_stages_new_file_via_add_minus_a_flag() {
     let action = AgentAction::CommitChanges {
         message: "add new.txt".into(),
     };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::Committed { sha, dropped } => {
             assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
@@ -189,7 +203,8 @@ async fn propose_bundle_captures_head_and_loc_changed() {
     let action = AgentAction::ProposeBundle {
         claims: vec!["changed readme".into()],
     };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::BundleCreated { bundle, dropped } => {
             assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
@@ -213,7 +228,8 @@ async fn propose_bundle_with_no_changes_still_captures_head() {
         response: String::new(),
     };
     let action = AgentAction::ProposeBundle { claims: vec![] };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::BundleCreated { bundle, dropped } => {
             assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
@@ -234,7 +250,8 @@ async fn done_action_constructs_noop_bundle() {
     let action = AgentAction::Done {
         message: "no code needed".into(),
     };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::Done(bundle) => {
             assert_eq!(bundle.noop_reason, Some("no code needed".to_string()));
@@ -259,7 +276,8 @@ async fn need_help_returns_reason_after_partial_commit() {
     let action = AgentAction::NeedHelp {
         reason: "don't understand".into(),
     };
-    let result = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let result = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     match result {
         ActionResult::NeedHelp(reason) => assert_eq!(reason, "don't understand"),
         other => panic!("expected NeedHelp, got {other:?}"),
@@ -279,7 +297,8 @@ async fn need_help_on_clean_tree_does_not_commit() {
         response: String::new(),
     };
     let action = AgentAction::NeedHelp { reason: "clean".into() };
-    let _ = dispatch_action(action, &wt, &tools).await.unwrap();
+    let work = test_work(vec![]);
+    let _ = dispatch_action(action, &work, &wt, &tools).await.unwrap();
     let after = run_capture(wt_path, &["rev-parse", "HEAD"]);
     assert_eq!(before, after, "clean tree must not produce a commit");
 }
