@@ -245,10 +245,22 @@ async fn commit_changes(
     if in_scope.is_empty() {
         return Ok(ActionResult::NothingToCommit { dropped: out_of_scope });
     }
+    // Stage only the in-scope paths first so untracked new files
+    // become known to git: `git commit --only` will not promote an
+    // untracked file into the index by itself (verified empirically
+    // 2026-04-27; an early Phase-3 build that omitted this step
+    // failed the new-file test with "pathspec did not match any
+    // file(s) known to git").
+    let mut add_args = vec!["add", "--"];
+    add_args.extend(in_scope.iter().map(String::as_str));
+    run_git(path, &add_args).await?;
     // git commit --only -- <paths>: snapshots the working-tree contents
     // of <paths> into a commit, ignoring any other index entries.
     // Eliminates the index-leak class of bugs where prior `git add`
-    // invocations from bash actions would otherwise be folded in.
+    // invocations from bash actions would otherwise be folded in. The
+    // preceding `git add -- <in_scope>` does NOT defeat `--only`: any
+    // out-of-scope index entries from `bash: git add ...` are still
+    // ignored at commit time.
     let mut commit_args = vec![
         "commit", "--only",
         "--message", message,
