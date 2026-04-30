@@ -4,7 +4,7 @@ The `Coordinator` Role variant is a v3 fossil. v3 had `Coordinator` as the top L
 
 ## Status
 
-Decided. Doc rename: commit `305bcdb`. Code rename: commit TBD (filled in post-commit).
+Decided. Doc rename: commit `305bcdb`. Code rename: commit `d58d0a9`.
 
 ## Considered alternatives
 
