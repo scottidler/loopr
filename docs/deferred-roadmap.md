@@ -2,6 +2,8 @@
 
 **Status:** living index of design docs that have not yet been written but are known to be needed. Companion to [roadmap.md](roadmap.md). Where roadmap.md tracks the build order from Stage 0 through First Gate, this doc tracks everything past First Gate plus the Stage 7-9 completion gaps that the existing roadmap labels as "earned features" or "deferred."
 
+> **Naming note (ADR-0002):** the `Coordinator` Role variant has been renamed to `Reactor`, and the v3 "Coordinator agent" concept that originally lived as Tier 1.2 is reframed here as **Director — Phase 1 (routine orchestration)**. Tier 3.1 becomes **Director — Phase 2 (judgment plane)**. The same agent rolls out in two phases; there is no separate "Coordinator agent" planned. Headings, the 1.2/3.1 entries, and the dependency graph reflect the rename below; body prose in entries that mention "Coordinator" by name still uses the old term and will sweep when the entry becomes live work. See [`docs/adr/0002-rename-role-coordinator-to-reactor.md`](adr/0002-rename-role-coordinator-to-reactor.md).
+
 **How to use this doc.** Each entry below is a stub for a future design doc. Each entry carries enough source-material pointers, keywords, and acceptance criteria that a future session can run `/create-design-doc` against it: read the keywords and grep the v5 docs they reference, read the v3 / v4 source files cited (at the paths and line ranges given), and produce the dated design doc under `docs/design/YYYY-MM-DD-<slug>.md` matching the conventions in [docs/CLAUDE.md](CLAUDE.md).
 
 **How entries are sized.** Tier numbers are priority bands, not effort estimates. Tier 1 closes Stage 7-9 exit-criterion gaps that real runs have already exercised. Tiers 2 and 3 reach v3 and v4 feature parity respectively. Tier 4 is the vision.md "Beyond First Gate (earned features)" set. Tier 5 is small items that will likely fold into adjacent docs rather than getting their own.
@@ -33,9 +35,11 @@ These items are framed in the existing design docs as Stage 7+ deferrals, but th
   - Specifies where the gate is tested - unit (action handler) and integration (daemon end-to-end with a 2-Work plan).
   - States whether this is a permanent home or a Tier-2 stepping stone toward a full Coordinator.
 
-### 1.2 Coordinator / reactor agent
+### 1.2 Director — Phase 1 (routine orchestration)
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-coordinator-agent.md`
+> Was "Coordinator / reactor agent" pre-ADR-0002. Reframed as Phase 1 of the Director agent (the v3-Coordinator-equivalent). Tier 3.1 is Phase 2. The split is by *delivery* — Phase 1 unblocks Stage 9, Phase 2 reaches v4 parity — not by *role*; there is one agent.
+
+- **Proposed filename:** `docs/design/<YYYY-MM-DD>-director-phase-1.md`
 - **Crates touched:** `agents`, `domain`, `loopr` (daemon dispatch), `context` (state-summary prompt assembly), `store`
 - **Depends on:** 1.1 (dep gate is referenced by the Coordinator's dispatch logic), 2.4 (multi-turn LLM history)
 - **What it covers.** A long-lived LLM agent (Opus tier per vision.md model budget) that owns the orchestration plane: it polls TaskStore (or, post-2.2 event bus, subscribes), assembles a state summary, decides on actions, and emits them via a typed action vocabulary. v3 had this as `~/repos/scottidler/loopr/src/agents/coordinator.rs` (47KB). The doc must define: (a) the FSM Coordinator runs through (`Interviewing -> Decomposing -> Planning -> Executing -> GoalComplete` is the v3 shape; v5 may collapse since interview is currently CLI-side); (b) the action vocabulary (`assign_agent`, `override_work`, `accept_bundle`, `redecompose`, `abandon`, plus how each action lands as a state mutation); (c) the state-summary builder that surfaces "Rejected Bundles", "Blocked Works", "SLA breaches", "stuck Bundles in Review", to the LLM as a structured prompt; (d) the reconciliation sweep cadence during Executing; (e) the loop's failure / restart story (v3's `max_restarts: 3`).
@@ -176,7 +180,9 @@ These items existed in v3 and are still relevant; the python-api run did not dir
 
 These items existed in v4 (the `loopr-v4` repo) and represent the most-evolved shape of the orchestration plane. Tier 3 is what "feature complete relative to last shipped version" looks like.
 
-### 3.1 Director agent
+### 3.1 Director — Phase 2 (judgment plane)
+
+> Phase 2 of the Director agent introduced in 1.2. Phase 1 is routine orchestration; Phase 2 layers judgment, escalation, pattern tracking, and the four-mode model. Same agent.
 
 - **Proposed filename:** `docs/design/<YYYY-MM-DD>-director-agent.md`
 - **Crates touched:** `agents`, `context`, `domain`, `ipc`, `loopr`
@@ -368,7 +374,7 @@ These items map directly to vision.md's "Deferred Enhancements" and "Beyond Firs
 
 These items are paragraph-sized. Most should fold into adjacent docs rather than getting their own. Listed here so they are not lost.
 
-- **`--as` role-override flag.** From [docs/design/2026-04-19-cli-skeleton.md](design/2026-04-19-cli-skeleton.md). Folds into 1.2 Coordinator (Coordinator is the role that emits role overrides).
+- **`--as` role-override flag.** From [docs/design/2026-04-19-cli-skeleton.md](design/2026-04-19-cli-skeleton.md). Folds into 1.2 Director Phase 1 (Director is the agent that emits role overrides).
 - **`loopr worktrees ls` subcommand.** From [docs/design/2026-04-21-worktree-lifecycle.md](design/2026-04-21-worktree-lifecycle.md). Folds into 3.3 parallel execution.
 - **`loopr prompts edit` command + init seeding `.loopr/prompts/`.** From [roadmap.md](roadmap.md). Folds into 4.3 prompts-on-disk.
 - **FSM `on_enter` / `on_exit` hooks.** From [docs/design/2026-04-20-fsm-macro.md](design/2026-04-20-fsm-macro.md). Earn when a use case shows up.
@@ -402,7 +408,7 @@ Tier 2
   2.4 multi-turn-llm           (no deps; gating Tier 2 item)
        |
        v
-  1.2 coordinator-agent        (depends on 1.1, 2.4)
+  1.2 director-phase-1         (depends on 1.1, 2.4)   [routine orchestration]
        |
        v
   1.3 recovery-loop            (depends on 1.2)
@@ -414,7 +420,7 @@ Tier 3
   3.2 event-bus                (depends on 1.2)
        |
        v
-  3.1 director-agent           (depends on 1.2, 2.4, 3.2)
+  3.1 director-phase-2         (depends on 1.2, 2.4, 3.2)   [judgment plane]
   3.3 parallel-execution       (depends on 1.1, 1.2, 3.2)
   3.4 spec-phase-hierarchy     (depends on 1.2, 2.2)
 
@@ -429,7 +435,7 @@ Tier 4
   4.8 keychain                 (no deps)
 ```
 
-The critical path through the orchestration plane: `2.4 -> 1.2 -> 3.2 -> 3.1`. Without 2.4 the LLM crate cannot carry multi-turn history; without 1.2 there is nothing for state changes to drive; without 3.2 Director cannot subscribe; without 3.1 the v4-parity judgment plane does not exist.
+The critical path through the orchestration plane: `2.4 -> 1.2 -> 3.2 -> 3.1`. Without 2.4 the LLM crate cannot carry multi-turn history; without 1.2 (Director Phase 1) there is nothing for state changes to drive; without 3.2 Director Phase 2 cannot subscribe to events; without 3.1 the v4-parity judgment plane does not exist.
 
 ---
 

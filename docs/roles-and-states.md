@@ -1,7 +1,7 @@
 # Roles and States
 
 **Author:** Scott A. Idler
-**Date:** 2026-04-20
+**Date:** 2026-04-20 (Reactor rename: 2026-04-30)
 **Status:** Reference (canonical, not a design doc)
 
 This doc is the single source of truth for what each Role in v5 is, what
@@ -10,6 +10,14 @@ It is a reference, not a proposal: every decision here is locked by
 [`docs/vision.md`](vision.md) and the domain-crate FSM tables. If you
 find a contradiction between this doc and either of those sources, the
 source wins; fix this doc.
+
+> **Naming note (ADR-0002):** the `Coordinator` Role variant has been
+> renamed to `Reactor`. This doc describes the post-rename naming. The
+> code rename across `crates/domain/src/{role,plan,work}.rs` is a
+> follow-up commit; until it lands the source still says
+> `Role::Coordinator`. Treat any FSM-edge `By:` annotation in this doc
+> as authoritative; the code follows. See
+> [`docs/adr/0002-rename-role-coordinator-to-reactor.md`](adr/0002-rename-role-coordinator-to-reactor.md).
 
 ## Summary
 
@@ -37,7 +45,7 @@ Defined in `crates/domain/src/role.rs`:
 
 ```rust
 pub enum Role {
-    Coordinator,
+    Reactor,
     Integrator,
     Implementer,
     Reviewer,
@@ -51,7 +59,7 @@ Grouped by what actually performs them at runtime:
 
 | Role        | Kind                      | Owner crate     | In First Gate? |
 |-------------|---------------------------|-----------------|----------------|
-| Coordinator | Daemon-internal routing   | `loopr`         | Yes            |
+| Reactor     | Daemon-internal routing   | `loopr`         | Yes            |
 | Integrator  | Deterministic Rust code   | `integrator`    | Yes            |
 | Decomposer  | Function (LLM-backed)     | `decomposer`    | Yes            |
 | Implementer | LLM Ralph loop            | `agents`        | Yes            |
@@ -64,14 +72,14 @@ Grouped by what actually performs them at runtime:
 Roles marked "No" exist as `Role` variants today, are referenced by FSM
 edges, but have no running code yet.
 
-### Coordinator
+### Reactor
 
 The **daemon itself**. Not an LLM agent, not a sub-agent, not a Ralph
 loop. When `loopr` is running as a daemon, the reactive event loop in
-`crates/loopr` holds the `Coordinator` role and uses it to authorize
+`crates/loopr` holds the `Reactor` role and uses it to authorize
 the deterministic, forward-moving edges in both FSMs.
 
-- Examples of Coordinator-authorized moves:
+- Examples of Reactor-authorized moves:
   - All dependencies satisfied → `Work: Pending -> Ready`
   - Implementer returned a Bundle → `Work: InProgress -> InReview`
   - Reviewer returned `Verdict::Reject` → `Work: InReview -> InProgress`
@@ -84,9 +92,11 @@ the deterministic, forward-moving edges in both FSMs.
   through the same type-checked API as any LLM-backed actor, instead
   of a "FSM bypass" escape hatch.
 - It is **never** an LLM agent. If you catch yourself reasoning about
-  "what the Coordinator would decide," you are asking the wrong
-  question. Coordinator decisions are mechanical consequences of
-  TaskStore state, not an LLM's opinion.
+  "what the Reactor would decide," you are asking the wrong
+  question. Reactor decisions are mechanical consequences of
+  TaskStore state, not an LLM's opinion. The name change from
+  `Coordinator` (ADR-0002) was specifically to remove the
+  agent-flavored connotation.
 
 ### Integrator
 
@@ -102,7 +112,7 @@ architectural property, not a convention.
   - `Work: InReview -> Integrated` (Reviewer approved, Bundle merged)
 - `Integrated -> Done` is **not** an Integrator edge. Session state
   lives in `agents` + the daemon loop, so the "no active sessions"
-  guard on that edge is a Coordinator-only concern; Integrator has
+  guard on that edge is a Reactor-only concern; Integrator has
   no visibility into it.
 - Same code, same inputs, same base commit → same Tick SHA or the
   same typed `IntegrationError`. No LLM opinions involved.
@@ -118,13 +128,13 @@ fn decompose(plan: &Plan, ctx: &mut Context) -> Result<WorkDag>;
 ```
 
 - FSM edge it authorizes:
-  - `Plan: Active -> Complete` *(shared with Coordinator)*. The
+  - `Plan: Active -> Complete` *(shared with Reactor)*. The
     decomposer emits the terminal transition when its output matches
-    an "all-deps-satisfied-and-done" shape; the Coordinator fires the
+    an "all-deps-satisfied-and-done" shape; the Reactor fires the
     same edge when runtime state reaches the same condition.
-- Why it is a Role at all: same reason as Coordinator. The FSM needs
+- Why it is a Role at all: same reason as Reactor. The FSM needs
   an authorizing Role, and "the decomposer function" is a clearer
-  authority tag than reusing Coordinator for a transition that is
+  authority tag than reusing Reactor for a transition that is
   semantically the decomposer's output.
 - v3 and v5 both explicitly choose "decomposer is a function, not an
   agent" (v4 briefly treated it as one; that added nothing). A future
@@ -142,12 +152,12 @@ fn run_implementer(work: &Work, deps: &Deps<...>) -> Result<Bundle>;
 - Writes code in a sibling worktree, iterates until it produces a
   Bundle it is willing to submit, or hits a retry-strategy exhaustion.
 - FSM edges it authorizes:
-  - `Work: InProgress -> Blocked` *(shared with Coordinator)*: "I am
+  - `Work: InProgress -> Blocked` *(shared with Reactor)*: "I am
     stuck and need intervention"
   - `Work: InProgress -> InReview`: "I am done; please review"
 - The Implementer does **not** return itself to `Ready`
   mid-flight. If stuck, it goes `Blocked` (with a reason, once Stage 7
-  adds `blocked_reason`); only the `Coordinator` can reset via the
+  adds `blocked_reason`); only the `Reactor` can reset via the
   override table. This is deliberate: `Blocked` with a reason is more
   informative than silently re-queuing.
 
@@ -190,20 +200,22 @@ An **LLM Ralph loop** in `crates/agents`:
 fn run_director(event: &Event, deps: &Deps<...>) -> Result<Action>;
 ```
 
-- Handles escalations the Coordinator is not authorized to make:
+- Handles escalations the Reactor is not authorized to make:
   kicking an `Active` Plan back to `Draft` for re-decomposition,
   `Abandoning` a whole Plan, or `Superseding` a Work that has been
-  overtaken.
+  overtaken. Also owns the routine-orchestration plane that v3's
+  Coordinator agent used to own — see "Lineage" below for why these
+  are unified under one Role.
 - FSM edges it authorizes:
   - `Plan: Active -> Draft` *(override)*: re-decompose
   - `Plan: Pending -> Draft` *(override)*: re-interview
   - `Plan: {Active, Pending, Draft} -> {Superseded, Abandoned}`
-    *(shared with Coordinator, but Director is the only Role authorized
+    *(shared with Reactor, but Director is the only Role authorized
     for these from `Active`/`Pending`/`Draft` without the override
-    table). Coordinator drives them in the routine-cascade case, Director
+    table). Reactor drives them in the routine-cascade case, Director
     in the escalation case.
   - `Work: any-non-terminal -> {Superseded, Abandoned}`
-    *(shared with Coordinator; same split of routine vs. escalation)*
+    *(shared with Reactor; same split of routine vs. escalation)*
 - Deferred from First Gate. Until the Director agent is implemented
   in `agents`, escalations in First Gate runs result in exit-with-error;
   see [vision.md §Explicitly Not in First
@@ -228,16 +240,16 @@ Canonical source: `crates/domain/src/plan.rs`.
 
 | From    | To         | By                       |
 |---------|------------|--------------------------|
-| Draft   | Pending    | Coordinator              |
-| Draft   | Active     | Coordinator              |
-| Draft   | Superseded | Coordinator, Director    |
-| Draft   | Abandoned  | Coordinator, Director    |
-| Pending | Active     | Coordinator              |
-| Pending | Superseded | Coordinator, Director    |
-| Pending | Abandoned  | Coordinator, Director    |
-| Active  | Complete   | Coordinator, Decomposer  |
-| Active  | Superseded | Coordinator, Director    |
-| Active  | Abandoned  | Coordinator, Director    |
+| Draft   | Pending    | Reactor                  |
+| Draft   | Active     | Reactor                  |
+| Draft   | Superseded | Reactor, Director        |
+| Draft   | Abandoned  | Reactor, Director        |
+| Pending | Active     | Reactor                  |
+| Pending | Superseded | Reactor, Director        |
+| Pending | Abandoned  | Reactor, Director        |
+| Active  | Complete   | Reactor, Decomposer      |
+| Active  | Superseded | Reactor, Director        |
+| Active  | Abandoned  | Reactor, Director        |
 
 **Overrides:**
 
@@ -256,49 +268,49 @@ in `hierarchy.md`.
 
 | From       | To         | By                       |
 |------------|------------|--------------------------|
-| Draft      | Pending    | Coordinator              |
-| Draft      | Ready      | Coordinator              |
-| Draft      | Superseded | Coordinator, Director    |
-| Draft      | Abandoned  | Coordinator, Director    |
-| Pending    | Ready      | Coordinator              |
-| Pending    | Superseded | Coordinator, Director    |
-| Pending    | Abandoned  | Coordinator, Director    |
-| Ready      | InProgress | Coordinator              |
-| Ready      | Blocked    | Coordinator              |
-| Ready      | Superseded | Coordinator, Director    |
-| Ready      | Abandoned  | Coordinator, Director    |
-| InProgress | Blocked    | Coordinator, Implementer |
+| Draft      | Pending    | Reactor                  |
+| Draft      | Ready      | Reactor                  |
+| Draft      | Superseded | Reactor, Director        |
+| Draft      | Abandoned  | Reactor, Director        |
+| Pending    | Ready      | Reactor                  |
+| Pending    | Superseded | Reactor, Director        |
+| Pending    | Abandoned  | Reactor, Director        |
+| Ready      | InProgress | Reactor                  |
+| Ready      | Blocked    | Reactor                  |
+| Ready      | Superseded | Reactor, Director        |
+| Ready      | Abandoned  | Reactor, Director        |
+| InProgress | Blocked    | Reactor, Implementer     |
 | InProgress | InReview   | Implementer              |
-| InProgress | Superseded | Coordinator, Director    |
-| InProgress | Abandoned  | Coordinator, Director    |
-| Blocked    | Ready      | Coordinator              |
-| Blocked    | Superseded | Coordinator, Director    |
-| Blocked    | Abandoned  | Coordinator, Director    |
-| InReview   | InProgress | Coordinator              |
+| InProgress | Superseded | Reactor, Director        |
+| InProgress | Abandoned  | Reactor, Director        |
+| Blocked    | Ready      | Reactor                  |
+| Blocked    | Superseded | Reactor, Director        |
+| Blocked    | Abandoned  | Reactor, Director        |
+| InReview   | InProgress | Reactor                  |
 | InReview   | Integrated | Integrator               |
-| InReview   | Superseded | Coordinator, Director    |
-| InReview   | Abandoned  | Coordinator, Director    |
-| Integrated | Done       | Coordinator              |
-| Integrated | Superseded | Coordinator, Director    |
-| Integrated | Abandoned  | Coordinator, Director    |
+| InReview   | Superseded | Reactor, Director        |
+| InReview   | Abandoned  | Reactor, Director        |
+| Integrated | Done       | Reactor                  |
+| Integrated | Superseded | Reactor, Director        |
+| Integrated | Abandoned  | Reactor, Director        |
 
 **Overrides:**
 
 | From       | To       | By          |
 |------------|----------|-------------|
-| Ready      | Done     | Coordinator |
-| InProgress | Ready    | Coordinator |
-| InProgress | InReview | Coordinator |
-| InReview   | Ready    | Coordinator |
+| Ready      | Done     | Reactor     |
+| InProgress | Ready    | Reactor     |
+| InProgress | InReview | Reactor     |
+| InReview   | Ready    | Reactor     |
 
 Notable edges explained:
 
-- `Ready -> Done` (Coordinator, *override only*): the "no-op Work"
+- `Ready -> Done` (Reactor, *override only*): the "no-op Work"
   bypass. Exists for (a) Works whose AC was already satisfied by
   concurrent commits before they started; (b) test/recovery
   bootstrap. Lives in the overrides table rather than transitions,
-  so callers must use `Work::override_status(Done, Coordinator)`
-  explicitly; a stray `Work::transition(Done, Coordinator)` from
+  so callers must use `Work::override_status(Done, Reactor)`
+  explicitly; a stray `Work::transition(Done, Reactor)` from
   `Ready` is a typed error. Structural enforcement of "no AC
   skipping on the normal path."
 - `Integrated -> Superseded`: present so a cascade from a superseded
@@ -319,18 +331,18 @@ transition the Work?"), so the resolution lives here.
 
 1. Implementer produces a `Bundle` and fires
    `Work: InProgress -> InReview`.
-2. Coordinator (daemon) notices the `InReview` state and kicks off
+2. Reactor (daemon) notices the `InReview` state and kicks off
    `run_reviewer(bundle, ...)`.
 3. Reviewer returns `Result<Verdict>`. The `Verdict` is a typed
    artifact persisted to the TaskStore; it is **not** an FSM edge.
-4. Coordinator reads the `Verdict`:
-   - `Verdict::Reject` → Coordinator fires
+4. Reactor reads the `Verdict`:
+   - `Verdict::Reject` → Reactor fires
      `Work: InReview -> InProgress`.
-   - `Verdict::Approve` → Coordinator hands the Bundle to the
+   - `Verdict::Approve` → Reactor hands the Bundle to the
      `integrator` crate.
 5. Integrator performs the merge and, on success, fires
    `Work: InReview -> Integrated`.
-6. Coordinator fires `Work: Integrated -> Done` once the
+6. Reactor fires `Work: Integrated -> Done` once the
    post-integration guard (no active sessions) is satisfied.
 
 **Why Reviewer has no FSM edges:**
@@ -343,7 +355,7 @@ transition the Work?"), so the resolution lives here.
   rationale; `Approved` as a state would carry no information beyond
   "run_reviewer returned Ok(Verdict::Approve)" and would be duplicated
   in the Verdict record anyway.
-- Routing layer stays deterministic. Keeping the Coordinator as the
+- Routing layer stays deterministic. Keeping the Reactor as the
   sole router between LLM opinion and mechanical action means the
   state machine advances in one place, not two.
 
@@ -358,15 +370,19 @@ window grows big enough to need its own state (e.g. Stage 8's
 merge-conflict-resolution queue), earn it then with a design doc that
 actually needs it.
 
-## Why Coordinator and Director are Both Roles
+## Why Reactor and Director are Both Roles
 
-This question recurs because v3 had only `Coordinator` (no Director),
-v4 added Director, and v5 inherited v4's 7-Role shape without a recent
-re-justification. The short answer: they serve disjoint purposes.
+This question recurs because v3 had only one top role (named
+`Coordinator` then), v4 split off Director as a new judgment-plane
+agent and demoted the original Coordinator variant to mean "the
+daemon's mechanical edges only," and v5 has now renamed that
+daemon-only variant to `Reactor` (ADR-0002) so the agent-flavored
+name does not invite re-confusion. The short answer: Reactor and
+Director serve disjoint purposes.
 
-- **Coordinator** is the deterministic routing layer. Every edge it
+- **Reactor** is the deterministic routing layer. Every edge it
   authorizes is a mechanical consequence of TaskStore state plus agent
-  outputs. No LLM judgment is ever involved in whether a Coordinator
+  outputs. No LLM judgment is ever involved in whether a Reactor
   transition fires.
 - **Director** is the escalation layer, and is an LLM agent. Its job
   only exists when routine progress has broken down: a Plan needs to
@@ -374,15 +390,16 @@ re-justification. The short answer: they serve disjoint purposes.
   needs to be abandoned. These are judgments, not mechanical
   consequences.
 - Several edges appear in both Role lists (e.g.
-  `Plan: Active -> Abandoned by (Coordinator, Director)`). That is not
-  redundancy: Coordinator fires the edge in the routine cascade case
+  `Plan: Active -> Abandoned by (Reactor, Director)`). That is not
+  redundancy: Reactor fires the edge in the routine cascade case
   ("parent Plan marked Abandoned, mechanically cascade to child
   Works"); Director fires the same edge in the escalation case ("this
   Plan is not recoverable, abandon it"). The FSM grants them both
   because either actor can legitimately reach that state; the calling
   context determines which actor does so in practice.
 
-The alternative, collapsing Director into Coordinator, was rejected
+The alternative, collapsing Director into Reactor (or letting one
+name authorize both deterministic and LLM-driven edges), was rejected
 because it would force the daemon to hold LLM-agent identity for the
 escalation edges. The current split keeps the daemon's routing logic
 free of LLM opinions and confines LLM-driven state resets to a named,
@@ -421,6 +438,8 @@ Guidelines for future stages:
 
 - [vision.md](vision.md): architectural shape; canonical for the
   distinction between LLM-calling and non-LLM crates.
+- [`docs/adr/0002-rename-role-coordinator-to-reactor.md`](adr/0002-rename-role-coordinator-to-reactor.md):
+  rationale for the `Coordinator` → `Reactor` rename.
 - [`crates/domain/CLAUDE.md`](../crates/domain/CLAUDE.md): scope
   rules for the crate where the FSMs live.
 - [`crates/domain/docs/design/2026-04-20-hierarchy.md`](design/2026-04-20-hierarchy.md):
