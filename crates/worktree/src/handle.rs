@@ -3,7 +3,7 @@
 //! Construction provisions the worktree + branch; explicit `.cleanup()`
 //! removes the worktree but keeps the branch (the integrator still needs it
 //! to merge). `Drop` is a **crash safety net**, not the routine cleanup
-//! mechanism — the coordinator in `loopr` drives cleanup via explicit
+//! mechanism — the Reactor in `loopr` drives cleanup via explicit
 //! `.cleanup()` inside `tokio::task::spawn_blocking` so a ~30ms `git worktree
 //! remove --force` never runs on a tokio worker.
 //!
@@ -88,7 +88,7 @@ impl Worktree {
     /// `ops::git_cmd`).
     ///
     /// Callers pass an already-resolved `sha` (not a ref) — the
-    /// coordinator in `loopr` resolves it in repo context, NEVER inside a
+    /// Reactor in `loopr` resolves it in repo context, NEVER inside a
     /// worktree, because `HEAD` inside a worktree resolves to the worktree's
     /// own branch tip rather than the intended base (D10; v4
     /// commit `120c29b`).
@@ -187,7 +187,7 @@ impl Drop for Worktree {
             return;
         }
         // Best-effort synchronous cleanup. Logs on failure; does not panic.
-        // Coordinator is expected to use explicit `.cleanup()` inside
+        // Reactor is expected to use explicit `.cleanup()` inside
         // `spawn_blocking` for routine sweeps; this path is the crash /
         // panic-unwind safety net.
         if let Err(e) = ops::remove_worktree(&self.repo_path, &self.path) {

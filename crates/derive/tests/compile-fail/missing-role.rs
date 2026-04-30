@@ -4,7 +4,7 @@ use derive::Fsm;
 #[fsm(
     terminal = [Done],
     transitions(
-        Draft => Done by (Coordinator),
+        Draft => Done by (Reactor),
     ),
 )]
 enum BadFsm {

@@ -79,9 +79,9 @@ async fn full_roundtrip_accept_verdict_persists_reviewed_bundle() {
     bundle.paths = vec!["src.rs".to_string()];
     bundle.head_commit = Some(sha.clone());
     // Triage the Bundle: the daemon would do this in wiring (using
-    // Role::Coordinator as the identifier, per the Reviewer design
+    // Role::Reactor as the identifier, per the Reviewer design
     // doc invariant).
-    bundle.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    bundle.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     store.bundles().create(bundle.clone()).await.unwrap();
 
     // Fake LLM returning an accept verdict.
@@ -142,7 +142,7 @@ async fn change_requested_verdict_persists_rejected_bundle() {
     );
     bundle.paths = vec!["src.rs".to_string()];
     bundle.head_commit = Some(sha);
-    bundle.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    bundle.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     store.bundles().create(bundle.clone()).await.unwrap();
 
     let llm = ScriptedLlm::new();

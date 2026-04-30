@@ -26,8 +26,8 @@ use crate::{FsmError, Role, Transition};
 /// failure (merge conflict, post-merge test break), and downstream
 /// consumers branch on it without parsing a verification string.
 ///
-/// `Reviewer` cannot act on `Proposed`: the Coordinator always triages
-/// first. `Proposed => Rejected` is Coordinator-only.
+/// `Reviewer` cannot act on `Proposed`: the Reactor always triages
+/// first. `Proposed => Rejected` is Reactor-only.
 ///
 /// Display output is lowercase to match the serde wire form - the
 /// Record derive calls `ToString::to_string` on indexed fields, so
@@ -40,21 +40,21 @@ use crate::{FsmError, Role, Transition};
     role = crate::Role,
     terminal = [Merged, Rejected, IntegrationFailed, Superseded],
     transitions(
-        Proposed    => Triaged           by (Coordinator),
-        Proposed    => Rejected          by (Coordinator),
-        Proposed    => Superseded        by (Coordinator),
-        Triaged     => Reviewed          by (Coordinator, Reviewer),
-        Triaged     => Accepted          by (Coordinator),
-        Triaged     => Rejected          by (Coordinator, Reviewer),
-        Triaged     => Superseded        by (Coordinator),
-        Reviewed    => Accepted          by (Coordinator),
-        Reviewed    => Rejected          by (Coordinator, Reviewer),
-        Reviewed    => Superseded        by (Coordinator),
+        Proposed    => Triaged           by (Reactor),
+        Proposed    => Rejected          by (Reactor),
+        Proposed    => Superseded        by (Reactor),
+        Triaged     => Reviewed          by (Reactor, Reviewer),
+        Triaged     => Accepted          by (Reactor),
+        Triaged     => Rejected          by (Reactor, Reviewer),
+        Triaged     => Superseded        by (Reactor),
+        Reviewed    => Accepted          by (Reactor),
+        Reviewed    => Rejected          by (Reactor, Reviewer),
+        Reviewed    => Superseded        by (Reactor),
         Accepted    => Integrating       by (Integrator),
-        Accepted    => Superseded        by (Coordinator),
+        Accepted    => Superseded        by (Reactor),
         Integrating => Merged            by (Integrator),
         Integrating => IntegrationFailed by (Integrator),
-        Integrating => Superseded        by (Coordinator),
+        Integrating => Superseded        by (Reactor),
     ),
 )]
 pub enum BundleStatus {

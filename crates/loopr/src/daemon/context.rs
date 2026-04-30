@@ -283,7 +283,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 &*self.summary_fanout,
                 &mut work,
                 WorkStatus::Ready,
-                Role::Coordinator,
+                Role::Reactor,
                 false,
             )
             .await
@@ -296,7 +296,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 &*self.summary_fanout,
                 &mut work,
                 WorkStatus::InProgress,
-                Role::Coordinator,
+                Role::Reactor,
                 false,
             )
             .await
@@ -335,7 +335,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     false,
                 )
                 .await;
@@ -402,7 +402,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     false,
                 )
                 .await;
@@ -413,7 +413,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     false,
                 )
                 .await;
@@ -461,7 +461,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         // of the same Bundle (reconcile + Implementer hand-off racing)
         // returns Stale and we exit cleanly.
         let expected = bundle.updated_at;
-        if let Err(e) = bundle.transition(BundleStatus::Triaged, Role::Coordinator) {
+        if let Err(e) = bundle.transition(BundleStatus::Triaged, Role::Reactor) {
             error!(error = %e, "bundle Proposed -> Triaged transition rejected by FSM; skipping");
             return;
         }
@@ -490,7 +490,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &self.store,
                     &mut work,
                     WorkStatus::InReview,
-                    Role::Coordinator,
+                    Role::Reactor,
                     true, // override
                 )
                 .await
@@ -527,7 +527,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     true,
                 )
                 .await;
@@ -539,7 +539,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     true,
                 )
                 .await;
@@ -562,7 +562,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     }
                 };
                 let expected = reviewed_bundle.updated_at;
-                if let Err(e) = reviewed_bundle.transition(BundleStatus::Accepted, Role::Coordinator) {
+                if let Err(e) = reviewed_bundle.transition(BundleStatus::Accepted, Role::Reactor) {
                     error!(error = %e, "Reviewed -> Accepted transition rejected by FSM");
                     return;
                 }
@@ -585,7 +585,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     true,
                 )
                 .await;
@@ -596,7 +596,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     true,
                 )
                 .await;
@@ -717,7 +717,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Done,
-                    Role::Coordinator,
+                    Role::Reactor,
                     false,
                 )
                 .await
@@ -742,7 +742,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                             &mut plan_mut,
                             siblings,
                             PlanStatus::Complete,
-                            Role::Coordinator,
+                            Role::Reactor,
                         )
                         .await
                         {
@@ -766,7 +766,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     &*self.summary_fanout,
                     &mut work,
                     WorkStatus::Blocked,
-                    Role::Coordinator,
+                    Role::Reactor,
                     true,
                 )
                 .await;

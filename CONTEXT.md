@@ -35,7 +35,7 @@ _Avoid_: Release, Build, Snapshot, Checkpoint.
 There are seven Role variants in `domain::Role`. They differ by *Kind* (LLM Ralph loop, deterministic code, daemon-internal routing, or pure function), and only some are LLM agents. Lumping them as "agents" was a v4 habit; v5 untangles it via [docs/roles-and-states.md](docs/roles-and-states.md).
 
 **Reactor**:
-The daemon itself, not an LLM. Performs deterministic FSM routing: dependency gating, post-Verdict transitions, parent-child cascades. _Not_ an agent; never holds an LLM opinion. Renamed from `Coordinator` per ADR-0002 to remove the agent-flavored connotation; code rename across `crates/` follows in a later commit.
+The daemon itself, not an LLM. Performs deterministic FSM routing: dependency gating, post-Verdict transitions, parent-child cascades. _Not_ an agent; never holds an LLM opinion. Renamed from `Coordinator` per ADR-0002.
 _Avoid_: Coordinator, Manager, Foreman, Mayor, Daemon, Router.
 
 **Decomposer**:

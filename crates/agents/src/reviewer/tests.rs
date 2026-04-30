@@ -152,7 +152,7 @@ fn triaged_bundle(work_id: WorkId, head_commit: Option<&str>, paths: Vec<String>
     let mut b = Bundle::new(work_id, "loopr/wk-test".to_string(), vec!["test claim".to_string()]);
     b.paths = paths;
     b.head_commit = head_commit.map(str::to_string);
-    b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    b.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     b
 }
 

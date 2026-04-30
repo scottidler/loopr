@@ -4,7 +4,7 @@ The `Coordinator` Role variant is a v3 fossil. v3 had `Coordinator` as the top L
 
 ## Status
 
-Decided. Doc rename lands first (this commit). Code rename across `crates/domain/src/{role,plan,work}.rs` and 49 referencing files lands as a follow-up; until then, `roles-and-states.md` and CONTEXT.md describe the post-rename naming with an explicit "code rename pending" note.
+Decided. Doc rename: commit `305bcdb`. Code rename: commit TBD (filled in post-commit).
 
 ## Considered alternatives
 

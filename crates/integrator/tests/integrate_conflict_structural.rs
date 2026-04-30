@@ -51,9 +51,9 @@ async fn persist_accepted_bundle(
     store.bundles().create(b.clone()).await.unwrap();
 
     for (target, role) in [
-        (BundleStatus::Triaged, Role::Coordinator),
+        (BundleStatus::Triaged, Role::Reactor),
         (BundleStatus::Reviewed, Role::Reviewer),
-        (BundleStatus::Accepted, Role::Coordinator),
+        (BundleStatus::Accepted, Role::Reactor),
     ] {
         let current = store.bundles().get(&b.id).await.unwrap();
         let mut next = current.clone();

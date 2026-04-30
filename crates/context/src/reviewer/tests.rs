@@ -25,7 +25,7 @@ fn sample_bundle(work_id: WorkId, head_commit: Option<&str>) -> Bundle {
     // Advance the Bundle to `Triaged` so it matches a real run; the
     // renderer does not gate on status, but the test mirrors the
     // production call shape.
-    b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    b.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     b
 }
 

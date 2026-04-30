@@ -229,35 +229,35 @@ fn assert_changed(b: &mut Bundle, to: BundleStatus, role: Role) {
 }
 
 #[test]
-fn transition_proposed_triaged_by_coordinator() {
+fn transition_proposed_triaged_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Proposed),
         BundleStatus::Triaged,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
-fn transition_proposed_rejected_by_coordinator() {
+fn transition_proposed_rejected_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Proposed),
         BundleStatus::Rejected,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
-fn transition_proposed_superseded_by_coordinator() {
+fn transition_proposed_superseded_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Proposed),
         BundleStatus::Superseded,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
-fn transition_triaged_reviewed_by_coordinator() {
+fn transition_triaged_reviewed_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Triaged),
         BundleStatus::Reviewed,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
@@ -269,11 +269,11 @@ fn transition_triaged_reviewed_by_reviewer() {
     );
 }
 #[test]
-fn transition_triaged_accepted_by_coordinator() {
+fn transition_triaged_accepted_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Triaged),
         BundleStatus::Accepted,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
@@ -285,19 +285,19 @@ fn transition_triaged_rejected_by_reviewer() {
     );
 }
 #[test]
-fn transition_triaged_superseded_by_coordinator() {
+fn transition_triaged_superseded_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Triaged),
         BundleStatus::Superseded,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
-fn transition_reviewed_accepted_by_coordinator() {
+fn transition_reviewed_accepted_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Reviewed),
         BundleStatus::Accepted,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
@@ -309,11 +309,11 @@ fn transition_reviewed_rejected_by_reviewer() {
     );
 }
 #[test]
-fn transition_reviewed_superseded_by_coordinator() {
+fn transition_reviewed_superseded_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Reviewed),
         BundleStatus::Superseded,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
@@ -325,11 +325,11 @@ fn transition_accepted_integrating_by_integrator() {
     );
 }
 #[test]
-fn transition_accepted_superseded_by_coordinator() {
+fn transition_accepted_superseded_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Accepted),
         BundleStatus::Superseded,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
@@ -349,11 +349,11 @@ fn transition_integrating_integrationfailed_by_integrator() {
     );
 }
 #[test]
-fn transition_integrating_superseded_by_coordinator() {
+fn transition_integrating_superseded_by_reactor() {
     assert_changed(
         &mut bundle_in(BundleStatus::Integrating),
         BundleStatus::Superseded,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 
@@ -363,9 +363,9 @@ fn transition_integrating_superseded_by_coordinator() {
 
 #[test]
 fn proposed_to_rejected_by_reviewer_rejects() {
-    // Reviewer cannot act on Proposed - Coordinator always triages first.
+    // Reviewer cannot act on Proposed - Reactor always triages first.
     // This test pins the design decision that Proposed => Rejected is
-    // Coordinator-only.
+    // Reactor-only.
     let mut b = bundle_in(BundleStatus::Proposed);
     let err = b.transition(BundleStatus::Rejected, Role::Reviewer).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
@@ -376,7 +376,7 @@ fn proposed_to_rejected_by_reviewer_rejects() {
 fn transition_no_edge_rejects() {
     // Proposed -> Accepted is not in the transitions table.
     let mut b = bundle_in(BundleStatus::Proposed);
-    let err = b.transition(BundleStatus::Accepted, Role::Coordinator).unwrap_err();
+    let err = b.transition(BundleStatus::Accepted, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
     assert_eq!(b.status, BundleStatus::Proposed);
 }
@@ -385,7 +385,7 @@ fn transition_no_edge_rejects() {
 fn transition_wrong_role_rejects() {
     // Accepted -> Integrating is Integrator-only.
     let mut b = bundle_in(BundleStatus::Accepted);
-    let err = b.transition(BundleStatus::Integrating, Role::Coordinator).unwrap_err();
+    let err = b.transition(BundleStatus::Integrating, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
     assert_eq!(b.status, BundleStatus::Accepted);
 }
@@ -400,7 +400,7 @@ fn transition_from_terminal_merged_rejects() {
 #[test]
 fn transition_from_terminal_rejected_rejects() {
     let mut b = bundle_in(BundleStatus::Rejected);
-    let err = b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap_err();
+    let err = b.transition(BundleStatus::Triaged, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
 }
 
@@ -414,7 +414,7 @@ fn transition_from_terminal_integration_failed_rejects() {
 #[test]
 fn transition_from_terminal_superseded_rejects() {
     let mut b = bundle_in(BundleStatus::Superseded);
-    let err = b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap_err();
+    let err = b.transition(BundleStatus::Triaged, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
 }
 
@@ -426,7 +426,7 @@ fn transition_from_terminal_superseded_rejects() {
 fn transition_same_state_is_unchanged() {
     let mut b = Bundle::new(WorkId::new(), "b".to_string(), vec![]);
     let before = b.updated_at;
-    let result = b.transition(BundleStatus::Proposed, Role::Coordinator).unwrap();
+    let result = b.transition(BundleStatus::Proposed, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Unchanged);
     assert_eq!(b.status, BundleStatus::Proposed);
     assert_eq!(b.updated_at, before, "Unchanged must not advance updated_at");

@@ -20,7 +20,7 @@
 //! 3. Look up the `Work` in TaskStore. Missing record → log orphan.
 //! 4. If `Work.status.is_terminal()` → `cleanup_at` the worktree and, if
 //!    status is `Done`, `delete_branch` as belt-and-suspenders.
-//! 5. Otherwise: log "surviving attempt" and leave alone — the next coordinator
+//! 5. Otherwise: log "surviving attempt" and leave alone — the next reactor
 //!    session (Stage 7) will deal with it.
 //!
 //! The `(non-terminal, crash-interrupted)` state mutation is explicitly a
@@ -28,7 +28,7 @@
 //! where to wire it in.
 //!
 //! Single-threaded boot sequence: reconcile is called synchronously before
-//! `bind_listener`, so there is no race with coordinators spawning new
+//! `bind_listener`, so there is no race with reactors spawning new
 //! attempts concurrently.
 
 use std::path::Path;
@@ -49,7 +49,7 @@ pub struct ReconcileReport {
     pub cleaned: usize,
     /// Worktree entries we parsed but whose Work record is not in TaskStore.
     pub orphans_logged: usize,
-    /// Non-terminal survivors left alone for the next coordinator session to handle.
+    /// Non-terminal survivors left alone for the next reactor session to handle.
     pub carried_forward: usize,
     /// Entries whose branch name did not match the `loopr/wk-*` shape.
     pub foreign_skipped: usize,
@@ -234,7 +234,7 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
 /// Enumerate persisted Bundles and re-enqueue each intermediate-state
 /// Bundle into the correct daemon JoinSet. Terminal statuses noop.
 ///
-/// A re-entry from `Reviewed` or `Accepted` requires a Coordinator
+/// A re-entry from `Reviewed` or `Accepted` requires a Reactor
 /// transition before the Integrator can consume the Bundle; we run it
 /// in-place here (not inside `spawn_integrator_for_bundle`) because the
 /// Integrator's pre-flight rejects anything that is not already at
@@ -269,16 +269,12 @@ where
                 report.reviewers_requeued += 1;
             }
             BundleStatus::Reviewed => {
-                // Coordinator transitions Reviewed -> Accepted in place so
+                // Reactor transitions Reviewed -> Accepted in place so
                 // the Integrator's pre-flight accepts the Bundle.
                 let mut b = bundle.clone();
-                if let Err(e) = transition_and_persist_bundle(
-                    &*ctx.summary_fanout,
-                    &mut b,
-                    BundleStatus::Accepted,
-                    Role::Coordinator,
-                )
-                .await
+                if let Err(e) =
+                    transition_and_persist_bundle(&*ctx.summary_fanout, &mut b, BundleStatus::Accepted, Role::Reactor)
+                        .await
                 {
                     tracing::warn!(
                         bundle_id = %bundle.id,

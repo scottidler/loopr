@@ -92,7 +92,7 @@ impl<'a> PlansStore<'a> {
     /// `AsyncStore::update`, which rewrites the JSONL line and refreshes the
     /// SQLite cache row. Consumed by the Stage 8 wiring capstone's Integrator
     /// spawn: after every child Work under a Plan is terminal with at least
-    /// one Done, the Coordinator fires `Active -> Complete` via this method.
+    /// one Done, the Reactor fires `Active -> Complete` via this method.
     /// Mirrors `WorksStore::update` (blind-write, no OCC); Plans have no
     /// concurrent-writer race in the single-daemon-per-target threat model.
     #[instrument(

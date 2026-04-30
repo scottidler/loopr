@@ -30,7 +30,7 @@ Every Work attempt gets a fresh worktree at `<target>/.loopr/worktrees/<work-id>
 
 ## Rule
 
-`Drop` is a safety net, not the routine cleanup mechanism. The coordinator in `loopr` dictates *when* to clean based on `AttemptCleanupPolicy` and executes `.cleanup()` inside `tokio::task::spawn_blocking`. The Round 1 Architect finding — "Drop guards do not execute on SIGTERM, SIGKILL, or power loss" — is addressed by `loopr::daemon::startup::reconcile`, which runs ONCE at daemon startup before the IPC listener accepts.
+`Drop` is a safety net, not the routine cleanup mechanism. The Reactor in `loopr` dictates *when* to clean based on `AttemptCleanupPolicy` and executes `.cleanup()` inside `tokio::task::spawn_blocking`. The Round 1 Architect finding — "Drop guards do not execute on SIGTERM, SIGKILL, or power loss" — is addressed by `loopr::daemon::startup::reconcile`, which runs ONCE at daemon startup before the IPC listener accepts.
 
 Seq allocation is atomic via git's own "branch/path already exists" errors as the EEXIST-equivalent. No separate claim-then-create step; git's refcount on branch creation is the serialization primitive.
 

@@ -86,7 +86,7 @@ pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError
 /// Resolve a ref (`HEAD`, a branch, a tag, a short SHA) to the full 40-char
 /// SHA **in the repo's context**, not inside any worktree. This matters:
 /// `HEAD` resolved inside a worktree returns that worktree's own branch
-/// tip, which is exactly wrong when the coordinator wants the current
+/// tip, which is exactly wrong when the Reactor wants the current
 /// integration-branch tip to use as `sha` for the next attempt (D10;
 /// v4 NO-OP-LOOP bug, commit `120c29b`).
 #[instrument(

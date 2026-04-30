@@ -7,9 +7,9 @@ enum Tiny {
     C,
 }
 
-const VALID_NORMAL_FROM_A: &[(Tiny, &[&str])] = &[(Tiny::B, &["coordinator"]), (Tiny::C, &[])];
+const VALID_NORMAL_FROM_A: &[(Tiny, &[&str])] = &[(Tiny::B, &["reactor"]), (Tiny::C, &[])];
 
-const VALID_OVERRIDE_FROM_A: &[(Tiny, &[&str])] = &[(Tiny::C, &["coordinator"])];
+const VALID_OVERRIDE_FROM_A: &[(Tiny, &[&str])] = &[(Tiny::C, &["reactor"])];
 
 #[test]
 fn display_no_transition_renders_header_and_hints() {
@@ -24,8 +24,8 @@ fn display_no_transition_renders_header_and_hints() {
     };
     let rendered = err.to_string();
     let expected = "invalid transition: A -> C (role: implementer): no transition exists\n\
-                    \x20\x20valid from A (normal): B (coordinator), C (any)\n\
-                    \x20\x20valid from A (override): C (coordinator)";
+                    \x20\x20valid from A (normal): B (reactor), C (any)\n\
+                    \x20\x20valid from A (override): C (reactor)";
     assert_eq!(rendered, expected);
 }
 
@@ -73,7 +73,7 @@ fn display_empty_targets_renders_none() {
     let err: FsmError<Tiny> = FsmError {
         from: Tiny::C,
         to: Tiny::A,
-        role: "coordinator".to_string(),
+        role: "reactor".to_string(),
         kind: FsmErrorKind::NoTransition,
         valid_normal: &[],
         valid_override: &[],
@@ -87,7 +87,7 @@ fn display_empty_targets_renders_none() {
 #[test]
 fn role_display_uses_kebab_case() {
     use domain::Role;
-    assert_eq!(Role::Coordinator.to_string(), "coordinator");
+    assert_eq!(Role::Reactor.to_string(), "reactor");
     assert_eq!(Role::Integrator.to_string(), "integrator");
     assert_eq!(Role::Implementer.to_string(), "implementer");
     assert_eq!(Role::Director.to_string(), "director");

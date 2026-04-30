@@ -6,36 +6,36 @@ use domain::{FsmErrorKind, Role, TargetKind, Transition};
     role = ::domain::Role,
     terminal = [Done, Superseded, Abandoned],
     transitions(
-        Draft      => Pending     by (Coordinator),
-        Draft      => Ready       by (Coordinator),
-        Draft      => Superseded  by (Coordinator, Director),
-        Draft      => Abandoned   by (Coordinator, Director),
-        Pending    => Ready       by (Coordinator),
-        Pending    => Superseded  by (Coordinator, Director),
-        Pending    => Abandoned   by (Coordinator, Director),
-        Ready      => InProgress  by (Coordinator),
-        Ready      => Blocked     by (Coordinator),
-        Ready      => Superseded  by (Coordinator, Director),
-        Ready      => Abandoned   by (Coordinator, Director),
-        Ready      => Done        by (Coordinator),
+        Draft      => Pending     by (Reactor),
+        Draft      => Ready       by (Reactor),
+        Draft      => Superseded  by (Reactor, Director),
+        Draft      => Abandoned   by (Reactor, Director),
+        Pending    => Ready       by (Reactor),
+        Pending    => Superseded  by (Reactor, Director),
+        Pending    => Abandoned   by (Reactor, Director),
+        Ready      => InProgress  by (Reactor),
+        Ready      => Blocked     by (Reactor),
+        Ready      => Superseded  by (Reactor, Director),
+        Ready      => Abandoned   by (Reactor, Director),
+        Ready      => Done        by (Reactor),
         InProgress => Blocked     by (Any),
         InProgress => InReview    by (Implementer),
-        InProgress => Superseded  by (Coordinator, Director),
-        InProgress => Abandoned   by (Coordinator, Director),
-        Blocked    => Ready       by (Coordinator),
-        Blocked    => Superseded  by (Coordinator, Director),
-        Blocked    => Abandoned   by (Coordinator, Director),
-        InReview   => InProgress  by (Coordinator),
+        InProgress => Superseded  by (Reactor, Director),
+        InProgress => Abandoned   by (Reactor, Director),
+        Blocked    => Ready       by (Reactor),
+        Blocked    => Superseded  by (Reactor, Director),
+        Blocked    => Abandoned   by (Reactor, Director),
+        InReview   => InProgress  by (Reactor),
         InReview   => Integrated  by (Integrator),
-        InReview   => Superseded  by (Coordinator, Director),
-        InReview   => Abandoned   by (Coordinator, Director),
-        Integrated => Done        by (Coordinator, Integrator),
-        Integrated => Abandoned   by (Coordinator, Director),
+        InReview   => Superseded  by (Reactor, Director),
+        InReview   => Abandoned   by (Reactor, Director),
+        Integrated => Done        by (Reactor, Integrator),
+        Integrated => Abandoned   by (Reactor, Director),
     ),
     overrides(
-        InProgress => Ready     by (Coordinator),
-        InProgress => InReview  by (Coordinator),
-        InReview   => Ready     by (Coordinator),
+        InProgress => Ready     by (Reactor),
+        InProgress => InReview  by (Reactor),
+        InReview   => Ready     by (Reactor),
     ),
 )]
 enum WorkStatus {
@@ -65,7 +65,7 @@ const ALL_WORK_STATES: &[WorkStatus] = &[
 ];
 
 const ALL_ROLES: &[Role] = &[
-    Role::Coordinator,
+    Role::Reactor,
     Role::Integrator,
     Role::Implementer,
     Role::Reviewer,
@@ -115,14 +115,14 @@ fn from_equal_to_is_unchanged_for_every_state_and_role() {
 #[test]
 fn validate_transition_happy_paths() {
     let cases = [
-        (WorkStatus::Draft, WorkStatus::Pending, Role::Coordinator),
+        (WorkStatus::Draft, WorkStatus::Pending, Role::Reactor),
         (WorkStatus::Draft, WorkStatus::Superseded, Role::Director),
-        (WorkStatus::Ready, WorkStatus::InProgress, Role::Coordinator),
+        (WorkStatus::Ready, WorkStatus::InProgress, Role::Reactor),
         (WorkStatus::InProgress, WorkStatus::Blocked, Role::Reviewer),
         (WorkStatus::InProgress, WorkStatus::InReview, Role::Implementer),
         (WorkStatus::InReview, WorkStatus::Integrated, Role::Integrator),
         (WorkStatus::Integrated, WorkStatus::Done, Role::Integrator),
-        (WorkStatus::Integrated, WorkStatus::Done, Role::Coordinator),
+        (WorkStatus::Integrated, WorkStatus::Done, Role::Reactor),
     ];
     for (from, to, role) in cases {
         let result = WorkStatus::validate_transition(from, to, role).unwrap();
@@ -149,7 +149,7 @@ fn validate_transition_role_not_authorized() {
 
 #[test]
 fn validate_transition_no_edge() {
-    let err = WorkStatus::validate_transition(WorkStatus::Draft, WorkStatus::Done, Role::Coordinator).unwrap_err();
+    let err = WorkStatus::validate_transition(WorkStatus::Draft, WorkStatus::Done, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
     assert!(err.context.is_none());
 }
@@ -157,15 +157,15 @@ fn validate_transition_no_edge() {
 #[test]
 fn validate_override_uses_override_table() {
     assert_eq!(
-        WorkStatus::validate_override(WorkStatus::InProgress, WorkStatus::Ready, Role::Coordinator).unwrap(),
+        WorkStatus::validate_override(WorkStatus::InProgress, WorkStatus::Ready, Role::Reactor).unwrap(),
         Transition::Override,
     );
     assert_eq!(
-        WorkStatus::validate_override(WorkStatus::InProgress, WorkStatus::InReview, Role::Coordinator).unwrap(),
+        WorkStatus::validate_override(WorkStatus::InProgress, WorkStatus::InReview, Role::Reactor).unwrap(),
         Transition::Override,
     );
     assert_eq!(
-        WorkStatus::validate_override(WorkStatus::InReview, WorkStatus::Ready, Role::Coordinator).unwrap(),
+        WorkStatus::validate_override(WorkStatus::InReview, WorkStatus::Ready, Role::Reactor).unwrap(),
         Transition::Override,
     );
 }
@@ -173,14 +173,14 @@ fn validate_override_uses_override_table() {
 #[test]
 fn validate_override_returns_changed_for_normal_match() {
     assert_eq!(
-        WorkStatus::validate_override(WorkStatus::Draft, WorkStatus::Pending, Role::Coordinator).unwrap(),
+        WorkStatus::validate_override(WorkStatus::Draft, WorkStatus::Pending, Role::Reactor).unwrap(),
         Transition::Changed,
     );
 }
 
 #[test]
 fn validate_override_chains_context_when_override_also_fails_no_transition() {
-    let err = WorkStatus::validate_override(WorkStatus::Draft, WorkStatus::Done, Role::Coordinator).unwrap_err();
+    let err = WorkStatus::validate_override(WorkStatus::Draft, WorkStatus::Done, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
     let inner = err.context.as_ref().expect("context should chain normal-path error");
     assert_eq!(inner.kind, FsmErrorKind::NoTransition);
@@ -196,7 +196,7 @@ fn validate_override_chains_context_when_override_exists_but_role_wrong() {
 
 #[test]
 fn valid_targets_preserves_source_order() {
-    let targets = WorkStatus::valid_targets(WorkStatus::InProgress, Role::Coordinator);
+    let targets = WorkStatus::valid_targets(WorkStatus::InProgress, Role::Reactor);
     assert_eq!(
         targets,
         vec![
@@ -223,7 +223,7 @@ fn valid_targets_filters_by_role() {
 
 #[test]
 fn valid_targets_empty_for_terminal_state() {
-    let targets = WorkStatus::valid_targets(WorkStatus::Done, Role::Coordinator);
+    let targets = WorkStatus::valid_targets(WorkStatus::Done, Role::Reactor);
     assert!(targets.is_empty());
 }
 
@@ -266,8 +266,8 @@ fn display_snapshot_matches_design_doc() {
     let err = WorkStatus::validate_transition(WorkStatus::InProgress, WorkStatus::Done, Role::Implementer).unwrap_err();
     let rendered = err.to_string();
     let expected = "invalid transition: InProgress -> Done (role: implementer): no transition exists\n\
-                    \x20\x20valid from InProgress (normal): Blocked (any), InReview (implementer), Superseded (coordinator, director), Abandoned (coordinator, director)\n\
-                    \x20\x20valid from InProgress (override): Ready (coordinator), InReview (coordinator)";
+                    \x20\x20valid from InProgress (normal): Blocked (any), InReview (implementer), Superseded (reactor, director), Abandoned (reactor, director)\n\
+                    \x20\x20valid from InProgress (override): Ready (reactor), InReview (reactor)";
     assert_eq!(rendered, expected);
 }
 

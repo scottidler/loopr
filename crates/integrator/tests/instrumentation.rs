@@ -141,7 +141,7 @@ async fn persist_accepted_bundle(store: &Store, work: &Work, branch: &str, head:
     for target in [BundleStatus::Triaged, BundleStatus::Reviewed, BundleStatus::Accepted] {
         let role = match target {
             BundleStatus::Reviewed => Role::Reviewer,
-            _ => Role::Coordinator,
+            _ => Role::Reactor,
         };
         let current = store.bundles().get(&b.id).await.unwrap();
         let mut next = current.clone();

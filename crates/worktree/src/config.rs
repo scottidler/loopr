@@ -2,7 +2,7 @@
 //!
 //! `AttemptCleanupPolicy` is the tunable; `WorktreeConfig` wraps it into the
 //! shape expected by the top-level `loopr::Config` composition pattern. The
-//! enum defines the variants; the **coordinator in `loopr`** is what actually
+//! enum defines the variants; the **Reactor in `loopr`** is what actually
 //! applies the policy (by deciding when to drop `Worktree` handles). The
 //! `worktree` crate itself is oblivious to policy — `Drop` cleans whenever it
 //! fires, full stop.
@@ -25,7 +25,7 @@ pub enum AttemptCleanupPolicy {
     OnRunEnd,
     /// Never clean automatically. Strict debug-only.
     ///
-    /// The coordinator parks handles in a long-lived `Vec` to keep them alive,
+    /// The Reactor parks handles in a long-lived `Vec` to keep them alive,
     /// which leaks memory and file descriptors over multi-week daemon uptime.
     /// Changing the config mid-flight from `Never` to any other variant does
     /// NOT retroactively clean Works that already terminated under `Never` —

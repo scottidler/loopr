@@ -94,7 +94,7 @@ async fn two_concurrent_reviewers_exactly_one_wins_occ() {
     let mut bundle = Bundle::new(work.id.clone(), "loopr/wk-race".to_string(), vec!["claim".to_string()]);
     bundle.paths = vec!["src.rs".to_string()];
     bundle.head_commit = Some(sha);
-    bundle.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    bundle.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     store.bundles().create(bundle.clone()).await.unwrap();
 
     let stored = store.bundles().get(&bundle.id).await.unwrap();

@@ -249,7 +249,7 @@ fn work_record_indexed_fields_two_entries() {
 #[test]
 fn work_record_indexed_status_tracks_transitions() {
     let mut work = Work::new(PlanId::new(), "t".to_string());
-    work.transition(WorkStatus::Ready, Role::Coordinator).unwrap();
+    work.transition(WorkStatus::Ready, Role::Reactor).unwrap();
     let fields = work.indexed_fields();
     assert_eq!(
         fields.get("status"),
@@ -288,12 +288,12 @@ fn assert_changed(w: &mut Work, to: WorkStatus, role: Role) {
 }
 
 #[test]
-fn transition_draft_pending_by_coordinator() {
-    assert_changed(&mut work_in(WorkStatus::Draft), WorkStatus::Pending, Role::Coordinator);
+fn transition_draft_pending_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Draft), WorkStatus::Pending, Role::Reactor);
 }
 #[test]
-fn transition_draft_ready_by_coordinator() {
-    assert_changed(&mut work_in(WorkStatus::Draft), WorkStatus::Ready, Role::Coordinator);
+fn transition_draft_ready_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Draft), WorkStatus::Ready, Role::Reactor);
 }
 #[test]
 fn transition_draft_superseded_by_director() {
@@ -304,8 +304,8 @@ fn transition_draft_abandoned_by_director() {
     assert_changed(&mut work_in(WorkStatus::Draft), WorkStatus::Abandoned, Role::Director);
 }
 #[test]
-fn transition_pending_ready_by_coordinator() {
-    assert_changed(&mut work_in(WorkStatus::Pending), WorkStatus::Ready, Role::Coordinator);
+fn transition_pending_ready_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Pending), WorkStatus::Ready, Role::Reactor);
 }
 #[test]
 fn transition_pending_superseded_by_director() {
@@ -316,24 +316,16 @@ fn transition_pending_superseded_by_director() {
     );
 }
 #[test]
-fn transition_pending_abandoned_by_coordinator() {
-    assert_changed(
-        &mut work_in(WorkStatus::Pending),
-        WorkStatus::Abandoned,
-        Role::Coordinator,
-    );
+fn transition_pending_abandoned_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Pending), WorkStatus::Abandoned, Role::Reactor);
 }
 #[test]
-fn transition_ready_inprogress_by_coordinator() {
-    assert_changed(
-        &mut work_in(WorkStatus::Ready),
-        WorkStatus::InProgress,
-        Role::Coordinator,
-    );
+fn transition_ready_inprogress_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Ready), WorkStatus::InProgress, Role::Reactor);
 }
 #[test]
-fn transition_ready_blocked_by_coordinator() {
-    assert_changed(&mut work_in(WorkStatus::Ready), WorkStatus::Blocked, Role::Coordinator);
+fn transition_ready_blocked_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Ready), WorkStatus::Blocked, Role::Reactor);
 }
 #[test]
 fn transition_ready_superseded_by_director() {
@@ -376,8 +368,8 @@ fn transition_inprogress_abandoned_by_director() {
     );
 }
 #[test]
-fn transition_blocked_ready_by_coordinator() {
-    assert_changed(&mut work_in(WorkStatus::Blocked), WorkStatus::Ready, Role::Coordinator);
+fn transition_blocked_ready_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Blocked), WorkStatus::Ready, Role::Reactor);
 }
 #[test]
 fn transition_blocked_superseded_by_director() {
@@ -388,19 +380,15 @@ fn transition_blocked_superseded_by_director() {
     );
 }
 #[test]
-fn transition_blocked_abandoned_by_coordinator() {
-    assert_changed(
-        &mut work_in(WorkStatus::Blocked),
-        WorkStatus::Abandoned,
-        Role::Coordinator,
-    );
+fn transition_blocked_abandoned_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Blocked), WorkStatus::Abandoned, Role::Reactor);
 }
 #[test]
-fn transition_inreview_inprogress_by_coordinator() {
+fn transition_inreview_inprogress_by_reactor() {
     assert_changed(
         &mut work_in(WorkStatus::InReview),
         WorkStatus::InProgress,
-        Role::Coordinator,
+        Role::Reactor,
     );
 }
 #[test]
@@ -428,12 +416,8 @@ fn transition_inreview_abandoned_by_director() {
     );
 }
 #[test]
-fn transition_integrated_done_by_coordinator() {
-    assert_changed(
-        &mut work_in(WorkStatus::Integrated),
-        WorkStatus::Done,
-        Role::Coordinator,
-    );
+fn transition_integrated_done_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Integrated), WorkStatus::Done, Role::Reactor);
 }
 #[test]
 fn transition_integrated_superseded_by_director() {
@@ -458,7 +442,7 @@ fn transition_integrated_abandoned_by_director() {
 
 #[test]
 fn transition_wrong_role_rejects() {
-    // Draft -> Pending is Coordinator-only; Implementer must reject.
+    // Draft -> Pending is Reactor-only; Implementer must reject.
     let mut w = work_in(WorkStatus::Draft);
     let err = w.transition(WorkStatus::Pending, Role::Implementer).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
@@ -469,7 +453,7 @@ fn transition_wrong_role_rejects() {
 fn transition_no_edge_rejects() {
     // Pending -> Done is not in the transitions table.
     let mut w = work_in(WorkStatus::Pending);
-    let err = w.transition(WorkStatus::Done, Role::Coordinator).unwrap_err();
+    let err = w.transition(WorkStatus::Done, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
     assert_eq!(w.status, WorkStatus::Pending);
 }
@@ -478,10 +462,10 @@ fn transition_no_edge_rejects() {
 fn transition_ready_done_via_transition_rejects() {
     // Structural enforcement of the no-AC-skipping rule: Ready -> Done
     // is in overrides, not transitions. A stray transition() call from
-    // a Stage 7 Coordinator attempting to bypass AC must surface as a
+    // a Stage 7 Reactor attempting to bypass AC must surface as a
     // typed error, not a silent success.
     let mut w = work_in(WorkStatus::Ready);
-    let err = w.transition(WorkStatus::Done, Role::Coordinator).unwrap_err();
+    let err = w.transition(WorkStatus::Done, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
     assert_eq!(w.status, WorkStatus::Ready);
 }
@@ -489,7 +473,7 @@ fn transition_ready_done_via_transition_rejects() {
 #[test]
 fn transition_from_terminal_done_rejects() {
     let mut w = work_in(WorkStatus::Done);
-    let err = w.transition(WorkStatus::Ready, Role::Coordinator).unwrap_err();
+    let err = w.transition(WorkStatus::Ready, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
 }
 
@@ -503,7 +487,7 @@ fn transition_from_terminal_superseded_rejects() {
 #[test]
 fn transition_from_terminal_abandoned_rejects() {
     let mut w = work_in(WorkStatus::Abandoned);
-    let err = w.transition(WorkStatus::Ready, Role::Coordinator).unwrap_err();
+    let err = w.transition(WorkStatus::Ready, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
 }
 
@@ -512,22 +496,22 @@ fn transition_from_terminal_abandoned_rejects() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn override_inprogress_ready_by_coordinator_mutates_state() {
+fn override_inprogress_ready_by_reactor_mutates_state() {
     let mut w = work_in(WorkStatus::InProgress);
     std::thread::sleep(std::time::Duration::from_millis(2));
     let before = w.updated_at;
-    let result = w.override_status(WorkStatus::Ready, Role::Coordinator).unwrap();
+    let result = w.override_status(WorkStatus::Ready, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Override);
     assert_eq!(w.status, WorkStatus::Ready);
     assert!(w.updated_at > before, "override must advance updated_at");
 }
 
 #[test]
-fn override_ready_done_by_coordinator_succeeds() {
+fn override_ready_done_by_reactor_succeeds() {
     // Companion to transition_ready_done_via_transition_rejects: the
     // same edge, via override_status, must succeed with Transition::Override.
     let mut w = work_in(WorkStatus::Ready);
-    let result = w.override_status(WorkStatus::Done, Role::Coordinator).unwrap();
+    let result = w.override_status(WorkStatus::Done, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Override);
     assert_eq!(w.status, WorkStatus::Done);
 }
@@ -547,18 +531,18 @@ fn override_ready_done_wrong_role_rejects() {
 #[test]
 fn override_returns_changed_for_normal_edge() {
     // validate_override falls through to validate_transition first;
-    // a valid normal edge (Pending -> Ready by Coordinator) should
+    // a valid normal edge (Pending -> Ready by Reactor) should
     // return Changed, not Override.
     let mut w = work_in(WorkStatus::Pending);
-    let result = w.override_status(WorkStatus::Ready, Role::Coordinator).unwrap();
+    let result = w.override_status(WorkStatus::Ready, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Changed);
     assert_eq!(w.status, WorkStatus::Ready);
 }
 
 #[test]
-fn override_inreview_ready_by_coordinator() {
+fn override_inreview_ready_by_reactor() {
     let mut w = work_in(WorkStatus::InReview);
-    let result = w.override_status(WorkStatus::Ready, Role::Coordinator).unwrap();
+    let result = w.override_status(WorkStatus::Ready, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Override);
     assert_eq!(w.status, WorkStatus::Ready);
 }
@@ -571,7 +555,7 @@ fn override_inreview_ready_by_coordinator() {
 fn transition_same_state_is_unchanged() {
     let mut w = Work::new(PlanId::new(), "t".to_string());
     let before = w.updated_at;
-    let result = w.transition(WorkStatus::Pending, Role::Coordinator).unwrap();
+    let result = w.transition(WorkStatus::Pending, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Unchanged);
     assert_eq!(w.status, WorkStatus::Pending);
     assert_eq!(w.updated_at, before, "Unchanged must not advance updated_at");

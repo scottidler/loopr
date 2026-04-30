@@ -129,9 +129,9 @@ fn plan_transition_active_complete_by_decomposer() {
 }
 
 #[test]
-fn plan_transition_active_complete_by_coordinator() {
+fn plan_transition_active_complete_by_reactor() {
     let mut plan = Plan::new("g".to_string());
-    let result = plan.transition(PlanStatus::Complete, Role::Coordinator).unwrap();
+    let result = plan.transition(PlanStatus::Complete, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Changed);
     assert_eq!(plan.status, PlanStatus::Complete);
 }
@@ -150,7 +150,7 @@ fn plan_transition_no_direct_draft_to_complete() {
     let mut plan = Plan::new("g".to_string());
     plan.status = PlanStatus::Draft;
     let before_updated_at = plan.updated_at;
-    let err = plan.transition(PlanStatus::Complete, Role::Coordinator).unwrap_err();
+    let err = plan.transition(PlanStatus::Complete, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::NoTransition);
     assert_eq!(plan.status, PlanStatus::Draft);
     assert_eq!(plan.updated_at, before_updated_at);
@@ -160,7 +160,7 @@ fn plan_transition_no_direct_draft_to_complete() {
 fn plan_transition_same_state_is_unchanged() {
     let mut plan = Plan::new("g".to_string());
     let before_updated_at = plan.updated_at;
-    let result = plan.transition(PlanStatus::Active, Role::Coordinator).unwrap();
+    let result = plan.transition(PlanStatus::Active, Role::Reactor).unwrap();
     assert_eq!(result, Transition::Unchanged);
     assert_eq!(plan.status, PlanStatus::Active);
     assert_eq!(
@@ -189,9 +189,9 @@ fn plan_override_active_draft_by_director_mutates_state() {
 }
 
 #[test]
-fn plan_override_active_draft_by_coordinator_rejects() {
+fn plan_override_active_draft_by_reactor_rejects() {
     let mut plan = Plan::new("g".to_string());
-    let err = plan.override_status(PlanStatus::Draft, Role::Coordinator).unwrap_err();
+    let err = plan.override_status(PlanStatus::Draft, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
     assert_eq!(plan.status, PlanStatus::Active);
 }
@@ -210,7 +210,7 @@ fn plan_override_returns_changed_for_normal_edge() {
 
 #[test]
 fn plan_override_nonexistent_edge_rejects() {
-    // Active -> Complete is a normal edge but only for Coordinator/Decomposer;
+    // Active -> Complete is a normal edge but only for Reactor/Decomposer;
     // there's no override edge for it, so Director (not in the normal 'by' list)
     // should get NoTransition from the override fallthrough path.
     let mut plan = Plan::new("g".to_string());

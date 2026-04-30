@@ -252,8 +252,8 @@ fn accepted_bundle(work_id: WorkId) -> Bundle {
     let mut b = Bundle::new(work_id, "loopr/wk-test".to_string(), vec!["claim".to_string()]);
     b.head_commit = Some("abc123".to_string());
     b.paths = vec!["src/a.rs".to_string()];
-    b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
-    b.transition(BundleStatus::Accepted, Role::Coordinator).unwrap();
+    b.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
+    b.transition(BundleStatus::Accepted, Role::Reactor).unwrap();
     b
 }
 
@@ -300,7 +300,7 @@ async fn preflight_bundle_in_reviewed_rejected() {
     let deps = fake_deps();
     let plan = Plan::new("x".to_string());
     let mut b = Bundle::new(WorkId::new(), "loopr/wk".to_string(), vec![]);
-    b.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    b.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     b.transition(BundleStatus::Reviewed, Role::Reviewer).unwrap();
     let result = crate::integrate(&[b], &plan, &deps).await;
     match result {

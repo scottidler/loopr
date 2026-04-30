@@ -118,7 +118,7 @@ async fn persist_accepted_bundle(
     // Drive Proposed -> Triaged -> Reviewed -> Accepted via OCC.
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
-    next.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    next.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     store.bundles().update(next.clone(), current.updated_at).await.unwrap();
 
     let current = store.bundles().get(&b.id).await.unwrap();
@@ -128,7 +128,7 @@ async fn persist_accepted_bundle(
 
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
-    next.transition(BundleStatus::Accepted, Role::Coordinator).unwrap();
+    next.transition(BundleStatus::Accepted, Role::Reactor).unwrap();
     store.bundles().update(next.clone(), current.updated_at).await.unwrap();
 
     store.bundles().get(&b.id).await.unwrap()
@@ -257,11 +257,11 @@ async fn integration_branch_missing_returns_typed_error() {
     store.bundles().create(b.clone()).await.unwrap();
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
-    next.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    next.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     store.bundles().update(next.clone(), current.updated_at).await.unwrap();
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
-    next.transition(BundleStatus::Accepted, Role::Coordinator).unwrap();
+    next.transition(BundleStatus::Accepted, Role::Reactor).unwrap();
     store.bundles().update(next.clone(), current.updated_at).await.unwrap();
     let accepted = store.bundles().get(&b.id).await.unwrap();
 

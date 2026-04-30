@@ -33,7 +33,7 @@ pub struct AssembledContext {
 }
 
 /// Cross-iteration state the Implementer carries. Populated by the
-/// coordinator on a retry: if the prior Bundle was rejected, the
+/// reactor on a retry: if the prior Bundle was rejected, the
 /// reason is threaded through so the LLM sees why.
 #[derive(Debug, Clone, Default)]
 pub struct StateSummary {

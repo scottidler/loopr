@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-30
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 3/5 (Draft, Correctness, Clarity; Edge Cases folded into Risks; Excellence skipped — mechanical refactor doc, 3 is appropriate)
 **Crates touched:** agents, context, derive, domain, integrator, loopr, store, worktree
 

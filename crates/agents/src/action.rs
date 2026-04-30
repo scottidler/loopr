@@ -47,7 +47,7 @@ pub enum AgentAction {
 
     /// Escalate to a human. The dispatcher commits any partially-
     /// staged work so a human can inspect, then returns
-    /// `Err(EscalationNeeded)` to the coordinator.
+    /// `Err(EscalationNeeded)` to the reactor.
     NeedHelp { reason: String },
 }
 

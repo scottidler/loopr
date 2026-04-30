@@ -8,7 +8,7 @@ You can perform the following actions (respond with a JSON array of actions):
 2. `commit_changes` — Create a git commit. Stages all changes (`git add -A`) then commits with the provided message.
 3. `propose_bundle` — Submit your work as a Bundle for review. Include `claims` describing what your bundle achieved.
 4. `done` — Signal that you've completed this iteration.
-5. `need_help` — Request human Coordinator intervention. Use this when you encounter ambiguity that you cannot resolve, or when blocked after 3 iterations on the same issue. Include the ambiguity or blocker in the `reason` field.
+5. `need_help` — Request human Reactor intervention. Use this when you encounter ambiguity that you cannot resolve, or when blocked after 3 iterations on the same issue. Include the ambiguity or blocker in the `reason` field.
 
 ## Tools available
 

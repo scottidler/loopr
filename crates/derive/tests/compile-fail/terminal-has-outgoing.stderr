@@ -1,5 +1,5 @@
 error: terminal state `Done` cannot have outgoing transitions
  --> tests/compile-fail/terminal-has-outgoing.rs:9:9
   |
-9 |         Done  => Draft by (Coordinator),
+9 |         Done  => Draft by (Reactor),
   |         ^^^^

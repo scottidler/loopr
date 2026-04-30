@@ -37,8 +37,7 @@ async fn update_round_trip_ok() {
     let expected_updated_at = stored.updated_at;
 
     let mut next = stored.clone();
-    next.transition(BundleStatus::Triaged, Role::Coordinator)
-        .expect("triage");
+    next.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
     next.transition(BundleStatus::Reviewed, Role::Reviewer).expect("review");
     next.verification = "Reviewer approved: test".to_string();
 
@@ -64,9 +63,7 @@ async fn update_stale_version_rejected() {
     let snapshot = stored.updated_at;
 
     let mut first = stored.clone();
-    first
-        .transition(BundleStatus::Triaged, Role::Coordinator)
-        .expect("triage");
+    first.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
     first
         .transition(BundleStatus::Reviewed, Role::Reviewer)
         .expect("review");
@@ -78,9 +75,7 @@ async fn update_stale_version_rejected() {
         .expect("first update");
 
     let mut second = stored;
-    second
-        .transition(BundleStatus::Triaged, Role::Coordinator)
-        .expect("triage");
+    second.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
     second
         .transition(BundleStatus::Rejected, Role::Reviewer)
         .expect("reject");
@@ -125,13 +120,13 @@ async fn concurrent_updates_produce_exactly_one_winner() {
 
     let s1 = Arc::clone(&store);
     let mut b1 = stored.clone();
-    b1.transition(BundleStatus::Triaged, Role::Coordinator).expect("triage");
+    b1.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
     b1.transition(BundleStatus::Reviewed, Role::Reviewer).expect("review");
     b1.verification = "task A".to_string();
 
     let s2 = Arc::clone(&store);
     let mut b2 = stored.clone();
-    b2.transition(BundleStatus::Triaged, Role::Coordinator).expect("triage");
+    b2.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
     b2.transition(BundleStatus::Rejected, Role::Reviewer).expect("reject");
     b2.verification = "task B".to_string();
 

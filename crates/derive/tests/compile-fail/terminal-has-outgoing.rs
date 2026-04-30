@@ -5,8 +5,8 @@ use derive::Fsm;
     role = ::domain::Role,
     terminal = [Done],
     transitions(
-        Draft => Done  by (Coordinator),
-        Done  => Draft by (Coordinator),
+        Draft => Done  by (Reactor),
+        Done  => Draft by (Reactor),
     ),
 )]
 enum BadFsm {

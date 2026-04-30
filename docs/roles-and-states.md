@@ -11,14 +11,6 @@ It is a reference, not a proposal: every decision here is locked by
 find a contradiction between this doc and either of those sources, the
 source wins; fix this doc.
 
-> **Naming note (ADR-0002):** the `Coordinator` Role variant has been
-> renamed to `Reactor`. This doc describes the post-rename naming. The
-> code rename across `crates/domain/src/{role,plan,work}.rs` is a
-> follow-up commit; until it lands the source still says
-> `Role::Coordinator`. Treat any FSM-edge `By:` annotation in this doc
-> as authoritative; the code follows. See
-> [`docs/adr/0002-rename-role-coordinator-to-reactor.md`](adr/0002-rename-role-coordinator-to-reactor.md).
-
 ## Summary
 
 v5 has **seven named Roles** and **two FSMs** that reference them. Roles

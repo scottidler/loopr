@@ -1,7 +1,7 @@
 //! Integration seam test: pair a Stage-7 `run_implementer` run with a
 //! Stage-8 `run_reviewer` run in one test. The Implementer writes a
 //! Bundle; the daemon-role `Bundle::transition(Triaged,
-//! Role::Coordinator)` drives it to `Triaged`; the Reviewer reads it
+//! Role::Reactor)` drives it to `Triaged`; the Reviewer reads it
 //! and transitions. Asserts the full agent-to-agent handoff against a
 //! real `store::Store` (TaskStore-backed tempdir).
 
@@ -105,12 +105,12 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     let bundle = run_implementer(&work, &wt, &impl_deps).await.unwrap();
     assert_eq!(bundle.status, BundleStatus::Proposed);
 
-    // Daemon (simulated): triage the Bundle with Role::Coordinator,
+    // Daemon (simulated): triage the Bundle with Role::Reactor,
     // persist via OCC update. This mirrors the Stage 8 wiring capstone.
     let persisted = store.bundles().get(&bundle.id).await.unwrap();
     let expected_updated_at = persisted.updated_at;
     let mut triaged = persisted.clone();
-    triaged.transition(BundleStatus::Triaged, Role::Coordinator).unwrap();
+    triaged.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
     BundleUpdateSink::update(&&store, triaged, expected_updated_at)
         .await
         .unwrap();

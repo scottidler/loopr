@@ -523,7 +523,7 @@ where
 
     // Hygiene sweep: clean up worktrees left behind by a previous daemon
     // crash, log orphans. Runs BEFORE the accept loop binds so no
-    // coordinator session can race with this pass.
+    // reactor session can race with this pass.
     let report = startup::reconcile(&ctx).await?;
     tracing::info!(
         cleaned = report.cleaned,

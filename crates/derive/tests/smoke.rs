@@ -6,11 +6,11 @@ use domain::{Role, TargetKind, Transition};
     role = ::domain::Role,
     terminal = [Done],
     transitions(
-        Draft => Ready by (Coordinator),
-        Ready => Done by (Coordinator),
+        Draft => Ready by (Reactor),
+        Ready => Done by (Reactor),
     ),
     overrides(
-        Ready => Draft by (Coordinator),
+        Ready => Draft by (Reactor),
     ),
 )]
 enum MiniStatus {
@@ -42,13 +42,13 @@ fn is_terminal_detects_terminal_states() {
 
 #[test]
 fn validate_transition_happy_path() {
-    let result = MiniStatus::validate_transition(MiniStatus::Draft, MiniStatus::Ready, Role::Coordinator);
+    let result = MiniStatus::validate_transition(MiniStatus::Draft, MiniStatus::Ready, Role::Reactor);
     assert_eq!(result.unwrap(), Transition::Changed);
 }
 
 #[test]
 fn validate_transition_same_state_is_unchanged() {
-    let result = MiniStatus::validate_transition(MiniStatus::Draft, MiniStatus::Draft, Role::Coordinator);
+    let result = MiniStatus::validate_transition(MiniStatus::Draft, MiniStatus::Draft, Role::Reactor);
     assert_eq!(result.unwrap(), Transition::Unchanged);
 }
 
@@ -60,19 +60,19 @@ fn validate_transition_rejects_unauthorized_role() {
 
 #[test]
 fn validate_transition_rejects_missing_edge() {
-    let err = MiniStatus::validate_transition(MiniStatus::Draft, MiniStatus::Done, Role::Coordinator).unwrap_err();
+    let err = MiniStatus::validate_transition(MiniStatus::Draft, MiniStatus::Done, Role::Reactor).unwrap_err();
     assert_eq!(err.kind, domain::FsmErrorKind::NoTransition);
 }
 
 #[test]
 fn validate_override_falls_back_to_override_table() {
-    let result = MiniStatus::validate_override(MiniStatus::Ready, MiniStatus::Draft, Role::Coordinator);
+    let result = MiniStatus::validate_override(MiniStatus::Ready, MiniStatus::Draft, Role::Reactor);
     assert_eq!(result.unwrap(), Transition::Override);
 }
 
 #[test]
 fn valid_targets_includes_normal_and_override() {
-    let targets = MiniStatus::valid_targets(MiniStatus::Ready, Role::Coordinator);
+    let targets = MiniStatus::valid_targets(MiniStatus::Ready, Role::Reactor);
     assert!(targets.contains(&(MiniStatus::Done, TargetKind::Normal)));
     assert!(targets.contains(&(MiniStatus::Draft, TargetKind::Override)));
 }

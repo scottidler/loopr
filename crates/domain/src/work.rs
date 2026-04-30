@@ -1,7 +1,7 @@
 //! `Work` record type and `WorkStatus` state machine.
 //!
 //! A `Work` is a leaf-level implementation unit decomposed from a
-//! `Plan`. Stage 6 introduces the type; Stage 7's reactive coordinator
+//! `Plan`. Stage 6 introduces the type; Stage 7's Reactor
 //! drives the FSM through Pending -> Ready -> InProgress -> InReview
 //! -> Integrated -> Done as deps clear, agents run, and Bundles merge.
 //!
@@ -29,7 +29,7 @@ use crate::{FsmError, Role, Transition};
 /// Works mid-integration; `Ready => Done` demoted from the routine
 /// transitions table to `overrides(...)` so the no-op-Work bypass
 /// cannot be used as an AC-skipping loophole on the normal path;
-/// `Integrated => Done` is `Coordinator`-only because the "no active
+/// `Integrated => Done` is `Reactor`-only because the "no active
 /// sessions" guard needs daemon-level visibility the `integrator`
 /// crate does not have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Fsm)]
@@ -39,38 +39,38 @@ use crate::{FsmError, Role, Transition};
     role = crate::Role,
     terminal = [Done, Superseded, Abandoned],
     transitions(
-        Draft       => Pending    by (Coordinator),
-        Draft       => Ready      by (Coordinator),
-        Draft       => Superseded by (Coordinator, Director),
-        Draft       => Abandoned  by (Coordinator, Director),
-        Pending     => Ready      by (Coordinator),
-        Pending     => Superseded by (Coordinator, Director),
-        Pending     => Abandoned  by (Coordinator, Director),
-        Ready       => InProgress by (Coordinator),
-        Ready       => Blocked    by (Coordinator),
-        Ready       => Superseded by (Coordinator, Director),
-        Ready       => Abandoned  by (Coordinator, Director),
-        InProgress  => Blocked    by (Coordinator, Implementer),
+        Draft       => Pending    by (Reactor),
+        Draft       => Ready      by (Reactor),
+        Draft       => Superseded by (Reactor, Director),
+        Draft       => Abandoned  by (Reactor, Director),
+        Pending     => Ready      by (Reactor),
+        Pending     => Superseded by (Reactor, Director),
+        Pending     => Abandoned  by (Reactor, Director),
+        Ready       => InProgress by (Reactor),
+        Ready       => Blocked    by (Reactor),
+        Ready       => Superseded by (Reactor, Director),
+        Ready       => Abandoned  by (Reactor, Director),
+        InProgress  => Blocked    by (Reactor, Implementer),
         InProgress  => InReview   by (Implementer),
-        InProgress  => Superseded by (Coordinator, Director),
-        InProgress  => Abandoned  by (Coordinator, Director),
-        Blocked     => Ready      by (Coordinator),
-        Blocked     => Superseded by (Coordinator, Director),
-        Blocked     => Abandoned  by (Coordinator, Director),
-        InReview    => InProgress by (Coordinator),
+        InProgress  => Superseded by (Reactor, Director),
+        InProgress  => Abandoned  by (Reactor, Director),
+        Blocked     => Ready      by (Reactor),
+        Blocked     => Superseded by (Reactor, Director),
+        Blocked     => Abandoned  by (Reactor, Director),
+        InReview    => InProgress by (Reactor),
         InReview    => Integrated by (Integrator),
-        InReview    => Superseded by (Coordinator, Director),
-        InReview    => Abandoned  by (Coordinator, Director),
-        Integrated  => Done       by (Coordinator),
-        Integrated  => Superseded by (Coordinator, Director),
-        Integrated  => Abandoned  by (Coordinator, Director),
+        InReview    => Superseded by (Reactor, Director),
+        InReview    => Abandoned  by (Reactor, Director),
+        Integrated  => Done       by (Reactor),
+        Integrated  => Superseded by (Reactor, Director),
+        Integrated  => Abandoned  by (Reactor, Director),
     ),
     overrides(
-        Ready      => Done     by (Coordinator),
-        InProgress => Ready    by (Coordinator),
-        InProgress => InReview by (Coordinator),
-        InReview   => Ready    by (Coordinator),
-        InReview   => Blocked  by (Coordinator),
+        Ready      => Done     by (Reactor),
+        InProgress => Ready    by (Reactor),
+        InProgress => InReview by (Reactor),
+        InReview   => Ready    by (Reactor),
+        InReview   => Blocked  by (Reactor),
     ),
 )]
 pub enum WorkStatus {
@@ -92,10 +92,10 @@ pub enum WorkStatus {
 /// Fields ported from v3's `Work` post-v0.1.96 (the
 /// description-field-crisis remediation) with two v5 upgrades: typed
 /// `WorkId` / `PlanId` instead of `String`, and indexed `parent_id`
-/// for Stage 7's reactive coordinator (which scans "child Works of
+/// for Stage 7's Reactor (which scans "child Works of
 /// this Plan" on every tick). `attempt_count`, `session_failure_count`,
 /// `files`, and `assignee` ship with `Default` values; Stage 7
-/// populates them when the coordinator and reviewer wire up. No
+/// populates them when the Reactor and reviewer wire up. No
 /// `description` field (v0.1.96 removed it); no `blocked_reason`
 /// (deferred per scope memo D3).
 #[derive(Debug, Clone, Serialize, Deserialize, Record)]
@@ -127,7 +127,7 @@ impl Work {
     /// New Work under the given Plan. Status starts `Pending` (not
     /// `Draft`) because the reactive-execution convention is that a
     /// freshly decomposed Work is immediately eligible for the
-    /// Coordinator's `Pending -> Ready` transition once its deps
+    /// Reactor's `Pending -> Ready` transition once its deps
     /// clear. Stage 6's decomposer never constructs a `Draft` Work;
     /// `Draft` is reserved for a future pre-decomposition authoring
     /// flow that would want a different constructor.
