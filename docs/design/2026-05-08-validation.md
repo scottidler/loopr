@@ -213,8 +213,8 @@ Single branch on `v5`. Four phases, each committed separately. No feature flag n
 ## Open Questions
 
 - [x] **Log size in `ValidationFailed`.** Capped at 64 KiB by truncating the combined stdout+stderr buffer after `output()` returns. An infinite-output command is killed by `kill_on_drop` when the per-command timeout fires — the cap bounds the stored error record, not in-memory accumulation during the run. Sufficient for first-gate commands.
-- [ ] **Should the daemon log a structured `warn!` with the failing command and exit code, or rely on the error propagation?** Lean: structured `warn!` at the `spawn_integrator_for_bundle` call site in `context.rs` - same pattern as existing error paths.
-- [ ] **Is `git reset --hard` the right rollback, or `git revert`?** Reset is right: the merge commit was never pushed (v5 git posture is never-push); hard reset discards it cleanly. Revert would add an extra commit that undoes the merge, which is unnecessary noise on a branch no one else has seen.
+- [x] **Should the daemon log a structured `warn!` with the failing command and exit code, or rely on the error propagation?** Implemented: `spawn_integrator_for_bundle` in `context.rs` has an explicit `ValidationFailed` match arm that emits `warn!(command = %command, exit_code = ?exit_code, "post-merge validation failed; marking Work Blocked")` before transitioning Work to Blocked.
+- [x] **Is `git reset --hard` the right rollback, or `git revert`?** Reset is right: the merge commit was never pushed (v5 git posture is never-push); hard reset discards it cleanly. Revert would add an extra commit that undoes the merge, which is unnecessary noise on a branch no one else has seen.
 
 ## References
 
