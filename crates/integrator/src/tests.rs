@@ -27,6 +27,8 @@ fn integrator_config_defaults() {
     let cfg = IntegratorConfig::default();
     assert_eq!(cfg.git_timeout, Duration::from_secs(60));
     assert!(!cfg.allow_multi_bundle);
+    assert!(cfg.validation_commands.is_empty());
+    assert_eq!(cfg.validation_timeout, Duration::from_secs(300));
 }
 
 #[test]
@@ -99,6 +101,15 @@ fn integration_error_display_covers_every_variant() {
         (
             IntegrationError::Transition("Accepted -> Merged not allowed".to_string()).to_string(),
             "Accepted",
+        ),
+        (
+            IntegrationError::ValidationFailed {
+                command: "cargo test".to_string(),
+                exit_code: Some(101),
+                log: "test failed output".to_string(),
+            }
+            .to_string(),
+            "cargo test",
         ),
     ];
     for (msg, needle) in cases {

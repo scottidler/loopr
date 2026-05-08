@@ -18,15 +18,29 @@ pub struct IntegratorConfig {
     /// `IntegrationError::MultiBundleNotSupported { count }`.
     /// Default `false`.
     pub allow_multi_bundle: bool,
+
+    /// Shell commands run after a successful git merge, before Tick
+    /// persistence. Each string is passed to `sh -c`. Commands run
+    /// sequentially; the first non-zero exit rolls back the merge and
+    /// returns `IntegrationError::ValidationFailed`.
+    /// Default `vec![]` (skip validation entirely).
+    pub validation_commands: Vec<String>,
+
+    /// Wall-clock cap for each individual validation command.
+    /// Default 300s (`VALIDATION_TIMEOUT_SECS_DEFAULT`).
+    pub validation_timeout: Duration,
 }
 
 const GIT_TIMEOUT_SECS_DEFAULT: u64 = 60;
+const VALIDATION_TIMEOUT_SECS_DEFAULT: u64 = 300;
 
 impl Default for IntegratorConfig {
     fn default() -> Self {
         Self {
             git_timeout: Duration::from_secs(GIT_TIMEOUT_SECS_DEFAULT),
             allow_multi_bundle: false,
+            validation_commands: vec![],
+            validation_timeout: Duration::from_secs(VALIDATION_TIMEOUT_SECS_DEFAULT),
         }
     }
 }

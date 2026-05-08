@@ -71,4 +71,11 @@ pub enum IntegrationError {
 
     #[error("fsm transition rejected: {0}")]
     Transition(String),
+
+    #[error("validation command failed: `{command}` exited {exit_code:?}\n{log}")]
+    ValidationFailed {
+        command: String,
+        exit_code: Option<i32>,
+        log: String,
+    },
 }
