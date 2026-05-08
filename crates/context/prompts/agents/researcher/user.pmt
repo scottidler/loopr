@@ -1,0 +1,13 @@
+## Research Question
+
+{{question}}
+
+{{#if context_hints}}
+### Context Hints
+
+{{#each context_hints}}
+- {{this}}
+{{/each}}
+{{/if}}
+
+Placeholder — 2.1 Researcher design doc will replace this with the full query template.

@@ -10,9 +10,12 @@
 //! not `llm::ToolSchema`, so the assembly layer stays independent of
 //! whichever LLM backend is in use.
 
+mod history;
 mod implementer;
 mod loader;
 mod reviewer;
+
+pub use history::trim_history;
 
 pub use implementer::InlineContextBuilder;
 pub use loader::{BAKED_PROMPTS, PromptError, PromptLoader, baked_prompts};
@@ -83,9 +86,45 @@ pub enum ContextError {
     Prompt(#[from] PromptError),
 }
 
+/// State snapshot passed to `build_for_director`. All fields are
+/// plain strings so `context` does not need to import domain FSM
+/// types. The caller (`agents::run_director`) converts domain records
+/// to this display-oriented shape before calling in.
+#[derive(Debug, Clone, Default)]
+pub struct DirectorState {
+    pub plan_id: String,
+    pub works: Vec<WorkLine>,
+    pub bundles: Vec<BundleLine>,
+    pub blocked_reason: Option<String>,
+}
+
+/// One Work row in a `DirectorState`.
+#[derive(Debug, Clone)]
+pub struct WorkLine {
+    pub id: String,
+    pub title: String,
+    /// Stringified status ("Pending", "InProgress", etc.). Stringified
+    /// by the caller so `context` does not import `domain::WorkStatus`.
+    pub status: String,
+    pub attempt_count: u32,
+}
+
+/// One Bundle row in a `DirectorState`.
+#[derive(Debug, Clone)]
+pub struct BundleLine {
+    pub id: String,
+    pub work_id: String,
+    pub status: String,
+}
+
+/// Query passed to `build_for_researcher`.
+#[derive(Debug, Clone)]
+pub struct ResearchQuery {
+    pub question: String,
+    pub context_hints: Vec<String>,
+}
+
 /// Single entry point for prompt assembly. One method per role/stage.
-/// Stage 7 added `build_for_implementer`; Stage 8 (this trait
-/// extension) adds `build_for_reviewer`.
 pub trait ContextBuilder: Send + Sync {
     /// Assemble the Implementer's system + user prompts for one
     /// iteration. `tool_schemas` comes from `tools::ToolSchema`
@@ -118,6 +157,28 @@ pub trait ContextBuilder: Send + Sync {
         diff: &str,
         noop_files: Option<&[(String, String)]>,
     ) -> Result<AssembledContext, ContextError>;
+
+    /// Assemble the Director's context for one turn. Message order:
+    ///   `[trimmed prior history] + [fresh state summary (current user turn)]`
+    ///
+    /// The state summary is the LAST message — the one the model responds to.
+    /// `history` must already alternate user→assistant; the caller maintains
+    /// this invariant before calling in.
+    fn build_for_director(
+        &self,
+        state: &DirectorState,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError>;
+
+    /// Assemble the Researcher's context for one turn. Same ordering
+    /// contract as `build_for_director`: current query last.
+    fn build_for_researcher(
+        &self,
+        query: &ResearchQuery,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError>;
 }
 
 /// Forwarding impl for `Arc<C>` so daemon code can hand an
@@ -144,5 +205,23 @@ impl<C: ContextBuilder + ?Sized> ContextBuilder for std::sync::Arc<C> {
         noop_files: Option<&[(String, String)]>,
     ) -> Result<AssembledContext, ContextError> {
         (**self).build_for_reviewer(bundle, work, diff, noop_files)
+    }
+
+    fn build_for_director(
+        &self,
+        state: &DirectorState,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError> {
+        (**self).build_for_director(state, history, token_budget)
+    }
+
+    fn build_for_researcher(
+        &self,
+        query: &ResearchQuery,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError> {
+        (**self).build_for_researcher(query, history, token_budget)
     }
 }

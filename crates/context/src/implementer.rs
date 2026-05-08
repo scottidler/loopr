@@ -18,10 +18,15 @@ use domain::{Bundle, Work};
 use tools::ToolSchema;
 
 use llm::Message;
+use tracing::warn;
 
+use crate::history::{estimate_message_tokens, trim_history};
 use crate::loader::PromptLoader;
 use crate::reviewer::build_reviewer_user_ctx;
-use crate::{AssembledContext, ContextBuilder, ContextError, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
+use crate::{
+    AssembledContext, BundleLine, ContextBuilder, ContextError, DirectorState, ITERATION_SUMMARY_CAP,
+    IterationSummary, ResearchQuery, StateSummary, WorkLine,
+};
 
 /// Rough tokens-per-char estimate (English text averages ~4 chars
 /// per token; we use 4 as the divisor for a generous-side estimate
@@ -213,6 +218,159 @@ impl ContextBuilder for InlineContextBuilder {
         Ok(AssembledContext {
             system_prompt,
             messages: vec![Message::user(user_message)],
+            token_estimate,
+        })
+    }
+
+    fn build_for_director(
+        &self,
+        state: &DirectorState,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError> {
+        self.director_impl(state, history, token_budget)
+    }
+
+    fn build_for_researcher(
+        &self,
+        query: &ResearchQuery,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError> {
+        self.researcher_impl(query, history, token_budget)
+    }
+}
+
+// --- Serde context structs for director/researcher templates -----------
+
+#[derive(Serialize)]
+struct WorkLineCtx<'a> {
+    id: &'a str,
+    title: &'a str,
+    status: &'a str,
+    attempt_count: u32,
+}
+
+#[derive(Serialize)]
+struct BundleLineCtx<'a> {
+    id: &'a str,
+    work_id: &'a str,
+    status: &'a str,
+}
+
+#[derive(Serialize)]
+struct DirectorUserCtx<'a> {
+    plan_id: &'a str,
+    works: Vec<WorkLineCtx<'a>>,
+    bundles: Vec<BundleLineCtx<'a>>,
+    blocked_reason: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ResearcherUserCtx<'a> {
+    question: &'a str,
+    context_hints: &'a [String],
+}
+
+// Implementation of build_for_director and build_for_researcher is
+// added as inherent methods below and called from the trait impl via
+// helper functions to keep the trait impl block tidy.
+
+impl InlineContextBuilder {
+    fn director_impl(
+        &self,
+        state: &DirectorState,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError> {
+        let system_prompt = self
+            .loader
+            .render("agents/director/system.pmt", &serde_json::json!({}))?;
+
+        let user_ctx = DirectorUserCtx {
+            plan_id: &state.plan_id,
+            works: state
+                .works
+                .iter()
+                .map(|w: &WorkLine| WorkLineCtx {
+                    id: &w.id,
+                    title: &w.title,
+                    status: &w.status,
+                    attempt_count: w.attempt_count,
+                })
+                .collect(),
+            bundles: state
+                .bundles
+                .iter()
+                .map(|b: &BundleLine| BundleLineCtx {
+                    id: &b.id,
+                    work_id: &b.work_id,
+                    status: &b.status,
+                })
+                .collect(),
+            blocked_reason: state.blocked_reason.as_deref(),
+        };
+        let state_message = self.loader.render("agents/director/user.pmt", &user_ctx)?;
+        let state_msg = Message::user(state_message);
+
+        // Compute budget remaining after system prompt and state message.
+        let system_tokens = system_prompt.len() / CHARS_PER_TOKEN;
+        let state_tokens = estimate_message_tokens(&state_msg);
+        let history_budget = token_budget.saturating_sub(system_tokens + state_tokens);
+
+        let mut trimmed = trim_history(history, history_budget);
+        if trimmed.is_empty() && !history.is_empty() {
+            warn!(
+                history_len = history.len(),
+                budget = token_budget,
+                "build_for_director: history trimmed to empty; proceeding with state-only context"
+            );
+        }
+        trimmed.push(state_msg);
+
+        let token_estimate = system_tokens + trimmed.iter().map(estimate_message_tokens).sum::<usize>();
+        Ok(AssembledContext {
+            system_prompt,
+            messages: trimmed,
+            token_estimate,
+        })
+    }
+
+    fn researcher_impl(
+        &self,
+        query: &ResearchQuery,
+        history: &[Message],
+        token_budget: usize,
+    ) -> Result<AssembledContext, ContextError> {
+        let system_prompt = self
+            .loader
+            .render("agents/researcher/system.pmt", &serde_json::json!({}))?;
+
+        let user_ctx = ResearcherUserCtx {
+            question: &query.question,
+            context_hints: &query.context_hints,
+        };
+        let query_message = self.loader.render("agents/researcher/user.pmt", &user_ctx)?;
+        let query_msg = Message::user(query_message);
+
+        let system_tokens = system_prompt.len() / CHARS_PER_TOKEN;
+        let query_tokens = estimate_message_tokens(&query_msg);
+        let history_budget = token_budget.saturating_sub(system_tokens + query_tokens);
+
+        let mut trimmed = trim_history(history, history_budget);
+        if trimmed.is_empty() && !history.is_empty() {
+            warn!(
+                history_len = history.len(),
+                budget = token_budget,
+                "build_for_researcher: history trimmed to empty; proceeding with query-only context"
+            );
+        }
+        trimmed.push(query_msg);
+
+        let token_estimate = system_tokens + trimmed.iter().map(estimate_message_tokens).sum::<usize>();
+        Ok(AssembledContext {
+            system_prompt,
+            messages: trimmed,
             token_estimate,
         })
     }

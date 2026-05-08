@@ -1,0 +1,27 @@
+## Current State — Plan {{plan_id}}
+
+### Works
+
+{{#each works}}
+- **{{id}}** ({{status}}, attempt {{attempt_count}}): {{title}}
+{{/each}}
+{{#unless works}}
+(no works)
+{{/unless}}
+
+### Bundles
+
+{{#each bundles}}
+- **{{id}}** for work {{work_id}}: {{status}}
+{{/each}}
+{{#unless bundles}}
+(no bundles)
+{{/unless}}
+
+{{#if blocked_reason}}
+### Blocked
+
+{{blocked_reason}}
+{{/if}}
+
+Placeholder — 1.2 Director Phase 1 design doc will replace this with the full state summary template.
