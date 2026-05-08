@@ -19,7 +19,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use llm::{AnthropicClient, ChatMessage, LlmClient, LlmConfig};
+use llm::{AnthropicClient, LlmClient, LlmConfig, Message};
 
 fn live_config() -> LlmConfig {
     LlmConfig {
@@ -53,7 +53,7 @@ async fn cache_read_tokens_increment_on_second_call() {
     let client = AnthropicClient::new(live_config(), api_key).expect("client");
 
     let system = bulk_system_prompt(2500);
-    let messages = vec![ChatMessage::user("respond with OK".to_string())];
+    let messages = vec![Message::user("respond with OK".to_string())];
 
     // Call 1: cache miss; the API populates cache_creation_input_tokens.
     let (_first, first_usage) = client.complete_free(&system, &messages).await.expect("first call");

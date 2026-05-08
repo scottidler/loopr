@@ -17,7 +17,7 @@ use tokio::sync::Barrier;
 use agents::{ReviewerConfig, ReviewerDeps, ReviewerError, run_reviewer};
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, Role, Work};
-use llm::{Message, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
+use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use store::{BundleUpdateError, Store};
 
 // Gated fake LLM: both tasks block on a shared barrier after entering
