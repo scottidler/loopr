@@ -23,7 +23,7 @@ use tracing::{debug, info, instrument, warn};
 
 use context::{ContextBuilder, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
 use domain::{Bundle, BundleId, Work};
-use llm::{ChatMessage, LlmClient};
+use llm::{Message, LlmClient};
 use telemetry::transcript::{TranscriptIteration, append_iteration, implementer_path};
 use worktree::Worktree;
 
@@ -219,7 +219,7 @@ where
 
         // Self-correction sub-loop: parse failures append to this
         // vec and re-prompt; reset_parse_failures ONLY on Ok.
-        let mut messages = vec![ChatMessage::user(assembled.user_message.clone())];
+        let mut messages = assembled.messages.clone();
         let actions = loop {
             let (raw, _usage) = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
             last_raw = raw.clone();
@@ -230,8 +230,8 @@ where
                 }
                 Err(e) => {
                     warn!(iteration, error = %e, "parse failure in sub-loop");
-                    messages.push(ChatMessage::assistant(raw));
-                    messages.push(ChatMessage::user(format!(
+                    messages.push(Message::assistant(raw));
+                    messages.push(Message::user(format!(
                         "parse failed: {e}. Return one JSON array of actions."
                     )));
                     let requeries_used = (messages.len() - 1) / 2;
@@ -242,7 +242,7 @@ where
                                 work.id.as_ref(),
                                 iteration,
                                 &assembled.system_prompt,
-                                &assembled.user_message,
+                                &assembled.first_user_text().unwrap_or_default(),
                                 &last_raw,
                                 &[],
                                 &[],
@@ -262,7 +262,7 @@ where
                 work.id.as_ref(),
                 iteration,
                 &assembled.system_prompt,
-                &assembled.user_message,
+                &assembled.first_user_text().unwrap_or_default(),
                 &last_raw,
                 &[],
                 &["(all parse attempts failed this iteration)".to_string()],
@@ -287,7 +287,7 @@ where
                     work.id.as_ref(),
                     iteration,
                     &assembled.system_prompt,
-                    &assembled.user_message,
+                    &assembled.first_user_text().unwrap_or_default(),
                     &last_raw,
                     &parsed_actions_snapshot,
                     &summaries,
@@ -308,7 +308,7 @@ where
                         work.id.as_ref(),
                         iteration,
                         &assembled.system_prompt,
-                        &assembled.user_message,
+                        &assembled.first_user_text().unwrap_or_default(),
                         &last_raw,
                         &parsed_actions_snapshot,
                         &summaries,
@@ -325,7 +325,7 @@ where
                         work.id.as_ref(),
                         iteration,
                         &assembled.system_prompt,
-                        &assembled.user_message,
+                        &assembled.first_user_text().unwrap_or_default(),
                         &last_raw,
                         &parsed_actions_snapshot,
                         &summaries,
@@ -342,7 +342,7 @@ where
                         work.id.as_ref(),
                         iteration,
                         &assembled.system_prompt,
-                        &assembled.user_message,
+                        &assembled.first_user_text().unwrap_or_default(),
                         &last_raw,
                         &parsed_actions_snapshot,
                         &summaries,
@@ -372,10 +372,10 @@ where
                 }
                 ActionResult::Error(err_msg) => {
                     warn!(iteration, error = %err_msg, "correctable tool error; re-prompting");
-                    messages.push(ChatMessage::assistant(
+                    messages.push(Message::assistant(
                         serde_json::to_string(&action).unwrap_or_else(|_| "{}".into()),
                     ));
-                    messages.push(ChatMessage::user(format!(
+                    messages.push(Message::user(format!(
                         "action failed: {err_msg}. Return one corrected JSON action (single object, not array)."
                     )));
                     let (corrected_raw, _usage) = deps.llm.complete_free(&assembled.system_prompt, &messages).await?;
@@ -394,7 +394,7 @@ where
                                         work.id.as_ref(),
                                         iteration,
                                         &assembled.system_prompt,
-                                        &assembled.user_message,
+                                        &assembled.first_user_text().unwrap_or_default(),
                                         &last_raw,
                                         &parsed_actions_snapshot,
                                         &summaries,
@@ -411,7 +411,7 @@ where
                                         work.id.as_ref(),
                                         iteration,
                                         &assembled.system_prompt,
-                                        &assembled.user_message,
+                                        &assembled.first_user_text().unwrap_or_default(),
                                         &last_raw,
                                         &parsed_actions_snapshot,
                                         &summaries,
@@ -428,7 +428,7 @@ where
                                         work.id.as_ref(),
                                         iteration,
                                         &assembled.system_prompt,
-                                        &assembled.user_message,
+                                        &assembled.first_user_text().unwrap_or_default(),
                                         &last_raw,
                                         &parsed_actions_snapshot,
                                         &summaries,
@@ -481,7 +481,7 @@ where
             work.id.as_ref(),
             iteration,
             &assembled.system_prompt,
-            &assembled.user_message,
+            &assembled.first_user_text().unwrap_or_default(),
             &last_raw,
             &parsed_actions_snapshot,
             &summaries,

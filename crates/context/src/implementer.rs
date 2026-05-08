@@ -17,6 +17,8 @@ use tracing::instrument;
 use domain::{Bundle, Work};
 use tools::ToolSchema;
 
+use llm::Message;
+
 use crate::loader::PromptLoader;
 use crate::reviewer::build_reviewer_user_ctx;
 use crate::{AssembledContext, ContextBuilder, ContextError, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
@@ -170,7 +172,7 @@ impl ContextBuilder for InlineContextBuilder {
         span.record("token_estimate", token_estimate);
         Ok(AssembledContext {
             system_prompt,
-            user_message,
+            messages: vec![Message::user(user_message)],
             token_estimate,
         })
     }
@@ -210,7 +212,7 @@ impl ContextBuilder for InlineContextBuilder {
         span.record("token_estimate", token_estimate);
         Ok(AssembledContext {
             system_prompt,
-            user_message,
+            messages: vec![Message::user(user_message)],
             token_estimate,
         })
     }

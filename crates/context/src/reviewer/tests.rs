@@ -46,7 +46,7 @@ fn build_returns_non_empty_assembled_context() {
         .build_for_reviewer(&bundle, &work, "diff --git a/foo b/foo\n-x\n+y\n", None)
         .unwrap();
     assert!(!out.system_prompt.is_empty());
-    assert!(!out.user_message.is_empty());
+    assert!(!out.first_user_text().unwrap().is_empty());
     assert!(out.token_estimate > 0);
 }
 
@@ -57,9 +57,9 @@ fn user_message_renders_work_title_and_ac() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "diff body", None)
         .unwrap();
-    assert!(out.user_message.contains("add --version flag"));
-    assert!(out.user_message.contains("cli parses --version"));
-    assert!(out.user_message.contains("prints GIT_DESCRIBE"));
+    assert!(out.first_user_text().unwrap().contains("add --version flag"));
+    assert!(out.first_user_text().unwrap().contains("cli parses --version"));
+    assert!(out.first_user_text().unwrap().contains("prints GIT_DESCRIBE"));
 }
 
 #[test]
@@ -69,11 +69,11 @@ fn user_message_renders_bundle_metadata() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "diff body", None)
         .unwrap();
-    assert!(out.user_message.contains("deadbeef1234"), "got: {}", out.user_message);
-    assert!(out.user_message.contains("loopr/wk-00042-1"));
-    assert!(out.user_message.contains("src/cli.rs, src/main.rs"));
-    assert!(out.user_message.contains("loc_changed:    17"));
-    assert!(out.user_message.contains("force_proposed: false"));
+    assert!(out.first_user_text().unwrap().contains("deadbeef1234"), "got: {}", out.first_user_text().unwrap());
+    assert!(out.first_user_text().unwrap().contains("loopr/wk-00042-1"));
+    assert!(out.first_user_text().unwrap().contains("src/cli.rs, src/main.rs"));
+    assert!(out.first_user_text().unwrap().contains("loc_changed:    17"));
+    assert!(out.first_user_text().unwrap().contains("force_proposed: false"));
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn force_proposed_bundle_is_surfaced() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "diff body", None)
         .unwrap();
-    assert!(out.user_message.contains("force_proposed: true"));
+    assert!(out.first_user_text().unwrap().contains("force_proposed: true"));
 }
 
 #[test]
@@ -95,9 +95,9 @@ fn diff_section_rendered_when_noop_files_is_none() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, diff, None)
         .unwrap();
-    assert!(out.user_message.contains("### Diff"));
-    assert!(out.user_message.contains("diff --git a/foo b/foo"));
-    assert!(!out.user_message.contains("### File Contents"));
+    assert!(out.first_user_text().unwrap().contains("### Diff"));
+    assert!(out.first_user_text().unwrap().contains("diff --git a/foo b/foo"));
+    assert!(!out.first_user_text().unwrap().contains("### File Contents"));
 }
 
 #[test]
@@ -111,12 +111,12 @@ fn file_contents_section_rendered_when_noop_files_is_some() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "", Some(&files))
         .unwrap();
-    assert!(out.user_message.contains("### File Contents"));
-    assert!(out.user_message.contains("#### README.md"));
-    assert!(out.user_message.contains("# project"));
-    assert!(out.user_message.contains("#### src/main.rs"));
-    assert!(out.user_message.contains("fn main()"));
-    assert!(!out.user_message.contains("### Diff"));
+    assert!(out.first_user_text().unwrap().contains("### File Contents"));
+    assert!(out.first_user_text().unwrap().contains("#### README.md"));
+    assert!(out.first_user_text().unwrap().contains("# project"));
+    assert!(out.first_user_text().unwrap().contains("#### src/main.rs"));
+    assert!(out.first_user_text().unwrap().contains("fn main()"));
+    assert!(!out.first_user_text().unwrap().contains("### Diff"));
 }
 
 #[test]
@@ -127,10 +127,10 @@ fn empty_diff_with_head_commit_renders_structural_corruption_marker() {
         .build_for_reviewer(&bundle, &work, "", None)
         .unwrap();
     assert!(
-        out.user_message
+        out.first_user_text().unwrap()
             .contains("(empty patch body: structural corruption; see system prompt)"),
         "got: {}",
-        out.user_message
+        out.first_user_text().unwrap()
     );
 }
 
@@ -141,7 +141,7 @@ fn empty_diff_without_head_commit_renders_noop_marker() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "", None)
         .unwrap();
-    assert!(out.user_message.contains("(no diff: noop bundle without head_commit)"));
+    assert!(out.first_user_text().unwrap().contains("(no diff: noop bundle without head_commit)"));
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn pre_truncated_diff_passes_through_verbatim() {
         .build_for_reviewer(&bundle, &work, truncated, None)
         .unwrap();
     assert!(
-        out.user_message.contains("[... diff truncated; original 200000 bytes"),
+        out.first_user_text().unwrap().contains("[... diff truncated; original 200000 bytes"),
         "truncation marker must pass through verbatim"
     );
 }
@@ -166,8 +166,8 @@ fn bundle_claims_rendered() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "diff", None)
         .unwrap();
-    assert!(out.user_message.contains("### Claims"));
-    assert!(out.user_message.contains("added --version handling"));
+    assert!(out.first_user_text().unwrap().contains("### Claims"));
+    assert!(out.first_user_text().unwrap().contains("added --version handling"));
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn empty_ac_does_not_crash() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "diff", None)
         .unwrap();
-    assert!(out.user_message.contains("(none specified)"));
+    assert!(out.first_user_text().unwrap().contains("(none specified)"));
 }
 
 #[test]

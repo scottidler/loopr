@@ -41,7 +41,7 @@ fn build_returns_non_empty_assembled_context() {
         )
         .unwrap();
     assert!(!out.system_prompt.is_empty());
-    assert!(!out.user_message.is_empty());
+    assert!(!out.first_user_text().unwrap().is_empty());
     assert!(out.token_estimate > 0);
 }
 
@@ -84,9 +84,9 @@ fn user_message_contains_title_and_ac() {
     let out = builder
         .build_for_implementer(&work, Path::new("/tmp/wt"), &[], &[], &StateSummary::default(), 1)
         .unwrap();
-    assert!(out.user_message.contains("add --version flag"));
-    assert!(out.user_message.contains("cli parses --version"));
-    assert!(out.user_message.contains("prints GIT_DESCRIBE"));
+    assert!(out.first_user_text().unwrap().contains("add --version flag"));
+    assert!(out.first_user_text().unwrap().contains("cli parses --version"));
+    assert!(out.first_user_text().unwrap().contains("prints GIT_DESCRIBE"));
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn user_message_includes_worktree_path() {
             1,
         )
         .unwrap();
-    assert!(out.user_message.contains("/var/tmp/wt-xyz"));
+    assert!(out.first_user_text().unwrap().contains("/var/tmp/wt-xyz"));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn user_message_includes_iteration_count() {
     let out = builder
         .build_for_implementer(&work, Path::new("/tmp/wt"), &[], &[], &StateSummary::default(), 17)
         .unwrap();
-    assert!(out.user_message.contains("Iteration: 17"));
+    assert!(out.first_user_text().unwrap().contains("Iteration: 17"));
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn user_message_empty_ac_does_not_crash() {
     let out = builder
         .build_for_implementer(&work, Path::new("/tmp/wt"), &[], &[], &StateSummary::default(), 1)
         .unwrap();
-    assert!(out.user_message.contains("(none specified)"));
+    assert!(out.first_user_text().unwrap().contains("(none specified)"));
 }
 
 #[test]
@@ -137,8 +137,8 @@ fn user_message_threads_rejected_bundle_reason() {
     let out = builder
         .build_for_implementer(&work, Path::new("/tmp/wt"), &[], &[], &state, 2)
         .unwrap();
-    assert!(out.user_message.contains("Prior Bundle Was Rejected"));
-    assert!(out.user_message.contains("tests failed: test_foo"));
+    assert!(out.first_user_text().unwrap().contains("Prior Bundle Was Rejected"));
+    assert!(out.first_user_text().unwrap().contains("tests failed: test_foo"));
 }
 
 #[test]
@@ -158,10 +158,10 @@ fn user_message_renders_iteration_history() {
     let out = builder
         .build_for_implementer(&work, Path::new("/tmp/wt"), &[], &history, &StateSummary::default(), 3)
         .unwrap();
-    assert!(out.user_message.contains("Iteration 1"));
-    assert!(out.user_message.contains("ran bash: ls"));
-    assert!(out.user_message.contains("Iteration 2"));
-    assert!(out.user_message.contains("wrote file cli.rs"));
+    assert!(out.first_user_text().unwrap().contains("Iteration 1"));
+    assert!(out.first_user_text().unwrap().contains("ran bash: ls"));
+    assert!(out.first_user_text().unwrap().contains("Iteration 2"));
+    assert!(out.first_user_text().unwrap().contains("wrote file cli.rs"));
 }
 
 #[test]
@@ -178,22 +178,22 @@ fn iteration_summary_capped_at_4000_chars() {
         .unwrap();
     // The 10_000-char 'x' run must not appear verbatim in its entirety.
     assert!(
-        !out.user_message.contains(&huge),
+        !out.first_user_text().unwrap().contains(&huge),
         "10k-char summary must not appear in full"
     );
     // But a truncated prefix + marker must appear.
     assert!(
-        out.user_message.contains("truncated"),
+        out.first_user_text().unwrap().contains("truncated"),
         "expected truncation marker in: {}",
-        &out.user_message[..500.min(out.user_message.len())]
+        &out.first_user_text().unwrap()[..500.min(out.first_user_text().unwrap().len())]
     );
     // Roughly: history body should not be longer than the cap + marker
     // + the surrounding iteration scaffolding; assert we're close to
     // the cap, not still carrying 10k chars.
     assert!(
-        out.user_message.len() < 6_000,
+        out.first_user_text().unwrap().len() < 6_000,
         "user_message grew to {} chars; cap should hold",
-        out.user_message.len()
+        out.first_user_text().unwrap().len()
     );
 }
 

@@ -33,7 +33,7 @@ use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
 use domain::{Bundle, BundleStatus, ReviewIssue, Role, Verdict, Work};
-use llm::{ChatMessage, LlmClient};
+use llm::{Message, LlmClient};
 use store::{BundleUpdateError, BundleUpdateSink};
 use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
 
@@ -158,7 +158,7 @@ where
         &deps.llm,
         &deps.config,
         &assembled.system_prompt,
-        &assembled.user_message,
+        &assembled.first_user_text().unwrap_or_default(),
     )
     .await?;
 
@@ -167,7 +167,7 @@ where
     // came out"). Failures emit a warn and continue.
     let mut iter = TranscriptIteration::new_single_turn(String::new(), String::new());
     iter.system_prompt = assembled.system_prompt.clone();
-    iter.user_prompt = assembled.user_message.clone();
+    iter.user_prompt = assembled.first_user_text().unwrap_or_default().to_string();
     iter.response = render_verification(&verdict);
     iter.parsed_actions = vec![match &verdict {
         Verdict::Accept { .. } => "verdict=accept".to_string(),
@@ -221,7 +221,7 @@ async fn call_llm_with_retry<L>(
 where
     L: LlmClient,
 {
-    let mut messages = vec![ChatMessage::user(user_message.to_string())];
+    let mut messages = vec![Message::user(user_message.to_string())];
     let mut requeries: u32 = 0;
     loop {
         let (raw, _usage) = llm.complete_free(system_prompt, &messages).await?;
@@ -238,7 +238,7 @@ where
                         "parse-retry exhausted after {requeries} attempts: {e}"
                     )));
                 }
-                messages.push(ChatMessage::assistant(raw));
+                messages.push(Message::assistant(raw));
                 let hint = match &e {
                     ParseError::Unparseable(_) => {
                         "Response was not parseable JSON. Return exactly one JSON object \
@@ -251,7 +251,7 @@ where
                          and a non-empty `reasons` array; reject needs `reason`."
                     }
                 };
-                messages.push(ChatMessage::user(format!("parse failed: {e}. {hint}")));
+                messages.push(Message::user(format!("parse failed: {e}. {hint}")));
             }
         }
     }

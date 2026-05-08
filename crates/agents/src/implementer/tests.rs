@@ -8,7 +8,7 @@ use tempfile::TempDir;
 
 use context::{InlineContextBuilder, StateSummary};
 use domain::{BundleId, PlanId, Work, WorkId};
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
+use llm::{Message, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use worktree::Worktree;
 
 use super::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
@@ -56,7 +56,7 @@ impl LlmClient for FakeLlm {
     fn complete_free<'a>(
         &'a self,
         _system: &'a str,
-        _messages: &'a [ChatMessage],
+        _messages: &'a [Message],
     ) -> impl std::future::Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let mut q = self.responses.lock().unwrap();

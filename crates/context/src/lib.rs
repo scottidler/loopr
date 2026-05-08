@@ -20,16 +20,38 @@ pub use loader::{BAKED_PROMPTS, PromptError, PromptLoader, baked_prompts};
 use std::path::Path;
 
 use domain::{Bundle, Work};
+use llm::Message;
 use tools::ToolSchema;
 
 /// The output of a successful context assembly. Ready to hand to
-/// `LlmClient::complete_free` (system + user-as-first-message) or to
-/// `LlmClient::complete_with_tool` (system + user).
+/// `LlmClient::complete_free` (system + messages).
+///
+/// `messages` carries the full turn sequence for the current call:
+/// - Single-turn callers (Implementer, Reviewer): one `Message::user(...)`.
+/// - Multi-turn callers (Director, Researcher): `[trimmed_history...,
+///   fresh_state_summary]` — state summary is always last.
 #[derive(Debug, Clone)]
 pub struct AssembledContext {
     pub system_prompt: String,
-    pub user_message: String,
+    pub messages: Vec<Message>,
     pub token_estimate: usize,
+}
+
+impl AssembledContext {
+    /// Returns the text content of the first message if it is a
+    /// single-`Text`-block user message. Used by the Implementer's
+    /// transcript writer. Returns `None` if `messages` is empty or
+    /// the first content block is not `Text`.
+    pub fn first_user_text(&self) -> Option<&str> {
+        use llm::MessageContent;
+        self.messages.first().and_then(|m| {
+            if let Some(MessageContent::Text(t)) = m.content.first() {
+                Some(t.as_str())
+            } else {
+                None
+            }
+        })
+    }
 }
 
 /// Cross-iteration state the Implementer carries. Populated by the

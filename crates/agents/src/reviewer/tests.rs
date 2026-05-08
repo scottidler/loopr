@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, Verdict, Work, WorkId};
-use llm::{ChatMessage, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
+use llm::{Message, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
 
 use store::{BundleUpdateError, BundleUpdateSink};
 
@@ -58,7 +58,7 @@ impl LlmClient for FakeLlm {
     fn complete_free<'a>(
         &'a self,
         _system: &'a str,
-        _messages: &'a [ChatMessage],
+        _messages: &'a [Message],
     ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let mut q = self.responses.lock().unwrap();
