@@ -363,27 +363,26 @@ where
 
     // Phase 3: validation (skipped when validation_commands is empty)
     span.record("phase", "validation");
-    if !deps.config.validation_commands.is_empty() {
-        if let Err(val_err) = validation::run_validation(
+    if !deps.config.validation_commands.is_empty()
+        && let Err(val_err) = validation::run_validation(
             &deps.config.validation_commands,
             deps.config.validation_timeout,
             &deps.target,
         )
         .await
-        {
-            git::reset_hard(&deps.target, &pre_merge, deps.config.git_timeout).await?;
-            git::clean_fd(&deps.target, deps.config.git_timeout).await;
-            return fail_all_without_reset(
-                &bundle_states,
-                deps,
-                IntegrationError::ValidationFailed {
-                    command: val_err.command,
-                    exit_code: val_err.exit_code,
-                    log: val_err.log,
-                },
-            )
-            .await;
-        }
+    {
+        git::reset_hard(&deps.target, &pre_merge, deps.config.git_timeout).await?;
+        git::clean_fd(&deps.target, deps.config.git_timeout).await;
+        return fail_all_without_reset(
+            &bundle_states,
+            deps,
+            IntegrationError::ValidationFailed {
+                command: val_err.command,
+                exit_code: val_err.exit_code,
+                log: val_err.log,
+            },
+        )
+        .await;
     }
 
     let sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;

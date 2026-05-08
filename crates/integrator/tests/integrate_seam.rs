@@ -594,20 +594,23 @@ async fn validation_failure_rolls_back_and_marks_bundle_integration_failed() {
     let integ = format!("loopr/plan-{}", plan.id);
     let pre_sha = git_capture(&repo, &["rev-parse", &integ]);
 
-    let mut config = IntegratorConfig::default();
-    config.validation_commands = vec!["false".to_string()]; // always fails
     let deps = IntegratorDeps {
         bundle_sink: &store,
         works: &store,
         ticks: &store,
-        config,
+        config: IntegratorConfig {
+            validation_commands: vec!["false".to_string()], // always fails
+            ..IntegratorConfig::default()
+        },
         target: repo.clone(),
         git_lock: Arc::new(AsyncMutex::new(())),
     };
 
     let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
     match result {
-        Err(IntegrationError::ValidationFailed { ref command, exit_code, .. }) => {
+        Err(IntegrationError::ValidationFailed {
+            ref command, exit_code, ..
+        }) => {
             assert_eq!(command, "false");
             assert_eq!(exit_code, Some(1));
         }

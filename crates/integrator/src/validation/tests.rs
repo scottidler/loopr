@@ -51,13 +51,9 @@ async fn failing_command_captures_output() {
 #[tokio::test]
 async fn timeout_returns_error_with_no_exit_code() {
     let dir = temp_dir();
-    let err = run_validation(
-        &["sleep 60".to_string()],
-        Duration::from_millis(200),
-        dir.path(),
-    )
-    .await
-    .unwrap_err();
+    let err = run_validation(&["sleep 60".to_string()], Duration::from_millis(200), dir.path())
+        .await
+        .unwrap_err();
     assert_eq!(err.command, "sleep 60");
     assert!(err.exit_code.is_none());
     assert!(err.log.contains("timed out"), "log was: {}", err.log);

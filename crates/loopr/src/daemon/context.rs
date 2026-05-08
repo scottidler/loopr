@@ -767,7 +767,9 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 let _ = bundle; // bundle was previously re-fetched here for the inline summary
                 let _ = work;
             }
-            Err(IntegrationError::ValidationFailed { ref command, exit_code, .. }) => {
+            Err(IntegrationError::ValidationFailed {
+                ref command, exit_code, ..
+            }) => {
                 // Bundles are already IntegrationFailed (integrate() called
                 // fail_all_without_reset before returning). Only Work needs
                 // a state change here.
