@@ -152,17 +152,46 @@ fn context_smoke_spans_director_and_researcher() {
         bundles: vec![],
         blocked_reason: None,
     };
-    let dir_ctx = builder.build_for_director(&state, &[], large_budget).unwrap();
-    assert!(!dir_ctx.system_prompt.is_empty());
-    assert!(!dir_ctx.messages.is_empty());
-    assert!(dir_ctx.token_estimate > 0);
+    builder.build_for_director(&state, &[], large_budget).unwrap();
 
     let query = ResearchQuery {
         question: "what does main() do?".into(),
         context_hints: vec!["src/main.rs".into()],
     };
-    let res_ctx = builder.build_for_researcher(&query, &[], large_budget).unwrap();
-    assert!(!res_ctx.system_prompt.is_empty());
-    assert!(!res_ctx.messages.is_empty());
-    assert!(res_ctx.token_estimate > 0);
+    builder.build_for_researcher(&query, &[], large_budget).unwrap();
+
+    // Assert director span fields
+    let dir = cap
+        .find("context.build_for_director")
+        .expect("context.build_for_director span must be emitted");
+    assert_eq!(dir.fields.get("role").map(String::as_str), Some("director"));
+    assert_eq!(dir.fields.get("plan_id").map(String::as_str), Some("pl-abc"));
+    assert_eq!(dir.fields.get("history_len").map(String::as_str), Some("0"));
+    assert!(
+        dir.fields.contains_key("system_chars"),
+        "director span missing system_chars: {:?}",
+        dir.fields
+    );
+    assert!(
+        dir.fields.contains_key("token_estimate"),
+        "director span missing token_estimate: {:?}",
+        dir.fields
+    );
+
+    // Assert researcher span fields
+    let res = cap
+        .find("context.build_for_researcher")
+        .expect("context.build_for_researcher span must be emitted");
+    assert_eq!(res.fields.get("role").map(String::as_str), Some("researcher"));
+    assert_eq!(res.fields.get("history_len").map(String::as_str), Some("0"));
+    assert!(
+        res.fields.contains_key("system_chars"),
+        "researcher span missing system_chars: {:?}",
+        res.fields
+    );
+    assert!(
+        res.fields.contains_key("token_estimate"),
+        "researcher span missing token_estimate: {:?}",
+        res.fields
+    );
 }

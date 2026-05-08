@@ -277,6 +277,20 @@ struct ResearcherUserCtx<'a> {
 // helper functions to keep the trait impl block tidy.
 
 impl InlineContextBuilder {
+    #[instrument(
+        name = "context.build_for_director",
+        level = "debug",
+        skip_all,
+        fields(
+            role = "director",
+            plan_id = %state.plan_id,
+            history_len = history.len(),
+            token_budget = token_budget,
+            system_chars = tracing::field::Empty,
+            token_estimate = tracing::field::Empty,
+        ),
+        err,
+    )]
     fn director_impl(
         &self,
         state: &DirectorState,
@@ -329,6 +343,9 @@ impl InlineContextBuilder {
         trimmed.push(state_msg);
 
         let token_estimate = system_tokens + trimmed.iter().map(estimate_message_tokens).sum::<usize>();
+        let span = tracing::Span::current();
+        span.record("system_chars", system_prompt.len());
+        span.record("token_estimate", token_estimate);
         Ok(AssembledContext {
             system_prompt,
             messages: trimmed,
@@ -336,6 +353,19 @@ impl InlineContextBuilder {
         })
     }
 
+    #[instrument(
+        name = "context.build_for_researcher",
+        level = "debug",
+        skip_all,
+        fields(
+            role = "researcher",
+            history_len = history.len(),
+            token_budget = token_budget,
+            system_chars = tracing::field::Empty,
+            token_estimate = tracing::field::Empty,
+        ),
+        err,
+    )]
     fn researcher_impl(
         &self,
         query: &ResearchQuery,
@@ -368,6 +398,9 @@ impl InlineContextBuilder {
         trimmed.push(query_msg);
 
         let token_estimate = system_tokens + trimmed.iter().map(estimate_message_tokens).sum::<usize>();
+        let span = tracing::Span::current();
+        span.record("system_chars", system_prompt.len());
+        span.record("token_estimate", token_estimate);
         Ok(AssembledContext {
             system_prompt,
             messages: trimmed,

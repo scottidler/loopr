@@ -10,7 +10,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use llm::{AnthropicClient, FatalReason, LlmClient, LlmConfig, LlmError, ToolSchema};
+use llm::{AnthropicClient, FatalReason, LlmClient, LlmConfig, LlmError, Message, ToolSchema};
 use serde_json::{Value, json};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -382,4 +382,63 @@ fn new_rejects_unparseable_base_url() {
         }) => {}
         Err(other) => panic!("expected ConfigInvalid, got: {other:?}"),
     }
+}
+
+fn text_response(text: &str) -> Value {
+    json!({
+        "id": "msg_01ABC",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6-20260115",
+        "content": [{ "type": "text", "text": text }],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 100, "output_tokens": 10 }
+    })
+}
+
+/// Phase 4 seam test: `complete_free` with a multi-turn history sends
+/// the correct wire body — both turns present, correct roles, bare
+/// string content (single-Text optimisation), no `tools` or
+/// `tool_choice` fields.
+#[tokio::test]
+async fn complete_free_multi_turn_wire_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(text_response("ok")))
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    let messages = vec![
+        Message::user("first user turn"),
+        Message::assistant("assistant reply"),
+        Message::user("second user turn"),
+    ];
+    let (text, _usage) = client.complete_free("system text", &messages).await.unwrap();
+    assert_eq!(text, "ok");
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
+
+    // No tools or tool_choice on free requests
+    assert!(body.get("tools").is_none(), "free must not carry tools");
+    assert!(body.get("tool_choice").is_none(), "free must not carry tool_choice");
+
+    // System block is the cache-annotated array form
+    let system = body["system"].as_array().expect("system must be an array");
+    assert_eq!(system[0]["type"], "text");
+    assert_eq!(system[0]["text"], "system text");
+    assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
+
+    // All three turns present with correct roles and bare-string content
+    let msgs = body["messages"].as_array().expect("messages must be array");
+    assert_eq!(msgs.len(), 3, "expected 3 turns in wire body");
+    assert_eq!(msgs[0]["role"], "user");
+    assert_eq!(msgs[0]["content"], "first user turn");
+    assert_eq!(msgs[1]["role"], "assistant");
+    assert_eq!(msgs[1]["content"], "assistant reply");
+    assert_eq!(msgs[2]["role"], "user");
+    assert_eq!(msgs[2]["content"], "second user turn");
 }
