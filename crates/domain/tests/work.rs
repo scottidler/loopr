@@ -308,6 +308,18 @@ fn transition_pending_ready_by_reactor() {
     assert_changed(&mut work_in(WorkStatus::Pending), WorkStatus::Ready, Role::Reactor);
 }
 #[test]
+fn transition_pending_blocked_by_reactor() {
+    assert_changed(&mut work_in(WorkStatus::Pending), WorkStatus::Blocked, Role::Reactor);
+}
+#[test]
+fn transition_pending_blocked_rejected_by_director() {
+    let mut w = work_in(WorkStatus::Pending);
+    assert!(
+        w.transition(WorkStatus::Blocked, Role::Director).is_err(),
+        "Pending => Blocked must require Reactor, not Director"
+    );
+}
+#[test]
 fn transition_pending_superseded_by_director() {
     assert_changed(
         &mut work_in(WorkStatus::Pending),
@@ -573,4 +585,97 @@ fn work_status_terminal_states() {
     assert!(!WorkStatus::Blocked.is_terminal());
     assert!(!WorkStatus::InReview.is_terminal());
     assert!(!WorkStatus::Integrated.is_terminal());
+}
+
+// ---------------------------------------------------------------------------
+// all_deps_done + any_dep_irrecoverable
+// ---------------------------------------------------------------------------
+
+fn make_work_with_status(status: WorkStatus) -> Work {
+    let mut w = Work::new(PlanId::new(), "dep".to_string());
+    if status != WorkStatus::Pending {
+        w.status = status;
+    }
+    w
+}
+
+#[test]
+fn all_deps_done_no_deps_returns_true() {
+    let w = Work::new(PlanId::new(), "w".to_string());
+    assert!(w.all_deps_done(&[]));
+    assert!(w.all_deps_done(&[make_work_with_status(WorkStatus::Pending)]));
+}
+
+#[test]
+fn all_deps_done_all_done_returns_true() {
+    let dep = make_work_with_status(WorkStatus::Done);
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![dep.id.clone()];
+    assert!(w.all_deps_done(&[dep]));
+}
+
+#[test]
+fn all_deps_done_one_pending_returns_false() {
+    let dep = make_work_with_status(WorkStatus::Pending);
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![dep.id.clone()];
+    assert!(!w.all_deps_done(&[dep]));
+}
+
+#[test]
+fn all_deps_done_unknown_id_returns_false() {
+    let unknown_id = Work::new(PlanId::new(), "ghost".to_string()).id;
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![unknown_id];
+    assert!(!w.all_deps_done(&[]));
+}
+
+#[test]
+fn all_deps_done_mixed_returns_false() {
+    let done = make_work_with_status(WorkStatus::Done);
+    let pending = make_work_with_status(WorkStatus::Pending);
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![done.id.clone(), pending.id.clone()];
+    assert!(!w.all_deps_done(&[done, pending]));
+}
+
+#[test]
+fn any_dep_irrecoverable_no_deps_returns_none() {
+    let w = Work::new(PlanId::new(), "w".to_string());
+    assert!(w.any_dep_irrecoverable(&[]).is_none());
+}
+
+#[test]
+fn any_dep_irrecoverable_abandoned_returns_some() {
+    let dep = make_work_with_status(WorkStatus::Abandoned);
+    let dep_id = dep.id.clone();
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![dep_id.clone()];
+    assert_eq!(w.any_dep_irrecoverable(&[dep]), Some(&dep_id));
+}
+
+#[test]
+fn any_dep_irrecoverable_superseded_returns_some() {
+    let dep = make_work_with_status(WorkStatus::Superseded);
+    let dep_id = dep.id.clone();
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![dep_id.clone()];
+    assert_eq!(w.any_dep_irrecoverable(&[dep]), Some(&dep_id));
+}
+
+#[test]
+fn any_dep_irrecoverable_blocked_returns_none() {
+    let dep = make_work_with_status(WorkStatus::Blocked);
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![dep.id.clone()];
+    // Blocked is recoverable - must NOT be treated as irrecoverable
+    assert!(w.any_dep_irrecoverable(&[dep]).is_none());
+}
+
+#[test]
+fn any_dep_irrecoverable_done_returns_none() {
+    let dep = make_work_with_status(WorkStatus::Done);
+    let mut w = Work::new(PlanId::new(), "w".to_string());
+    w.dependencies = vec![dep.id.clone()];
+    assert!(w.any_dep_irrecoverable(&[dep]).is_none());
 }

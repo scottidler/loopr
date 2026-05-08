@@ -106,6 +106,7 @@ async fn create_same_id_twice_returns_already_exists() {
         acceptance_criteria: AcceptanceCriteria(vec!["assert nope".to_string()]),
         attempt_count: 0,
         session_failure_count: 0,
+        blocked_reason: None,
     };
     store.works().create(w1).await.expect("first create");
     let err = store.works().create(w2).await.expect_err("second should reject");
@@ -159,8 +160,9 @@ async fn update_round_trips_status_change() {
     let id = work.id.clone();
     store.works().create(work.clone()).await.expect("create");
 
+    let expected_updated_at = work.updated_at;
     work.status = WorkStatus::Blocked;
-    store.works().update(work).await.expect("update");
+    store.works().update(work, expected_updated_at).await.expect("update");
 
     let got = store.works().get(&id).await.expect("get after update");
     assert_eq!(got.status, WorkStatus::Blocked);

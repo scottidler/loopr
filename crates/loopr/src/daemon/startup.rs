@@ -38,7 +38,11 @@ use domain::{BundleStatus, Role, WorkStatus};
 use llm::LlmClient;
 use store::Store;
 
-use crate::daemon::context::{DaemonContext, transition_and_persist_bundle};
+use domain::PlanStatus;
+
+use crate::daemon::context::{
+    DaemonContext, block_dependent_siblings, promote_unblocked_siblings, transition_and_persist_bundle,
+};
 use crate::error::LooprError;
 
 /// Summary of one reconcile pass, returned so the daemon can log it and
@@ -95,6 +99,12 @@ where
     // Runs AFTER worktree hygiene and BEFORE `accept_loop` binds, so no
     // handler can race with the spawned tasks.
     sweep_bundles(ctx, &mut report).await?;
+
+    // Dep gate: crash-recovery promotion sweep. For each Active Plan,
+    // promote any Pending Works whose deps are now all Done. This closes
+    // the gap where a dep went Done before a crash and left its
+    // dependents stranded in Pending forever.
+    sweep_dep_promotions(ctx).await;
 
     tracing::info!(
         cleaned = report.cleaned,
@@ -312,6 +322,45 @@ where
         }
     }
     Ok(())
+}
+
+/// Crash-recovery dep promotion sweep. For each Active Plan, calls
+/// `promote_unblocked_siblings` so any Works whose deps went Done
+/// before the crash but were never promoted get their Implementers
+/// spawned now. Best-effort: failures are logged and skipped.
+async fn sweep_dep_promotions<L>(ctx: &Arc<DaemonContext<L>>)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    let plans = match ctx.store.plans().list().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "sweep_dep_promotions: plans().list() failed; skipping");
+            return;
+        }
+    };
+    let active_plans: Vec<_> = plans.into_iter().filter(|p| p.status == PlanStatus::Active).collect();
+    tracing::debug!(
+        plan_count = active_plans.len(),
+        "sweep_dep_promotions: scanning Active Plans"
+    );
+    for plan in active_plans {
+        let plan_id = plan.id.clone();
+        // Promotion: spawn implementers for newly unblocked Works.
+        promote_unblocked_siblings(Arc::clone(ctx), plan_id.clone()).await;
+        // Blocking: mark Pending Works whose deps are irrecoverably terminal.
+        // Fetch siblings once for the blocking sweep.
+        if let Ok(siblings) = ctx.store.works().list_by_parent_id(&plan_id).await {
+            for work in &siblings {
+                if let Some(terminal_dep_id) = work.any_dep_irrecoverable(&siblings) {
+                    let terminal_dep = siblings.iter().find(|s| &s.id == terminal_dep_id);
+                    if let Some(dep) = terminal_dep {
+                        block_dependent_siblings(Arc::clone(ctx), plan_id.clone(), dep.id.clone(), dep.status).await;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -31,6 +31,12 @@ pub struct Store {
     /// Mutex local to the handle would serialize nothing between two
     /// `.bundles().update(...)` calls.
     bundle_update_lock: Mutex<()>,
+    /// Intra-daemon OCC serializer for `WorksStore::update`. Mirrors
+    /// `bundle_update_lock` exactly. Guards the concurrent-promotion
+    /// race where two sibling Works go Done simultaneously and both
+    /// `promote_unblocked_siblings` calls find the same Pending Work
+    /// eligible, preventing double Implementer spawning.
+    work_update_lock: Mutex<()>,
     /// Intra-daemon serializer for `TicksStore::create`'s duplicate-
     /// detection read-check-write. Without it, two concurrent
     /// `integrate` calls in the crash-recovery path could both see
@@ -62,6 +68,7 @@ impl Store {
         Ok(Self {
             inner,
             bundle_update_lock: Mutex::new(()),
+            work_update_lock: Mutex::new(()),
             tick_lock: Mutex::new(()),
         })
     }
@@ -72,8 +79,11 @@ impl Store {
     }
 
     /// Typed accessor for Work records. Borrowed, zero-cost handle.
+    /// The handle borrows the parent `Store`'s OCC mutex so
+    /// `update(work, expected_updated_at)` calls serialize across
+    /// all callers of the same `Store`, not just within one handle.
     pub fn works(&self) -> WorksStore<'_> {
-        WorksStore::new(&self.inner)
+        WorksStore::new(&self.inner, &self.work_update_lock)
     }
 
     /// Typed accessor for Bundle records. Borrowed, zero-cost handle.

@@ -60,10 +60,14 @@ where
     S: WorkUpdateSink,
 {
     #[allow(clippy::manual_async_fn)]
-    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+    fn update<'a>(
+        &'a self,
+        work: Work,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
         async move {
             let work_for_summary = work.clone();
-            self.inner.update(work).await?;
+            self.inner.update(work, expected_updated_at).await?;
             // Best-effort: write the Work summary first.
             if let Err(e) = summary::write_work(&self.target, &work_for_summary) {
                 warn!(

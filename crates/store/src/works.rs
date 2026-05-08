@@ -2,6 +2,7 @@ use std::future::Future;
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use domain::{PlanId, Work, WorkId};
@@ -10,11 +11,12 @@ use crate::error::StoreError;
 
 pub struct WorksStore<'a> {
     inner: &'a AsyncStore,
+    update_lock: &'a Mutex<()>,
 }
 
 impl<'a> WorksStore<'a> {
-    pub(crate) fn new(inner: &'a AsyncStore) -> Self {
-        Self { inner }
+    pub(crate) fn new(inner: &'a AsyncStore, update_lock: &'a Mutex<()>) -> Self {
+        Self { inner, update_lock }
     }
 
     /// Persist a new Work. Errors with `AlreadyExists` if a work with the
@@ -152,20 +154,48 @@ impl<'a> WorksStore<'a> {
         Ok(result)
     }
 
-    /// Persist a status / field change on an existing Work. Delegates to
-    /// `AsyncStore::update` which rewrites the JSONL line and refreshes
-    /// the SQLite cache row. The Stage-7 wiring requires this so
-    /// implementer-error transitions (Blocked / Failed) survive daemon
-    /// restart; without it the daemon re-dispatches failing Works forever.
+    /// Persist a status / field change on an existing Work with
+    /// intra-daemon optimistic concurrency control.
+    ///
+    /// Sequence under the lock:
+    ///
+    /// 1. acquire `update_lock`,
+    /// 2. read the current Work by id; missing id -> `RecordNotFound`,
+    /// 3. compare the on-disk `updated_at` to `expected_updated_at`;
+    ///    mismatch -> `StoreError::Stale { expected, actual }`,
+    /// 4. write the new Work via `AsyncStore::update`,
+    /// 5. drop the lock.
+    ///
+    /// This closes the concurrent-promotion race where two sibling
+    /// Works go Done simultaneously, both find the same Pending Work
+    /// eligible, and both call `spawn_implementer_for_work`. The first
+    /// writer commits; the second sees a mismatched `updated_at` and
+    /// returns `Stale` without spawning a second Implementer.
     #[instrument(
         name = "works.update",
         level = "debug",
         skip_all,
-        fields(record_kind = "work", record_id = %work.id, status = ?work.status, op = "update"),
+        fields(record_kind = "work", record_id = %work.id, status = ?work.status, expected_updated_at, op = "update"),
         ret,
         err,
     )]
-    pub async fn update(&self, work: Work) -> Result<(), StoreError> {
+    pub async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), StoreError> {
+        let _guard = self.update_lock.lock().await;
+        let id_str = work.id.as_ref().to_string();
+        let current = self
+            .inner
+            .get::<Work>(&id_str)
+            .await?
+            .ok_or(StoreError::RecordNotFound {
+                collection: "works",
+                id: id_str,
+            })?;
+        if current.updated_at != expected_updated_at {
+            return Err(StoreError::Stale {
+                expected: expected_updated_at,
+                actual: current.updated_at,
+            });
+        }
         self.inner.update(work).await?;
         Ok(())
     }
@@ -174,36 +204,53 @@ impl<'a> WorksStore<'a> {
 // ---------------------------------------------------------------------------
 // `WorkUpdateSink` trait + impls
 //
-// Phase 5 of the Tier-1 cleanup. Mirrors `BundleUpdateSink`'s shape so
-// the daemon's `SummaryFanout` decorator can implement all three sink
-// traits with the same pattern. Work updates are NOT OCC-tracked
-// today (only Bundle is), so the trait surface omits
-// `expected_updated_at`. Re-evaluate when a real Work-OCC pattern
-// shows up in production logs.
+// Mirrors `BundleUpdateSink`'s shape exactly. OCC added in the
+// dependency-gate design (docs/design/2026-05-07-dependency-gate.md
+// Phase 0) to prevent double Implementer spawning when two sibling
+// Works go Done concurrently and both find the same Pending Work
+// eligible for promotion.
 // ---------------------------------------------------------------------------
 
 /// Minimal Work-update interface for sink-generic transition helpers.
+/// Passes the OCC `expected_updated_at` snapshot the caller took
+/// before mutating its clone.
 #[allow(clippy::manual_async_fn)]
 pub trait WorkUpdateSink: Send + Sync {
-    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a;
+    fn update<'a>(
+        &'a self,
+        work: Work,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkUpdateError {
     #[error("work update failed: {0}")]
     Update(String),
+    /// OCC version-check failure. Callers in the concurrent-promotion
+    /// path should treat this as a benign race (the Work was already
+    /// advanced by another task) and return without error.
+    #[error("stale work: expected updated_at={expected}, actual={actual}")]
+    Stale { expected: i64, actual: i64 },
 }
 
 /// Real `WorkUpdateSink` backed by `store::Store`. Delegates to
-/// `WorksStore::update`.
+/// `WorksStore::update` which holds the intra-daemon OCC Mutex;
+/// `StoreError::Stale` is preserved as `WorkUpdateError::Stale` so
+/// downstream matching works.
 impl WorkUpdateSink for crate::Store {
     #[allow(clippy::manual_async_fn)]
-    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+    fn update<'a>(
+        &'a self,
+        work: Work,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
         async move {
-            self.works()
-                .update(work)
-                .await
-                .map_err(|e| WorkUpdateError::Update(e.to_string()))
+            match self.works().update(work, expected_updated_at).await {
+                Ok(()) => Ok(()),
+                Err(StoreError::Stale { expected, actual }) => Err(WorkUpdateError::Stale { expected, actual }),
+                Err(other) => Err(WorkUpdateError::Update(other.to_string())),
+            }
         }
     }
 }
@@ -212,8 +259,12 @@ impl WorkUpdateSink for crate::Store {
 /// `BundleUpdateSink`'s borrowed-store helper.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
     #[allow(clippy::manual_async_fn)]
-    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
-        async move { (*self).update(work).await }
+    fn update<'a>(
+        &'a self,
+        work: Work,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+        async move { (*self).update(work, expected_updated_at).await }
     }
 }
 
@@ -221,7 +272,11 @@ impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
 /// `SummaryFanout::new(Arc::clone(&store), ...)` without unwrapping.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for std::sync::Arc<W> {
     #[allow(clippy::manual_async_fn)]
-    fn update<'a>(&'a self, work: Work) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
-        async move { (**self).update(work).await }
+    fn update<'a>(
+        &'a self,
+        work: Work,
+        expected_updated_at: i64,
+    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
+        async move { (**self).update(work, expected_updated_at).await }
     }
 }

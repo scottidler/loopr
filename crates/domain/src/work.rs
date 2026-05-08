@@ -44,6 +44,7 @@ use crate::{FsmError, Role, Transition};
         Draft       => Superseded by (Reactor, Director),
         Draft       => Abandoned  by (Reactor, Director),
         Pending     => Ready      by (Reactor),
+        Pending     => Blocked    by (Reactor),
         Pending     => Superseded by (Reactor, Director),
         Pending     => Abandoned  by (Reactor, Director),
         Ready       => InProgress by (Reactor),
@@ -96,8 +97,9 @@ pub enum WorkStatus {
 /// this Plan" on every tick). `attempt_count`, `session_failure_count`,
 /// `files`, and `assignee` ship with `Default` values; Stage 7
 /// populates them when the Reactor and reviewer wire up. No
-/// `description` field (v0.1.96 removed it); no `blocked_reason`
-/// (deferred per scope memo D3).
+/// `description` field (v0.1.96 removed it). `blocked_reason` ships
+/// here per docs/design/2026-05-07-dependency-gate.md Phase 1
+/// (resolves scope memo D3 deferral).
 #[derive(Debug, Clone, Serialize, Deserialize, Record)]
 #[serde(deny_unknown_fields)]
 pub struct Work {
@@ -121,6 +123,12 @@ pub struct Work {
     pub attempt_count: u32,
     #[serde(default)]
     pub session_failure_count: u32,
+    /// Set when a dep Work reaches a terminal non-Done state, explaining
+    /// why this Work was blocked by the dep gate rather than by an agent.
+    /// Written by `block_dependent_siblings` in `loopr`; read by 1.3's
+    /// recovery loop and by the Work summary renderer.
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
 }
 
 impl Work {
@@ -146,7 +154,35 @@ impl Work {
             acceptance_criteria: AcceptanceCriteria::default(),
             attempt_count: 0,
             session_failure_count: 0,
+            blocked_reason: None,
         }
+    }
+
+    /// True when every dep id in `self.dependencies` appears in
+    /// `siblings` with status `Done`. Unknown dep ids (not present in
+    /// `siblings`) return `false` - treated as unsatisfied. A Work with
+    /// no dependencies always returns `true`.
+    pub fn all_deps_done(&self, siblings: &[Work]) -> bool {
+        self.dependencies
+            .iter()
+            .all(|dep_id| siblings.iter().any(|s| &s.id == dep_id && s.status == WorkStatus::Done))
+    }
+
+    /// Returns the first dep id whose Work appears in `siblings` with
+    /// an irrecoverable (truly terminal, non-Done) status: `Abandoned`
+    /// or `Superseded`. `Blocked` is excluded because it may recover
+    /// via 1.3's recovery loop. Returns `None` when no dep is
+    /// irrecoverable.
+    pub fn any_dep_irrecoverable<'a>(&self, siblings: &'a [Work]) -> Option<&'a WorkId> {
+        self.dependencies.iter().find_map(|dep_id| {
+            siblings.iter().find_map(|s| {
+                if &s.id == dep_id && matches!(s.status, WorkStatus::Abandoned | WorkStatus::Superseded) {
+                    Some(&s.id)
+                } else {
+                    None
+                }
+            })
+        })
     }
 
     /// Read current status. The field is `pub`; this method exists

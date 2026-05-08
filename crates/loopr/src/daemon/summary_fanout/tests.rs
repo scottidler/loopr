@@ -53,7 +53,9 @@ async fn work_update_writes_work_summary_and_refreshes_parent_plan() {
     store.works().create(work.clone()).await.expect("create work");
 
     let fanout = SummaryFanout::new(Arc::clone(&store), target.clone(), Arc::clone(&store));
-    WorkUpdateSink::update(&fanout, work.clone()).await.expect("update");
+    WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
+        .await
+        .expect("update");
 
     let work_summary = summary_path(&target, "works", work.id.as_ref());
     assert!(
@@ -89,7 +91,9 @@ async fn work_update_with_missing_parent_writes_only_work_summary() {
     store.works().create(work.clone()).await.expect("create work");
 
     let fanout = SummaryFanout::new(Arc::clone(&store), target.clone(), Arc::clone(&store));
-    WorkUpdateSink::update(&fanout, work.clone()).await.expect("update");
+    WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
+        .await
+        .expect("update");
 
     let work_summary = summary_path(&target, "works", work.id.as_ref());
     assert!(work_summary.exists());

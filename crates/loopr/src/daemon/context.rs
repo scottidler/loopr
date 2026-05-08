@@ -21,7 +21,7 @@ use agents::{
     run_reviewer,
 };
 use context::{InlineContextBuilder, StateSummary};
-use domain::{Bundle, BundleStatus, Plan, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
 use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
 use llm::LlmClient;
@@ -725,6 +725,14 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     error!(error = %e, "Integrated -> Done transition failed after Tick persisted");
                     return;
                 }
+                // Dep gate: promote any Pending siblings whose deps are
+                // now all Done. Best-effort; failure is already logged
+                // inside promote_unblocked_siblings.
+                {
+                    let ctx = Arc::clone(&self);
+                    promote_unblocked_siblings(ctx, plan.id.clone()).await;
+                }
+
                 // Plan-level completion check: if every sibling Work is
                 // terminal with at least one Done, fire Plan:
                 // Active -> Complete. Best-effort; log + continue on Err.
@@ -790,6 +798,111 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     }
 }
 
+/// Scan Pending sibling Works for the given Plan and spawn an
+/// Implementer for any whose deps are now all Done.
+///
+/// Returns `Pin<Box<dyn Future<...>>>` (not `impl Future`) so rustc can
+/// resolve the return type without following the async call graph into
+/// `spawn_implementer_for_work` -> `spawn_reviewer_for_bundle` ->
+/// `spawn_integrator_for_bundle` -> this function (E0391 cycle). A
+/// concrete boxed-future return type breaks the opaque-type cycle at
+/// this edge.
+///
+/// Called after every `Integrated -> Done` transition and during
+/// startup reconcile (crash-recovery gap). Best-effort: store errors
+/// are logged and dropped so a sibling-sweep failure never kills the
+/// caller's success path.
+pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
+    ctx: Arc<DaemonContext<L>>,
+    plan_id: PlanId,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+    Box::pin(async move {
+        let span = tracing::info_span!("daemon.promote_unblocked_siblings", plan_id = %plan_id);
+        let _enter = span.enter();
+        let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "promote_unblocked_siblings: list_by_parent_id failed");
+                return;
+            }
+        };
+        let pending: Vec<Work> = siblings
+            .iter()
+            .filter(|w| w.status == WorkStatus::Pending)
+            .cloned()
+            .collect();
+        let mut promoted = 0usize;
+        for work in pending {
+            if work.all_deps_done(&siblings) {
+                let mut tasks = ctx.implementer_tasks.lock().await;
+                tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
+                promoted += 1;
+            }
+        }
+        info!(promoted, "promote_unblocked_siblings: done");
+    })
+}
+
+/// Mark any Pending Works whose `dependencies` contains `terminal_work_id`
+/// as `Blocked`, writing `blocked_reason` to explain that a dep became
+/// irrecoverable.
+///
+/// Only called when `terminal_work_id` reaches `Abandoned` or `Superseded`
+/// (truly terminal, non-Done). `Blocked` deps are excluded because they
+/// may still recover via 1.3's recovery loop.
+///
+/// Returns `Pin<Box<dyn Future<...>>>` for the same E0391 reason as
+/// `promote_unblocked_siblings`.
+pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
+    ctx: Arc<DaemonContext<L>>,
+    plan_id: PlanId,
+    terminal_work_id: WorkId,
+    terminal_status: WorkStatus,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+    Box::pin(async move {
+        let span = tracing::warn_span!(
+            "daemon.block_dependent_siblings",
+            plan_id = %plan_id,
+            terminal_work_id = %terminal_work_id,
+            terminal_status = ?terminal_status,
+        );
+        let _enter = span.enter();
+        let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "block_dependent_siblings: list_by_parent_id failed");
+                return;
+            }
+        };
+        let pending_dependents: Vec<Work> = siblings
+            .iter()
+            .filter(|w| w.status == WorkStatus::Pending && w.dependencies.iter().any(|d| d == &terminal_work_id))
+            .cloned()
+            .collect();
+        let mut blocked = 0usize;
+        for mut work in pending_dependents {
+            work.blocked_reason = Some(format!(
+                "dep {} reached {:?}; irrecoverable",
+                terminal_work_id, terminal_status
+            ));
+            if let Err(e) = transition_and_persist_work(
+                &*ctx.summary_fanout,
+                &mut work,
+                WorkStatus::Blocked,
+                Role::Reactor,
+                false,
+            )
+            .await
+            {
+                warn!(work_id = %work.id, error = %e, "block_dependent_siblings: Pending -> Blocked failed");
+            } else {
+                blocked += 1;
+            }
+        }
+        warn!(blocked, "block_dependent_siblings: done");
+    })
+}
+
 /// Resolve the current HEAD commit of the target repo. Async via
 /// `tokio::process::Command` so git subprocess spawning doesn't
 /// block the tokio reactor.
@@ -827,6 +940,7 @@ pub(crate) async fn transition_and_persist_work<S>(
 where
     S: store::WorkUpdateSink,
 {
+    let expected_updated_at = work.updated_at;
     let result = if override_ {
         work.override_status(target, role)
             .map_err(|e| format!("fsm override rejected: {e}"))?
@@ -837,7 +951,7 @@ where
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
-    sink.update(work.clone())
+    sink.update(work.clone(), expected_updated_at)
         .await
         .map_err(|e| format!("works().update: {e}"))
 }

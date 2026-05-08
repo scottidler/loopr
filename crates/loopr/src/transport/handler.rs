@@ -173,15 +173,40 @@ where
             let count = works.len();
             match ctx.store.works().create_many(works.clone()).await {
                 Ok(ids) => {
-                    info!(request_id = id, plan_id = %plan_snapshot.id, work_count = count, ids = ?ids, "plan.create decomposed + persisted");
-                    // Stage 7 wiring: spawn one Implementer task per Work
-                    // into the daemon-owned JoinSet. The JoinSet is
-                    // drained at shutdown (see daemon_main) before
-                    // Arc::try_unwrap on DaemonContext reclaims the Store.
+                    // Dep gate: partition into unblocked (all deps Done or
+                    // no deps) and held (at least one dep not Done). Only
+                    // unblocked Works get an Implementer spawned immediately;
+                    // held Works stay Pending and are promoted reactively when
+                    // their deps reach Done (see promote_unblocked_siblings).
+                    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| w.all_deps_done(&works));
+                    let unblocked_count = unblocked.len();
+                    let held_count = held.len();
+                    // Warn on any held Work whose dep ids are not in this
+                    // batch - indicates a decomposer bug (unknown dep ref).
+                    for w in &held {
+                        for dep_id in &w.dependencies {
+                            if !works.iter().any(|s| &s.id == dep_id) {
+                                warn!(
+                                    work_id = %w.id,
+                                    dep_id = %dep_id,
+                                    "dep_gate: unknown dep id not in decomposed batch; Work may hang Pending"
+                                );
+                            }
+                        }
+                    }
+                    info!(
+                        request_id = id,
+                        plan_id = %plan_snapshot.id,
+                        work_count = count,
+                        ids = ?ids,
+                        unblocked = unblocked_count,
+                        held = held_count,
+                        "plan.create decomposed + persisted"
+                    );
                     let mut tasks = ctx.implementer_tasks.lock().await;
-                    for work in works {
+                    for work in unblocked {
                         let task_ctx = Arc::clone(ctx);
-                        tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                        tasks.spawn(task_ctx.spawn_implementer_for_work(work.clone()));
                     }
                 }
                 Err(e) => warn!(
