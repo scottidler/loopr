@@ -37,8 +37,10 @@ pub enum MessageRole {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
     /// Plain text. Used by Director (state summaries), Implementer
-    /// self-correction, and Reviewer.
-    Text(String),
+    /// self-correction, and Reviewer. Named field `text` matches the
+    /// Anthropic wire format and satisfies serde's internal-tag
+    /// requirement (a map, not a bare string).
+    Text { text: String },
     /// A tool-invocation request emitted by the assistant. Defined
     /// now for type completeness; `AnthropicClient` returns
     /// `Fatal(NotImplemented)` until 2.1 activates this path.
@@ -49,10 +51,7 @@ pub enum MessageContent {
     },
     /// The result of a tool invocation, returned by the user turn.
     /// Paired with a preceding `ToolUse` block. Same staged-stub rule.
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-    },
+    ToolResult { tool_use_id: String, content: String },
 }
 
 impl Message {
@@ -60,7 +59,7 @@ impl Message {
     pub fn user(text: impl Into<String>) -> Self {
         Self {
             role: MessageRole::User,
-            content: vec![MessageContent::Text(text.into())],
+            content: vec![MessageContent::Text { text: text.into() }],
         }
     }
 
@@ -68,7 +67,7 @@ impl Message {
     pub fn assistant(text: impl Into<String>) -> Self {
         Self {
             role: MessageRole::Assistant,
-            content: vec![MessageContent::Text(text.into())],
+            content: vec![MessageContent::Text { text: text.into() }],
         }
     }
 

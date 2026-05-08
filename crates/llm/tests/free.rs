@@ -4,7 +4,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use llm::{AnthropicClient, ChatMessage, FatalReason, LlmClient, LlmConfig, LlmError};
+use llm::{AnthropicClient, FatalReason, LlmClient, LlmConfig, LlmError, Message};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -44,7 +44,7 @@ async fn free_happy_path_returns_text() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let messages = vec![ChatMessage::user("say hi")];
+    let messages = vec![Message::user("say hi")];
     let (result, _usage) = client.complete_free("sys", &messages).await.unwrap();
 
     assert_eq!(result, "hello world");
@@ -61,9 +61,9 @@ async fn free_request_body_has_no_tools_or_tool_choice() {
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
     let messages = vec![
-        ChatMessage::user("first"),
-        ChatMessage::assistant("intermediate"),
-        ChatMessage::user("last"),
+        Message::user("first"),
+        Message::assistant("intermediate"),
+        Message::user("last"),
     ];
     client.complete_free("S", &messages).await.unwrap();
 
@@ -117,7 +117,7 @@ async fn free_picks_first_text_block_skipping_thinking() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let msgs = vec![ChatMessage::user("q")];
+    let msgs = vec![Message::user("q")];
     let (out, _usage) = client.complete_free("s", &msgs).await.unwrap();
     assert_eq!(out, "the answer", "first text block wins, thinking skipped");
 }
@@ -143,7 +143,7 @@ async fn free_no_text_block_maps_to_schema_validation() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[ChatMessage::user("q")]).await.unwrap_err();
+    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::SchemaValidation(msg),
@@ -171,7 +171,7 @@ async fn free_max_tokens_maps_to_context_exhausted() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[ChatMessage::user("q")]).await.unwrap_err();
+    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::ContextExhausted { used, limit },
@@ -193,7 +193,7 @@ async fn free_http_500_maps_to_retryable() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[ChatMessage::user("q")]).await.unwrap_err();
+    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
     match err {
         LlmError::Retryable { reason } => assert!(reason.contains("500"), "got: {reason}"),
         other => panic!("expected Retryable, got {other:?}"),
@@ -210,7 +210,7 @@ async fn free_http_401_maps_to_fatal_auth() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[ChatMessage::user("q")]).await.unwrap_err();
+    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::Auth(_),

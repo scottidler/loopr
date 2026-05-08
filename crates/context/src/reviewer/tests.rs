@@ -69,7 +69,11 @@ fn user_message_renders_bundle_metadata() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "diff body", None)
         .unwrap();
-    assert!(out.first_user_text().unwrap().contains("deadbeef1234"), "got: {}", out.first_user_text().unwrap());
+    assert!(
+        out.first_user_text().unwrap().contains("deadbeef1234"),
+        "got: {}",
+        out.first_user_text().unwrap()
+    );
     assert!(out.first_user_text().unwrap().contains("loopr/wk-00042-1"));
     assert!(out.first_user_text().unwrap().contains("src/cli.rs, src/main.rs"));
     assert!(out.first_user_text().unwrap().contains("loc_changed:    17"));
@@ -127,7 +131,8 @@ fn empty_diff_with_head_commit_renders_structural_corruption_marker() {
         .build_for_reviewer(&bundle, &work, "", None)
         .unwrap();
     assert!(
-        out.first_user_text().unwrap()
+        out.first_user_text()
+            .unwrap()
             .contains("(empty patch body: structural corruption; see system prompt)"),
         "got: {}",
         out.first_user_text().unwrap()
@@ -141,7 +146,11 @@ fn empty_diff_without_head_commit_renders_noop_marker() {
     let out = InlineContextBuilder::new()
         .build_for_reviewer(&bundle, &work, "", None)
         .unwrap();
-    assert!(out.first_user_text().unwrap().contains("(no diff: noop bundle without head_commit)"));
+    assert!(
+        out.first_user_text()
+            .unwrap()
+            .contains("(no diff: noop bundle without head_commit)")
+    );
 }
 
 #[test]
@@ -154,7 +163,9 @@ fn pre_truncated_diff_passes_through_verbatim() {
         .build_for_reviewer(&bundle, &work, truncated, None)
         .unwrap();
     assert!(
-        out.first_user_text().unwrap().contains("[... diff truncated; original 200000 bytes"),
+        out.first_user_text()
+            .unwrap()
+            .contains("[... diff truncated; original 200000 bytes"),
         "truncation marker must pass through verbatim"
     );
 }

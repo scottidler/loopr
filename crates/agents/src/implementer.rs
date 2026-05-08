@@ -23,7 +23,7 @@ use tracing::{debug, info, instrument, warn};
 
 use context::{ContextBuilder, ITERATION_SUMMARY_CAP, IterationSummary, StateSummary};
 use domain::{Bundle, BundleId, Work};
-use llm::{Message, LlmClient};
+use llm::{LlmClient, Message};
 use telemetry::transcript::{TranscriptIteration, append_iteration, implementer_path};
 use worktree::Worktree;
 
@@ -242,7 +242,7 @@ where
                                 work.id.as_ref(),
                                 iteration,
                                 &assembled.system_prompt,
-                                &assembled.first_user_text().unwrap_or_default(),
+                                assembled.first_user_text().unwrap_or_default(),
                                 &last_raw,
                                 &[],
                                 &[],
@@ -262,7 +262,7 @@ where
                 work.id.as_ref(),
                 iteration,
                 &assembled.system_prompt,
-                &assembled.first_user_text().unwrap_or_default(),
+                assembled.first_user_text().unwrap_or_default(),
                 &last_raw,
                 &[],
                 &["(all parse attempts failed this iteration)".to_string()],
@@ -287,7 +287,7 @@ where
                     work.id.as_ref(),
                     iteration,
                     &assembled.system_prompt,
-                    &assembled.first_user_text().unwrap_or_default(),
+                    assembled.first_user_text().unwrap_or_default(),
                     &last_raw,
                     &parsed_actions_snapshot,
                     &summaries,
@@ -308,7 +308,7 @@ where
                         work.id.as_ref(),
                         iteration,
                         &assembled.system_prompt,
-                        &assembled.first_user_text().unwrap_or_default(),
+                        assembled.first_user_text().unwrap_or_default(),
                         &last_raw,
                         &parsed_actions_snapshot,
                         &summaries,
@@ -325,7 +325,7 @@ where
                         work.id.as_ref(),
                         iteration,
                         &assembled.system_prompt,
-                        &assembled.first_user_text().unwrap_or_default(),
+                        assembled.first_user_text().unwrap_or_default(),
                         &last_raw,
                         &parsed_actions_snapshot,
                         &summaries,
@@ -342,7 +342,7 @@ where
                         work.id.as_ref(),
                         iteration,
                         &assembled.system_prompt,
-                        &assembled.first_user_text().unwrap_or_default(),
+                        assembled.first_user_text().unwrap_or_default(),
                         &last_raw,
                         &parsed_actions_snapshot,
                         &summaries,
@@ -394,7 +394,7 @@ where
                                         work.id.as_ref(),
                                         iteration,
                                         &assembled.system_prompt,
-                                        &assembled.first_user_text().unwrap_or_default(),
+                                        assembled.first_user_text().unwrap_or_default(),
                                         &last_raw,
                                         &parsed_actions_snapshot,
                                         &summaries,
@@ -411,7 +411,7 @@ where
                                         work.id.as_ref(),
                                         iteration,
                                         &assembled.system_prompt,
-                                        &assembled.first_user_text().unwrap_or_default(),
+                                        assembled.first_user_text().unwrap_or_default(),
                                         &last_raw,
                                         &parsed_actions_snapshot,
                                         &summaries,
@@ -428,7 +428,7 @@ where
                                         work.id.as_ref(),
                                         iteration,
                                         &assembled.system_prompt,
-                                        &assembled.first_user_text().unwrap_or_default(),
+                                        assembled.first_user_text().unwrap_or_default(),
                                         &last_raw,
                                         &parsed_actions_snapshot,
                                         &summaries,
@@ -481,7 +481,7 @@ where
             work.id.as_ref(),
             iteration,
             &assembled.system_prompt,
-            &assembled.first_user_text().unwrap_or_default(),
+            assembled.first_user_text().unwrap_or_default(),
             &last_raw,
             &parsed_actions_snapshot,
             &summaries,

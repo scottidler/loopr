@@ -12,7 +12,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
-use context::{ContextBuilder, InlineContextBuilder, StateSummary};
+use context::{ContextBuilder, DirectorState, InlineContextBuilder, ResearchQuery, StateSummary};
 use domain::{AcceptanceCriteria, Bundle, Plan, Work};
 
 #[derive(Debug, Default, Clone)]
@@ -134,4 +134,35 @@ fn context_smoke_spans_implementer_and_reviewer() {
     );
     assert!(rev.fields.contains_key("diff_chars"));
     assert!(rev.fields.contains_key("system_chars"));
+}
+
+#[test]
+fn context_smoke_spans_director_and_researcher() {
+    let cap = Arc::new(SpanCapture::default());
+    let layer = CaptureLayer { capture: cap.clone() };
+    let sub = Registry::default().with(EnvFilter::new("trace")).with(layer);
+    let _g = tracing::subscriber::set_default(sub);
+
+    let builder = InlineContextBuilder::new();
+    let large_budget = 1_000_000;
+
+    let state = DirectorState {
+        plan_id: "pl-abc".into(),
+        works: vec![],
+        bundles: vec![],
+        blocked_reason: None,
+    };
+    let dir_ctx = builder.build_for_director(&state, &[], large_budget).unwrap();
+    assert!(!dir_ctx.system_prompt.is_empty());
+    assert!(!dir_ctx.messages.is_empty());
+    assert!(dir_ctx.token_estimate > 0);
+
+    let query = ResearchQuery {
+        question: "what does main() do?".into(),
+        context_hints: vec!["src/main.rs".into()],
+    };
+    let res_ctx = builder.build_for_researcher(&query, &[], large_budget).unwrap();
+    assert!(!res_ctx.system_prompt.is_empty());
+    assert!(!res_ctx.messages.is_empty());
+    assert!(res_ctx.token_estimate > 0);
 }

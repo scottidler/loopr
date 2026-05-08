@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use context::InlineContextBuilder;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, Verdict, Work, WorkId};
-use llm::{Message, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
+use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 
 use store::{BundleUpdateError, BundleUpdateSink};
 

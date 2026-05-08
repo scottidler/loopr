@@ -256,8 +256,8 @@ impl LlmClient for AnthropicClient {
                 .last()
                 .and_then(|m| m.content.first())
                 .and_then(|c| {
-                    if let MessageContent::Text(t) = c {
-                        Some(truncate_preview(t))
+                    if let MessageContent::Text { text } = c {
+                        Some(truncate_preview(text))
                     } else {
                         None
                     }
@@ -440,15 +440,17 @@ fn validate_api_base_url(url_str: &str) -> Result<(), LlmError> {
 /// - `ToolUse`/`ToolResult` blocks → `Fatal(NotImplemented)` until 2.1
 ///   wires the full Researcher path.
 fn to_wire_content(blocks: &[MessageContent]) -> Result<Value, LlmError> {
-    if blocks.len() == 1 {
-        if let MessageContent::Text(t) = &blocks[0] {
-            return Ok(Value::String(t.clone()));
-        }
+    if blocks.len() == 1
+        && let MessageContent::Text { text } = &blocks[0]
+    {
+        return Ok(Value::String(text.clone()));
     }
     let mut arr = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
-            MessageContent::Text(t) => arr.push(serde_json::json!({"type": "text", "text": t})),
+            MessageContent::Text { text } => {
+                arr.push(serde_json::json!({"type": "text", "text": text}));
+            }
             MessageContent::ToolUse { .. } | MessageContent::ToolResult { .. } => {
                 return Err(LlmError::Fatal {
                     reason: crate::error::FatalReason::NotImplemented {

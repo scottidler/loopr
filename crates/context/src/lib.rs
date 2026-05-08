@@ -48,8 +48,8 @@ impl AssembledContext {
     pub fn first_user_text(&self) -> Option<&str> {
         use llm::MessageContent;
         self.messages.first().and_then(|m| {
-            if let Some(MessageContent::Text(t)) = m.content.first() {
-                Some(t.as_str())
+            if let Some(MessageContent::Text { text }) = m.content.first() {
+                Some(text.as_str())
             } else {
                 None
             }

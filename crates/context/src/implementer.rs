@@ -24,8 +24,8 @@ use crate::history::{estimate_message_tokens, trim_history};
 use crate::loader::PromptLoader;
 use crate::reviewer::build_reviewer_user_ctx;
 use crate::{
-    AssembledContext, BundleLine, ContextBuilder, ContextError, DirectorState, ITERATION_SUMMARY_CAP,
-    IterationSummary, ResearchQuery, StateSummary, WorkLine,
+    AssembledContext, BundleLine, ContextBuilder, ContextError, DirectorState, ITERATION_SUMMARY_CAP, IterationSummary,
+    ResearchQuery, StateSummary, WorkLine,
 };
 
 /// Rough tokens-per-char estimate (English text averages ~4 chars

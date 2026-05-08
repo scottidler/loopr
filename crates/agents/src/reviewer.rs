@@ -33,7 +33,7 @@ use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
 use domain::{Bundle, BundleStatus, ReviewIssue, Role, Verdict, Work};
-use llm::{Message, LlmClient};
+use llm::{LlmClient, Message};
 use store::{BundleUpdateError, BundleUpdateSink};
 use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
 
@@ -158,7 +158,7 @@ where
         &deps.llm,
         &deps.config,
         &assembled.system_prompt,
-        &assembled.first_user_text().unwrap_or_default(),
+        assembled.first_user_text().unwrap_or_default(),
     )
     .await?;
 

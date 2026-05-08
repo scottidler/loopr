@@ -32,10 +32,8 @@ pub fn estimate_message_tokens(msg: &Message) -> usize {
     msg.content
         .iter()
         .map(|c| match c {
-            MessageContent::Text(t) => t.len(),
-            MessageContent::ToolUse { input, .. } => {
-                serde_json::to_string(input).map(|s| s.len()).unwrap_or(0)
-            }
+            MessageContent::Text { text } => text.len(),
+            MessageContent::ToolUse { input, .. } => serde_json::to_string(input).map(|s| s.len()).unwrap_or(0),
             MessageContent::ToolResult { content, .. } => content.len(),
         })
         .sum::<usize>()

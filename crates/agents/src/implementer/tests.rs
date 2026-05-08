@@ -8,7 +8,7 @@ use tempfile::TempDir;
 
 use context::{InlineContextBuilder, StateSummary};
 use domain::{BundleId, PlanId, Work, WorkId};
-use llm::{Message, LlmClient, LlmError, ToolCall, ToolSchema as LlmToolSchema, Usage};
+use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use worktree::Worktree;
 
 use super::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
