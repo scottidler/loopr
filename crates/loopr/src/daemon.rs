@@ -491,7 +491,7 @@ where
     let context_builder = Arc::new(::context::InlineContextBuilder::with_loader(prompt_loader));
     let implementer_config = ::agents::ImplementerConfig::default();
     let reviewer_config = ::agents::ReviewerConfig::default();
-    let integrator_config = ::integrator::IntegratorConfig::default();
+    let integrator_config = config.integrator.into_integrator_config();
     let worktree_cleanup_policy = config.worktree.cleanup_policy;
 
     let ctx = Arc::new(DaemonContext::new(

@@ -11,6 +11,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use std::time::Duration;
+
 use agents::AgentsConfig;
 use llm::LlmConfig;
 use tools::ToolsConfig;
@@ -20,6 +22,43 @@ use crate::error::LooprError;
 
 /// Relative path (from target root) to the loopr config file.
 const CONFIG_SUBPATH: &str = ".loopr/config.yml";
+
+/// YAML-facing integrator knobs. Only the user-configurable fields are
+/// exposed here; `IntegratorConfig::git_timeout` stays internal (not
+/// user-tunable). Converted to `integrator::IntegratorConfig` in
+/// `build_context`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct IntegratorSection {
+    /// Shell commands run after a successful git merge, before Tick
+    /// persistence. Each string is passed to `sh -c`. First non-zero
+    /// exit rolls back the merge and returns ValidationFailed.
+    /// Default: `[]` (skip validation entirely).
+    pub validation_commands: Vec<String>,
+
+    /// Wall-clock cap in seconds for each individual validation command.
+    /// Default: 300.
+    pub validation_timeout_secs: u64,
+}
+
+impl Default for IntegratorSection {
+    fn default() -> Self {
+        Self {
+            validation_commands: vec![],
+            validation_timeout_secs: 300,
+        }
+    }
+}
+
+impl IntegratorSection {
+    pub fn into_integrator_config(self) -> integrator::IntegratorConfig {
+        integrator::IntegratorConfig {
+            validation_commands: self.validation_commands,
+            validation_timeout: Duration::from_secs(self.validation_timeout_secs),
+            ..integrator::IntegratorConfig::default()
+        }
+    }
+}
 
 /// Top-level configuration composed from each stage crate's config.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -37,6 +76,10 @@ pub struct Config {
     /// `ctx.config.agents.implementer.clone()` etc.
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// Integrator knobs. Validation commands and timeout are the
+    /// user-facing surface; git_timeout stays internal.
+    #[serde(default)]
+    pub integrator: IntegratorSection,
 }
 
 impl Config {

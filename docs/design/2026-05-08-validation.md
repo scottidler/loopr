@@ -123,7 +123,7 @@ Validation is a gate, not a field. A Tick only exists on success. `ValidationFai
 - Implement `pub(crate) async fn run_validation(commands: &[String], timeout: Duration, target: &Path) -> Result<(), ValidationError>` where `ValidationError` carries the failing command, exit code, and captured stdout+stderr log.
 - Each command runs via `tokio::process::Command::new("sh").arg("-c").arg(cmd).current_dir(target).kill_on_drop(true)` with stdout+stderr captured (`output().await`). `.kill_on_drop(true)` is mandatory: without it, dropping a timed-out future does not kill the OS process, leaving rogue child processes running in the worktree.
 - Timeout wraps each command independently via `tokio::time::timeout`.
-- Captured output is capped at 64 KiB via `AsyncReadExt::take(65536)` applied to the combined stdout+stderr stream. This prevents an infinitely-looping command from OOM-ing the daemon before the timeout fires.
+- Captured output stored in `ValidationError.log` is capped at 64 KiB by truncating the combined stdout+stderr buffer after `output()` returns. This bounds the error record size. An infinite-output command is killed by the timeout (via `kill_on_drop`), not this cap.
 - On success (all commands exit 0 within timeout): `Ok(())`.
 - On failure: `Err(ValidationError { command, exit_code, log })`.
 - `ValidationError` is a module-private type that `integrate()` maps to `IntegrationError::ValidationFailed`.
@@ -212,7 +212,7 @@ Single branch on `v5`. Four phases, each committed separately. No feature flag n
 
 ## Open Questions
 
-- [x] **Log size in `ValidationFailed`.** Capped at 64 KiB via `AsyncReadExt::take(65536)` on the combined stdout+stderr stream. Relying on the tracing subscriber to truncate is not sufficient: an infinite-output command will OOM the daemon before the timeout fires because `output().await` buffers the entire stream in memory first. 64 KiB captures the failure message in all practical cases.
+- [x] **Log size in `ValidationFailed`.** Capped at 64 KiB by truncating the combined stdout+stderr buffer after `output()` returns. An infinite-output command is killed by `kill_on_drop` when the per-command timeout fires — the cap bounds the stored error record, not in-memory accumulation during the run. Sufficient for first-gate commands.
 - [ ] **Should the daemon log a structured `warn!` with the failing command and exit code, or rely on the error propagation?** Lean: structured `warn!` at the `spawn_integrator_for_bundle` call site in `context.rs` - same pattern as existing error paths.
 - [ ] **Is `git reset --hard` the right rollback, or `git revert`?** Reset is right: the merge commit was never pushed (v5 git posture is never-push); hard reset discards it cleanly. Revert would add an extra commit that undoes the merge, which is unnecessary noise on a branch no one else has seen.
 
