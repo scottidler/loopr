@@ -12,6 +12,7 @@ mod classify;
 mod config;
 mod error;
 mod git;
+mod validation;
 
 use std::future::Future;
 use std::path::PathBuf;
