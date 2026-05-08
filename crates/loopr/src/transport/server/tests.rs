@@ -226,6 +226,9 @@ async fn oversize_line_closes_connection_daemon_stays_up() {
             Ok(0) => {} // clean close after LineTooLong
             Ok(n) => panic!("unexpected payload back from daemon: {n} bytes"),
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            // ECONNRESET: server closed mid-stream with data still in flight.
+            // Same root cause as UnexpectedEof; depends on kernel RST timing.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
             Err(e) => panic!("unexpected read error: {e}"),
         }
     }
