@@ -198,6 +198,13 @@ pub(crate) async fn merge_abort(target: &Path, git_timeout: Duration) {
     let _ = run_git(target, &["merge", "--abort"], git_timeout).await;
 }
 
+/// Best-effort `git clean -fd`. Removes untracked files and directories
+/// left by validation commands that `git reset --hard` cannot restore.
+/// Errors are swallowed; the rollback continues regardless.
+pub(crate) async fn clean_fd(target: &Path, git_timeout: Duration) {
+    let _ = run_git(target, &["clean", "-fd"], git_timeout).await;
+}
+
 /// Reset the current branch hard to the given SHA. A failure here is
 /// fatal: rollback could not restore the integration branch, and the
 /// daemon's worktree-crash-recovery pass at restart owns the repair.

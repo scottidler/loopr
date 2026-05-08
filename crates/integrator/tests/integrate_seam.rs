@@ -573,3 +573,58 @@ async fn crash_recovery_d_merge_never_landed_merge_fails_produces_conflict() {
 
     store.close().await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Validation failure
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn validation_failure_rolls_back_and_marks_bundle_integration_failed() {
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feature.rs", "pub fn f() {}\n");
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feature.rs".to_string()]).await;
+
+    // Capture integration branch SHA before the call.
+    let integ = format!("loopr/plan-{}", plan.id);
+    let pre_sha = git_capture(&repo, &["rev-parse", &integ]);
+
+    let mut config = IntegratorConfig::default();
+    config.validation_commands = vec!["false".to_string()]; // always fails
+    let deps = IntegratorDeps {
+        bundle_sink: &store,
+        works: &store,
+        ticks: &store,
+        config,
+        target: repo.clone(),
+        git_lock: Arc::new(AsyncMutex::new(())),
+    };
+
+    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
+    match result {
+        Err(IntegrationError::ValidationFailed { ref command, exit_code, .. }) => {
+            assert_eq!(command, "false");
+            assert_eq!(exit_code, Some(1));
+        }
+        other => panic!("expected ValidationFailed, got {other:?}"),
+    }
+
+    // Integration branch must be back at pre_sha (merge rolled back).
+    let post_sha = git_capture(&repo, &["rev-parse", &integ]);
+    assert_eq!(pre_sha, post_sha, "integration branch should be reset to pre-merge SHA");
+
+    // Bundle must be IntegrationFailed.
+    let final_bundle = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(final_bundle.status, BundleStatus::IntegrationFailed);
+
+    // No Tick must have been written.
+    let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
+    assert!(ticks.is_empty(), "no Tick should exist after validation failure");
+
+    store.close().await.unwrap();
+}

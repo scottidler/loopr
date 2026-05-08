@@ -767,6 +767,24 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 let _ = bundle; // bundle was previously re-fetched here for the inline summary
                 let _ = work;
             }
+            Err(IntegrationError::ValidationFailed { ref command, exit_code, .. }) => {
+                // Bundles are already IntegrationFailed (integrate() called
+                // fail_all_without_reset before returning). Only Work needs
+                // a state change here.
+                warn!(
+                    command = %command,
+                    exit_code = ?exit_code,
+                    "post-merge validation failed; marking Work Blocked"
+                );
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Reactor,
+                    true,
+                )
+                .await;
+            }
             Err(e) => {
                 error!(error = %e, "integrator terminal; marking Work Blocked");
                 // One-step via the Phase 1 InReview -> Blocked override.
