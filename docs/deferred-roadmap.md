@@ -158,7 +158,7 @@ These items existed in v3 and are still relevant; the python-api run did not dir
 
 ### 2.4 Multi-turn LLM history and context builder v2
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-multi-turn-llm.md`
+- **Proposed filename:** [`docs/design/2026-05-08-multi-turn-llm.md`](design/2026-05-08-multi-turn-llm.md) **Status: Implemented**
 - **Crates touched:** `llm`, `context`, `agents`
 - **Depends on:** none (this is the gating Tier 2 item; many later items depend on it)
 - **What it covers.** v5's `LlmClient` trait today takes bare `&str` (per [docs/design/2026-04-20-llm-client.md](design/2026-04-20-llm-client.md)). For Coordinator state-summary turns, Director judgment turns, and Researcher iterative inquiry, we need typed multi-turn `Message` history. Doc must define: the `Message` enum (system / user / assistant / tool-use / tool-result), the conversion from / to Anthropic SDK shapes, how `context` crate consumers build histories, and how the Implementer's existing single-iteration `messages` Vec migrates to this typed shape without churn. Also picks up the deferred `context-builder.md` from the Stage 6 scope memo.
