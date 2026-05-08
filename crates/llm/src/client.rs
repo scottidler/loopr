@@ -16,7 +16,7 @@
 use std::future::Future;
 
 use crate::error::LlmError;
-use crate::message::ChatMessage;
+use crate::message::Message;
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
@@ -48,20 +48,23 @@ pub trait LlmClient {
     /// Send a free-form multi-turn completion. No `tool_choice`, no
     /// `tools`: the model replies with plain text (possibly JSON, at
     /// the caller's request inside the prompt). Used by the
-    /// Implementer's self-correction sub-loop, where parse failures
-    /// append `(assistant: raw, user: error)` pairs to `messages` and
-    /// the next call sees the full conversation.
+    /// Implementer's self-correction sub-loop, Director state-summary
+    /// turns, and (later) the Researcher's iterative inquiry.
     ///
     /// Contract: the last message in `messages` MUST have
-    /// `role = "user"` (Anthropic's Messages API requires the turn
-    /// list to end with user). The returned `String` is the first
+    /// `role = User` (Anthropic's Messages API requires the turn list
+    /// to end with user). The returned `String` is the first
     /// `{"type": "text"}` content block from the response; thinking
     /// blocks are discarded by the backend. The returned `Usage`
     /// carries the same per-call counts as `complete_with_tool`.
+    ///
+    /// `ToolUse`/`ToolResult` content blocks in `messages` are type-
+    /// level defined but not yet wired; `AnthropicClient` returns
+    /// `Fatal(NotImplemented)` if encountered until 2.1 ships.
     fn complete_free<'a>(
         &'a self,
         system: &'a str,
-        messages: &'a [ChatMessage],
+        messages: &'a [Message],
     ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a;
 }
 
@@ -81,7 +84,7 @@ impl<L: LlmClient + ?Sized> LlmClient for std::sync::Arc<L> {
     fn complete_free<'a>(
         &'a self,
         system: &'a str,
-        messages: &'a [ChatMessage],
+        messages: &'a [Message],
     ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         (**self).complete_free(system, messages)
     }

@@ -23,7 +23,7 @@ pub use anthropic::AnthropicClient;
 pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
-pub use message::ChatMessage;
+pub use message::{Message, MessageContent, MessageRole};
 pub use metered::MeteredLlmClient;
 pub use tool::{ToolCall, ToolSchema};
 pub use usage::Usage;

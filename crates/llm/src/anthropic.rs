@@ -19,7 +19,7 @@ use tracing::{debug, info_span, instrument, warn};
 use crate::client::LlmClient;
 use crate::config::LlmConfig;
 use crate::error::{FatalReason, LlmError};
-use crate::message::ChatMessage;
+use crate::message::{Message, MessageContent};
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
@@ -148,13 +148,24 @@ struct ToolChoiceWire<'a> {
 /// `tool_choice`: the model replies with plain content blocks.
 /// Same `system: Value` shape as `AnthropicRequest` so the cached
 /// system block carries across both call paths.
+///
+/// `content` on each message is a `Value` rather than `&str` because
+/// multi-block turns (tool-use arcs) require the content-block array
+/// form `[{"type":"...","text":"..."}]` while plain-text turns may use
+/// a bare string. `to_wire_content` handles the conversion.
 #[derive(Serialize)]
-struct AnthropicFreeRequest<'a> {
-    model: &'a str,
+struct AnthropicFreeRequest {
+    model: String,
     max_tokens: u32,
     temperature: f32,
     system: Value,
-    messages: Vec<AnthropicMessage<'a>>,
+    messages: Vec<AnthropicFreeMessage>,
+}
+
+#[derive(Serialize)]
+struct AnthropicFreeMessage {
+    role: String,
+    content: Value,
 }
 
 /// Build the `system` field as a one-element content-block array with
@@ -238,12 +249,19 @@ impl LlmClient for AnthropicClient {
     fn complete_free<'a>(
         &'a self,
         system: &'a str,
-        messages: &'a [ChatMessage],
+        messages: &'a [Message],
     ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let last_user_preview = messages
                 .last()
-                .map(|m| truncate_preview(&m.content))
+                .and_then(|m| m.content.first())
+                .and_then(|c| {
+                    if let MessageContent::Text(t) = c {
+                        Some(truncate_preview(t))
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or_default();
             let span = info_span!(
                 "llm.anthropic.free",
@@ -294,17 +312,21 @@ impl LlmClient for AnthropicClient {
 }
 
 impl AnthropicClient {
-    async fn send_free_request(&self, system: &str, messages: &[ChatMessage]) -> Result<(String, Usage), LlmError> {
+    async fn send_free_request(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
         let url = format!("{}/v1/messages", self.config.api_base_url);
-        let wire_messages: Vec<AnthropicMessage<'_>> = messages
-            .iter()
-            .map(|m| AnthropicMessage {
-                role: &m.role,
-                content: &m.content,
-            })
-            .collect();
+        let mut wire_messages: Vec<AnthropicFreeMessage> = Vec::with_capacity(messages.len());
+        for m in messages {
+            let role = match m.role {
+                crate::message::MessageRole::User => "user",
+                crate::message::MessageRole::Assistant => "assistant",
+            };
+            wire_messages.push(AnthropicFreeMessage {
+                role: role.to_string(),
+                content: to_wire_content(&m.content)?,
+            });
+        }
         let body = AnthropicFreeRequest {
-            model: &self.config.model,
+            model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             system: build_system_block(system),
@@ -408,6 +430,35 @@ fn validate_api_base_url(url_str: &str) -> Result<(), LlmError> {
         });
     }
     Ok(())
+}
+
+/// Convert a slice of `MessageContent` blocks into the Anthropic wire
+/// `content` field. Rules:
+/// - Exactly one `Text` block → a bare JSON string (plain string form,
+///   matching the existing single-turn wire shape for cache locality).
+/// - Any other combination → a JSON array of content-block objects.
+/// - `ToolUse`/`ToolResult` blocks → `Fatal(NotImplemented)` until 2.1
+///   wires the full Researcher path.
+fn to_wire_content(blocks: &[MessageContent]) -> Result<Value, LlmError> {
+    if blocks.len() == 1 {
+        if let MessageContent::Text(t) = &blocks[0] {
+            return Ok(Value::String(t.clone()));
+        }
+    }
+    let mut arr = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            MessageContent::Text(t) => arr.push(serde_json::json!({"type": "text", "text": t})),
+            MessageContent::ToolUse { .. } | MessageContent::ToolResult { .. } => {
+                return Err(LlmError::Fatal {
+                    reason: crate::error::FatalReason::NotImplemented {
+                        feature: "ToolUse/ToolResult message content (deferred to 2.1)".into(),
+                    },
+                });
+            }
+        }
+    }
+    Ok(Value::Array(arr))
 }
 
 /// Truncate a prompt to `PROMPT_PREVIEW_MAX_BYTES` for span emission,

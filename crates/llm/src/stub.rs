@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::client::LlmClient;
 use crate::error::LlmError;
-use crate::message::ChatMessage;
+use crate::message::Message;
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
@@ -81,7 +81,7 @@ impl LlmClient for ScriptedLlm {
     fn complete_free<'a>(
         &'a self,
         _system: &'a str,
-        _messages: &'a [ChatMessage],
+        _messages: &'a [Message],
     ) -> impl std::future::Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let popped = self.free_responses.lock().expect("free_responses lock").pop_front();

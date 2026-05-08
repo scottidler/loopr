@@ -68,4 +68,10 @@ pub enum FatalReason {
     /// Config was missing the API key, or the key env var was unset,
     /// or the base URL was malformed.
     ConfigInvalid(String),
+
+    /// A code path that is type-level-defined but not yet wired for
+    /// production. Returned by `AnthropicClient` when it encounters
+    /// `ToolUse`/`ToolResult` message content before the 2.1
+    /// Researcher ships. Encountering this is always a caller error.
+    NotImplemented { feature: String },
 }

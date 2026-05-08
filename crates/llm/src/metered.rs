@@ -14,7 +14,7 @@ use telemetry::digest::process::ProcessSnapshot;
 
 use crate::client::LlmClient;
 use crate::error::LlmError;
-use crate::message::ChatMessage;
+use crate::message::Message;
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
@@ -50,7 +50,7 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
     fn complete_free<'a>(
         &'a self,
         system: &'a str,
-        messages: &'a [ChatMessage],
+        messages: &'a [Message],
     ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
         async move {
             let (raw, usage) = self.inner.complete_free(system, messages).await?;
