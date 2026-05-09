@@ -94,16 +94,10 @@ struct CollectingSink {
 }
 
 impl BundleSink for CollectingSink {
-    #[allow(clippy::manual_async_fn)]
-    fn persist<'a>(
-        &'a self,
-        bundle: domain::Bundle,
-    ) -> impl std::future::Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a {
-        async move {
-            let id = bundle.id.clone();
-            self.persisted.lock().unwrap().push(bundle);
-            Ok(id)
-        }
+    async fn persist(&self, bundle: domain::Bundle) -> Result<BundleId, BundleSinkError> {
+        let id = bundle.id.clone();
+        self.persisted.lock().unwrap().push(bundle);
+        Ok(id)
     }
 }
 

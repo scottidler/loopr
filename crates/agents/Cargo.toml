@@ -16,6 +16,7 @@ context = { path = "../context" }
 telemetry = { path = "../telemetry" }
 serde_json.workspace = true
 tracing.workspace = true
+trait-variant.workspace = true
 thiserror = "2.0.18"
 serde = { workspace = true, features = ["derive"] }
 tokio = { version = "1.52.1", features = ["process", "fs", "macros", "rt"] }

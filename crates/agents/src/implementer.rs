@@ -14,7 +14,6 @@
 //! - Per-iteration message history is local; cross-iteration context
 //!   travels only via `history: Vec<IterationSummary>`.
 
-use std::future::Future;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -82,9 +81,9 @@ fn write_implementer_transcript(
 /// Minimal store-write interface. Abstracting just the
 /// `Bundle`-create surface (not the full `Store`) keeps the
 /// Implementer's test fakes tiny.
-#[allow(clippy::manual_async_fn)]
+#[trait_variant::make(Send)]
 pub trait BundleSink: Send + Sync {
-    fn persist<'a>(&'a self, bundle: Bundle) -> impl Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a;
+    async fn persist(&self, bundle: Bundle) -> Result<BundleId, BundleSinkError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,14 +96,11 @@ pub enum BundleSinkError {
 /// (not `store`) because the trait is defined here; the impl does
 /// not require any change to the `store` crate.
 impl BundleSink for store::Store {
-    #[allow(clippy::manual_async_fn)]
-    fn persist<'a>(&'a self, bundle: Bundle) -> impl Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a {
-        async move {
-            self.bundles()
-                .create(bundle)
-                .await
-                .map_err(|e| BundleSinkError::Persist(e.to_string()))
-        }
+    async fn persist(&self, bundle: Bundle) -> Result<BundleId, BundleSinkError> {
+        self.bundles()
+            .create(bundle)
+            .await
+            .map_err(|e| BundleSinkError::Persist(e.to_string()))
     }
 }
 
@@ -114,9 +110,8 @@ impl BundleSink for store::Store {
 /// conflict with the Store shutdown contract requiring unique ownership
 /// at `Arc::try_unwrap` time).
 impl<B: BundleSink + ?Sized> BundleSink for &B {
-    #[allow(clippy::manual_async_fn)]
-    fn persist<'a>(&'a self, bundle: Bundle) -> impl Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a {
-        async move { (*self).persist(bundle).await }
+    async fn persist(&self, bundle: Bundle) -> Result<BundleId, BundleSinkError> {
+        (*self).persist(bundle).await
     }
 }
 
@@ -126,9 +121,8 @@ impl<B: BundleSink + ?Sized> BundleSink for &B {
 /// implementer take `bundles: &*self.store` (where `self.store:
 /// Arc<Store>`) without unwrapping.
 impl<B: BundleSink + ?Sized> BundleSink for std::sync::Arc<B> {
-    #[allow(clippy::manual_async_fn)]
-    fn persist<'a>(&'a self, bundle: Bundle) -> impl Future<Output = Result<BundleId, BundleSinkError>> + Send + 'a {
-        async move { (**self).persist(bundle).await }
+    async fn persist(&self, bundle: Bundle) -> Result<BundleId, BundleSinkError> {
+        (**self).persist(bundle).await
     }
 }
 
