@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-05-08
-**Status:** Draft
+**Status:** Implemented
 **Crates touched:** store, integrator, agents, llm, loopr
 **Review Passes Completed:** 5/5
 
