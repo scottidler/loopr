@@ -4,6 +4,7 @@
 
 mod action;
 mod config;
+mod director;
 mod dispatch;
 mod implementer;
 mod lifeguard;
@@ -12,7 +13,11 @@ mod reviewer;
 pub mod scope;
 
 pub use action::AgentAction;
-pub use config::{AgentsConfig, ImplementerConfig, ReviewerConfig};
+pub use config::{AgentsConfig, DirectorConfig, ImplementerConfig, ReviewerConfig};
+pub use director::{
+    DirectorAction, DirectorDeps, DirectorError, DirectorFsmState, DirectorState, DirectorStore, WorkSpawner,
+    parse_director_actions, run_director,
+};
 pub use dispatch::{ActionResult, DispatchError, RealTools, ToolExecutor, dispatch_action};
 pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
 pub use lifeguard::{Decision, Lifeguard, canonical_hash};

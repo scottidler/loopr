@@ -83,6 +83,36 @@ impl Default for ReviewerConfig {
     }
 }
 
+/// Knob bag for the Director agent. Director Phase 1 (long-lived per-Plan
+/// supervisor running on Opus) reads `poll_interval_secs`,
+/// `idle_interval_secs`, `max_restarts`, `model`, and `token_budget`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct DirectorConfig {
+    /// Seconds between iterations when actions were taken.
+    pub poll_interval_secs: u64,
+    /// Seconds between iterations when no actions were taken.
+    pub idle_interval_secs: u64,
+    /// Max restarts on transient failure.
+    pub max_restarts: u32,
+    /// Anthropic model for Director calls.
+    pub model: String,
+    /// Token budget per LLM call (system + history + state summary).
+    pub token_budget: usize,
+}
+
+impl Default for DirectorConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_secs: 5,
+            idle_interval_secs: 15,
+            max_restarts: 3,
+            model: "claude-opus-4-7".to_string(),
+            token_budget: 100_000,
+        }
+    }
+}
+
 /// Composes every role-level agent config. The top-level loopr
 /// `Config` embeds `agents: AgentsConfig`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -90,4 +120,5 @@ impl Default for ReviewerConfig {
 pub struct AgentsConfig {
     pub implementer: ImplementerConfig,
     pub reviewer: ReviewerConfig,
+    pub director: DirectorConfig,
 }
