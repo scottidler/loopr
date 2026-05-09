@@ -1,8 +1,9 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
+use tracing::{debug, instrument};
 use tree_sitter::{Node, Tree};
 
 use crate::error::ToolError;
@@ -51,6 +52,7 @@ pub struct Output {
     err,
 )]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolError> {
+    let started = Instant::now();
     // Parse the command via tree-sitter-bash ONCE; reuse the CST for both
     // the denylist check (step 1) and the lane-routing decision (step 2).
     // Per the design doc Phase 3 flow: "parse command via tree-sitter-bash
@@ -87,6 +89,13 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolErro
         .spawn(cmd, lane, &ctx.working_dir, input.timeout_secs, persist)
         .await?;
 
+    debug!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        bytes = result.combined_output.len(),
+        exit_code = result.exit_code,
+        timed_out = result.timed_out,
+        "tool: ok"
+    );
     Ok(Output {
         stdout: result.stdout,
         stderr: result.stderr,

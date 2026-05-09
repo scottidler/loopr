@@ -72,7 +72,7 @@ pub struct PersistConfig<'a> {
     level = "debug",
     skip_all,
     fields(
-        timeout_secs,
+        timeout_secs = timeout_secs,
         kill_strategy = ?kill_strategy,
         invocation_id = ?persist.invocation_id,
     ),
@@ -100,7 +100,13 @@ pub async fn spawn_with_process_group(
         .id()
         .ok_or_else(|| std::io::Error::other("spawned child reported no PID"))? as i32;
 
-    debug!(child_pid, ?kill_strategy, "spawned child in new process group");
+    debug!(
+        child_pid,
+        timeout_secs,
+        invocation_id = ?persist.invocation_id,
+        ?kill_strategy,
+        "spawn: process started"
+    );
 
     let stdout_pipe = child
         .stdout

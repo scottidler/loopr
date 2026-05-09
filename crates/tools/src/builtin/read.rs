@@ -1,9 +1,10 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::builtin::path::{PathError, resolve};
 use crate::error::ToolError;
@@ -68,6 +69,7 @@ impl From<Error> for ToolError {
     err,
 )]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
+    let started = Instant::now();
     let resolved = resolve(&input.path, ctx).map_err(|e| match e {
         PathError::Escape(s) => Error::SandboxViolation(s),
         PathError::Denied(s) => Error::PathDenied(s),
@@ -77,6 +79,7 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
         path: resolved.clone(),
         source,
     })?;
+    let bytes_read = bytes.len();
     let content_full = String::from_utf8_lossy(&bytes).into_owned();
     let lines_total = content_full.lines().count();
 
@@ -93,6 +96,12 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
         numbered.push_str(&format!("{:6}\t{}\n", idx + 1, line));
     }
 
+    debug!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        bytes = bytes_read,
+        lines_shown,
+        "tool: ok"
+    );
     Ok(Output {
         content: numbered,
         lines_shown,

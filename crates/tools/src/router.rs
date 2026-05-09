@@ -136,6 +136,13 @@ impl LaneRouter {
             .unwrap_or(policy.default_timeout_secs)
             .min(policy.max_timeout_secs);
 
+        debug!(
+            lane = lane.as_str(),
+            timeout_secs = timeout,
+            sandbox = ?self.sandbox,
+            "router: dispatched"
+        );
+
         debug!(?lane, timeout_secs = timeout, "router spawn acquiring slot");
 
         let permit = self.semaphores[&lane]

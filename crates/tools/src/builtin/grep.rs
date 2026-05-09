@@ -1,9 +1,10 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::builtin::path::{PathError, resolve};
 use crate::error::ToolError;
@@ -56,6 +57,7 @@ pub struct Output {
     err,
 )]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolError> {
+    let started = Instant::now();
     let search_path = match input.path {
         Some(p) => resolve(&p, ctx).map_err(map_path_err)?,
         None => ctx.working_dir.clone(),
@@ -85,6 +87,12 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolErro
 
     let matches = result.stdout.lines().map(|l| l.to_string()).collect::<Vec<_>>();
 
+    debug!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        match_count = matches.len(),
+        exit_code = result.exit_code,
+        "tool: ok"
+    );
     Ok(Output {
         matches,
         stderr: result.stderr,

@@ -1,10 +1,11 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use ::glob::{MatchOptions, Pattern, glob_with};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::error::ToolError;
 use crate::sandbox::SandboxMode;
@@ -57,6 +58,7 @@ impl From<Error> for ToolError {
     err,
 )]
 pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
+    let started = Instant::now();
     // Validate the pattern parses before walking.
     let _ = Pattern::new(&input.pattern).map_err(|e| Error::InvalidPattern(e.to_string()))?;
 
@@ -91,6 +93,11 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
         let rel = abs.strip_prefix(&working_canonical).unwrap_or(&abs).to_path_buf();
         paths.push(rel);
     }
+    debug!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        match_count = paths.len(),
+        "tool: ok"
+    );
     Ok(Output { paths })
 }
 
