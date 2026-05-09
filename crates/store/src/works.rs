@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
@@ -214,13 +213,9 @@ impl<'a> WorksStore<'a> {
 /// Minimal Work-update interface for sink-generic transition helpers.
 /// Passes the OCC `expected_updated_at` snapshot the caller took
 /// before mutating its clone.
-#[allow(clippy::manual_async_fn)]
+#[trait_variant::make(Send)]
 pub trait WorkUpdateSink: Send + Sync {
-    fn update<'a>(
-        &'a self,
-        work: Work,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a;
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -239,18 +234,11 @@ pub enum WorkUpdateError {
 /// `StoreError::Stale` is preserved as `WorkUpdateError::Stale` so
 /// downstream matching works.
 impl WorkUpdateSink for crate::Store {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        work: Work,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
-        async move {
-            match self.works().update(work, expected_updated_at).await {
-                Ok(()) => Ok(()),
-                Err(StoreError::Stale { expected, actual }) => Err(WorkUpdateError::Stale { expected, actual }),
-                Err(other) => Err(WorkUpdateError::Update(other.to_string())),
-            }
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+        match self.works().update(work, expected_updated_at).await {
+            Ok(()) => Ok(()),
+            Err(StoreError::Stale { expected, actual }) => Err(WorkUpdateError::Stale { expected, actual }),
+            Err(other) => Err(WorkUpdateError::Update(other.to_string())),
         }
     }
 }
@@ -258,25 +246,15 @@ impl WorkUpdateSink for crate::Store {
 /// Forwarding impl for any reference to a `WorkUpdateSink`. Mirrors
 /// `BundleUpdateSink`'s borrowed-store helper.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        work: Work,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
-        async move { (*self).update(work, expected_updated_at).await }
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+        (*self).update(work, expected_updated_at).await
     }
 }
 
 /// Forwarding impl for `Arc<W>`. Lets the daemon construct
 /// `SummaryFanout::new(Arc::clone(&store), ...)` without unwrapping.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for std::sync::Arc<W> {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        work: Work,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
-        async move { (**self).update(work, expected_updated_at).await }
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+        (**self).update(work, expected_updated_at).await
     }
 }

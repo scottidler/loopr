@@ -59,31 +59,24 @@ impl<S> WorkUpdateSink for SummaryFanout<S>
 where
     S: WorkUpdateSink,
 {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        work: Work,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), WorkUpdateError>> + Send + 'a {
-        async move {
-            let work_for_summary = work.clone();
-            self.inner.update(work, expected_updated_at).await?;
-            // Best-effort: write the Work summary first.
-            if let Err(e) = summary::write_work(&self.target, &work_for_summary) {
-                warn!(
-                    work_id = %work_for_summary.id,
-                    error = %e,
-                    "summary::write_work failed (non-fatal)"
-                );
-            }
-            // C-extended: refresh the parent Plan's summary so it
-            // reflects this Work transition's new status counts.
-            // `parent_id` may be a Plan (Phase-1 simple shape) or a
-            // Spec/Phase (Tier-2 multi-tier shape, not built); the
-            // Plan-resolve is itself best-effort.
-            self.refresh_parent_plan(&work_for_summary).await;
-            Ok(())
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+        let work_for_summary = work.clone();
+        self.inner.update(work, expected_updated_at).await?;
+        // Best-effort: write the Work summary first.
+        if let Err(e) = summary::write_work(&self.target, &work_for_summary) {
+            warn!(
+                work_id = %work_for_summary.id,
+                error = %e,
+                "summary::write_work failed (non-fatal)"
+            );
         }
+        // C-extended: refresh the parent Plan's summary so it
+        // reflects this Work transition's new status counts.
+        // `parent_id` may be a Plan (Phase-1 simple shape) or a
+        // Spec/Phase (Tier-2 multi-tier shape, not built); the
+        // Plan-resolve is itself best-effort.
+        self.refresh_parent_plan(&work_for_summary).await;
+        Ok(())
     }
 }
 
