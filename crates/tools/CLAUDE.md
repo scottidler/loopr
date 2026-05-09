@@ -57,6 +57,8 @@ The router's `spawn` opens `router.spawn` (`debug`, `err`) carrying `lane`, `wor
 
 The acceptance test `tests/instrumentation.rs` drives each builtin through `dispatch` and asserts its span and required fields appear. Removing an `#[instrument]` from a builtin's `execute()` fails that test.
 
+**Visibility (2026-05-09 sweep).** Each builtin's `execute()` now emits a `tool: ok` debug event on the success path with `elapsed_ms` plus a per-tool size metric (`bytes` for read/write/edit/bash, `match_count` for glob/grep). The router emits `router: dispatched` after slot acquisition; the spawn wrapper emits `spawn: process started` after fork-and-setsid. The contract test `tests/tool_visibility.rs` drives each builtin through the real router under the production telemetry subscriber and asserts every `tool.*` span is grep-able. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

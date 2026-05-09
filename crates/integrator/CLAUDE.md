@@ -50,6 +50,8 @@ Inner spans:
 
 Acceptance test: `tests/instrumentation.rs::integrator_smoke_spans_happy_path` drives `integrate` against a real git tempdir and asserts `integrator.integrate` carries `plan_id`, `bundle_count`, `integration_branch`, the final `phase=commit`, plus the nested transition + git spans.
 
+**Visibility (2026-05-09 sweep).** Each phase transition inside `integrate` now emits a corresponding `info!("integrator: phase begin", phase=...)` event so a stalled integration's last visible phase is unambiguous from `events.log` alone (Phase 3 of `docs/design/2026-05-09-comprehensive-telemetry.md`). The `transition_bundle`, `fail_all`, `fail_all_without_reset`, and `git.*` helpers each emit a single `debug!` or `warn!` on their success/failure path. The contract test `tests/integrator_visibility.rs` drives a real happy-path `integrate` under the production telemetry subscriber and asserts every documented span surfaces its required fields against `events.log`. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

@@ -36,6 +36,8 @@ Output of this crate is a `WorkDag` that downstream stages can consume without r
 
 Acceptance test: `tests/instrumentation.rs::decomposer_smoke_spans_decompose` drives one happy-path decomposition and asserts the outer span carries plan_id/goal_len/child_count/outcome and the helpers all fired.
 
+**Visibility (2026-05-09 sweep).** Inner helpers (`collect_workspace_tree`, `detect_cycles`, `resolve_deps`, `assemble_system`, `assemble_user`, `try_llm_once`) each emit a `debug!` on their success path so the span ancestry lands on a real `events.log` line (Phase 4 of `docs/design/2026-05-09-comprehensive-telemetry.md`). Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

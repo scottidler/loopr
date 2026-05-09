@@ -25,6 +25,18 @@ This crate must compile without `tokio`, `reqwest`, or any LLM/network dependenc
 
 The v3/v4 lesson that motivates this crate: observability bolted on late is observability with gaps. Debugging a ralph loop that stalls across three stages required reading three log files and mentally reconstructing causality. XDG-rooted session layout, per-Work + per-Session fanout, span context, and typed `SessionId` / `ProcessId` are the minimum to make "follow one Work through every stage" a grep-and-read, not a reconstruction.
 
+## Visibility contract (2026-05-09 sweep)
+
+`init_for_test(run_dir, directive) -> TestSubscriberGuard` wraps the
+production layer composition (`compose_subscriber`) in a thread-local
+`set_default` install. Tests build a tempdir-rooted `events.log`
+through the same layers production uses, so a regression in layer
+shape or filter wiring fails the contract test, not just an in-memory
+fake. The keystone test lives at `tests/events_log_contract.rs`;
+per-crate scenarios in other crates' `tests/` use `init_for_test`
+directly. Operator grep patterns for the resulting JSONL:
+[`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## Dependencies
 
 `tracing`, `tracing-subscriber` (with `json` and `env-filter` features), `tracing-appender` (non-blocking file writer), `chrono` (for session-id formatting), `serde` + `serde_json` (for structured event emission), `dirs` (XDG lookup), `dashmap` (Work fanout cache), `lru` (Session fanout cache). Added via `cargo add` at the time the first code needs them, not speculatively.

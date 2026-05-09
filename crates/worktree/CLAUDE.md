@@ -50,6 +50,8 @@ Internal git wrappers (`ops::try_create_at_seq`, `ops::remove_worktree`, `ops::d
 
 Acceptance test: `tests/instrumentation.rs::worktree_smoke_spans_create_then_cleanup` creates and cleans up a real worktree, asserts both span names and the post-creation `seq` + `branch` fields.
 
+**Visibility (2026-05-09 sweep).** `Worktree::create` emits a post-allocation `info!("worktree: allocated", seq, branch, base_sha, worktree_path)`; each `ops::*` helper emits a `debug!` on its success path. The contract test `tests/worktree_visibility.rs` drives a real create against a tempdir git repo under the production telemetry subscriber and asserts the documented spans surface their required fields. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map

@@ -50,6 +50,8 @@ The daemon's IPC dispatch and pipeline-spawn methods carry `#[tracing::instrumen
 
 Per-request scope fields available on the daemon's `ipc.connection` span (set in transport/server.rs at handshake completion): `client_session_id` and `request_id` propagate from the connection span downward into every handler's span.
 
+**Visibility (2026-05-09 sweep).** `transition_and_persist_work` emits an `info!("work: terminal-state summary", ...)` when a Work transition lands on a terminal state; `transition_and_persist_plan` emits an `info!("plan: terminal-state summary", ...)` on the Plan terminal transition with per-Work counts. The richer per-run rollups (LLM tokens, cost, lifeguard fires) live on `ProcessSnapshot` and the per-process digest under `runs/<pid>/summary.md`. The contract test `tests/work_plan_summary_visibility.rs` exercises both helpers under the production telemetry subscriber. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## Transcripts
 
 The LLM round-trip transcript writers live in `crates/telemetry/src/transcript/` (moved from this crate on 2026-04-24 so agents/decomposer can depend on them — `loopr` is the binary crate and cannot be a dependency of library crates). The agents and decomposer crates wire `append_iteration` calls themselves; this crate no longer has a transcript module. Layout:

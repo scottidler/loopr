@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-05-09
-**Status:** Draft
+**Status:** Implemented
 **Crates touched:** telemetry, agents, tools, integrator, worktree, decomposer, loopr
 **Review Passes Completed:** 4/4 + Architect Rounds 1 + 2 (architecturally sound)
 

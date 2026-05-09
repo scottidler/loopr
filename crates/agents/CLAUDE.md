@@ -80,6 +80,18 @@ Levels: `run_implementer` and `run_reviewer` are `info`; per-iteration helpers (
 
 The acceptance test `tests/instrumentation.rs::agents_smoke_spans_lifeguard_escalation` drives the Stage 9 lifeguard-repeat shape and asserts the four entry-point spans exist with their required fields. If you remove an `#[instrument]` attribute or change a field name, that test fails.
 
+**Visibility (2026-05-09 sweep).** Lifeguard, dispatch, parse, and reviewer/director helpers now emit explicit lifecycle events from inside their `#[instrument]`-decorated bodies (Phases 4-7 of `docs/design/2026-05-09-comprehensive-telemetry.md`):
+
+- `lifeguard.check_action` -> `debug!("lifeguard: action observed", action_kind, action_hash, action_count, max_repeat)`.
+- `lifeguard.record_parse_failure` -> `debug!("lifeguard: parse failure recorded", consecutive_parse_failures, max_parse_failures)`.
+- `parse_actions` -> `debug!("parse: actions parsed", action_count, path)` on the success branch.
+- `dispatch_action` / `commit_changes` / `commit_partial_for_inspection` / `propose_bundle` -> one `debug!` per success path; `propose_bundle` emits the canonical `info!("implementer produced bundle", paths_added, paths_modified, paths_deleted, patch_id, diff_bytes, ...)` (Phase 6).
+- `run_reviewer` -> per-AC `debug!(target: "reviewer.ac", criterion, status, evidence)` plus `info!("reviewer: ac roll-up", ac_count, ac_verified, ac_failed, ac_skipped)` (Phase 5; AC results synthesized from the parsed Verdict).
+- `director.accept_bundle` -> `info!` routing event per AcceptBundle action (Phase 7).
+- `director.run` records `restart_reason` (closed enum: `llm_retryable`, `parse_failure`, `context_failure`, `store_failure`, `id_failure`, `lifeguard_escalation`, `need_help`).
+
+Per-area contract tests in `tests/agents_visibility.rs`, `tests/reviewer_ac_visibility.rs`, `tests/bundle_manifest_visibility.rs`, `tests/director_visibility.rs` parse the production-shape `events.log` and assert presence + required fields. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
