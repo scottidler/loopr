@@ -957,7 +957,7 @@ async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Err
 /// which mutated `work.status = ...` by raw assignment and bypassed the
 /// FSM entirely. Every Work-state change in the pipeline flows through
 /// this helper.
-pub(crate) async fn transition_and_persist_work<S>(
+pub async fn transition_and_persist_work<S>(
     sink: &S,
     work: &mut Work,
     target: WorkStatus,
@@ -980,7 +980,27 @@ where
     }
     sink.update(work.clone(), expected_updated_at)
         .await
-        .map_err(|e| format!("works().update: {e}"))
+        .map_err(|e| format!("works().update: {e}"))?;
+
+    // Phase 8: per-Work terminal summary. The richer metrics
+    // (total_iterations, lifeguard_fires, director_override_count) are
+    // not yet aggregated daemon-side; this event opens the door so a
+    // future commit can extend the field set without changing the
+    // event name. For now: work_id + terminal_state + role + override
+    // is enough to grep "every Work that reached terminal in this run."
+    if work.status.is_terminal() {
+        info!(
+            work_id = %work.id,
+            plan_id = %work.parent_id,
+            terminal_state = ?work.status,
+            role = ?role,
+            override_,
+            attempt_count = work.attempt_count,
+            session_failure_count = work.session_failure_count,
+            "work: terminal-state summary"
+        );
+    }
+    Ok(())
 }
 
 /// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
@@ -991,7 +1011,7 @@ where
 /// Alternatives §4 option (c-extended): the caller fetches children
 /// before invoking this helper, and the sink (typically a
 /// `SummaryFanout`) renders the Plan summary from `(plan, children)`.
-pub(crate) async fn transition_and_persist_plan<S>(
+pub async fn transition_and_persist_plan<S>(
     sink: &S,
     plan: &mut Plan,
     children: Vec<Work>,
@@ -1007,9 +1027,54 @@ where
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
+
+    // Snapshot the per-state Work counts BEFORE the sink moves
+    // `children` into its `update` call.
+    let (works_done, works_failed, works_blocked) = if plan.status.is_terminal() {
+        let mut done = 0u64;
+        let mut failed = 0u64;
+        let mut blocked = 0u64;
+        for w in &children {
+            match w.status {
+                WorkStatus::Done | WorkStatus::Integrated => done += 1,
+                WorkStatus::Abandoned | WorkStatus::Superseded => failed += 1,
+                WorkStatus::Blocked => blocked += 1,
+                _ => {}
+            }
+        }
+        (Some(done), Some(failed), Some(blocked))
+    } else {
+        (None, None, None)
+    };
+    let total_works = if plan.status.is_terminal() { Some(children.len() as u64) } else { None };
+    let plan_terminal = plan.status.is_terminal();
+    let plan_id = plan.id.clone();
+    let plan_status = plan.status;
+
     sink.update(plan.clone(), children)
         .await
-        .map_err(|e| format!("plans().update: {e}"))
+        .map_err(|e| format!("plans().update: {e}"))?;
+
+    // Phase 8: per-Plan terminal summary. LLM token + cost
+    // aggregation is owned by `MeteredLlmClient`'s `ProcessSnapshot`
+    // and lives in the per-process digest, not on the FSM transition
+    // path; emitting them here would require threading a snapshot
+    // handle into this helper. For now the event records what's
+    // locally knowable: terminal state + per-Work counts. A future
+    // commit can extend with token + cost fields.
+    if plan_terminal {
+        info!(
+            plan_id = %plan_id,
+            terminal_state = ?plan_status,
+            role = ?role,
+            total_works = total_works.unwrap_or(0),
+            works_done = works_done.unwrap_or(0),
+            works_failed = works_failed.unwrap_or(0),
+            works_blocked = works_blocked.unwrap_or(0),
+            "plan: terminal-state summary"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

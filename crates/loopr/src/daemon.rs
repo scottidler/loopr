@@ -19,7 +19,7 @@
 //! Unwinding the stack back into `lib::run` would fall into the parent's
 //! telemetry-init block and crash on `AlreadyInitialized`.
 
-pub(crate) mod context;
+pub mod context;
 pub(crate) mod fork;
 pub(crate) mod git;
 pub mod handle;
