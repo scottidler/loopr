@@ -1,0 +1,19 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# LiteLLM
+
+> LiteLLM is an open-source platform that provides a unified interface to manage and access over 100 LLMs from various providers.
+
+<img noZoom width="400px" style={{margin: "0 auto", borderRadius: "10px"}} src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/76dcba22-image.jpeg" />
+
+<Card title="LiteLLM" href="https://www.litellm.ai/" icon="globe" horizontal>
+  [](https://www.litellm.ai/)
+</Card>
+
+<Columns cols={2}>
+  <Card img="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/a22c16d3-image.avif" href="/docs/phoenix/integrations/llm-providers/litellm/litellm-tracing" title="LiteLLM Tracing" />
+
+  <Card img="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/a22c16d3-image.avif" href="/docs/phoenix/integrations/llm-providers/litellm/litellm-evals" title="LiteLLM Evals" />
+</Columns>

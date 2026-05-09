@@ -1,0 +1,49 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Flowise Tracing
+
+> Analyzing and troubleshooting what happens under the hood can be challenging without proper insights. By integrating your Flowise application with Phoenix, you can monitor traces and gain robust observability into your chatflows and agentflows.
+
+### Viewing Flowise traces in Phoenix
+
+<Steps>
+  <Step title={<span className="step-title">Access Configurations</span>}>
+    Navigate to settings in your chatflow or agentflow and find configurations.
+
+    <Frame>
+      <iframe src="https://cdn.iframe.ly/MU5cw6c" allowFullScreen className="aspect-video" />
+    </Frame>
+  </Step>
+
+  <Step title={<span className="step-title">Connect to Phoenix</span>}>
+    Go to the **Analyze Chatflow** tab and configure your application with Phoenix. Get your API key from your Phoenix instance to create your credentials. Be sure to name your project and confirm that the Phoenix toggle is enabled before saving.
+
+    <Info>
+      **Note**: If you are using using an environment that is not [Phoenix Cloud](/docs/phoenix/environments), you may need to modify the Endpoint field.
+    </Info>
+
+    <Frame>
+      <iframe src="https://cdn.iframe.ly/Rkzq2g1" allowFullScreen className="aspect-video" />
+    </Frame>
+  </Step>
+
+  <Step title={<span className="step-title">View Traces</span>}>
+    In Phoenix, you will find your project under the Projects tab. Click into this to view and analyze traces as you test your application.
+
+    <Frame>
+      <iframe src="https://cdn.iframe.ly/kBXFsLO" allowFullScreen className="aspect-video" />
+    </Frame>
+  </Step>
+
+  <Step title={<span className="step-title">Store and Experiment</span>}>
+    Optionally, you can also filter traces, store traces in a dataset to run experiments, analyze patterns, and optimize your workflows over time.
+
+    <Frame>
+      <iframe src="https://cdn.iframe.ly/c0T0bBt" allowFullScreen className="aspect-video" />
+    </Frame>
+
+    You can also reference [Flowise documentation](https://docs.flowiseai.com/using-flowise/analytics/phoenix) here.
+  </Step>
+</Steps>

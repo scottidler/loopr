@@ -1,0 +1,1212 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Release Notes
+
+> The latest from the Phoenix team.
+
+<Card title="Releases · Arize-ai/phoenix" href="https://github.com/Arize-ai/phoenix/releases" icon="github" horizontal>
+  GitHub
+</Card>
+
+<Update label="05.05.2026">
+  ## [05.05.2026: Provider Tools in Playground and Prompts](/docs/phoenix/release-notes/05-2026/05-05-2026-provider-tools)
+
+  **Available in arize-phoenix 15.4.0+**
+
+  Phoenix Playground and the Prompts library now support vendor-native tools — web search, code execution, computer use, grounding, and more — alongside existing function tools. Paste any provider's tool JSON into the Playground and Phoenix stores and round-trips it verbatim.
+
+  * **Generic passthrough** — any tool the provider SDK accepts works without a library update; verified examples include Anthropic `web_search` / `code_execution` / `computer_use`, OpenAI Responses `web_search` / `file_search` / `code_interpreter` / `computer_use_preview`, and Gemini `google_search` grounding
+  * **Mix with function tools** — provider tools and function tools coexist on the same prompt version
+  * **SDK export** — Python and TypeScript clients preserve provider tools when formatting prompts
+</Update>
+
+<Update label="05.05.2026">
+  ## [05.05.2026: REST API Updates — Annotation Delete, Token Counts, and More](/docs/phoenix/release-notes/05-2026/05-05-2026-rest-api-updates)
+
+  **Available in arize-phoenix 15.3.0–15.4.0+, arize-phoenix-evals 3.1.0+**
+
+  * **Filter-based annotation DELETE** — `DELETE /v1/projects/{project}/span_annotations`, `trace_annotations`, and `session_annotations` bulk-remove annotations by `identifier`, `name`, `annotator_kind`, or time range
+  * **Token counts in REST** — trace and session list endpoints now return `cumulative_token_count_prompt`, `_completion`, and `_total` fields
+  * **Experiment CSV metadata** — downloading an experiment as CSV now includes per-example dataset metadata as `metadata_<key>` columns
+  * **Evals runtime capability detection** — OpenAI reasoning models (`o1`, `o3`, `o3-mini`, `o4-mini`) now work with `ClassificationEvaluator` automatically
+</Update>
+
+<Update label="05.01.2026">
+  ## [05.01.2026: TanStack AI Tracing](/docs/phoenix/release-notes/05-2026/05-01-2026-tanstack-ai-tracing)
+
+  **Available in @arizeai/openinference-tanstack-ai 0.1.0+**
+
+  A new OpenInference middleware for [TanStack AI](https://tanstack.com/ai/latest/docs/getting-started/overview) emits `AGENT`, `LLM`, and `TOOL` spans for `chat()` calls — covering streaming, non-streaming, and tool-loop flows across any TanStack AI provider adapter.
+
+  * **Install** — `npm install --save @arizeai/openinference-tanstack-ai @tanstack/ai`
+  * **Usage** — drop `openInferenceMiddleware()` into the `middleware` option of any `chat()` call
+  * **Feedback welcome** — this integration is brand new; please reach out via the [OpenInference repo](https://github.com/Arize-ai/openinference)
+</Update>
+
+<Update label="04.30.2026">
+  ## [04.30.2026: CLI Named Auth Profiles](/docs/phoenix/release-notes/04-2026/04-30-2026-cli-auth-profiles)
+
+  **Available in @arizeai/phoenix-cli 1.4.0+**
+
+  `px profile` commands let you store named connection profiles — endpoint, project, API key, and headers — and switch between Phoenix instances without re-exporting environment variables. The active profile slots into the existing config resolution chain below env vars, so existing scripts are unaffected.
+
+  * **Commands** — `px profile create`, `list`, `show`, `edit`, `use`, `delete`
+  * **Profile status** — `px auth status` surfaces the active profile name
+  * **Editor autocomplete** — JSON Schema published for `~/.px/profiles.json`
+</Update>
+
+<Update label="04.30.2026">
+  ## [04.30.2026: Annotation Enhancements — Sessions, TypeScript, and Identifier Queries](/docs/phoenix/release-notes/04-2026/04-30-2026-annotation-enhancements)
+
+  **Available in arize-phoenix 15.1.0+ (server), @arizeai/phoenix-cli 1.4.0+ (CLI), @arizeai/phoenix-client 6.9.0+ (TypeScript)**
+
+  * **CLI session annotations** — `px session annotate <id>` and `px session add-note <id>` with `--include-annotations` / `--include-notes` flags on list and get
+  * **TypeScript trace annotations** — `addTraceAnnotation` and `logTraceAnnotations` exported from `@arizeai/phoenix-client/traces`
+  * **`addSessionNote`** in `@arizeai/phoenix-client/sessions`
+  * **Query by identifier** — GET annotation endpoints for spans, traces, and sessions accept `?identifier=` to retrieve all annotations sharing a tag, project-wide
+</Update>
+
+<Update label="04.29.2026">
+  ## [04.29.2026: Dataset Upsert](/docs/phoenix/release-notes/04-2026/04-29-2026-dataset-upsert)
+
+  **Breaking change in arize-phoenix-client 2.6.0+ (Python) and arize-phoenix 15.0.0+ (server)**
+
+  `client.datasets.create_dataset()` now defaults to upsert semantics: if a dataset with the same name exists, examples are merged into the latest version rather than returning a conflict error. Supply a stable `id` on each example for deterministic in-place updates on re-upload.
+</Update>
+
+<Update label="04.28.2026">
+  ## [04.28.2026: Session Notes API](/docs/phoenix/release-notes/04-2026/04-28-2026-session-notes-api)
+
+  **Available in arize-phoenix 14.16.0+**
+
+  Phoenix now supports creating session notes through `POST /v1/session_notes`. The generic session annotation endpoint now reserves `name="note"` for note-specific APIs, so use `POST /v1/session_notes` for session notes and `POST /v1/session_annotations` for regular annotations.
+</Update>
+
+<Update label="04.24.2026">
+  ## [04.24.2026: Trace Notes API](/docs/phoenix/release-notes/04-2026/04-24-2026-trace-notes-api)
+
+  **Available in arize-phoenix 14.13.0+ (server), @arizeai/phoenix-client 6.8.0+ (TypeScript), @arizeai/phoenix-cli 1.3.0+ (CLI)**
+
+  Add notes to traces via the REST endpoint, TypeScript client, or CLI. Notes are stored separately from annotations and support multiple entries per trace.
+
+  * **TypeScript** — `addTraceNote({ traceNote: { traceId, note } })` from `@arizeai/phoenix-client/traces`
+  * **CLI** — `px trace add-note <trace-id> --text "..."` and `--include-notes` flag on `px trace get` / `px trace list`
+  * **Reserved name** — `note` is no longer accepted on the generic annotation endpoints; use `POST /v1/trace_notes`
+</Update>
+
+<Update label="04.24.2026">
+  ## [04.24.2026: arize-phoenix-otel 0.16](/docs/phoenix/release-notes/04-2026/04-24-2026-phoenix-otel-python-0-16)
+
+  **Available in arize-phoenix-otel 0.16.0+**
+
+  `arize-phoenix-otel` now re-exports the most common OpenInference context managers and semantic conventions, so manual instrumentation no longer requires installing `openinference-instrumentation` or `openinference-semantic-conventions` as separate dependencies.
+
+  * **Context managers** — `using_session`, `using_user`, `using_metadata`, `using_tags`, `using_attributes`, `using_prompt_template`, `suppress_tracing` (usable as `with` blocks or decorators)
+  * **Semantic conventions** — `SpanAttributes`, `OpenInferenceSpanKindValues`, `OpenInferenceMimeTypeValues`
+  * **Single install** — `pip install "arize-phoenix-otel>=0.16.0"` is enough for `register()` + context propagation
+</Update>
+
+<Update label="04.22.2026">
+  ## [04.22.2026: Secrets Settings Page](/docs/phoenix/release-notes/04-2026/04-22-2026-secrets-ui-and-evaluator-trace-id)
+
+  **Available in arize-phoenix 14.11.0+**
+
+  A new **Settings → Secrets** page lets admins add, replace, and delete encrypted LLM provider credentials (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) directly in the Phoenix UI — no REST API calls required.
+
+  * **Add / Replace / Delete** secrets from the browser
+  * **Search and filter** the secrets list by key name or owner
+  * **Admin-only** — all mutations require admin access
+</Update>
+
+<Update label="04.22.2026">
+  ## [04.22.2026: `trace_id` in Experiment Evaluators](/docs/phoenix/release-notes/04-2026/04-22-2026-secrets-ui-and-evaluator-trace-id)
+
+  **Available in arize-phoenix-client 2.4.0+**
+
+  Evaluator functions now receive the originating trace ID for each experiment run. Add a `trace_id` keyword argument to any evaluator function or `Evaluator` class method to access it.
+
+  * **Optional** — evaluators without `trace_id` are unaffected
+  * **Works sync and async** — supported on both function-based and protocol-based evaluators
+</Update>
+
+<Update label="04.20.2026">
+  ## [04.20.2026: Span Attribute Filtering](/docs/phoenix/release-notes/04-2026/04-20-2026-span-attribute-filter-cli-notes-and-opus-4-7)
+
+  **Available in arize-phoenix 14.9.0+ (server), arize-phoenix-client 2.4.0+ (Python), @arizeai/phoenix-client 6.7.0+ (TypeScript)**
+
+  Filter spans by stored attribute values using the Python client, TypeScript client, REST API, or CLI. Multiple filters are AND-ed together; the value's JS/Python type selects which storage type is matched.
+
+  * **Python** — `client.spans.get_spans(..., attributes={"llm.model_name": "gpt-4o"})`
+  * **TypeScript** — `getSpans({ ..., attributes: { "llm.model_name": "gpt-4o" } })`
+  * **CLI** — `px span list --attribute "llm.model_name:gpt-4o"`
+  * **Type-aware** — `int`, `float`, `bool`, and `str` values each match their corresponding stored type
+</Update>
+
+<Update label="04.20.2026">
+  ## [04.20.2026: CLI Span Notes](/docs/phoenix/release-notes/04-2026/04-20-2026-span-attribute-filter-cli-notes-and-opus-4-7)
+
+  **Available in @arizeai/phoenix-cli 1.1.0+**
+
+  `px span add-note <span-id> --text "..."` attaches a free-text note to any span. Pass `--include-notes` to `px span list` or `px trace get` to read notes back alongside span data.
+</Update>
+
+<Update label="04.20.2026">
+  ## [04.20.2026: Claude Opus 4.7 in the Playground](/docs/phoenix/release-notes/04-2026/04-20-2026-span-attribute-filter-cli-notes-and-opus-4-7)
+
+  **Available in arize-phoenix 14.9.0+**
+
+  Claude Opus 4.7 is now available as a model option in the Phoenix Playground. Select it from the model picker to compare outputs against other Anthropic and cross-provider models.
+</Update>
+
+<Update label="04.16.2026">
+  ## [04.16.2026: Azure Managed Identity for PostgreSQL](/docs/phoenix/release-notes/04-2026/04-16-2026-azure-managed-identity-postgres)
+
+  **Available in arize-phoenix 14.8.0+**
+
+  Connect Phoenix to Azure Database for PostgreSQL using Microsoft Entra managed identity — no static database password required. Install the `azure` extra and set `PHOENIX_POSTGRES_USE_AZURE_MANAGED_IDENTITY=true`.
+
+  * **Zero-credential setup** — tokens are fetched and refreshed automatically on each connection
+  * **New `[azure]` extra** — `pip install 'arize-phoenix[azure]'` pulls in `azure-identity` and `aiohttp`
+  * **`PHOENIX_POSTGRES_AWS_IAM_TOKEN_LIFETIME_SECONDS` deprecated** — silently ignored with a startup warning
+</Update>
+
+<Update label="04.14.2026">
+  ## [04.14.2026: CLI Annotation Commands](/docs/phoenix/release-notes/04-2026/04-14-2026-cli-annotation-commands)
+
+  **Available in @arizeai/phoenix-cli 1.0.4+**
+
+  `px span annotate` and `px trace annotate` write labels, scores, and explanations to spans and traces from the terminal. Pass `--include-annotations` to `px trace get` or `px span list` to read annotations back alongside the data.
+
+  * **`px span annotate <span-id>`** — attach a label, score, or explanation to any span by OTel span ID
+  * **`px trace annotate <trace-id>`** — annotate a full trace by OTel trace ID
+  * **Annotator kinds** — `HUMAN`, `LLM`, or `CODE`; submitting again with the same name updates the existing entry
+</Update>
+
+<Update label="04.13.2026">
+  ## [04.13.2026: @arizeai/phoenix-otel 1.0](/docs/phoenix/release-notes/04-2026/04-13-2026-phoenix-otel-ts-1-0)
+
+  **Available in @arizeai/phoenix-otel 1.0.0+**
+
+  `@arizeai/phoenix-otel` now re-exports the full `@arizeai/openinference-core` and `@arizeai/openinference-semantic-conventions` surface from a single import.
+
+  * **Tracing helpers** — `withSpan`, `traceChain`, `traceAgent`, `traceTool` wrap functions with OpenInference spans and follow global provider changes
+  * **`observe` decorator** — trace class methods with TypeScript 5+ standard decorators while preserving `this`
+  * **Context setters** — `setSession`, `setUser`, `setMetadata`, `setTags`, `setAttributes`, `setPromptTemplate` propagate attributes to child spans
+  * **Attribute builders** — `getLLMAttributes`, `getRetrieverAttributes`, `getEmbeddingAttributes`, `getToolAttributes`, and more for raw OTel spans
+  * **Semantic conventions** — `SemanticConventions` and `OpenInferenceSpanKind` re-exported; no second dependency needed
+  * **Redaction** — `OITracer` + `traceConfig` or `OPENINFERENCE_HIDE_*` env vars strip sensitive attributes before export
+</Update>
+
+<Update label="04.10.2026">
+  ## [04.10.2026: Shareable Project URLs](/docs/phoenix/release-notes/04-2026/04-10-2026-shareable-url-redirects)
+
+  **Available in arize-phoenix 14.2.0+**
+
+  Navigate to `/redirects/projects/{project_name}` and Phoenix resolves the name and redirects to the project page — no internal ID required. Construct stable, bookmarkable links using the project name you already set in `PHOENIX_PROJECT_NAME`.
+
+  * **Project by name** — `/redirects/projects/default` resolves and redirects to the project page
+  * **Other patterns** — traces, spans, sessions, and prompt tags are also supported via `/redirects/...`
+</Update>
+
+<Update label="04.07.2026">
+  ## [04.07.2026: PostgreSQL Read Replica Routing](/docs/phoenix/release-notes/04-2026/04-07-2026-postgresql-read-replica)
+
+  **Available in arize-phoenix 14.0.0+**
+
+  Route read-only queries (GraphQL resolvers, REST reads, dataloaders) to an optional PostgreSQL read replica via `PHOENIX_SQL_DATABASE_READ_REPLICA_URL`, reducing load on the primary under high span ingestion.
+
+  * **Set and go** — point the env var at your replica; writes always go to the primary
+  * **No config change needed** when a replica is not configured — falls back to primary
+</Update>
+
+<Update label="04.07.2026">
+  ## [04.07.2026: Breaking Changes — Phoenix v14](/docs/phoenix/release-notes/04-2026/04-07-2026-phoenix-v14-breaking-changes)
+
+  **Breaking changes in arize-phoenix 14.0.0, arize-phoenix-evals 3.0.0, arize-phoenix-client 2.3.1+**
+
+  Phoenix v14 removes several legacy APIs. See the [migration guide](https://github.com/Arize-ai/phoenix/blob/main/MIGRATION.md) for step-by-step instructions.
+
+  * **CLI is now subcommand-first** — `phoenix serve --dev` replaces `phoenix --dev serve`
+  * **`px.Client()` removed** — use `from phoenix.client import Client` with `base_url=` instead of `endpoint=`
+  * **`/v1/evaluations` removed** — use `/v1/span_annotations`, `/v1/trace_annotations`, or `/v1/document_annotations`
+  * **Evals 1.0 removed** — `arize-phoenix-evals` 3.0.0 drops the `legacy/` subpackage; `phoenix.experiments` is replaced by `phoenix.client.experiments`
+  * **GraphQL pagination requires `first`** — `Project.spans`, `Trace.spans`, and `ProjectSession.traces` now require an explicit `first` argument (max 1000)
+  * **Resume interrupted SDK experiments** — continue missing or failed runs with `resume_experiment` and `async_resume_experiment`
+</Update>
+
+<Update label="04.03.2026">
+  ## [04.03.2026: ATIF Trajectory Upload](/docs/phoenix/release-notes/04-2026/04-03-2026-atif-trajectory-upload)
+
+  **Available in arize-phoenix-client 2.3.0+ (Python)**
+
+  `upload_atif_trajectories_as_spans` converts [ATIF](https://github.com/harbor-ai/agent-trajectory-format) (Agent Trajectory Interchange Format) trajectory JSON files into OpenTelemetry span trees and uploads them to Phoenix. Visualize offline Harbor agent runs alongside live instrumented traces.
+
+  * **Supports ATIF v1.0–v1.6** including multimodal content (images) in v1.6+
+  * **Subagent linking** — upload parent and child trajectories together to link them into one trace
+  * **Idempotent** — trace/span IDs are derived from `session_id` via SHA-256; re-uploading the same file is safe
+</Update>
+
+<Update label="04.01.2026">
+  ## [04.01.2026: Python 3.14 Support](/docs/phoenix/release-notes/04-2026/04-01-2026-get-traces-secrets-api-and-python-314)
+
+  **Available in arize-phoenix 13.21.0+, arize-phoenix-client 2.2.0+, arize-phoenix-evals 2.13.0+**
+
+  Phoenix server, Python client SDK, and evals library now support Python 3.14 on Linux and macOS.
+</Update>
+
+<Update label="04.01.2026">
+  ## [04.01.2026: Secrets Management REST API](/docs/phoenix/release-notes/04-2026/04-01-2026-get-traces-secrets-api-and-python-314)
+
+  **Available in arize-phoenix 13.21.0+**
+
+  Admin users can store encrypted LLM provider API keys in Phoenix via `PUT /v1/secrets`. Atomically upsert or delete multiple secrets in one request; values are AES-encrypted at rest and never returned in responses.
+
+  * **`PUT /v1/secrets`** — batch upsert/delete with `value: null` to remove a key
+  * **Admin-only**, atomic, silent no-op for deleting non-existent keys
+</Update>
+
+<Update label="04.01.2026">
+  ## [04.01.2026: `get_traces` — Retrieve Traces via Python SDK](/docs/phoenix/release-notes/04-2026/04-01-2026-get-traces-secrets-api-and-python-314)
+
+  **Available in arize-phoenix 13.15.0+ (server), arize-phoenix-client 2.2.0+ (Python)**
+
+  `client.traces.get_traces()` fetches traces for a project with time range filtering, session filtering, sort control, and automatic cursor-based pagination.
+
+  * **`include_spans=True`** to embed full span detail in each trace
+  * **`session_id`** to filter to one or more sessions
+  * Async variant available on `AsyncClient`
+</Update>
+
+<Update label="03.30.2026">
+  ## [03.30.2026: Delete Prompts and Prompt Version Tags](/docs/phoenix/release-notes/03-2026/03-30-2026-delete-prompts-api)
+
+  **Available in arize-phoenix 13.20.0+**
+
+  Two new REST endpoints let you delete prompts and remove tags from prompt versions programmatically.
+
+  * **`DELETE /v1/prompts/{prompt_identifier}`** — permanently deletes a prompt and all its versions, tags, and labels
+  * **`DELETE /v1/prompt_versions/{id}/tags/{tag_name}`** — removes a single tag from a specific prompt version
+</Update>
+
+<Update label="03.24.2026">
+  ## [03.24.2026: Prompt Version Diff View](/docs/phoenix/release-notes/03-2026/03-24-2026-prompt-version-diff-and-evals-updates)
+
+  **Available in arize-phoenix 13.18.0+**
+
+  The Prompts UI now shows a line-by-line diff between any two prompt versions. See exactly what changed — message content, tool call arguments, and tool results — without leaving Phoenix.
+
+  * **Side-by-side diff** across the full chat template, including all content part types
+</Update>
+
+<Update label="03.24.2026">
+  ## [03.24.2026: Evals Accept Structured Data Inputs](/docs/phoenix/release-notes/03-2026/03-24-2026-prompt-version-diff-and-evals-updates)
+
+  **Available in arize-phoenix-evals 2.12.0+**
+
+  Evaluators now accept dicts and lists as template variable values, JSON-serializing them automatically. Built-in evaluators also accept `**kwargs` forwarded to the LLM on every call (e.g., `temperature=0.0`).
+
+  * **Structured inputs** (dicts, lists) are JSON-serialized before prompt rendering — no manual `json.dumps()` needed
+  * **LLM invocation kwargs** accepted by all built-in evaluators (`FaithfulnessEvaluator`, `CorrectnessEvaluator`, etc.)
+</Update>
+
+<Update label="03.23.2026">
+  ## [03.23.2026: `px auth status` Shows Username and Role](/docs/phoenix/release-notes/03-2026/03-22-2026-cli-and-user-api)
+
+  **Available in arize-phoenix 13.17.0+ and @arizeai/phoenix-cli 0.12.0+**
+
+  `px auth status` now verifies credentials against the server and displays the authenticated username and role alongside the endpoint and token info.
+</Update>
+
+<Update label="03.22.2026">
+  ## [03.22.2026: `px spans` — Fetch and Filter Spans from the CLI](/docs/phoenix/release-notes/03-2026/03-22-2026-cli-and-user-api)
+
+  **Available in arize-phoenix 13.16.0+ and @arizeai/phoenix-cli 0.12.0+**
+
+  `px spans` fetches spans for a project with filtering by kind, status code, name, trace ID, and time window. Output to the terminal or save to JSON for offline use.
+
+  * **`--span-kind`**, **`--status-code`**, **`--name`**, **`--trace-id`** filters
+  * **`--last-n-minutes`** / **`--since`** time range controls
+  * **`--include-annotations`** to attach span annotations to the output
+</Update>
+
+<Update label="03.22.2026">
+  ## [03.22.2026: `px self update` and `GET /v1/user`](/docs/phoenix/release-notes/03-2026/03-22-2026-cli-and-user-api)
+
+  **Available in arize-phoenix 13.16.0+ and @arizeai/phoenix-cli 0.12.0+**
+
+  `px self update` upgrades the installed CLI to the latest version, detecting npm, pnpm, bun, or Deno automatically. `GET /v1/user` returns the authenticated user's profile (username, email, role) or an anonymous representation when auth is disabled.
+</Update>
+
+<Update label="03.18.2026">
+  ## [03.18.2026: Span Filters — Name, Kind, and Status Code](/docs/phoenix/release-notes/03-2026/03-13-2026-rest-api-improvements)
+
+  **Available in arize-phoenix 13.15.0+ (server), arize-phoenix-client 2.1.0+ (Python), @arizeai/phoenix-client 6.5.1+ (TypeScript)**
+
+  Filter spans directly by name, span kind (`LLM`, `CHAIN`, `TOOL`, etc.), and status code (`OK`, `ERROR`, `UNSET`) in both the REST API and SDK clients. Filters are OR-combined within a field and AND-combined across fields.
+
+  * **`name` filter** to match one or more span names
+  * **`span_kind` filter** for `LLM`, `CHAIN`, `TOOL`, `RETRIEVER`, and other span kinds
+  * **`status_code` filter** to isolate error, success, or unset spans
+  * **Available in Python via `client.spans.get_spans(name=..., span_kind=..., status_code=...)`**
+  * **Available in TypeScript via `getSpans({ name, spanKind, statusCode })`**
+</Update>
+
+<Update label="03.13.2026">
+  ## [03.13.2026: List Traces by Project](/docs/phoenix/release-notes/03-2026/03-13-2026-rest-api-improvements)
+
+  **Available in arize-phoenix 13.15.0+**
+
+  A new `GET /v1/projects/{project_identifier}/traces` REST endpoint lists traces with time filtering, sort order, cursor pagination, optional inline spans, and session filtering.
+
+  * **`GET /v1/projects/{project}/traces`** with `sort`, `order`, `limit`, `cursor`, `include_spans`, and `session_identifier` params
+</Update>
+
+<Update label="03.11.2026">
+  ## [03.11.2026: Session Turns API](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix-client 2.0.0+ (Python) and @arizeai/phoenix-client 6.4.0+ (TypeScript)**
+
+  Phoenix now provides a dedicated session turns API that reconstructs the ordered input/output pairs across all traces in a session. The new `get_session_turns()` method (Python) and `getSessionTurns()` function (TypeScript) extract root span `input.value` / `output.value` attributes and return chronologically ordered `SessionTurn` objects.
+
+  * **Chronological turn ordering** from session traces sorted by start time
+  * **`SessionTurnIO` with MIME type** — supports `text/plain`, `application/json`, and image types
+  * **Batched root span fetching** with pagination to handle large sessions
+  * **Async variants available** in both Python and TypeScript clients
+</Update>
+
+<Update label="03.10.2026">
+  ## [03.10.2026: Session Management REST APIs](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.13.0+ (server), arize-phoenix-client 1.31.0+ (Python), @arizeai/phoenix-client 6.1.0+ (TypeScript)**
+
+  Phoenix now exposes comprehensive session management through REST API endpoints on the server. Retrieve individual sessions, list sessions with pagination and project filtering, and delete sessions with cascading cleanup of associated traces, spans, and annotations.
+
+  * **Single session retrieval** by ID or GlobalID with optional project filtering
+  * **Bulk session listing** with pagination, project filtering, and sorting
+  * **Session deletion** with automatic cascade through traces and spans
+  * **DataFrame export** in Python for sessions data analysis
+  * **Configurable timeouts** for all session operations
+</Update>
+
+<Update label="03.09.2026">
+  ## [03.09.2026: Filter Spans by Trace ID and Parent Relationships](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.12.0+ (server), arize-phoenix-client 2.0.0+ (Python), @arizeai/phoenix-client 6.3.0+ (TypeScript)**
+
+  Span queries now support filtering by trace ID and parent relationships, enabling precise navigation of trace hierarchies. Query for root spans using `parent_id=null` or retrieve all children of a specific parent span to reconstruct execution trees programmatically.
+
+  * **Trace ID filtering** to retrieve spans from specific traces
+  * **Parent ID filtering** to query root spans or span children
+  * **Multi-trace queries** via repeated trace ID parameters
+  * **Composable with existing filters** like time ranges and limits
+</Update>
+
+<Update label="03.04.2026">
+  ## [03.04.2026: Incremental Evaluation Metrics in Playground](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.8.0+**
+
+  The Playground now displays evaluation metrics, cost, and latency aggregates in real-time as dataset experiments run. Metrics update incrementally every \~2 seconds, providing immediate feedback on experiment performance without waiting for completion.
+</Update>
+
+<Update label="03.04.2026">
+  ## [03.04.2026: Brute Force Login Protection](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.8.0+**
+
+  Phoenix now automatically protects login endpoints against brute force attacks. After 5 consecutive failed attempts, the account is temporarily locked for 5 minutes. Enabled by default with configurable thresholds via `PHOENIX_BRUTE_FORCE_LOGIN_PROTECTION_MAX_ATTEMPTS`.
+</Update>
+
+<Update label="03.07.2026">
+  ## [03.07.2026: Unified Dataset Upload with Drag-and-Drop](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.9.0+**
+
+  Dataset creation from files is now streamlined with automatic file type detection and a unified upload experience. Drag-and-drop CSV or JSONL files anywhere in the upload form, and Phoenix automatically parses headers and previews data without loading entire files into memory.
+
+  * **Automatic format detection** for CSV and JSONL files
+  * **Drag-and-drop file selection** with visual feedback
+  * **Streaming parser** that handles large files efficiently
+  * **RFC 4180 CSV support** including quoted fields, escaped quotes, and BOM handling
+  * **Detailed error messages** for parsing issues with line-by-line feedback
+</Update>
+
+<Update label="03.10.2026">
+  ## [03.10.2026: Drag-and-Drop Column Assignment for Datasets](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.13.0+**
+
+  Dataset creation now features an intuitive drag-and-drop column assignment interface. Assign columns to input, output, or metadata buckets with automatic suggestions based on common naming conventions, and preview exactly how your data will appear in the final dataset.
+
+  * **Visual column assignment** with draggable chips and drop targets
+  * **Smart auto-assignment** based on column names like "input", "output", "reference"
+  * **Live dataset preview** showing the final structure as you make changes
+  * **Keyboard navigation support** for accessibility
+  * **Raw data preview** in tabular format alongside final dataset view
+</Update>
+
+<Update label="03.08.2026">
+  ## [03.08.2026: Extended Model Provider Support](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.10.0+ (Cerebras, Fireworks, Groq, Moonshot) and arize-phoenix 13.11.0+ (Perplexity, Together AI)**
+
+  Phoenix Playground now supports six additional OpenAI-compatible model providers: Perplexity AI, Together AI, Cerebras, Fireworks AI, Groq, and Moonshot (Kimi). Access hundreds of new models including specialized reasoning models and fine-tuned variants through familiar OpenAI-compatible APIs.
+
+  * **Perplexity AI** for research and web-grounded responses
+  * **Together AI** with models from Moonshot, DeepSeek, Qwen, and GLM
+  * **Cerebras** for ultra-fast inference with Llama models
+  * **Fireworks AI** with Llama 4 Scout and Maverick variants
+  * **Groq** for low-latency Llama and Qwen deployments
+  * **Moonshot (Kimi)** with extended 128k and 32k context models
+  * **Cost tracking enabled** for Cerebras, Fireworks, Groq, and Moonshot
+</Update>
+
+<Update label="03.10.2026">
+  ## [03.10.2026: Provider Visibility Controls](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.13.0+**
+
+  Control which model providers appear in the Phoenix UI using the `PHOENIX_ALLOWED_PROVIDERS` environment variable. Set it to a comma-separated list of provider names to show only those providers, keeping your interface focused on the tools you actually use.
+
+  * **Allow-list mode** to show only specified providers
+  * **Case-insensitive configuration** with typo detection warnings
+  * **Set to NONE** to hide all providers from the UI
+</Update>
+
+<Update label="03.08.2026">
+  ## [03.08.2026: Latest OpenAI GPT Models](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.10.0+**
+
+  Phoenix Playground now includes the latest OpenAI models: GPT-5.4 family, GPT-5.3-chat-latest, GPT-5.2-pro variants, and o3-pro-2025-06-10. All models include cost tracking and are ready to use in experiments and prompt testing.
+</Update>
+
+<Update label="03.08.2026">
+  ## [03.08.2026: Project Editing from Settings](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Available in arize-phoenix 13.10.0+**
+
+  Edit project descriptions and customize gradient colors directly from the Project Settings page. Click the edit button to update project metadata inline, with changes persisting immediately across the Phoenix UI.
+</Update>
+
+<Update label="03.11.2026">
+  ## [03.11.2026: Breaking Change: Removed Deprecated Annotations API](/docs/phoenix/release-notes/03-2026/03-11-2026-session-turns-api)
+
+  **Breaking change in arize-phoenix-client 2.0.0**
+
+  The deprecated `client.annotations` module has been removed. All annotation methods remain available on `client.spans`. Update your code to use `client.spans.add_span_annotation()` and `client.spans.log_span_annotations()` instead of the `client.annotations` variants.
+</Update>
+
+<Update label="03.05.2026">
+  ## [03.05.2026: SDK Session Retrieval](/docs/phoenix/release-notes/03-2026/03-05-2026-sdk-session-retrieval)
+
+  Session retrieval is now available in the Python client (`client.sessions.get()`, `client.sessions.list()`, `get_sessions_dataframe()`) and the TypeScript client (`getSession()`, `listSessions()`). Both SDKs support automatic pagination and async usage for working with session turns data.
+</Update>
+
+<Update label="02.27.2026">
+  ## [02.27.2026: Sessions API and CLI Support](/docs/phoenix/release-notes/02-2026/02-27-2026-cli-sessions-and-rest-api)
+
+  REST API endpoints for listing and getting sessions (`GET /v1/sessions`, `GET /v1/sessions/{id}`) and CLI commands (`px sessions`, `px session <id>`) for exploring multi-turn conversations from the terminal.
+</Update>
+
+<Update label="02.24.2026">
+  ## 02.24.2026: Claude Agent SDK Integration
+
+  Phoenix now supports tracing for [Anthropic's Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-agent-sdk) via a new OpenInference instrumentation package. The integration automatically captures **AGENT** and **TOOL** spans, giving you full visibility into your Claude Agent SDK applications.
+
+  * Install `@arizeai/openinference-instrumentation-claude-agent-sdk` alongside `@arizeai/phoenix-otel`
+  * See agent execution flows and tool invocations in Phoenix's trace UI
+  * [Get started →](/docs/phoenix/integrations/typescript/claude-agent-sdk)
+</Update>
+
+<Update label="02.14.2026">
+  ## [02.14.2026: Phoenix 13.0](/docs/phoenix/release-notes/02-2026/02-14-2026-phoenix-13-0)
+
+  **Phoenix 13.0** is a major release centered on **Dataset Evaluators**, with support for **custom model providers**, **OpenAI Responses API type selection**, and extensive **Playground** and **dataset/experiment UX** improvements.
+
+  Highlights include:
+
+  * Attach evaluator suites directly to datasets and run them server-side on every Playground experiment.
+  * Reuse server-managed custom providers (OpenAI, Azure OpenAI, Anthropic, AWS Bedrock, Google GenAI) across Playground, prompts, and dataset evaluators.
+  * Choose OpenAI API type per configuration (`chat.completions.create` or `responses.create`) with automatic parameter compatibility handling.
+  * Use new Playground workflows such as cancellation, template variable autocomplete, appended messages, improved prompt selection, and URL state for prompt IDs/versions/tags.
+  * Get expanded dataset and experiment ergonomics, model/provider updates (including Claude Opus 4.6 and Azure OpenAI v1 migration), and infrastructure improvements like a session ID index for spans.
+</Update>
+
+<Update label="02.12.2026">
+  ## [02.12.2026: OpenAI Responses API Type Support](/docs/phoenix/release-notes/02-2026/02-12-2026-openai-responses-api-support)
+
+  Phoenix now supports selecting the **OpenAI API type** for OpenAI and Azure OpenAI calls in the Playground and custom providers. Choose **Chat Completions** (`chat.completions.create`) or **Responses** (`responses.create`) depending on the model and features you want to use.
+
+  **Key capabilities:**
+
+  * **API type selection:** Choose Chat Completions or Responses per model configuration.
+  * **Custom provider support:** OpenAI and Azure OpenAI custom providers can be configured with an API type for consistent routing.
+  * **Parameter compatibility:** Phoenix maps shared invocation parameters to the chosen API type and filters unsupported fields automatically.
+
+  To get started, open the Playground model configuration panel and select an **OpenAI API type**, or set it in **Settings → AI Providers → Custom Providers** for server-managed routing.
+</Update>
+
+<Update label="02.12.2026">
+  ## [02.12.2026: Dataset Evaluators](/docs/phoenix/release-notes/02-2026/02-12-2026-dataset-evaluators)
+
+  **Requires Phoenix 13.x.**
+  **Dataset evaluators** let you attach evaluators directly to a dataset so they automatically run server-side whenever you execute experiments from the Phoenix UI (for example, from the Playground). This turns your dataset into a reusable evaluation suite and removes the need to reconfigure evaluators for every experiment.
+
+  **Key capabilities:**
+
+  * **Attach once, evaluate everywhere:** Add LLM or built-in code evaluators to a dataset and reuse them across Playground experiments.
+  * **Flexible input mapping:** Map evaluator inputs to dataset fields so each example is evaluated consistently.
+  * **Built-in visibility:** Each evaluator captures traces for debugging and refinement, with details available from the evaluator view.
+
+  To get started, open a dataset, navigate to the **Evaluators** tab, click **Add evaluator**, configure your input mapping, and run an experiment from the Playground to see server-side scores and traces.
+</Update>
+
+<Update label="02.11.2026">
+  ## [02.11.2026: Custom Providers for Playground and Prompts](/docs/phoenix/release-notes/02-2026/02-11-2026-custom-providers)
+
+  Phoenix now supports **custom providers** for OpenAI, Azure OpenAI, Anthropic, AWS Bedrock, and Google GenAI. Custom providers let you store provider credentials and routing configuration on the server and reuse them across the playground and saved prompt versions.
+
+  ![Custom provider configuration in Phoenix](https://storage.googleapis.com/arize-phoenix-assets/assets/images/custom-provider-config.png)
+
+  **Key capabilities:**
+
+  * **Centralized configuration:** Manage provider credentials and routing in Settings and reuse them across the playground and prompt versions.
+  * **SDK-specific authentication:** Support API keys, Azure AD token providers, or default credentials (Azure/AWS) depending on the SDK.
+  * **Model selection integration:** Custom providers show up in model menus as their own provider group and inherit model listings from the underlying SDK.
+  * **Request-level overrides:** Continue to supply custom request headers per prompt while using custom provider configuration for routing and authentication.
+
+  To get started, open **Settings → AI Providers → Custom Providers**, create a provider configuration, and select it from the model menu in the playground.
+</Update>
+
+<Update label="02.09.2026">
+  ## [02.09.2026: Claude Opus 4.6 Model Support](/docs/phoenix/release-notes/02-2026/02-10-2026-claude-opus-4-6-model-support)
+
+  Phoenix playground now supports Claude Opus 4.6, Anthropic's latest flagship model. Select `claude-opus-4-6` in the Anthropic provider or `anthropic.claude-opus-4-6-v1` in AWS Bedrock to start using the model with full extended thinking parameter support and accurate cost tracking.
+
+  **Key capabilities:**
+
+  * **Anthropic provider integration:** Access Claude Opus 4.6 directly through the playground with the `thinking` invocation parameter enabled for extended reasoning workflows
+  * **AWS Bedrock support:** Deploy Opus 4.6 through Bedrock with the region-specific model identifier
+  * **Automatic cost tracking:** Token costs are calculated using the latest pricing ($5 per million input tokens, $25 per million output tokens, plus cache read/write rates)
+
+  The model appears in playground dropdowns alongside other Claude models and inherits the same reasoning capabilities as other Claude 4.x models.
+</Update>
+
+<Update label="01.31.2026">
+  ## [01.31.2026: Tool Selection and Tool Invocation Evaluators](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+
+  **Available in arize-phoenix-evals 0.16.0+ (Python) and @arizeai/phoenix-evals 1.3.0+ (TypeScript)**
+
+  Phoenix now provides two specialized evaluators for assessing AI agent tool usage. The **Tool Selection Evaluator** judges whether an agent correctly chose the most appropriate tool from its available toolkit to answer a user's question, without evaluating the parameters passed. The **Tool Invocation Evaluator** assesses whether the agent correctly invoked a tool with proper parameters, JSON formatting, and safe values.
+
+  These evaluators help developers:
+
+  * **Identify tool selection errors** where agents choose suboptimal or incorrect tools
+  * **Debug parameter issues** including hallucinated fields, malformed JSON, and incorrect values
+  * **Improve tool descriptions** and agent prompts based on systematic evaluation
+  * **Validate multi-tool and multi-turn interactions** across complex agent workflows
+
+  Both evaluators are available as `ToolSelectionEvaluator` and `ToolInvocationEvaluator` in Python's `phoenix.evals.metrics` module, and as `createToolSelectionEvaluator` and `createToolInvocationEvaluator` in TypeScript.
+</Update>
+
+<Update label="01.28.2026">
+  ## [01.28.2026: Configurable Email Extraction for OAuth2 Providers](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+
+  **Available in Phoenix 12.33.1+**
+
+  Phoenix now supports custom email extraction from OAuth2 identity providers through the `PHOENIX_OAUTH2_{IDP}_EMAIL_ATTRIBUTE_PATH` environment variable. This solves authentication issues with providers like Azure AD/Entra ID where the standard `email` claim may be null but alternative claims like `preferred_username` contain the user's identity.
+
+  Configure email extraction using JMESPath expressions:
+
+  ```bash theme={null}
+  </Update>
+
+  <Update label="02.01.2026">
+  ## [02.01.2026: Extract from Azure AD preferred_username claim](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+  PHOENIX_OAUTH2_AZURE_AD_EMAIL_ATTRIBUTE_PATH=preferred_username
+  </Update>
+
+  <Update label="02.01.2026">
+  ## [02.01.2026: Extract from nested claims](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+  PHOENIX_OAUTH2_CUSTOM_IDP_EMAIL_ATTRIBUTE_PATH=user.contact.email
+  ```
+
+  The default behavior remains unchanged, using the standard OIDC `email` claim when no custom path is specified. JMESPath expressions are validated at startup for immediate feedback on configuration errors.
+</Update>
+
+<Update label="01.22.2026">
+  ## [01.22.2026: CLI Commands for Prompts, Datasets, and Experiments](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+
+  **Available in @arizeai/phoenix-cli 0.4.0+**
+
+  The Phoenix CLI now provides comprehensive commands for managing prompts, datasets, and experiments directly from your terminal. Access version-controlled prompts, create evaluation datasets, and run experiments—all without leaving your development environment.
+
+  **Prompt Management:**
+
+  * **List and view prompts** with `px prompts` and `px prompt <name>`
+  * **Pipe prompts to AI assistants** for optimization and analysis
+  * **Text format output** with XML-style role tags for LLM consumption
+
+  **Dataset Operations:**
+
+  * **Create and manage datasets** with `px datasets` and `px dataset <name>`
+  * **Add examples** and query dataset contents
+  * **Export datasets** for offline analysis
+
+  **Experiment Workflows:**
+
+  * **Run experiments** and compare results across configurations
+  * **View experiment details** and performance metrics
+  * **Track changes** across prompt and model variations
+
+  These commands integrate seamlessly with AI coding assistants and enable systematic testing of LLM applications through terminal-based workflows.
+</Update>
+
+<Update label="01.23.2026">
+  ## [01.23.2026: CLI Authentication Configuration](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+
+  **Available in @arizeai/phoenix-cli 0.4.0+**
+
+  The Phoenix CLI now includes enhanced authentication configuration commands, resolving database race conditions and improving connection reliability. Users can configure authentication settings directly through the CLI for more predictable and stable connections to Phoenix servers.
+</Update>
+
+<Update label="01.21.2026">
+  ## [01.21.2026: Create Datasets from Traces with Span Associations](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+
+  **Available in arize-phoenix-client 1.28.0+ (Python) and @arizeai/phoenix-client 2.0.0+ (TypeScript)**
+
+  Phoenix now enables converting production traces into curated datasets while preserving bidirectional links back to source spans. Use the new `span_id_key` parameter to maintain traceability from evaluation examples to their original production executions.
+
+  **Python Example:**
+
+  ```python theme={null}
+  from phoenix.client import Client
+
+  client = Client()
+  dataset = client.datasets.create_dataset(
+      name="production-queries",
+      dataframe=spans_df,
+      input_keys=["input"],
+      output_keys=["output"],
+      span_id_key="context.span_id"  # Links examples to spans
+  )
+  ```
+
+  **TypeScript Example:**
+
+  ```typescript theme={null}
+  import { createClient } from '@arizeai/phoenix-client';
+
+  const client = createClient();
+  await client.createDataset({
+      name: "production-queries",
+      examples: examples.map(ex => ({
+          input: ex.input,
+          output: ex.output,
+          spanId: ex.spanId  // Preserves trace links
+      }))
+  });
+  ```
+
+  Key capabilities:
+
+  * **Batch resolution** of span IDs for optimal performance
+  * **Graceful fallback** when span IDs are missing or invalid
+  * **Backwards compatible** with existing dataset creation workflows
+  * **Bidirectional navigation** between evaluation results and production traces
+</Update>
+
+<Update label="01.19.2026">
+  ## [01.19.2026: Export Annotations with Traces](/docs/phoenix/release-notes/02-2026/02-01-2026-tool-selection-and-tool-invocation-evaluators)
+
+  **Available in @arizeai/phoenix-cli 0.3.0+**
+
+  The Phoenix CLI now supports exporting annotations alongside traces using the `--include-annotations` flag. Annotations—including manual labels, LLM evaluation scores, and programmatic feedback—are now preserved when exporting traces for offline analysis, backup, or migration workflows.
+
+  ```bash theme={null}
+  px traces export --include-annotations > traces_with_feedback.jsonl
+  ```
+
+  This enables teams to maintain complete evaluation history when moving data between environments or conducting retrospective analysis of model performance.
+</Update>
+
+<Update label="01.22.2026">
+  ## [01.22.2026: CLI Prompt Commands: Pipe Prompts to AI Assistants](/docs/phoenix/release-notes/01-2026/01-22-2026-cli-prompt-commands) 📝
+
+  **Available in @arizeai/phoenix-cli 0.4.0+**
+
+  Phoenix CLI now supports prompt introspection with `px prompts` and `px prompt`. List prompts, view their content, and pipe them directly to AI assistants like Claude Code for optimization suggestions. The `--format text` option outputs prompts with XML-style role tags, ideal for analysis workflows.
+</Update>
+
+<Update label="01.21.2026">
+  ## [01.21.2026: Create Datasets from Traces with Span Associations](/docs/phoenix/release-notes/01-2026/01-21-2026-create-datasets-from-traces) 🔗
+
+  **Available in arize-phoenix-client 1.28.0+ (Python) and @arizeai/phoenix-client 2.0.0+ (TypeScript)**
+
+  The Phoenix client now enables converting production traces into curated datasets while preserving associations back to source spans. Query spans using client methods, then create datasets with span associations to maintain bidirectional links. Use this to build golden datasets from validated interactions, curate edge cases from failed traces, or create regression test suites from critical user flows.
+</Update>
+
+<Update label="01.21.2026">
+  ## [01.21.2026: Phoenix CLI: Datasets, Experiments & Annotations](/docs/phoenix/release-notes/01-2026/01-21-2026-cli-datasets-experiments-annotations) 🧪
+
+  **Available in @arizeai/phoenix-cli 0.2.0+**
+
+  The Phoenix CLI now supports datasets, experiments, and annotations. Pull evaluation data, export experiment results, and access human feedback directly from the terminal. Works well with AI coding assistants for analyzing test cases and reviewing results.
+</Update>
+
+<Update label="01.17.2026">
+  ## [01.17.2026: Phoenix CLI: Terminal Access for AI Coding Assistants](/docs/phoenix/release-notes/01-2026/01-17-2026-phoenix-cli-ai-agent-debugging) 🖥️
+
+  **Available in @arizeai/phoenix-cli 0.1.0+**
+
+  AI coding assistants operate through terminals and files—they run shell commands, read output, and process data. The new Phoenix CLI makes trace data accessible through these interfaces, enabling tools like Claude Code, Cursor, and Windsurf to query your Phoenix instance directly. Export traces to JSON, pipe to `jq`, or save to disk for analysis.
+</Update>
+
+<Update label="01.05.2026">
+  ## [01.05.2026: Appended Messages for Playground Experiments](/docs/phoenix/release-notes/01-2026/01-05-2026-appended-messages-for-playground-experiments) 💬
+
+  **Available in Phoenix 13.0+**
+
+  The Prompt Playground now supports appending conversation history from dataset examples to your prompts. This enables powerful A/B testing workflows for comparing models and system prompts against the same conversation threads. Specify a dot-notation path to messages in your dataset (e.g., `messages` or `input.messages`) and run experiments across all prompt variants.
+</Update>
+
+<Update label="12.20.2025">
+  ## [12.20.2025: Improved User Preferences](/docs/phoenix/release-notes/12-2025/12-20-2025-improved-user-preferences) ⚙️
+
+  **Available in Phoenix 12.27+**
+
+  Phoenix now offers enhanced user preference settings, giving you more control over your experience. This update includes theme selection in viewer preferences and programming language preference.
+</Update>
+
+<Update label="12.12.2025">
+  ## [12.12.2025: Support for Gemini Tool Calls](/docs/phoenix/release-notes/12-2025/12-12-2025-support-for-gemini-tool-calls) 🤖
+
+  **Available in Phoenix 12.25+**
+
+  Phoenix now supports Gemini tool calls, enabling enhanced integration capabilities with Google's Gemini models. This update allows for more robust and feature-complete interactions with Gemini, including improved request/response translation and advanced conversation handling with tool calls.
+</Update>
+
+<Update label="12.09.2025">
+  ## [12.09.2025: Span Notes API](/docs/phoenix/release-notes/12-2025/12-09-2025-span-notes-api) 📝
+
+  **Available in Phoenix 12.21+**
+
+  New dedicated endpoints for span notes enable open coding and seamless annotation integrations. Add notes to spans programmatically using the Phoenix client in both Python and TypeScript—perfect for debugging sessions, human feedback, and building custom annotation pipelines.
+</Update>
+
+<Update label="12.06.2025">
+  ## [12.06.2025: LDAP Authentication Support](/docs/phoenix/release-notes/12-2025/12-06-2025-ldap-authentication-support) 🔐
+
+  **Available in Phoenix 12.20+**
+
+  Phoenix now supports authentication against LDAP directories, enabling integration with enterprise identity infrastructure including Microsoft Active Directory, OpenLDAP, and any LDAP v3 compliant directory. Key features include group-based role mapping, multi-server failover, TLS encryption, and automatic user provisioning.
+</Update>
+
+<Update label="12.04.2025">
+  ## [12.04.2025: Evaluator Message Formats](/docs/phoenix/release-notes/12-2025/12-04-2025-evaluator-message-formats) 💬
+
+  **Available in phoenix-evals 0.22+ (Python) and @arizeai/phoenix-evals 2.0+ (TypeScript)**
+
+  Phoenix evaluators now support flexible prompt formats including simple string templates and OpenAI-style message arrays for multi-turn prompts. Python supports both f-string and mustache syntax, while TypeScript uses mustache syntax. Adapters handle provider-specific transformations automatically.
+</Update>
+
+<Update label="12.03.2025">
+  ## [12.03.2025: TypeScript createEvaluator](/docs/phoenix/release-notes/12-2025/12-03-2025-typescript-create-evaluator) 🧪
+
+  **Available in @arizeai/phoenix-evals 2.0+**
+
+  The `createEvaluator` utility provides a type-safe way to build custom code evaluators for experiments in TypeScript. Define evaluators with full type inference, access `input`, `output`, `expected`, and `metadata` parameters, and integrate seamlessly with `runExperiment`.
+</Update>
+
+<Update label="12.01.2025">
+  ## [12.01.2025: Splits on Experiments Table](/docs/phoenix/release-notes/12-2025/12-01-2025-splits-on-experiments-table) 📊
+
+  **Available in Phoenix 12.20+**
+
+  You can now view and filter experiment results by data splits directly in the experiments table. This enhancement makes it easier to analyze performance across different data subsets (such as train, validation, and test) and compare how your models perform on each split.
+</Update>
+
+<Update label="11.29.2025">
+  ## [11.29.2025: Add support for Claude Opus 4-5](/docs/phoenix/release-notes/11-2025/11-29-2025-add-support-for-claude-opus-4-5) 🤖
+
+  **Available in Phoenix 12.18+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/claude-opus-4-5-support.png" alt="Claude Opus 4-5 support" />
+  </Frame>
+
+  Phoenix now supports Claude Opus 4 and 4-5 as models you can invoke from the Playground.
+</Update>
+
+<Update label="11.27.2025">
+  ## [11.27.2025: Show Server Credential Setup in Playground API Keys](/docs/phoenix/release-notes/11-2025/11-27-2025-show-server-credential-setup-in-playground-api-keys) 🔐
+
+  **Available in Phoenix 12.18+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/playground-server-credential-set-up.png" alt="Playground server credential setup" />
+  </Frame>
+
+  The Playground now clearly indicates when server credentials are configured.
+</Update>
+
+<Update label="11.25.2025">
+  ## [11.25.2025: Split Assignments When Uploading a Dataset](/docs/phoenix/release-notes/11-2025/11-25-2025-split-assignments-when-uploading-a-dataset) 🗂️
+
+  **Available in Phoenix 12.18+**
+
+  <Frame>
+    <video src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/upload-dataset-splits.mp4" controls style={{ width: '100%' }} />
+  </Frame>
+
+  You can now assign data splits (ex: train/test/validation) directly when uploading a dataset into Arize Phoenix.
+</Update>
+
+<Update label="11.23.2025">
+  ## [11.23.2025: Repetitions for Manual Playground Invocations](/docs/phoenix/release-notes/11-2025/11-23-2025-repetitions-for-manual-playground-invocations) 🛝
+
+  **Available in Phoenix 12.17+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/playground-repetitions-rn.png" alt="Playground repetitions feature" />
+  </Frame>
+
+  This update adds an easy way to run several repetitions of the same prompt directly from the Playground.
+</Update>
+
+<Update label="11.14.2025">
+  ## [11.14.2025: Expanded Provider Support with OpenAI 5.1 + Gemini 3](/docs/phoenix/release-notes/11-2025/11-19-2025-expanded-provider-support-with-openai-5-1-+-gemini-3) 🔧
+
+  **Available in Phoenix 12.15+**
+
+  This update enhances LLM provider support by adding **OpenAI v5.1** compatibility (including reasoning capabilities), expanding support for **Google DeepMind/Gemini** models, and introducing the **gemini-3** model variant.
+</Update>
+
+<Update label="11.12.2025">
+  ## [11.12.2025: Updated Anthropic Model List](/docs/phoenix/release-notes/11-2025/11-12-2025-updated-anthropic-model-list) 🧠
+
+  **Available in Phoenix 12.15+**
+
+  This update enhances the Anthropic model registrations in Arize Phoenix by adding support for the **4.5 Sonnet/Haiku variants** and removing several legacy **3.x Sonnet/Opus entries.**
+</Update>
+
+<Update label="11.09.2025">
+  ## [11.09.2025: OpenInference TypeScript 2.0](/docs/phoenix/release-notes/11-2025/11-09-2025-openinference-typescript-2-0) 💻
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/traced_agent.mp4" alt="traced agent" />
+  </Frame>
+
+  * Added **easy manual instrumentation** with the same decorators, wrappers, and attribute helpers found in the Python `openinference-instrumentation` package.
+  * Introduced **function tracing utilities** that automatically create spans for sync/async function execution, including specialized wrappers for **chains**, **agents**, and **tools**.
+  * Added **decorator-based method tracing**, enabling automatic span creation on class methods via the `@observe` decorator.
+  * Expanded **attribute helper utilities** for standardized OpenTelemetry metadata creation, including helpers for **inputs/outputs**, **LLM operations**, **embeddings**, **retrievers**, and **tool definitions**.
+  * Overall, tracing workflows, agent behavior, and external tool calls is now significantly simpler and more consistent across languages.
+</Update>
+
+<Update label="11.07.2025">
+  ## [11.07.2025: Timezone Preference](/docs/phoenix/release-notes/11-2025/11-07-2025-timezone-preference) 🌍
+
+  **Available in Phoenix 12.11+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/timezone_preferences.mp4" alt="timezone preferences" />
+  </Frame>
+
+  This update adds a new **display timezone preference** feature for users: you can now specify how timestamps are shown across the UI, making time-based data more intuitive and aligned with your locale.
+</Update>
+
+<Update label="11.05.2025">
+  ## [11.05.2025: Metadata for Prompts](/docs/phoenix/release-notes/11-2025/11-05-2025-metadata-for-prompts) 🗂️
+
+  **Available in Phoenix 12.10+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/metadata_for_prompts.png" alt="metadata for prompts" />
+  </Frame>
+
+  Added full prompt-level metadata support across API, UI, and clients: you can now create, clone, patch, and display a JSON `metadata` field for prompts.
+</Update>
+
+<Update label="11.03.2025">
+  ## [11.03.2025: Playground Dataset Label Display](/docs/phoenix/release-notes/11-2025/11-03-2025-playground-dataset-label-display) 🏷️
+
+  **Available in Phoenix 12.10+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/dataset_labels_phoenix.png" alt="dataset labels in playground" />
+  </Frame>
+
+  You can now view dataset labels as you load datasets into the Playground. This enhancement makes it easier to identify and select your desired dataset.
+</Update>
+
+<Update label="11.01.2025">
+  ## [11.01.2025: Resume Experiments and Evaluations](/docs/phoenix/release-notes/11-2025/11-01-2025-resume-experiments-and-evaluations) 🔄
+
+  **Available in Phoenix 12.10+**
+
+  This release allows you to resume your experiments and evaluations at your convenience. If certain examples fail, there is no need to repeat an entire task you already completed. This feature provides you with new management capabilities across servers and clients. It's designed to save effort, making your experimentation workflow more flexible.
+</Update>
+
+<Update label="10.30.2025">
+  ## [10.30.2025: Metadata Support for Experiment Run Annotations](/docs/phoenix/release-notes/10-2025/10-30-2025-metadata-support-for-experiment-run-annotations) 🧩
+
+  **Available in Phoenix 12.9+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/releasenotes-10-30.png" alt="metadata support for experiment run annotations" />
+  </Frame>
+
+  Added **metadata support for experiment run annotations**, with GraphQL updates to fetch and expose this information. The annotation details view now displays formatted JSON metadata across both **compare** and **example** views for easier inspection and debugging.
+</Update>
+
+<Update label="10.28.2025">
+  ## [10.28.2025: Enable AWS IAM Auth for DB Configuration](/docs/phoenix/release-notes/10-2025/10-28-2025-enable-aws-iam-auth-for-db-configuration) 🔐
+
+  **Available in Phoenix 12.9+**
+
+  Added support for **AWS IAM–based authentication** for PostgreSQL connections to **AWS Aurora and RDS**. This enhancement enables the use of **short-lived IAM tokens** instead of static passwords, improving security and compliance for database access.
+</Update>
+
+<Update label="10.26.2025">
+  ## [10.26.2025: Add Split Edit Menu to Examples](/docs/phoenix/release-notes/10-2025/10-26-2025-add-split-edit-menu-to-examples) ䷖
+
+  **Available in Phoenix 12.8+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/add-splits-to-example.png" alt="add splits to example" />
+  </Frame>
+
+  Added a new **"Split"** dropdown to single-example view on the dataset pages, allowing users to update the data split classification (e.g., train/validation/test) directly from the example level. This improvement makes it easier to correct or adjust split assignments dynamically.
+</Update>
+
+<Update label="10.24.2025">
+  ## [10.24.2025: Filter Prompts Page by Label](/docs/phoenix/release-notes/10-2025/10-24-2025-filter-prompts-page-by-label) 🏷️
+
+  **Available in Phoenix 12.7+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/filter-prompts-by-label.png" alt="filter prompts by label" />
+  </Frame>
+
+  Added filtering by label on the Prompts page—users can now pick one or more labels to narrow the prompts list.
+</Update>
+
+<Update label="10.20.2025">
+  ## [10.20.2025: Splits](/docs/phoenix/release-notes/10-2025/10-20-2025-splits) ䷖
+
+  **Available in Phoenix 12.7+**
+
+  In Arize Phoenix, *splits* let you categorize your dataset into distinct subsets—such as **train**, **validation**, or **test**—enabling structured workflows for experiments and evaluations. This capability offers more flexibility in how you organize, filter, and compare your data across different stages or experimental conditions.
+</Update>
+
+<Update label="10.18.2025">
+  ## [10.18.2025: Filter Annotations in Compare Experiments Slideover](/docs/phoenix/release-notes/10-2025/10-18-2025-filter-annotations-in-compare-experiments-slideover) ✍️
+
+  **Available in Phoenix 12.7+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/filter-annotation-compare-experiments.png" alt="filter annotations in compare experiments" />
+  </Frame>
+
+  Added filtering of annotations in the experiment compare slideover so that only annotations present on the selected experiment runs are displayed. This ensures a cleaner UI and avoids filters for annotations that don't appear in the comparison set.
+</Update>
+
+<Update label="10.15.2025">
+  ## [10.15.2025: Enhanced Filtering for Examples Table](/docs/phoenix/release-notes/10-2025/10-15-2025-enhanced-filtering-for-examples-table) 🔍
+
+  **Available in Phoenix 12.5+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/experiment-examples-filtering.png" alt="enhanced filtering for examples table" />
+  </Frame>
+
+  Added filtering capabilities to the **Dataset Examples table**, allowing users to search examples by text or split ID. Additionally, the split-management filter menu has been reorganized to separate filtering by splits from split management actions.
+</Update>
+
+<Update label="10.13.2025">
+  ## [10.13.2025: View Traces in Compare Experiments](/docs/phoenix/release-notes/10-2025/10-13-2025-view-traces-in-compare-experiments) 🧪
+
+  **Available in Phoenix 12.5+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/view-trace-in-compare.png" alt="view traces in compare experiments" />
+  </Frame>
+
+  We've added trace-links to the experiment compare slideover for runs and annotations. Clicking the new trace icons opens the Trace View.
+</Update>
+
+<Update label="10.10.2025">
+  ## [10.10.2025: Viewer Role](/docs/phoenix/release-notes/10-2025/10-10-2025-viewer-role) 👀
+
+  **Available in Phoenix 12.5+**
+
+  Introduced a new **VIEWER role** with enforced read-only permissions across both GraphQL and REST APIs, improving access control and security.
+</Update>
+
+<Update label="10.08.2025">
+  ## [10.08.2025: Dataset Labels](/docs/phoenix/release-notes/10-2025/10-08-2025-dataset-labels) 🏷️
+
+  **Available in Phoenix 12.3+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/dataset-labels.png" alt="dataset labels" />
+  </Frame>
+
+  Added support for **dataset labels** — you can now label datasets and view these labels in a dedicated column on the dataset list page, making it easier to **filter and group datasets**. All dataset labels can also be managed and viewed in the **"Datasets" tab** on the Settings page.
+</Update>
+
+<Update label="10.06.2025">
+  ## [10.06.2025: Paginate Compare Experiments](/docs/phoenix/release-notes/10-2025/10-06-2025-paginate-compare-experiments) 📃
+
+  **Available in Phoenix 12.3+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/compare-experiment-paginate.png" alt="paginate compare experiments" />
+  </Frame>
+
+  We added pagination to the **experiment comparison slideover** on the list page for smoother navigation through results. We also introduced a new **repetition number column**, visible only when the base experiment includes multiple repetitions.
+</Update>
+
+<Update label="10.05.2025">
+  ## [10.05.2025: Load Prompt by Tag into Playground](/docs/phoenix/release-notes/10-2025/10-05-2025-load-prompt-by-tag-into-playground) 🛝
+
+  **Available in Phoenix 12.2+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/prompt-tags-in-playground.png" alt="prompt tags in playground" />
+  </Frame>
+
+  We have added support for **selecting and loading prompts by tag** in the Playground. Users can now open specific prompts tagged for easier comparison and reproducibility.
+</Update>
+
+<Update label="10.03.2025">
+  ## [10.03.2025: Prompt Version Editing in Playground](/docs/phoenix/release-notes/10-2025/10-03-2025-prompt-version-editing-in-playground) 🛝
+
+  **Available in Phoenix 12.2+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/prompt-versions-in-playground.png" alt="prompt versions in playground" />
+  </Frame>
+
+  We added support for **prompt versioning in the Playground** — users can now select, edit, and experiment with specific prompt versions directly. This update improves traceability and reproducibility for prompt iterations, making it easier to manage and compare different versions.
+</Update>
+
+<Update label="09.29.2025">
+  ## [09.29.2025: Day 0 support for Claude Sonnet 4.5](/docs/phoenix/release-notes/09-2025/09-29-2025-day-0-support-for-claude-sonnet-4.5) ⚡
+
+  **Available in Phoenix 12.1+**
+
+  <Frame>
+    <iframe src="https://cdn.iframe.ly/8Pt0YVT4" className="aspect-video" allowfullscreen="" allow="encrypted-media *;" />
+  </Frame>
+
+  Day-0 support for Claude Sonnet 4.5.
+</Update>
+
+<Update label="09.27.2025">
+  ## [09.27.2025: Dataset Splits ](/docs/phoenix/release-notes/09-2025/09-27-2025-dataset-splits)📊
+
+  **Available in Phoenix 12.0+**
+
+  Add support for custom dataset splits to organize examples by category.
+</Update>
+
+<Update label="09.26.2025">
+  ## [09.26.2025: Session Annotations 🗂️](/docs/phoenix/release-notes/09-2025/09-26-2025-session-annotations)&#x20;
+
+  **Available in Phoenix 12.0+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/session-annotation.png" alt="" />
+  </Frame>
+
+  You can now annotate sessions with conversational evaluations like coherency and tone.&#x20;
+</Update>
+
+<Update label="09.25.2025">
+  ## [09.25.2025: Repetitions](/docs/phoenix/release-notes/09-2025/09-25-2025-repetitions) 🔁
+
+  **Available in Phoenix 11.38+**
+
+  <Frame>
+    <iframe src="https://cdn.iframe.ly/8MbuGb7L" className="aspect-video" allowfullscreen="" allow="encrypted-media *;" />
+  </Frame>
+
+  Support for repetitions is now enabled in Playground and SDK workflows.
+</Update>
+
+<Update label="09.24.2025">
+  ## [09.24.2025: Custom HTTP headers for requests in Playground](/docs/phoenix/release-notes/09-2025/09-24-2025-custom-http-headers-for-requests-in-playground) 🛠️
+
+  **Available in Phoenix 11.36+**
+
+  <Frame>
+    <img src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/custom-headers-playground.png" alt="" />
+  </Frame>
+
+  Enable configuring custom HTTP headers for playground requests.
+</Update>
+
+<Update label="09.23.2025">
+  ## [09.23.2025: Repetitions in experiment compare slideover ](/docs/phoenix/release-notes/09-2025/09-23-2025-repetitions-in-experiment-compare-slideover)🔄
+
+  **Available in Phoenix 11.36+**
+
+  <Frame>
+    <iframe src="https://cdn.iframe.ly/pNndVmT2" className="aspect-video" allowfullscreen="" allow="encrypted-media *;" />
+  </Frame>
+
+  Show experiment repetitions as separate cards in the compare slideover 🔄
+</Update>
+
+<Update label="09.22.2025">
+  ## [09.22.2025: Helm configurable image registry & IPv6 support ](/docs/phoenix/release-notes/09-2025/09-22-2025-helm-configurable-image-registry-and-ipv6-support)🌐
+
+  **Available in Phoenix 11.35+**
+</Update>
+
+<Update label="09.17.2025">
+  ## [09.17.2025: Experiment compare details slideover in list view](/docs/phoenix/release-notes/09-2025/09-17-2025-experiment-compare-details-slideover-in-list-view) 🔍
+
+  **Available in Phoenix 11.34+**
+
+  <Frame>
+    <iframe src="https://cdn.iframe.ly/V5RZhXO1" className="aspect-video" allowfullscreen="" allow="encrypted-media *;" />
+  </Frame>
+
+  Added a slideover in the experiments list view to show compare details inline.
+</Update>
+
+<Update label="09.15.2025">
+  ## [09.15.2025: Prompt Labels 🏷️](/docs/phoenix/release-notes/09-2025/09-15-2025-prompt-labels)
+
+  **Available in Phoenix 11.33+**
+
+  <Frame>
+    <iframe src="https://cdn.iframe.ly/pEtL2hyu" className="aspect-video" allowfullscreen="" allow="encrypted-media *;" />
+  </Frame>
+
+  We’ve added support for labeling prompts so you can categorize them by use-case, provider, or any custom tag.
+</Update>
+
+<Update label="09.12.2025">
+  ## [09.12.2025: Enable Paging in Experiment Compare Details 📄](/docs/phoenix/release-notes/09-2025/09-12-2025-enable-paging-in-experiment-compare-details)
+
+  **Available in Phoenix 11.33+**
+
+  <Frame>
+    <iframe src="https://cdn.iframe.ly/iKFc6xPj" className="aspect-video" allowfullscreen="" allow="encrypted-media *;" />
+  </Frame>
+
+  We’ve added paging functionality to the Experiment Compare details slide-over view, allowing users to navigate between individual examples using arrow buttons or keyboard shortcuts (`J` / `K`). Pagination
+</Update>
+
+## See more
+
+<Card href="/docs/phoenix/release-notes/2026" horizontal arrow="true">
+  2026
+</Card>

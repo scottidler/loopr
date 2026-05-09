@@ -1,0 +1,15 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# LangChain
+
+> LangChain is an open-source framework for building language model applications with prompt chaining, memory, and external integrations
+
+<Card title="LangChain" href="https://www.langchain.com/" icon="globe" horizontal>
+  [](https://www.langchain.com/)
+</Card>
+
+<Columns cols={2}>
+  <Card img="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/f1e5c9e9-image.avif" horizontal title="LangChain Tracing" href="/docs/phoenix/integrations/python/langchain/langchain-tracing" />
+</Columns>

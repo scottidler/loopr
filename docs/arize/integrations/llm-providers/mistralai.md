@@ -1,0 +1,19 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# MistralAI
+
+> Mistral AI develops open-weight large language models, focusing on efficiency, customization, and cost-effective AI solutions.
+
+<img noZoom width="200px" style={{margin: "0 auto", borderRadius: "10px"}} src="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/f7958caa-image.jpeg" />
+
+<Card title="Website" href="https://mistral.ai/" icon="globe" horizontal>
+  [](https://mistral.ai/)
+</Card>
+
+<Columns cols={2}>
+  <Card img="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/808d1f26-image.avif" href="/docs/phoenix/integrations/llm-providers/mistralai/mistralai-tracing" title="MistralAI Tracing" />
+
+  <Card img="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/808d1f26-image.avif" href="/docs/phoenix/integrations/llm-providers/mistralai/mistralai-evals" title="MistralAI Evals" />
+</Columns>

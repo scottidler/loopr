@@ -1,0 +1,15 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Vercel
+
+> Vercel is a cloud platform that simplifies building, deploying, and scaling modern web applications with features like serverless functions, edge caching, and seamless Git integration
+
+<Card title="Vercel" href="https://vercel.com/ai" icon="globe" horizontal>
+  [](https://vercel.com/ai)
+</Card>
+
+<Columns cols={2}>
+  <Card img="https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/73e15985-image.avif" horizontal title="Vercel AI SDK Tracing (JS)" href="/docs/phoenix/integrations/typescript/vercel/vercel-ai-sdk-tracing-js" />
+</Columns>

@@ -1,0 +1,13 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# More Cookbooks
+
+Iteratively improve your LLM task by building datasets, running experiments, and evaluating performance using code and LLM-as-a-Judge.
+
+## Use Cases
+
+* [Answer and Context Relevancy Evals](https://colab.research.google.com/github/Arize-ai/phoenix/blob/main/tutorials/experiments/llama-index/answer_and_context_relevancy.ipynb)
+* [RAG with Reranker](https://colab.research.google.com/github/Arize-ai/phoenix/blob/main/tutorials/experiments/run_experiments_with_llama_index.ipynb)
+* [Response Guideline Evals](https://colab.research.google.com/github/Arize-ai/phoenix/blob/main/tutorials/experiments/llama-index/guideline_eval.ipynb)

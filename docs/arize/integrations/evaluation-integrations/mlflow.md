@@ -1,0 +1,29 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# MLflow
+
+> Use Phoenix evaluators as MLflow scorers for GenAI evaluation workflows.
+
+[MLflow](https://mlflow.org/) includes built-in support for Phoenix evaluators through its third-party scorer interface. This allows Phoenix users to run their existing evaluation metrics within MLflow's `mlflow.genai.evaluate()` pipeline alongside experiment tracking and model management.
+
+## Using Phoenix Evaluators in MLflow
+
+Phoenix evaluators such as `Hallucination`, `QACorrectness`, and `Toxicity` can be used directly as MLflow scorers:
+
+```python theme={null}
+from mlflow.genai.scorers.phoenix import Hallucination, QACorrectness
+
+import mlflow
+
+results = mlflow.genai.evaluate(
+    data=eval_dataset,
+    scorers=[
+        Hallucination(model="openai:/gpt-4o"),
+        QACorrectness(model="openai:/gpt-4o"),
+    ],
+)
+```
+
+For details on available scorers and configuration, see the [MLflow Phoenix integration docs](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/third-party/phoenix.html).

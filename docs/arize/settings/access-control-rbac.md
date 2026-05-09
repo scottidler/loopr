@@ -1,0 +1,50 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://arizeai-433a7140.mintlify.app/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Access Control (RBAC)
+
+The role-based access control (RBAC) in Phoenix is based on the following user roles:
+
+* `admin` - full control to the system, can administer users, system keys, etc.
+* `member` - a developer that can add traces, experiments, datasets, etc.
+* `viewer` - read-only access; cannot create, update, or delete most entities.
+
+A user's role controls their access via the UI as well as through the APIs.
+
+<Info>
+  For SSO (SAML), multi-level RBAC (account → organizations → spaces), and JIT user provisioning, see [Arize AX](https://arize.com/docs/ax/security-and-settings/sso-and-rbac).
+</Info>
+
+## User Management
+
+| Action                       | Admin | Member | Viewer |
+| ---------------------------- | :---: | :----: | :----: |
+| Create User                  | ✅ Yes |   No   |   No   |
+| Delete User                  | ✅ Yes |   No   |   No   |
+| Change Own Password          | ✅ Yes |  ✅ Yes |  ✅ Yes |
+| Change Other's Password      | ✅ Yes |   No   |   No   |
+| Change Own Username          | ✅ Yes |  ✅ Yes |  ✅ Yes |
+| Change Other's Username      | ✅ Yes |   No   |   No   |
+| Create System API Keys       | ✅ Yes |   No   |   No   |
+| Delete System API Keys       | ✅ Yes |   No   |   No   |
+| Create Own User API Keys     | ✅ Yes |  ✅ Yes |  ✅ Yes |
+| Delete Own User API Keys     | ✅ Yes |  ✅ Yes |  ✅ Yes |
+| Delete Other's User API Keys | ✅ Yes |   No   |   No   |
+
+## API Key Management
+
+| Action                               | Admin | Member | Viewer |
+| ------------------------------------ | :---: | :----: | :----: |
+| List All System API Keys             | ✅ Yes |   No   |   No   |
+| List All User API Keys               | ✅ Yes |   No   |   No   |
+| List All Users                       | ✅ Yes |   No   |   No   |
+| Fetch Other User's Info, e.g. emails | ✅ Yes |   No   |   No   |
+
+## Secrets Management
+
+| Action                | Admin | Member | Viewer |
+| --------------------- | :---: | :----: | :----: |
+| List Secret Keys      | ✅ Yes |  ✅ Yes |  ✅ Yes |
+| Create/Update Secrets | ✅ Yes |   No   |   No   |
+| Delete Secrets        | ✅ Yes |   No   |   No   |
