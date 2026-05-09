@@ -23,17 +23,14 @@ struct RecordedTools {
 }
 
 impl ToolExecutor for RecordedTools {
-    #[allow(clippy::manual_async_fn)]
-    fn execute<'a>(
-        &'a self,
-        tool_name: &'a str,
-        input: &'a serde_json::Value,
-        _working_dir: &'a Path,
-    ) -> impl std::future::Future<Output = Result<String, agents::DispatchError>> + Send + 'a {
-        async move {
-            self.calls.lock().unwrap().push((tool_name.to_string(), input.clone()));
-            Ok(format!("fake {tool_name} output"))
-        }
+    async fn execute(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+        _working_dir: &Path,
+    ) -> Result<String, agents::DispatchError> {
+        self.calls.lock().unwrap().push((tool_name.to_string(), input.clone()));
+        Ok(format!("fake {tool_name} output"))
     }
 }
 

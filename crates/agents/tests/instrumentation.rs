@@ -107,14 +107,13 @@ where
 struct EchoTools;
 
 impl ToolExecutor for EchoTools {
-    #[allow(clippy::manual_async_fn)]
-    fn execute<'a>(
-        &'a self,
-        tool_name: &'a str,
-        _input: &'a serde_json::Value,
-        _working_dir: &'a Path,
-    ) -> impl std::future::Future<Output = Result<String, agents::DispatchError>> + Send + 'a {
-        async move { Ok(format!("echo {tool_name}")) }
+    async fn execute(
+        &self,
+        tool_name: &str,
+        _input: &serde_json::Value,
+        _working_dir: &Path,
+    ) -> Result<String, agents::DispatchError> {
+        Ok(format!("echo {tool_name}"))
     }
 }
 

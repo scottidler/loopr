@@ -69,14 +69,13 @@ impl LlmClient for FakeLlm {
 struct FakeTools;
 
 impl ToolExecutor for FakeTools {
-    #[allow(clippy::manual_async_fn)]
-    fn execute<'a>(
-        &'a self,
-        _tool_name: &'a str,
-        _input: &'a serde_json::Value,
-        _working_dir: &'a Path,
-    ) -> impl std::future::Future<Output = Result<String, DispatchError>> + Send + 'a {
-        async move { Ok("ok".to_string()) }
+    async fn execute(
+        &self,
+        _tool_name: &str,
+        _input: &serde_json::Value,
+        _working_dir: &Path,
+    ) -> Result<String, DispatchError> {
+        Ok("ok".to_string())
     }
 }
 

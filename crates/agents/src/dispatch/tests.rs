@@ -29,20 +29,16 @@ struct FakeTools {
 }
 
 impl ToolExecutor for FakeTools {
-    #[allow(clippy::manual_async_fn)]
-    fn execute<'a>(
-        &'a self,
-        tool_name: &'a str,
-        _input: &'a serde_json::Value,
-        _working_dir: &'a Path,
-    ) -> impl std::future::Future<Output = Result<String, DispatchError>> + Send + 'a {
-        let response = self.response.clone();
-        async move {
-            if tool_name == "fail" {
-                Err(DispatchError::Tool("synthetic tool failure".into()))
-            } else {
-                Ok(response)
-            }
+    async fn execute(
+        &self,
+        tool_name: &str,
+        _input: &serde_json::Value,
+        _working_dir: &Path,
+    ) -> Result<String, DispatchError> {
+        if tool_name == "fail" {
+            Err(DispatchError::Tool("synthetic tool failure".into()))
+        } else {
+            Ok(self.response.clone())
         }
     }
 }

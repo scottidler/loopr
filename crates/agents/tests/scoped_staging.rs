@@ -18,14 +18,8 @@ use worktree::Worktree;
 struct NoopTools;
 
 impl ToolExecutor for NoopTools {
-    #[allow(clippy::manual_async_fn)]
-    fn execute<'a>(
-        &'a self,
-        _tool: &'a str,
-        _input: &'a serde_json::Value,
-        _wd: &'a Path,
-    ) -> impl std::future::Future<Output = Result<String, DispatchError>> + Send + 'a {
-        async move { Ok(String::new()) }
+    async fn execute(&self, _tool: &str, _input: &serde_json::Value, _wd: &Path) -> Result<String, DispatchError> {
+        Ok(String::new())
     }
 }
 

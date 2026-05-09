@@ -19,6 +19,7 @@ dependencies = [
  "tools",
  "tracing",
  "tracing-subscriber",
+ "trait-variant",
  "uuid",
  "worktree",
 ]
@@ -1278,6 +1279,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "trait-variant",
  "worktree",
 ]
 
@@ -1474,6 +1476,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "trait-variant",
  "url",
  "wiremock",
 ]
