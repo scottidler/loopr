@@ -193,25 +193,11 @@ pub struct DirectorConfig {
 
 Composed into `AgentsConfig.director: DirectorConfig` and read from `config.yml agents.director`. Default-fallback path is identical to `AgentsConfig.implementer`.
 
-#### DirectorFsmState
+#### Director lifecycle (no explicit FSM state struct)
 
-```rust
-/// Per-Plan Director lifecycle state. Two variants; the v3 coordinator FSM
-/// (Interviewing -> Decomposing -> Planning -> Executing -> GoalComplete) is
-/// collapsed here because v5's decomposer runs before the Director starts.
-/// By the time handle_plan_create spawns the Director, the Plan already has
-/// Works in Pending/Ready state. The Director always enters Executing and
-/// exits when reconcile_director detects GoalComplete.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DirectorFsmState {
-    /// Director is actively polling and issuing actions.
-    Executing,
-    /// All Works are terminal and at least one is Done. run_director returns Ok(()).
-    GoalComplete,
-}
-```
+The v3 coordinator FSM (Interviewing -> Decomposing -> Planning -> Executing -> GoalComplete) collapses to two cases for v5: the Director is either *running* (polling, issuing actions) or *done* (all Works terminal with at least one Done, exiting `Ok(())`). v5's decomposer runs before the Director starts, so by the time `handle_plan_create` spawns the Director the Plan already has Works in Pending/Ready state.
 
-This is an in-process state enum, not a persisted domain record. `run_director` transitions from `Executing` to `GoalComplete` implicitly when `reconcile_director` returns `true`; there is no FSM-persist call because the Director itself has no store record. (The Plan record's status covers the Plan-level lifecycle separately.)
+An earlier draft of this doc proposed a `DirectorFsmState { Executing, GoalComplete }` enum to make the lifecycle explicit. It was scaffolded in Phase 1 then dropped at Phase 2 entry per Architect review: the enum was not persisted, not surfaced to the LLM, and never matched against. The same lifecycle signal is encoded — without ceremony — by `reconcile_director` returning `Result<bool, DirectorError>` where `Ok(true)` means GoalComplete and triggers `run_director`'s `return Ok(())`. The Plan record's status covers the Plan-level persisted lifecycle separately.
 
 #### DirectorAction
 
@@ -563,6 +549,12 @@ These changes unblock every subsequent phase. Neither touches agent logic; both 
 #### Phase 1: Scaffolding (DirectorAction + DirectorConfig + WorkSpawner trait)
 **Model:** sonnet
 
+**Phase 1 status (shipped 2026-05-08, commit `f8333f6`).** Audited by Architect against the bullets below: 100% complete with one sensible deviation (`DirectorConfig` lives in `crates/agents/src/config.rs` alongside `AgentsConfig` rather than in `director.rs`; this is the correct long-term placement and matches `ImplementerConfig`/`ReviewerConfig`).
+
+Phase 1 also created two scaffolding types that Phase 2 should DELETE on entry:
+- `agents::director::DirectorState` (domain-typed `Vec<Work>`/`Vec<Bundle>`) duplicates the existing `context::DirectorState` (display-typed `Vec<WorkLine>`/`Vec<BundleLine>`). Per the Architect: only one state struct is warranted, and it lives in `context`. Phase 2's `build_director_state` returns `context::DirectorState` directly. Drop the agents-side struct and its `pub use` from `lib.rs`.
+- `agents::director::DirectorFsmState { Executing, GoalComplete }` is currently dead — not persisted, not in the LLM prompt, not driving any `match`. The reconcile sweep returning `bool` already encodes the GoalComplete signal. Drop the enum and its `pub use` from `lib.rs`.
+
 - `crates/agents/src/director.rs` (new, single-word file per `rules/general.md`):
   - `DirectorAction` with `#[serde(tag = "action", rename_all = "snake_case")]`
   - `DirectorConfig` with the five fields above
@@ -579,9 +571,12 @@ These changes unblock every subsequent phase. Neither touches agent logic; both 
 
 Non-mechanical: loop structure, history management, reconcile correctness, goal-complete detection, restart logic, lifeguard wiring.
 
+- Cleanup from Phase 1 scaffolding (do this first):
+  - Delete `agents::director::DirectorState` struct and remove from `pub use director::{...}` in `crates/agents/src/lib.rs`. The `build_director_state` function below returns `context::DirectorState` directly.
+  - Delete `agents::director::DirectorFsmState` enum and remove from `pub use`. Phase 2's loop encodes the FSM implicitly via `reconcile_director`'s `Result<bool, _>`.
 - `crates/agents/src/director.rs`:
-  - `build_director_state(plan_id, store) -> Result<DirectorState, DirectorError>`
-  - `reconcile_director(plan_id, store, spawner) -> Result<bool, DirectorError>`
+  - `build_director_state(plan_id, &store) -> Result<context::DirectorState, DirectorError>` is the conversion seam between domain records (`store.list_works_for_plan` / `list_bundles_for_plan`) and the display-oriented `context::DirectorState` (`Vec<WorkLine>`, `Vec<BundleLine>`). All `WorkStatus` / `BundleStatus` values are stringified at this seam so `context` does not import `domain` FSM enums.
+  - `reconcile_director(plan_id, &store, &spawner) -> Result<bool, DirectorError>`
   - `run_director` full implementation
   - Lifeguard wired identically to Implementer's pattern
 - `crates/agents/src/director/tests.rs`:
