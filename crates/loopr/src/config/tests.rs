@@ -40,7 +40,7 @@ llm:
     let cfg = Config::load(dir.path()).expect("load");
     assert_eq!(cfg.llm.model, "claude-opus-4-1");
     assert_eq!(cfg.llm.max_tokens, 4096);
-    assert_eq!(cfg.llm.temperature, 0.5);
+    assert_eq!(cfg.llm.temperature, Some(0.5));
     assert_eq!(cfg.llm.api_key_env, "MY_KEY");
     assert_eq!(cfg.llm.api_base_url, "https://example.com");
 }

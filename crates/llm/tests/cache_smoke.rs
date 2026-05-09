@@ -25,7 +25,7 @@ fn live_config() -> LlmConfig {
     LlmConfig {
         model: "claude-sonnet-4-6".into(),
         max_tokens: 1024,
-        temperature: 0.0,
+        temperature: Some(0.0),
         api_key_env: "ANTHROPIC_API_KEY".into(),
         api_base_url: "https://api.anthropic.com".into(),
     }

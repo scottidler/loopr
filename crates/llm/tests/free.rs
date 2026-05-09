@@ -13,7 +13,7 @@ fn test_config(base_url: String) -> LlmConfig {
     LlmConfig {
         model: "claude-sonnet-4-6".into(),
         max_tokens: 8192,
-        temperature: 0.3,
+        temperature: Some(0.3),
         api_key_env: "ANTHROPIC_API_KEY".into(),
         api_base_url: base_url,
     }

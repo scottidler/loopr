@@ -25,8 +25,12 @@ pub struct LlmConfig {
     /// decomposer's tool-input JSON does not truncate.
     pub max_tokens: u32,
 
-    /// Sampling temperature in [0, 1].
-    pub temperature: f32,
+    /// Sampling temperature in [0, 1]. `None` means "do not send the
+    /// parameter," which is required for models that have deprecated
+    /// it (e.g., Opus 4.7) and acceptable for any model where the
+    /// caller is fine with the API default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
 
     /// Name of the env var holding the API key. NEVER the literal key.
     pub api_key_env: String,
@@ -45,7 +49,7 @@ impl Default for LlmConfig {
         Self {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8192,
-            temperature: 0.3,
+            temperature: None,
             api_key_env: "ANTHROPIC_API_KEY".into(),
             api_base_url: "https://api.anthropic.com".into(),
         }

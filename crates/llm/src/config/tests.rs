@@ -7,7 +7,7 @@ fn default_values_match_scope_memo() {
     let cfg = LlmConfig::default();
     assert_eq!(cfg.model, "claude-sonnet-4-6");
     assert_eq!(cfg.max_tokens, 8192);
-    assert!((cfg.temperature - 0.3).abs() < f32::EPSILON);
+    assert_eq!(cfg.temperature, None);
     assert_eq!(cfg.api_key_env, "ANTHROPIC_API_KEY");
     assert_eq!(cfg.api_base_url, "https://api.anthropic.com");
 }
@@ -74,6 +74,31 @@ api-base-url: https://api.anthropic.com
         msg.contains("model"),
         "expected missing-field error to mention `model`: {msg}"
     );
+}
+
+#[test]
+fn yaml_missing_temperature_deserializes_to_none() {
+    let yaml = "\
+model: claude-sonnet-4-6
+max-tokens: 8192
+api-key-env: ANTHROPIC_API_KEY
+api-base-url: https://api.anthropic.com
+";
+    let cfg: LlmConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(cfg.temperature, None);
+}
+
+#[test]
+fn yaml_explicit_temperature_deserializes_to_some() {
+    let yaml = "\
+model: claude-sonnet-4-6
+max-tokens: 8192
+temperature: 0.3
+api-key-env: ANTHROPIC_API_KEY
+api-base-url: https://api.anthropic.com
+";
+    let cfg: LlmConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(cfg.temperature, Some(0.3));
 }
 
 #[test]

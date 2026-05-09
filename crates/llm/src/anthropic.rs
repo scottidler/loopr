@@ -116,7 +116,8 @@ impl AnthropicClient {
 struct AnthropicRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     system: Value,
     messages: [AnthropicMessage<'a>; 1],
     tools: [ToolSchemaWire<'a>; 1],
@@ -156,7 +157,8 @@ struct ToolChoiceWire<'a> {
 struct AnthropicFreeRequest {
     model: String,
     max_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     system: Value,
     messages: Vec<AnthropicFreeMessage>,
 }
@@ -204,6 +206,7 @@ impl LlmClient for AnthropicClient {
             system_preview = %truncate_preview(system),
             user_preview = %truncate_preview(user),
             tool_name = %tool.name,
+            temperature_present = self.config.temperature.is_some(),
             duration_ms = tracing::field::Empty,
             outcome = tracing::field::Empty,
             cache_creation_input_tokens = tracing::field::Empty,
@@ -268,6 +271,7 @@ impl LlmClient for AnthropicClient {
             message_count = messages.len(),
             system_preview = %truncate_preview(system),
             last_user_preview = %last_user_preview,
+            temperature_present = self.config.temperature.is_some(),
             duration_ms = tracing::field::Empty,
             outcome = tracing::field::Empty,
             cache_creation_input_tokens = tracing::field::Empty,

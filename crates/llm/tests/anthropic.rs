@@ -19,7 +19,7 @@ fn test_config(base_url: String) -> LlmConfig {
     LlmConfig {
         model: "claude-sonnet-4-6".into(),
         max_tokens: 8192,
-        temperature: 0.3,
+        temperature: Some(0.3),
         api_key_env: "ANTHROPIC_API_KEY".into(),
         api_base_url: base_url,
     }
@@ -112,6 +112,57 @@ async fn request_body_shape_matches_messages_api() {
     assert_eq!(body["tools"][0]["name"], "submit_decomposition");
     assert_eq!(body["tool_choice"]["type"], "tool");
     assert_eq!(body["tool_choice"]["name"], "submit_decomposition");
+}
+
+#[tokio::test]
+async fn temperature_omitted_when_config_is_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(valid_tool_use_body("submit_decomposition", json!({"works": []}))),
+        )
+        .mount(&server)
+        .await;
+
+    let mut cfg = test_config(server.uri());
+    cfg.temperature = None;
+    let client = AnthropicClient::new(cfg, "test-key".into()).unwrap();
+    client
+        .complete_with_tool("sys", "usr", test_tool(), None)
+        .await
+        .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(
+        body.get("temperature").is_none(),
+        "temperature key must be absent when config is None; got {body}"
+    );
+}
+
+#[tokio::test]
+async fn temperature_present_when_config_is_some() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(valid_tool_use_body("submit_decomposition", json!({"works": []}))),
+        )
+        .mount(&server)
+        .await;
+
+    let mut cfg = test_config(server.uri());
+    cfg.temperature = Some(0.7);
+    let client = AnthropicClient::new(cfg, "test-key".into()).unwrap();
+    client
+        .complete_with_tool("sys", "usr", test_tool(), None)
+        .await
+        .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["temperature"], 0.7);
 }
 
 #[tokio::test]
