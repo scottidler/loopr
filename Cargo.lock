@@ -1273,7 +1273,9 @@ name = "integrator"
 version = "0.7.11"
 dependencies = [
  "domain",
+ "serde_json",
  "store",
+ "telemetry",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3739,6 +3741,7 @@ dependencies = [
  "clap",
  "domain",
  "serde",
+ "serde_json",
  "serde_yaml",
  "telemetry",
  "tempfile",

@@ -66,6 +66,7 @@ pub(crate) fn detect_cycles(nodes: &HashMap<String, Vec<String>>) -> Result<(), 
         let cycled: Vec<_> = in_degree.iter().filter(|(_, deg)| **deg > 0).map(|(t, _)| *t).collect();
         return Err(cycled.join(", "));
     }
+    tracing::debug!(node_count = nodes.len(), "decomposer: detect_cycles ok");
     Ok(())
 }
 
@@ -108,6 +109,11 @@ pub(crate) fn resolve_deps(
     if !errors.is_empty() {
         return Err(DecomposerError::UnresolvedDeps(errors.join("; ")));
     }
+    tracing::debug!(
+        child_count = children.len(),
+        title_count = title_to_id.len(),
+        "decomposer: resolve_deps ok"
+    );
     Ok(resolved_per_child)
 }
 

@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use domain::WorkId;
 
@@ -123,6 +123,13 @@ impl Worktree {
                     verify_branch(&path, &branch)?;
                     span.record("seq", seq);
                     span.record("branch", branch.as_str());
+                    info!(
+                        seq,
+                        branch = %branch,
+                        worktree_path = %path.display(),
+                        base_sha = sha,
+                        "worktree: allocated"
+                    );
                     return Ok(Self {
                         path,
                         branch,

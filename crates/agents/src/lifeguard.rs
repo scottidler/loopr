@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::Hasher;
 
 use serde_json::Value;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::action::AgentAction;
 
@@ -80,6 +80,13 @@ impl Lifeguard {
         let my_count = *count;
         span.record("action_count", my_count);
         self.last_hash = Some(hash);
+        debug!(
+            action_kind = action.kind(),
+            action_hash = format!("{hash:#018x}"),
+            action_count = my_count,
+            max_repeat = self.max_repeat,
+            "lifeguard: action observed"
+        );
         if my_count >= self.max_repeat {
             // Embed action_hash + action_count in the message itself. The
             // span fields exist (above), but at INFO-level filtering the
@@ -114,6 +121,11 @@ impl Lifeguard {
     pub fn record_parse_failure(&mut self) -> Decision {
         self.consecutive_parse_failures += 1;
         tracing::Span::current().record("consecutive_parse_failures", self.consecutive_parse_failures);
+        debug!(
+            consecutive_parse_failures = self.consecutive_parse_failures,
+            max_parse_failures = self.max_parse_failures,
+            "lifeguard: parse failure recorded"
+        );
         if self.consecutive_parse_failures >= self.max_parse_failures {
             Decision::Escalate(format!(
                 "LLM produced unparseable output for {} consecutive iterations (max_parse_failures={})",

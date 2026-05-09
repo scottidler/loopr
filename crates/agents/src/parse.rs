@@ -12,7 +12,7 @@
 //! prose. `rfind(']')` would be wrong: it greedily captures any
 //! trailing `]` in surrounding text.
 
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::action::AgentAction;
 
@@ -47,6 +47,7 @@ pub fn parse_actions(raw: &str) -> Result<Vec<AgentAction>, ParseError> {
         let result = finalize(actions);
         if let Ok(ref a) = result {
             span.record("action_count", a.len());
+            debug!(action_count = a.len(), path = "direct", "parse: actions parsed");
         }
         return result;
     }
@@ -63,6 +64,7 @@ pub fn parse_actions(raw: &str) -> Result<Vec<AgentAction>, ParseError> {
                     let result = finalize(actions);
                     if let Ok(ref a) = result {
                         span.record("action_count", a.len());
+                        debug!(action_count = a.len(), path = "extracted", "parse: actions parsed");
                     }
                     return result;
                 }

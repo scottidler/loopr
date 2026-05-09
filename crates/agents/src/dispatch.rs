@@ -95,6 +95,7 @@ pub async fn dispatch_action<T: ToolExecutor>(
     worktree: &Worktree,
     tools: &T,
 ) -> Result<ActionResult, DispatchError> {
+    debug!(action_kind = action.kind(), "dispatch: action begin");
     match action {
         AgentAction::RunTool { tool, input } => {
             debug!(tool = %tool, "dispatch: run_tool");
@@ -172,6 +173,12 @@ async fn commit_changes(path: &Path, scope_files: &[String], message: &str) -> R
     commit_args.extend(in_scope.iter().map(String::as_str));
     run_git(path, &commit_args).await?;
     let sha = rev_parse_head(path).await?;
+    debug!(
+        sha = %sha,
+        in_scope = in_scope.len(),
+        dropped = out_of_scope.len(),
+        "dispatch: commit_changes ok"
+    );
     Ok(ActionResult::Committed {
         sha,
         dropped: out_of_scope,
@@ -185,6 +192,7 @@ async fn commit_changes(path: &Path, scope_files: &[String], message: &str) -> R
 async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError> {
     run_git(path, &["add", "-u"]).await?;
     if is_staging_empty(path).await? {
+        debug!("dispatch: commit_partial_for_inspection nothing-staged");
         return Ok(());
     }
     run_git(
@@ -192,6 +200,7 @@ async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError>
         &["commit", "--message", "partial: agent needed help", "--no-gpg-sign"],
     )
     .await?;
+    debug!("dispatch: commit_partial_for_inspection ok");
     Ok(())
 }
 
@@ -272,9 +281,18 @@ async fn propose_bundle(
     };
 
     let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), claims);
-    bundle.head_commit = head_commit;
+    bundle.head_commit = head_commit.clone();
     bundle.loc_changed = loc_changed;
-    bundle.paths = branch_paths;
+    bundle.paths = branch_paths.clone();
+    debug!(
+        bundle_id = %bundle.id,
+        work_id = %worktree.work_id(),
+        head_commit = ?head_commit,
+        loc_changed = ?loc_changed,
+        path_count = branch_paths.len(),
+        dropped_count = total_dropped.len(),
+        "dispatch: propose_bundle ok"
+    );
     Ok(ActionResult::BundleCreated {
         bundle,
         dropped: total_dropped,

@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use domain::WorkId;
 
@@ -75,10 +75,12 @@ pub(crate) fn try_create_at_seq(
         .output()?;
 
     if output.status.success() {
+        debug!(seq, branch = %branch, path = %path.display(), "worktree.ops: try_create_at_seq created");
         return Ok(CreateOutcome::Created { path, branch });
     }
 
     if is_seq_taken(&output) {
+        debug!(seq, "worktree.ops: try_create_at_seq seq_taken");
         return Ok(CreateOutcome::SeqTaken);
     }
 
@@ -111,6 +113,7 @@ pub(crate) fn remove_worktree(repo_path: &Path, path: &Path) -> Result<(), Workt
         .output()?;
 
     if output.status.success() {
+        debug!(path = %path.display(), "worktree.ops: remove_worktree ok");
         return Ok(());
     }
 
@@ -118,6 +121,7 @@ pub(crate) fn remove_worktree(repo_path: &Path, path: &Path) -> Result<(), Workt
     // "not a working tree" / "is not a working tree" / "no such path" — all mean
     // the worktree is already gone. Treat as success.
     if stderr.contains("is not a working tree") || stderr.contains("not a valid path") {
+        debug!(path = %path.display(), "worktree.ops: remove_worktree already gone");
         return Ok(());
     }
 
@@ -137,11 +141,13 @@ pub(crate) fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), Worktr
     let output = git_cmd(repo_path).args(["branch", "-D", branch]).output()?;
 
     if output.status.success() {
+        debug!(branch, "worktree.ops: delete_branch ok");
         return Ok(());
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.contains("not found") {
+        debug!(branch, "worktree.ops: delete_branch not_found (idempotent)");
         return Ok(());
     }
 
@@ -162,6 +168,8 @@ pub(crate) fn prune(repo_path: &Path) -> Result<(), WorktreeError> {
             stderr = %String::from_utf8_lossy(&output.stderr),
             "git worktree prune failed (non-fatal)"
         );
+    } else {
+        debug!(repo_path = %repo_path.display(), "worktree.ops: prune ok");
     }
     Ok(())
 }
@@ -189,6 +197,7 @@ pub(crate) fn resolve_sha(repo_path: &Path, base_ref: &str) -> Result<String, Wo
             "git rev-parse {base_ref}: empty stdout"
         )));
     }
+    debug!(base_ref, sha = %sha, "worktree.ops: resolve_sha ok");
     Ok(sha)
 }
 
@@ -212,7 +221,9 @@ pub(crate) fn list_porcelain(repo_path: &Path) -> Result<String, WorktreeError> 
     if !output.status.success() {
         return Err(WorktreeError::GitCommand(format_stderr(&output)));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    debug!(bytes = stdout.len(), "worktree.ops: list_porcelain ok");
+    Ok(stdout)
 }
 
 fn is_seq_taken(output: &Output) -> bool {

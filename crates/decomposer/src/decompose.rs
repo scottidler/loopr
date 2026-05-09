@@ -407,6 +407,12 @@ async fn try_llm_once<L: LlmClient>(llm: &L, system: &str, user: &str) -> Result
     let (tool_call, _usage) = llm
         .complete_with_tool(system, user, submit_decomposition_schema(), None)
         .await?;
+    tracing::debug!(
+        system_chars = system.len(),
+        user_chars = user.len(),
+        tool_name = %tool_call.tool_name,
+        "decomposer: try_llm_once ok"
+    );
     Ok(tool_call)
 }
 

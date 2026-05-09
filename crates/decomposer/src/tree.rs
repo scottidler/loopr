@@ -75,6 +75,7 @@ pub(crate) fn collect_workspace_tree(target: &Path) -> Result<String, Decomposer
 
     let result = format_entries(entries);
     tracing::Span::current().record("tree_chars", result.len());
+    tracing::debug!(tree_chars = result.len(), "decomposer: workspace tree collected");
     Ok(result)
 }
 

@@ -41,7 +41,13 @@ struct DecomposeUserCtx<'a> {
 #[tracing::instrument(level = "debug", skip_all, fields(tree_chars = tree.len()))]
 pub(crate) fn assemble_system(loader: &PromptLoader, tree: &str) -> Result<String, DecomposerError> {
     let ctx = DecomposeSystemCtx { tree };
-    Ok(loader.render("decompose/work/system.pmt", &ctx)?)
+    let rendered = loader.render("decompose/work/system.pmt", &ctx)?;
+    tracing::debug!(
+        tree_chars = tree.len(),
+        rendered_chars = rendered.len(),
+        "decomposer: assemble_system ok"
+    );
+    Ok(rendered)
 }
 
 /// Assemble the user message. On first attempt, `prev_error` is
@@ -54,9 +60,17 @@ pub(crate) fn assemble_user(
     goal: &str,
     prev_error: Option<&str>,
 ) -> Result<String, DecomposerError> {
+    let retry = prev_error.is_some();
     let prev_error = prev_error.map(truncate_retry_error);
     let ctx = DecomposeUserCtx { goal, prev_error };
-    Ok(loader.render("decompose/work/user.pmt", &ctx)?)
+    let rendered = loader.render("decompose/work/user.pmt", &ctx)?;
+    tracing::debug!(
+        goal_len = goal.len(),
+        retry,
+        rendered_chars = rendered.len(),
+        "decomposer: assemble_user ok"
+    );
+    Ok(rendered)
 }
 
 /// Cap `err` at `RETRY_ERROR_MAX_BYTES`, preserving UTF-8 char
