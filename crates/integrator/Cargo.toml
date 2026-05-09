@@ -16,5 +16,7 @@ trait-variant.workspace = true
 worktree = { path = "../worktree" }
 
 [dev-dependencies]
+serde_json.workspace = true
+telemetry = { path = "../telemetry" }
 tempfile = "3.27.0"
 tracing-subscriber = { workspace = true }

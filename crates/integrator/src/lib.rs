@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::instrument;
+use tracing::{debug, info, instrument, warn};
 
 use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, TickId, Work};
 use store::{BundleUpdateSink, StoreError};
@@ -210,6 +210,11 @@ where
 {
     let span = tracing::Span::current();
     span.record("phase", "preflight");
+    info!(
+        phase = "preflight",
+        bundle_count = bundles.len(),
+        "integrator: phase begin"
+    );
     // Phase 1: pre-flight
     preflight_shape(bundles, deps.config.allow_multi_bundle)?;
     preflight_status(bundles)?;
@@ -223,6 +228,11 @@ where
 
     // Phase 2: git sequence (serialize against the working tree)
     span.record("phase", "git_sequence");
+    info!(
+        phase = "git_sequence",
+        integration_branch = %integ_branch,
+        "integrator: phase begin"
+    );
     let _git_guard = deps.git_lock.lock().await;
 
     // Phase 2 prologue: transition every Accepted Bundle to Integrating.
@@ -354,6 +364,11 @@ where
 
     // Phase 3: validation (skipped when validation_commands is empty)
     span.record("phase", "validation");
+    info!(
+        phase = "validation",
+        validation_commands = deps.config.validation_commands.len(),
+        "integrator: phase begin"
+    );
     if !deps.config.validation_commands.is_empty()
         && let Err(val_err) = validation::run_validation(
             &deps.config.validation_commands,
@@ -380,6 +395,12 @@ where
 
     // Phase 4: commit (batched store writes)
     span.record("phase", "commit");
+    info!(
+        phase = "commit",
+        merged_count = outcomes.len(),
+        head_sha = %sha,
+        "integrator: phase begin"
+    );
     // Tick first. On `DuplicateTick`, adopt the existing Tick (prior
     // crashed call wrote it) and continue to the Merged transitions.
     let tick = Tick::new(
@@ -487,6 +508,7 @@ async fn preflight_plan_consistency<W: WorkLookup>(
             });
         }
     }
+    debug!(bundle_count = bundles.len(), "integrator: preflight ok");
     Ok(())
 }
 
@@ -530,6 +552,12 @@ async fn transition_bundle_returning<U: BundleUpdateSink>(
         .transition(target, Role::Integrator)
         .map_err(|e| IntegrationError::Transition(e.to_string()))?;
     sink.update(clone.clone(), expected).await?;
+    debug!(
+        bundle_id = %clone.id,
+        from = ?bundle.status,
+        target_status = ?target,
+        "integrator: bundle transitioned"
+    );
     Ok(clone)
 }
 
@@ -553,6 +581,12 @@ where
     W: WorkLookup,
     T: TickSink,
 {
+    warn!(
+        bundle_count = bundles.len(),
+        pre_merge_sha = pre_merge,
+        error = %err,
+        "integrator: failing all bundles (with reset)"
+    );
     git::merge_abort(&deps.target, deps.config.git_timeout).await;
     git::reset_hard(&deps.target, pre_merge, deps.config.git_timeout).await?;
     fail_all_without_reset(bundles, deps, err).await
@@ -576,6 +610,11 @@ where
     W: WorkLookup,
     T: TickSink,
 {
+    warn!(
+        bundle_count = bundles.len(),
+        error = %err,
+        "integrator: failing all bundles"
+    );
     for b in bundles {
         // `transition` is a no-op if the Bundle is already
         // IntegrationFailed (FSM returns `Unchanged`). Bundles that

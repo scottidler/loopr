@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::error::IntegrationError;
 
@@ -34,7 +34,7 @@ pub(crate) async fn verify_branch(
 /// Check out a branch via `git checkout <branch>`. Fatal on failure
 /// (a dirty working tree, a missing branch, or a permission error
 /// all surface here).
-#[instrument(name = "integrator.git.checkout", level = "debug", skip_all, fields(branch), err)]
+#[instrument(name = "integrator.git.checkout", level = "debug", skip_all, fields(branch = branch), err)]
 pub(crate) async fn checkout(target: &Path, branch: &str, git_timeout: Duration) -> Result<(), IntegrationError> {
     let out = run_git(target, &["checkout", branch], git_timeout).await?;
     if !out.status.success() {
@@ -43,6 +43,7 @@ pub(crate) async fn checkout(target: &Path, branch: &str, git_timeout: Duration)
             String::from_utf8_lossy(&out.stderr)
         )));
     }
+    debug!(branch, "integrator.git: checkout ok");
     Ok(())
 }
 
@@ -111,7 +112,7 @@ pub(crate) async fn assert_nontrivial_branch(
     name = "integrator.git.is_ancestor",
     level = "debug",
     skip_all,
-    fields(commit, ref_name),
+    fields(commit = commit, ref_name = ref_name),
     err
 )]
 pub(crate) async fn is_ancestor(
@@ -123,8 +124,14 @@ pub(crate) async fn is_ancestor(
     let out = run_git(target, &["merge-base", "--is-ancestor", commit, ref_name], git_timeout).await?;
     if let Some(code) = out.status.code() {
         match code {
-            0 => Ok(true),
-            1 => Ok(false),
+            0 => {
+                debug!(commit, ref_name, ancestor = true, "integrator.git: is_ancestor ok");
+                Ok(true)
+            }
+            1 => {
+                debug!(commit, ref_name, ancestor = false, "integrator.git: is_ancestor ok");
+                Ok(false)
+            }
             _ => Err(IntegrationError::Git(format!(
                 "git merge-base --is-ancestor {commit} {ref_name} exited {code}: {}",
                 String::from_utf8_lossy(&out.stderr)
@@ -176,7 +183,7 @@ pub(crate) async fn merge_commit_sha_for(
 /// On success returns the new `HEAD` SHA (via a follow-up `rev-parse HEAD`).
 /// On non-zero exit returns the stderr for the caller to classify; the
 /// caller is responsible for running `merge_abort` + `reset_hard`.
-#[instrument(name = "integrator.git.merge_no_ff", level = "debug", skip_all, fields(branch), err)]
+#[instrument(name = "integrator.git.merge_no_ff", level = "debug", skip_all, fields(branch = branch), err)]
 pub(crate) async fn merge_no_ff(
     target: &Path,
     branch: &str,
@@ -188,6 +195,7 @@ pub(crate) async fn merge_no_ff(
         return Ok(Err(String::from_utf8_lossy(&out.stderr).to_string()));
     }
     let sha = rev_parse_head(target, git_timeout).await?;
+    debug!(branch, head_sha = %sha, "integrator.git: merge_no_ff ok");
     Ok(Ok(sha))
 }
 
@@ -208,7 +216,7 @@ pub(crate) async fn clean_fd(target: &Path, git_timeout: Duration) {
 /// Reset the current branch hard to the given SHA. A failure here is
 /// fatal: rollback could not restore the integration branch, and the
 /// daemon's worktree-crash-recovery pass at restart owns the repair.
-#[instrument(name = "integrator.git.reset_hard", level = "debug", skip_all, fields(sha), err)]
+#[instrument(name = "integrator.git.reset_hard", level = "debug", skip_all, fields(sha = sha), err)]
 pub(crate) async fn reset_hard(target: &Path, sha: &str, git_timeout: Duration) -> Result<(), IntegrationError> {
     let out = run_git(target, &["reset", "--hard", sha], git_timeout).await?;
     if !out.status.success() {
@@ -217,6 +225,7 @@ pub(crate) async fn reset_hard(target: &Path, sha: &str, git_timeout: Duration) 
             String::from_utf8_lossy(&out.stderr)
         )));
     }
+    debug!(sha, "integrator.git: reset_hard ok");
     Ok(())
 }
 
