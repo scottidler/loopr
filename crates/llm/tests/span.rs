@@ -153,7 +153,7 @@ async fn span_emits_required_fields_and_no_secrets() {
         input_schema: json!({ "marker": "INPUT-SCHEMA-MARKER-NOT-IN-LOGS" }),
     };
     client
-        .complete_with_tool("short-system", user_marker, tool)
+        .complete_with_tool("short-system", user_marker, tool, None)
         .await
         .unwrap();
 
@@ -271,6 +271,7 @@ async fn long_prompt_preview_is_truncated_with_marker() {
                 description: "x".into(),
                 input_schema: json!({}),
             },
+            None,
         )
         .await
         .unwrap();

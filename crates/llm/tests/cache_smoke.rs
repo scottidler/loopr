@@ -56,7 +56,10 @@ async fn cache_read_tokens_increment_on_second_call() {
     let messages = vec![Message::user("respond with OK".to_string())];
 
     // Call 1: cache miss; the API populates cache_creation_input_tokens.
-    let (_first, first_usage) = client.complete_free(&system, &messages).await.expect("first call");
+    let (_first, first_usage) = client
+        .complete_free(&system, &messages, None)
+        .await
+        .expect("first call");
     println!(
         "first: input={} cache_create={} cache_read={}",
         first_usage.input_tokens, first_usage.cache_creation_input_tokens, first_usage.cache_read_input_tokens
@@ -67,7 +70,10 @@ async fn cache_read_tokens_increment_on_second_call() {
     );
 
     // Call 2: cache hit; cache_read_input_tokens should be > 0.
-    let (_second, second_usage) = client.complete_free(&system, &messages).await.expect("second call");
+    let (_second, second_usage) = client
+        .complete_free(&system, &messages, None)
+        .await
+        .expect("second call");
     println!(
         "second: input={} cache_create={} cache_read={}",
         second_usage.input_tokens, second_usage.cache_creation_input_tokens, second_usage.cache_read_input_tokens

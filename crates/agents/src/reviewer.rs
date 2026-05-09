@@ -224,7 +224,7 @@ where
     let mut messages = vec![Message::user(user_message.to_string())];
     let mut requeries: u32 = 0;
     loop {
-        let (raw, _usage) = llm.complete_free(system_prompt, &messages).await?;
+        let (raw, _usage) = llm.complete_free(system_prompt, &messages, None).await?;
         match parse_verdict(&raw) {
             Ok(v) => {
                 debug!(requeries, "reviewer verdict parsed");

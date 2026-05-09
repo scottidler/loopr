@@ -45,7 +45,7 @@ async fn free_happy_path_returns_text() {
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
     let messages = vec![Message::user("say hi")];
-    let (result, _usage) = client.complete_free("sys", &messages).await.unwrap();
+    let (result, _usage) = client.complete_free("sys", &messages, None).await.unwrap();
 
     assert_eq!(result, "hello world");
 }
@@ -65,7 +65,7 @@ async fn free_request_body_has_no_tools_or_tool_choice() {
         Message::assistant("intermediate"),
         Message::user("last"),
     ];
-    client.complete_free("S", &messages).await.unwrap();
+    client.complete_free("S", &messages, None).await.unwrap();
 
     let reqs = server.received_requests().await.unwrap();
     assert_eq!(reqs.len(), 1);
@@ -118,7 +118,7 @@ async fn free_picks_first_text_block_skipping_thinking() {
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
     let msgs = vec![Message::user("q")];
-    let (out, _usage) = client.complete_free("s", &msgs).await.unwrap();
+    let (out, _usage) = client.complete_free("s", &msgs, None).await.unwrap();
     assert_eq!(out, "the answer", "first text block wins, thinking skipped");
 }
 
@@ -143,7 +143,10 @@ async fn free_no_text_block_maps_to_schema_validation() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
+    let err = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::SchemaValidation(msg),
@@ -171,7 +174,10 @@ async fn free_max_tokens_maps_to_context_exhausted() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
+    let err = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::ContextExhausted { used, limit },
@@ -193,11 +199,61 @@ async fn free_http_500_maps_to_retryable() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
+    let err = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap_err();
     match err {
         LlmError::Retryable { reason } => assert!(reason.contains("500"), "got: {reason}"),
         other => panic!("expected Retryable, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn free_request_body_carries_model_override_when_some() {
+    // Phase 0 of director-phase-1: complete_free's `model: Option<&str>`
+    // parameter must override the configured default model when `Some`.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(text_response("ok")))
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    let messages = vec![Message::user("q")];
+    client
+        .complete_free("s", &messages, Some("claude-opus-4-7"))
+        .await
+        .unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    assert_eq!(
+        body["model"], "claude-opus-4-7",
+        "complete_free with Some(model) must send that model in the request body, not the configured default"
+    );
+}
+
+#[tokio::test]
+async fn free_request_body_uses_config_model_when_none() {
+    // Counterpart to free_request_body_carries_model_override_when_some:
+    // confirm None still uses the configured default (Sonnet here).
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(text_response("ok")))
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    let messages = vec![Message::user("q")];
+    client.complete_free("s", &messages, None).await.unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    assert_eq!(body["model"], "claude-sonnet-4-6");
 }
 
 #[tokio::test]
@@ -210,7 +266,10 @@ async fn free_http_401_maps_to_fatal_auth() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_free("s", &[Message::user("q")]).await.unwrap_err();
+    let err = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::Auth(_),

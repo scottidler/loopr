@@ -33,11 +33,17 @@ pub trait LlmClient {
     ///
     /// `system` and `user` are fully-assembled prompt strings; this
     /// crate does NOT touch them beyond forwarding.
+    ///
+    /// `model` overrides the configured default when `Some`. `None`
+    /// uses the client's configured model (the common case). Callers
+    /// that need a specific model tier (e.g. Director using Opus) pass
+    /// `Some("claude-opus-4-7")`; all other callers pass `None`.
     async fn complete_with_tool(
         &self,
         system: &str,
         user: &str,
         tool: ToolSchema,
+        model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError>;
 
     /// Send a free-form multi-turn completion. No `tool_choice`, no
@@ -56,7 +62,15 @@ pub trait LlmClient {
     /// `ToolUse`/`ToolResult` content blocks in `messages` are type-
     /// level defined but not yet wired; `AnthropicClient` returns
     /// `Fatal(NotImplemented)` if encountered until 2.1 ships.
-    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError>;
+    ///
+    /// `model` overrides the configured default when `Some`. `None`
+    /// uses the client's configured model (the common case).
+    async fn complete_free(
+        &self,
+        system: &str,
+        messages: &[Message],
+        model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError>;
 }
 
 /// Forwarding impl for `Arc<L>` so daemon code can build
@@ -68,11 +82,17 @@ impl<L: LlmClient + Send + Sync + ?Sized> LlmClient for std::sync::Arc<L> {
         system: &str,
         user: &str,
         tool: ToolSchema,
+        model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
-        (**self).complete_with_tool(system, user, tool).await
+        (**self).complete_with_tool(system, user, tool, model).await
     }
 
-    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
-        (**self).complete_free(system, messages).await
+    async fn complete_free(
+        &self,
+        system: &str,
+        messages: &[Message],
+        model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
+        (**self).complete_free(system, messages, model).await
     }
 }

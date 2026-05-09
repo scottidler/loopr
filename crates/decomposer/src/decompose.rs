@@ -405,7 +405,7 @@ async fn try_llm_once<L: LlmClient>(llm: &L, system: &str, user: &str) -> Result
     // decomposer doesn't consume `Usage` directly (the metering wrapper
     // owns counter accumulation), so discard it at this call site.
     let (tool_call, _usage) = llm
-        .complete_with_tool(system, user, submit_decomposition_schema())
+        .complete_with_tool(system, user, submit_decomposition_schema(), None)
         .await?;
     Ok(tool_call)
 }

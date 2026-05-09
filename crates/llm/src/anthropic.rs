@@ -189,14 +189,16 @@ impl LlmClient for AnthropicClient {
         system: &str,
         user: &str,
         tool: ToolSchema,
+        model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
         // Span fields per design doc Security → Telemetry rules:
         // model + prompt byte-lengths + previews (truncated to
         // PROMPT_PREVIEW_MAX_BYTES) + duration. NEVER the tool
         // schema, ToolCall.input, headers, or API key.
+        let effective_model = model.unwrap_or(&self.config.model);
         let span = info_span!(
             "llm.anthropic",
-            model = %self.config.model,
+            model = %effective_model,
             system_len = system.len(),
             user_len = user.len(),
             system_preview = %truncate_preview(system),
@@ -211,7 +213,7 @@ impl LlmClient for AnthropicClient {
         let _enter = span.enter();
         let started = Instant::now();
 
-        let result = self.send_request(system, user, &tool).await;
+        let result = self.send_request(system, user, &tool, effective_model).await;
 
         let elapsed = started.elapsed().as_millis() as u64;
         span.record("duration_ms", elapsed);
@@ -241,7 +243,12 @@ impl LlmClient for AnthropicClient {
         result
     }
 
-    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
+    async fn complete_free(
+        &self,
+        system: &str,
+        messages: &[Message],
+        model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
         let last_user_preview = messages
             .last()
             .and_then(|m| m.content.first())
@@ -253,9 +260,10 @@ impl LlmClient for AnthropicClient {
                 }
             })
             .unwrap_or_default();
+        let effective_model = model.unwrap_or(&self.config.model);
         let span = info_span!(
             "llm.anthropic.free",
-            model = %self.config.model,
+            model = %effective_model,
             system_len = system.len(),
             message_count = messages.len(),
             system_preview = %truncate_preview(system),
@@ -269,7 +277,7 @@ impl LlmClient for AnthropicClient {
         let _enter = span.enter();
         let started = Instant::now();
 
-        let result = self.send_free_request(system, messages).await;
+        let result = self.send_free_request(system, messages, effective_model).await;
 
         let elapsed = started.elapsed().as_millis() as u64;
         span.record("duration_ms", elapsed);
@@ -301,7 +309,12 @@ impl LlmClient for AnthropicClient {
 }
 
 impl AnthropicClient {
-    async fn send_free_request(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
+    async fn send_free_request(
+        &self,
+        system: &str,
+        messages: &[Message],
+        model: &str,
+    ) -> Result<(String, Usage), LlmError> {
         let url = format!("{}/v1/messages", self.config.api_base_url);
         let mut wire_messages: Vec<AnthropicFreeMessage> = Vec::with_capacity(messages.len());
         for m in messages {
@@ -315,7 +328,7 @@ impl AnthropicClient {
             });
         }
         let body = AnthropicFreeRequest {
-            model: self.config.model.clone(),
+            model: model.to_string(),
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             system: build_system_block(system),
@@ -338,10 +351,16 @@ impl AnthropicClient {
         classify_free_response(status, &body_bytes, self.config.max_tokens)
     }
 
-    async fn send_request(&self, system: &str, user: &str, tool: &ToolSchema) -> Result<(ToolCall, Usage), LlmError> {
+    async fn send_request(
+        &self,
+        system: &str,
+        user: &str,
+        tool: &ToolSchema,
+        model: &str,
+    ) -> Result<(ToolCall, Usage), LlmError> {
         let url = format!("{}/v1/messages", self.config.api_base_url);
         let body = AnthropicRequest {
-            model: &self.config.model,
+            model,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             system: build_system_block(system),

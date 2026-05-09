@@ -60,6 +60,7 @@ impl LlmClient for ScriptedLlm {
         _system: &str,
         _user: &str,
         _tool: ToolSchema,
+        _model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
         let popped = self.tool_responses.lock().expect("tool_responses lock").pop_front();
         match popped {
@@ -74,7 +75,12 @@ impl LlmClient for ScriptedLlm {
         }
     }
 
-    async fn complete_free(&self, _system: &str, _messages: &[Message]) -> Result<(String, Usage), LlmError> {
+    async fn complete_free(
+        &self,
+        _system: &str,
+        _messages: &[Message],
+        _model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
         let popped = self.free_responses.lock().expect("free_responses lock").pop_front();
         match popped {
             Some(Ok(s)) => Ok((s, Usage::default())),
@@ -111,9 +117,9 @@ mod tests {
             description: "".to_string(),
             input_schema: json!({}),
         };
-        let (first, _u) = stub.complete_with_tool("", "", schema.clone()).await.unwrap();
+        let (first, _u) = stub.complete_with_tool("", "", schema.clone(), None).await.unwrap();
         assert_eq!(first.input, json!({"i": 1}));
-        let (second, _u) = stub.complete_with_tool("", "", schema).await.unwrap();
+        let (second, _u) = stub.complete_with_tool("", "", schema, None).await.unwrap();
         assert_eq!(second.input, json!({"i": 2}));
         assert!(stub.is_empty());
     }
@@ -124,8 +130,8 @@ mod tests {
         stub.queue_free(Ok("first".to_string()));
         stub.queue_free(Ok("second".to_string()));
 
-        assert_eq!(stub.complete_free("", &[]).await.unwrap().0, "first");
-        assert_eq!(stub.complete_free("", &[]).await.unwrap().0, "second");
+        assert_eq!(stub.complete_free("", &[], None).await.unwrap().0, "first");
+        assert_eq!(stub.complete_free("", &[], None).await.unwrap().0, "second");
         assert!(stub.is_empty());
     }
 
@@ -135,7 +141,7 @@ mod tests {
         let probe = stub.clone();
         stub.queue_free(Ok("hello".to_string()));
         assert_eq!(probe.remaining(), (0, 1));
-        assert_eq!(stub.complete_free("", &[]).await.unwrap().0, "hello");
+        assert_eq!(stub.complete_free("", &[], None).await.unwrap().0, "hello");
         assert!(probe.is_empty());
     }
 
@@ -149,7 +155,7 @@ mod tests {
             reason: FatalReason::SchemaValidation("bad".to_string()),
         }));
 
-        let free_err = stub.complete_free("", &[]).await.unwrap_err();
+        let free_err = stub.complete_free("", &[], None).await.unwrap_err();
         assert!(matches!(free_err, LlmError::Retryable { .. }));
 
         let schema = ToolSchema {
@@ -157,7 +163,7 @@ mod tests {
             description: "".to_string(),
             input_schema: json!({}),
         };
-        let tool_err = stub.complete_with_tool("", "", schema).await.unwrap_err();
+        let tool_err = stub.complete_with_tool("", "", schema, None).await.unwrap_err();
         assert!(matches!(tool_err, LlmError::Fatal { .. }));
     }
 
@@ -165,6 +171,6 @@ mod tests {
     #[should_panic(expected = "complete_free called with empty queue")]
     async fn complete_free_panics_when_empty() {
         let stub = ScriptedLlm::new();
-        let _ = stub.complete_free("", &[]).await;
+        let _ = stub.complete_free("", &[], None).await;
     }
 }

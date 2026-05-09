@@ -67,7 +67,10 @@ async fn happy_path_returns_tool_call() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let (result, _usage) = client.complete_with_tool("sys", "usr", test_tool()).await.unwrap();
+    let (result, _usage) = client
+        .complete_with_tool("sys", "usr", test_tool(), None)
+        .await
+        .unwrap();
 
     assert_eq!(result.tool_name, "submit_decomposition");
     assert_eq!(result.input, input);
@@ -86,7 +89,7 @@ async fn request_body_shape_matches_messages_api() {
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
     client
-        .complete_with_tool("SYS-PROMPT", "USR-PROMPT", test_tool())
+        .complete_with_tool("SYS-PROMPT", "USR-PROMPT", test_tool(), None)
         .await
         .unwrap();
 
@@ -125,7 +128,7 @@ async fn required_headers_are_sent() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key-xyz".into()).unwrap();
-    client.complete_with_tool("s", "u", test_tool()).await.unwrap();
+    client.complete_with_tool("s", "u", test_tool(), None).await.unwrap();
     // If headers did not match, wiremock would return 404 and the
     // client would return a Fatal(BadRequest) error; reaching here
     // means all three expectations passed.
@@ -141,7 +144,10 @@ async fn http_401_maps_to_fatal_auth() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -163,7 +169,10 @@ async fn http_429_maps_to_retryable() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     assert!(matches!(err, LlmError::Retryable { .. }), "got: {err:?}");
 }
 
@@ -177,7 +186,10 @@ async fn http_500_maps_to_retryable() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     assert!(matches!(err, LlmError::Retryable { .. }), "got: {err:?}");
 }
 
@@ -200,7 +212,10 @@ async fn stop_reason_max_tokens_maps_to_context_exhausted() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     match err {
         LlmError::Fatal {
             reason: FatalReason::ContextExhausted { used, limit },
@@ -231,7 +246,10 @@ async fn missing_tool_use_block_maps_to_schema_validation() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -267,7 +285,10 @@ async fn malformed_tool_input_maps_to_schema_validation() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -293,7 +314,10 @@ async fn html_body_with_200_status_maps_to_retryable() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let err = client.complete_with_tool("s", "u", test_tool()).await.unwrap_err();
+    let err = client
+        .complete_with_tool("s", "u", test_tool(), None)
+        .await
+        .unwrap_err();
     assert!(matches!(err, LlmError::Retryable { .. }), "got: {err:?}");
 }
 
@@ -415,7 +439,7 @@ async fn complete_free_multi_turn_wire_body() {
         Message::assistant("assistant reply"),
         Message::user("second user turn"),
     ];
-    let (text, _usage) = client.complete_free("system text", &messages).await.unwrap();
+    let (text, _usage) = client.complete_free("system text", &messages, None).await.unwrap();
     assert_eq!(text, "ok");
 
     let reqs = server.received_requests().await.unwrap();

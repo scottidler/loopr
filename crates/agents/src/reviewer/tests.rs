@@ -48,11 +48,17 @@ impl LlmClient for FakeLlm {
         _system: &str,
         _user: &str,
         _tool: LlmToolSchema,
+        _model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
         panic!("FakeLlm: complete_with_tool not used in Reviewer tests")
     }
 
-    async fn complete_free(&self, _system: &str, _messages: &[Message]) -> Result<(String, Usage), LlmError> {
+    async fn complete_free(
+        &self,
+        _system: &str,
+        _messages: &[Message],
+        _model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
         let mut q = self.responses.lock().unwrap();
         let payload = if q.len() > 1 {
             q.remove(0)

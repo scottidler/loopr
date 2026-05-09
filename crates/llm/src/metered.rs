@@ -36,14 +36,20 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
         system: &str,
         user: &str,
         tool: ToolSchema,
+        model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
-        let (tc, usage) = self.inner.complete_with_tool(system, user, tool).await?;
+        let (tc, usage) = self.inner.complete_with_tool(system, user, tool, model).await?;
         record(&self.snapshot, &usage);
         Ok((tc, usage))
     }
 
-    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
-        let (raw, usage) = self.inner.complete_free(system, messages).await?;
+    async fn complete_free(
+        &self,
+        system: &str,
+        messages: &[Message],
+        model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
+        let (raw, usage) = self.inner.complete_free(system, messages, model).await?;
         record(&self.snapshot, &usage);
         Ok((raw, usage))
     }
@@ -83,7 +89,7 @@ mod tests {
         let stub = ScriptedLlm::new();
         stub.queue_free(Ok("ok".to_string()));
         let metered = MeteredLlmClient::new(stub, Arc::clone(&snapshot));
-        let (out, _) = metered.complete_free("s", &[]).await.unwrap();
+        let (out, _) = metered.complete_free("s", &[], None).await.unwrap();
         assert_eq!(out, "ok");
         let snap = snapshot.lock().unwrap();
         assert_eq!(snap.llm_calls, 1);
@@ -103,7 +109,7 @@ mod tests {
             input: serde_json::json!({}),
         }));
         let metered = MeteredLlmClient::new(stub, Arc::clone(&snapshot));
-        let _ = metered.complete_with_tool("", "", schema).await.unwrap();
+        let _ = metered.complete_with_tool("", "", schema, None).await.unwrap();
         let snap = snapshot.lock().unwrap();
         assert_eq!(snap.llm_calls, 1);
     }

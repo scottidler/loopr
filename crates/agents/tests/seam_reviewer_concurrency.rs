@@ -34,11 +34,17 @@ impl LlmClient for GatedLlm {
         _system: &str,
         _user: &str,
         _tool: LlmToolSchema,
+        _model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
         panic!("unused")
     }
 
-    async fn complete_free(&self, _system: &str, _messages: &[Message]) -> Result<(String, Usage), LlmError> {
+    async fn complete_free(
+        &self,
+        _system: &str,
+        _messages: &[Message],
+        _model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
         self.barrier.wait().await;
         Ok((self.response.clone(), Usage::default()))
     }
