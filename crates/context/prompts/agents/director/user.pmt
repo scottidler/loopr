@@ -1,4 +1,4 @@
-## Current State — Plan {{plan_id}}
+## Current State - Plan {{plan_id}}
 
 ### Works
 
@@ -9,7 +9,7 @@
 (no works)
 {{/unless}}
 
-### Bundles
+### Bundles (use accept_bundle for any in `Reviewed`)
 
 {{#each bundles}}
 - **{{id}}** for work {{work_id}}: {{status}}
@@ -24,4 +24,4 @@
 {{blocked_reason}}
 {{/if}}
 
-Placeholder — 1.2 Director Phase 1 design doc will replace this with the full state summary template.
+Decide what actions to take next. Respond with a JSON array of action objects only.

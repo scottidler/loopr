@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-05-08
-**Status:** Approved
+**Status:** Implemented
 **Review Passes Completed:** 5/5 + advisor review addressed
 **Crates touched:** `domain`, `llm`, `agents`, `context`, `loopr` (daemon wiring), `store`
 
