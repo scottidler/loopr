@@ -5,7 +5,6 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -219,25 +218,19 @@ impl FakeWorks {
 }
 
 impl WorkLookup for FakeWorks {
-    #[allow(clippy::manual_async_fn)]
-    fn get<'a>(&'a self, work_id: &'a str) -> impl Future<Output = Result<Option<Work>, StoreError>> + Send + 'a {
-        async move { Ok(self.by_id.get(work_id).cloned()) }
+    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError> {
+        Ok(self.by_id.get(work_id).cloned())
     }
 }
 
 struct FakeTicks;
 
 impl TickSink for FakeTicks {
-    #[allow(clippy::manual_async_fn)]
-    fn get<'a>(
-        &'a self,
-        _tick_id: &'a domain::TickId,
-    ) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a {
-        async move { Ok(None) }
+    async fn get(&self, _tick_id: &domain::TickId) -> Result<Option<Tick>, StoreError> {
+        Ok(None)
     }
-    #[allow(clippy::manual_async_fn)]
-    fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a {
-        async move { Ok(tick) }
+    async fn create(&self, tick: Tick) -> Result<Tick, StoreError> {
+        Ok(tick)
     }
 }
 

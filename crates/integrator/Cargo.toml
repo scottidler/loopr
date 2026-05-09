@@ -12,6 +12,7 @@ store = { path = "../store" }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["process", "sync"] }
 tracing.workspace = true
+trait-variant.workspace = true
 worktree = { path = "../worktree" }
 
 [dev-dependencies]

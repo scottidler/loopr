@@ -14,7 +14,6 @@ mod error;
 mod git;
 mod validation;
 
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -37,8 +36,9 @@ use crate::classify::{ConflictKind, classify_conflict};
 /// `bundle.work_id` to verify `work.parent_id == plan.id` during
 /// pre-flight. Read-only; the Integrator never transitions a Work
 /// (that's the daemon's job after an `Ok(Tick)` return).
+#[trait_variant::make(Send)]
 pub trait WorkLookup: Send + Sync {
-    fn get<'a>(&'a self, work_id: &'a str) -> impl Future<Output = Result<Option<Work>, StoreError>> + Send + 'a;
+    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError>;
 }
 
 /// Append-only `Tick` persistence plus read-back. The Integrator
@@ -48,65 +48,56 @@ pub trait WorkLookup: Send + Sync {
 /// calls `get(tick_id)` to resolve the existing Tick so it can
 /// return `Ok(existing_tick)` to the daemon after completing the
 /// `Merged` transitions.
+#[trait_variant::make(Send)]
 pub trait TickSink: Send + Sync {
-    fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a;
-    fn get<'a>(&'a self, tick_id: &'a TickId) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a;
+    async fn create(&self, tick: Tick) -> Result<Tick, StoreError>;
+    async fn get(&self, tick_id: &TickId) -> Result<Option<Tick>, StoreError>;
 }
 
 // Real impls backed by `store::Store`.
 
 impl WorkLookup for store::Store {
-    #[allow(clippy::manual_async_fn)]
-    fn get<'a>(&'a self, work_id: &'a str) -> impl Future<Output = Result<Option<Work>, StoreError>> + Send + 'a {
-        async move {
-            // `WorksStore::get` returns `Err(RecordNotFound)` for missing;
-            // the WorkLookup contract is `Option` so the Integrator can
-            // distinguish "wiring bug (bundle references a non-existent
-            // work)" from other store failures.
-            use domain::WorkId;
-            use std::str::FromStr;
-            let wid = WorkId::from_str(work_id).expect("WorkId::from_str is Infallible");
-            match self.works().get(&wid).await {
-                Ok(w) => Ok(Some(w)),
-                Err(StoreError::RecordNotFound { .. }) => Ok(None),
-                Err(other) => Err(other),
-            }
+    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError> {
+        // `WorksStore::get` returns `Err(RecordNotFound)` for missing;
+        // the WorkLookup contract is `Option` so the Integrator can
+        // distinguish "wiring bug (bundle references a non-existent
+        // work)" from other store failures.
+        use domain::WorkId;
+        use std::str::FromStr;
+        let wid = WorkId::from_str(work_id).expect("WorkId::from_str is Infallible");
+        match self.works().get(&wid).await {
+            Ok(w) => Ok(Some(w)),
+            Err(StoreError::RecordNotFound { .. }) => Ok(None),
+            Err(other) => Err(other),
         }
     }
 }
 
 impl<T: WorkLookup + ?Sized> WorkLookup for &T {
-    #[allow(clippy::manual_async_fn)]
-    fn get<'a>(&'a self, work_id: &'a str) -> impl Future<Output = Result<Option<Work>, StoreError>> + Send + 'a {
-        async move { (*self).get(work_id).await }
+    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError> {
+        (*self).get(work_id).await
     }
 }
 
 impl TickSink for store::Store {
-    #[allow(clippy::manual_async_fn)]
-    fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a {
-        async move { self.ticks().create(tick).await }
+    async fn create(&self, tick: Tick) -> Result<Tick, StoreError> {
+        self.ticks().create(tick).await
     }
-    #[allow(clippy::manual_async_fn)]
-    fn get<'a>(&'a self, tick_id: &'a TickId) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a {
-        async move {
-            match self.ticks().get(tick_id).await {
-                Ok(t) => Ok(Some(t)),
-                Err(StoreError::RecordNotFound { .. }) => Ok(None),
-                Err(other) => Err(other),
-            }
+    async fn get(&self, tick_id: &TickId) -> Result<Option<Tick>, StoreError> {
+        match self.ticks().get(tick_id).await {
+            Ok(t) => Ok(Some(t)),
+            Err(StoreError::RecordNotFound { .. }) => Ok(None),
+            Err(other) => Err(other),
         }
     }
 }
 
 impl<T: TickSink + ?Sized> TickSink for &T {
-    #[allow(clippy::manual_async_fn)]
-    fn create<'a>(&'a self, tick: Tick) -> impl Future<Output = Result<Tick, StoreError>> + Send + 'a {
-        async move { (*self).create(tick).await }
+    async fn create(&self, tick: Tick) -> Result<Tick, StoreError> {
+        (*self).create(tick).await
     }
-    #[allow(clippy::manual_async_fn)]
-    fn get<'a>(&'a self, tick_id: &'a TickId) -> impl Future<Output = Result<Option<Tick>, StoreError>> + Send + 'a {
-        async move { (*self).get(tick_id).await }
+    async fn get(&self, tick_id: &TickId) -> Result<Option<Tick>, StoreError> {
+        (*self).get(tick_id).await
     }
 }
 
