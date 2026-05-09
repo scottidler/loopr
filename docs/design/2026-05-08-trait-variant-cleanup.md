@@ -96,7 +96,7 @@ Affected traits, their files, and the impls (real + forwarding/decorator/fakes):
 | `WorkLookup` | integrator | `src/lib.rs` | `Store`, `&T`; `FakeWorks` (integrator tests) |
 | `TickSink` | integrator | `src/lib.rs` | `Store`, `&T`; `FakeTicks`, `FakeBundleSink` (integrator tests) |
 | `BundleSink` | agents | `src/implementer.rs` | `Store`, `&B`, `Arc<B>`; `CollectingSink` (agents/implementer tests) |
-| `LlmClient` | llm | `src/client.rs` | `AnthropicClient` (llm), `MeteredLlmClient<L>` (llm), `StubLlm` (llm) |
+| `LlmClient` | llm | `src/client.rs` | `AnthropicClient` (llm), `MeteredLlmClient<L>` (llm), `ScriptedLlm` (llm) |
 | `ToolExecutor` | agents | `src/dispatch.rs` | `LaneRouter`-based real impl + a test impl in `dispatch/tests.rs` |
 
 `SummaryFanout<S>` in `crates/loopr/src/daemon/summary_fanout.rs` impls all three store sink traits (`WorkUpdateSink`, `BundleUpdateSink`, `PlanUpdateSink`) with the same desugaring; those three impls collapse to `async fn`.
@@ -161,7 +161,7 @@ The work is one mechanical pattern applied 52 times. Phases group the changes by
 - Convert `LlmClient` trait in `crates/llm/src/client.rs`. Two methods: `complete_with_tool` and `complete_free`. Both follow the same pattern.
 - Convert `AnthropicClient` impl in `crates/llm/src/anthropic.rs`.
 - Convert `MeteredLlmClient<L>` decorator impl in `crates/llm/src/metered.rs` (this wraps another `LlmClient`; the inner `Send` bound carries through).
-- Convert `StubLlm` impl in `crates/llm/src/stub.rs`.
+- Convert `ScriptedLlm` impl in `crates/llm/src/stub.rs`.
 - `cargo test -p llm`. `otto ci`. Commit. The `tests/span.rs` snapshot tests in `llm` will catch any change in span shape; they should not fire because span emission is on the inherent methods, not the trait.
 
 #### Phase 6: Convert `ToolExecutor` and its test fakes
