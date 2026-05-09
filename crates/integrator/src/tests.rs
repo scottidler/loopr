@@ -196,16 +196,9 @@ struct FakeBundleSink {
 }
 
 impl BundleUpdateSink for FakeBundleSink {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        _expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move {
-            self.writes.lock().unwrap().push(bundle);
-            Ok(())
-        }
+    async fn update(&self, bundle: Bundle, _expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+        self.writes.lock().unwrap().push(bundle);
+        Ok(())
     }
 }
 

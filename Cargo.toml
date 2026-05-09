@@ -19,6 +19,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml = "0.9.34"
 tracing = "0.1.44"
+trait-variant = "0.1.2"
 # Reserved for Stage 4's post-fork daemon.
 #
 # Stage 2 deliberately uses blocking `LineWriter<File>` writers because

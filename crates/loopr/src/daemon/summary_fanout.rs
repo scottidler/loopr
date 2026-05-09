@@ -131,24 +131,17 @@ impl<S> BundleUpdateSink for SummaryFanout<S>
 where
     S: BundleUpdateSink,
 {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move {
-            let bundle_for_summary = bundle.clone();
-            self.inner.update(bundle, expected_updated_at).await?;
-            if let Err(e) = summary::write_bundle(&self.target, &bundle_for_summary) {
-                warn!(
-                    bundle_id = %bundle_for_summary.id,
-                    error = %e,
-                    "summary::write_bundle failed (non-fatal)"
-                );
-            }
-            Ok(())
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+        let bundle_for_summary = bundle.clone();
+        self.inner.update(bundle, expected_updated_at).await?;
+        if let Err(e) = summary::write_bundle(&self.target, &bundle_for_summary) {
+            warn!(
+                bundle_id = %bundle_for_summary.id,
+                error = %e,
+                "summary::write_bundle failed (non-fatal)"
+            );
         }
+        Ok(())
     }
 }
 

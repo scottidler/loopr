@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
@@ -207,13 +206,9 @@ impl<'a> BundlesStore<'a> {
 /// Minimal Bundle-update interface. Single-method trait so per-role
 /// test fakes stay tiny. Passes the OCC `expected_updated_at` snapshot
 /// the caller took before mutating its clone.
-#[allow(clippy::manual_async_fn)]
+#[trait_variant::make(Send)]
 pub trait BundleUpdateSink: Send + Sync {
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a;
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -232,18 +227,11 @@ pub enum BundleUpdateError {
 /// `StoreError::Stale` is specifically preserved as
 /// `BundleUpdateError::Stale` so downstream matching works.
 impl BundleUpdateSink for crate::Store {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move {
-            match self.bundles().update(bundle, expected_updated_at).await {
-                Ok(()) => Ok(()),
-                Err(StoreError::Stale { expected, actual }) => Err(BundleUpdateError::Stale { expected, actual }),
-                Err(other) => Err(BundleUpdateError::Update(other.to_string())),
-            }
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+        match self.bundles().update(bundle, expected_updated_at).await {
+            Ok(()) => Ok(()),
+            Err(StoreError::Stale { expected, actual }) => Err(BundleUpdateError::Stale { expected, actual }),
+            Err(other) => Err(BundleUpdateError::Update(other.to_string())),
         }
     }
 }
@@ -251,25 +239,15 @@ impl BundleUpdateSink for crate::Store {
 /// Forwarding impl for any reference to a `BundleUpdateSink`. Lets
 /// callers build deps with a borrowed `Store` without cloning.
 impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for &B {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move { (*self).update(bundle, expected_updated_at).await }
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+        (*self).update(bundle, expected_updated_at).await
     }
 }
 
 /// Forwarding impl for `Arc<B>`.
 impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for std::sync::Arc<B> {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move { (**self).update(bundle, expected_updated_at).await }
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+        (**self).update(bundle, expected_updated_at).await
     }
 }
 

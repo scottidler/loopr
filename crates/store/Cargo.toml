@@ -12,6 +12,7 @@ taskstore-async = { workspace = true }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["sync"] }
 tracing.workspace = true
+trait-variant.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

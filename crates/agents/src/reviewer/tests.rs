@@ -83,25 +83,18 @@ struct CollectingSink {
 }
 
 impl BundleUpdateSink for CollectingSink {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        bundle: Bundle,
-        expected_updated_at: i64,
-    ) -> impl Future<Output = Result<(), BundleUpdateError>> + Send + 'a {
-        async move {
-            let mut stale = self.stale_once.lock().unwrap();
-            if *stale {
-                *stale = false;
-                return Err(BundleUpdateError::Stale {
-                    expected: expected_updated_at,
-                    actual: expected_updated_at + 1,
-                });
-            }
-            drop(stale);
-            self.persisted.lock().unwrap().push((bundle, expected_updated_at));
-            Ok(())
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+        let mut stale = self.stale_once.lock().unwrap();
+        if *stale {
+            *stale = false;
+            return Err(BundleUpdateError::Stale {
+                expected: expected_updated_at,
+                actual: expected_updated_at + 1,
+            });
         }
+        drop(stale);
+        self.persisted.lock().unwrap().push((bundle, expected_updated_at));
+        Ok(())
     }
 }
 
