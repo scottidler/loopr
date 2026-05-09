@@ -1,41 +1,56 @@
-//! Director Phase 1 scaffolding: types, traits, and the action parser.
+//! Director: long-lived per-Plan Opus supervisor.
 //!
-//! `run_director` is the long-lived Opus LLM agent that runs as a per-Plan
-//! task in the daemon. It supplements the daemon's reactive dep-gate
-//! promotion (1.1) and inline Reviewer→Integrator chain (Stage 8) by
-//! polling TaskStore, assembling a state summary, and issuing typed
-//! `DirectorAction` variants for anything the pipeline left in a stuck or
-//! recoverable state.
+//! `run_director` polls TaskStore via `DirectorStore`, assembles a state
+//! summary via `context::build_for_director`, calls the LLM, parses
+//! `DirectorAction`s, and dispatches them through `WorkSpawner`.
 //!
-//! Phase 1 lands the scaffolding only: action enum, config, deps,
-//! WorkSpawner / DirectorStore traits, and the action parser. `run_director`
-//! itself is a `todo!()` stub here; the loop body, reconcile sweep, and
-//! lifeguard wiring land in Phase 2.
+//! The Director supplements the daemon's reactive dep-gate promotion (1.1)
+//! and inline Reviewer to Integrator chain (Stage 8) by handling the
+//! states those paths cannot resolve on their own: `Reviewed` Bundles
+//! awaiting acceptance policy, `Blocked` Works needing recovery, and the
+//! goal-completion audit.
+//!
+//! Loop shape (mirrors Implementer's outer-loop + parse-retry sub-loop):
+//! 1. Reconcile sweep promotes `Integrated` Works to `Done` and reports
+//!    GoalComplete (`Ok(true)` exits the run).
+//! 2. Build `context::DirectorState` from store snapshots.
+//! 3. Call `context.build_for_director` to assemble system prompt + state
+//!    user message.
+//! 4. Inner parse-retry sub-loop: re-prompt on parse failure within the
+//!    same iteration; only successful turns enter cross-iteration history,
+//!    avoiding the user/user adjacency that would arise if a failed turn's
+//!    error message survived into the next iteration's `build_for_director`
+//!    call (which always appends a fresh state user message).
+//! 5. Lifeguard `record_parse_failure` after the sub-loop exhausts its
+//!    requery budget; escalation returns `DirectorError::Lifeguard`.
+//! 6. Execute parsed actions through `WorkSpawner`; `NeedHelp` exits with
+//!    `DirectorError::NeedHelp` and no restart.
+//! 7. Sleep `poll_interval_secs` (or `idle_interval_secs` when no actions
+//!    were taken), interruptible by `deps.shutdown`.
+//!
+//! Restart story: `max_restarts` retries on transient failures (Llm,
+//! Store, Context, Parse, Lifeguard). History is cleared on every restart
+//! because the LLM context that led to the error is suspect; the reconcile
+//! sweep re-derives ground truth from the store at the top of every
+//! iteration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::sync::Notify;
+use tracing::{debug, info, instrument, warn};
 
-use context::ContextBuilder;
-use domain::{Bundle, BundleId, PlanId, Work, WorkId, WorkStatus};
-use llm::LlmClient;
+use context::{ContextBuilder, ContextError, DirectorState as CtxDirectorState};
+use domain::{Bundle, BundleId, BundleStatus, PlanId, Work, WorkId, WorkStatus};
+use llm::{LlmClient, Message};
 use store::StoreError;
 
 use crate::config::DirectorConfig;
-use crate::lifeguard;
+use crate::lifeguard::{Decision, Lifeguard};
 
 /// LLM-emitted instruction. Serialized as `{"action": "<kind>", ...}`.
-///
-/// Five variants cover the Phase 1 orchestration vocabulary:
-/// - `AcceptBundle` transfers Stage 8's auto-accept into the Director's
-///   explicit policy.
-/// - `OverrideWork` is the primary recovery path (Blocked → Ready, etc.).
-/// - `AssignWork` is the edge case where the dep-gate reactive path missed
-///   a Ready Work.
-/// - `Done` is a no-action iteration; the loop sleeps and resumes.
-/// - `NeedHelp` is the unrecoverable exit; the task ends without restart.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum DirectorAction {
@@ -62,34 +77,7 @@ pub enum DirectorAction {
     NeedHelp { reason: String },
 }
 
-/// Per-Plan Director lifecycle state. Two variants; the v3 coordinator FSM
-/// (Interviewing → Decomposing → Planning → Executing → GoalComplete) is
-/// collapsed here because v5's decomposer runs before the Director starts.
-/// By the time `handle_plan_create` spawns the Director, the Plan already
-/// has Works in Pending/Ready state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DirectorFsmState {
-    /// Director is actively polling and issuing actions.
-    Executing,
-    /// All Works are terminal and at least one is Done. `run_director`
-    /// returns `Ok(())`.
-    GoalComplete,
-}
-
-/// Per-Plan state snapshot fed into the Director's prompt. Built from
-/// `DirectorStore::list_works_for_plan` + `list_bundles_for_plan` on every
-/// iteration.
-#[derive(Debug, Clone)]
-pub struct DirectorState {
-    pub plan_id: PlanId,
-    pub works: Vec<Work>,
-    pub bundles: Vec<Bundle>,
-    pub fsm_state: DirectorFsmState,
-}
-
-/// Errors emitted by `run_director`. Variants mirror the Director's failure
-/// modes: LLM call failure, lifeguard escalation, `NeedHelp` action, store
-/// failure, and parse failure.
+/// Errors emitted by `run_director`.
 #[derive(Debug, Error)]
 pub enum DirectorError {
     #[error("llm error: {0}")]
@@ -103,14 +91,16 @@ pub enum DirectorError {
     #[error("parse error: {0}")]
     Parse(String),
     #[error("context error: {0}")]
-    Context(#[from] context::ContextError),
+    Context(#[from] ContextError),
+    #[error("invalid id: {0}")]
+    Id(String),
 }
 
 /// Fire-and-forget spawn surface injected into `run_director`. Implemented
 /// by `Arc<DaemonContext<L>>` in `crates/loopr` (Phase 3). Tests inject a
 /// fake.
 pub trait WorkSpawner: Send + Sync + 'static {
-    /// Transition Bundle Reviewed → Accepted; spawn Integrator task.
+    /// Transition Bundle Reviewed to Accepted; spawn Integrator task.
     fn accept_bundle(&self, bundle_id: BundleId);
     /// FSM override on a Work. The impl validates the transition is
     /// permitted before firing.
@@ -129,7 +119,7 @@ pub trait DirectorStore: Send + Sync + 'static {
 }
 
 /// Dependencies injected into `run_director`. Mirrors the Implementer's
-/// `Deps<L, T, W, S, C>` pattern: one generic flows through the function
+/// `Deps<L, T, S, C>` pattern: one generic flows through the function
 /// signature; concrete trait bounds live here.
 pub struct DirectorDeps<L, S, C, P>
 where
@@ -148,11 +138,7 @@ where
     pub shutdown: Arc<Notify>,
 }
 
-/// Parse the LLM response into a `Vec<DirectorAction>`. The response is
-/// expected to be a JSON array of action objects; a single object is also
-/// tolerated and wrapped into a one-element vector. Unknown action keys
-/// surface as a parse error so the lifeguard can apply a parse-failure
-/// strike.
+/// Parse the LLM response into a `Vec<DirectorAction>`.
 pub fn parse_director_actions(response: &str) -> Result<Vec<DirectorAction>, DirectorError> {
     let trimmed = response.trim();
     if trimmed.is_empty() {
@@ -164,30 +150,320 @@ pub fn parse_director_actions(response: &str) -> Result<Vec<DirectorAction>, Dir
     if let Ok(action) = serde_json::from_str::<DirectorAction>(trimmed) {
         return Ok(vec![action]);
     }
-    let err = serde_json::from_str::<Vec<DirectorAction>>(trimmed).unwrap_err();
-    Err(DirectorError::Parse(err.to_string()))
+    let err = serde_json::from_str::<Vec<DirectorAction>>(trimmed)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| "unknown parse failure".to_string());
+    Err(DirectorError::Parse(err))
 }
 
-/// Long-running per-Plan supervisor task. Polls TaskStore via
-/// `DirectorStore`, assembles a state summary, calls the LLM, parses
-/// `DirectorAction`s, and dispatches them through `WorkSpawner`. Exits
-/// `Ok(())` when the Plan reaches GoalComplete, `Err(NeedHelp)` on an
-/// LLM-emitted `NeedHelp` action, or `Err(Lifeguard)` after the lifeguard
-/// trips its restart cap.
-///
-/// Phase 1 is a stub; Phase 2 ships the full implementation including the
-/// reconcile sweep and lifeguard wiring.
-pub async fn run_director<L, S, C, P>(_plan_id: &PlanId, _deps: &DirectorDeps<L, S, C, P>) -> Result<(), DirectorError>
+/// PascalCase string for a `WorkStatus`. Mirrors the explicit-match style
+/// `summary/work.rs` and `summary/plan.rs` already use; Display is
+/// lowercase per strum, and Debug format is not a stable API surface.
+fn work_status_str(status: WorkStatus) -> &'static str {
+    use WorkStatus::*;
+    match status {
+        Draft => "Draft",
+        Pending => "Pending",
+        Ready => "Ready",
+        InProgress => "InProgress",
+        Blocked => "Blocked",
+        InReview => "InReview",
+        Integrated => "Integrated",
+        Done => "Done",
+        Superseded => "Superseded",
+        Abandoned => "Abandoned",
+    }
+}
+
+/// PascalCase string for a `BundleStatus`. Symmetric with `work_status_str`.
+fn bundle_status_str(status: BundleStatus) -> &'static str {
+    use BundleStatus::*;
+    match status {
+        Proposed => "Proposed",
+        Triaged => "Triaged",
+        Reviewed => "Reviewed",
+        Accepted => "Accepted",
+        Integrating => "Integrating",
+        Merged => "Merged",
+        Rejected => "Rejected",
+        IntegrationFailed => "IntegrationFailed",
+        Superseded => "Superseded",
+    }
+}
+
+/// Parse a `DirectorAction::OverrideWork.target_status` string back into a
+/// typed `WorkStatus`. Round-trips with `work_status_str`.
+fn parse_work_status(s: &str) -> Result<WorkStatus, DirectorError> {
+    use WorkStatus::*;
+    match s {
+        "Draft" => Ok(Draft),
+        "Pending" => Ok(Pending),
+        "Ready" => Ok(Ready),
+        "InProgress" => Ok(InProgress),
+        "Blocked" => Ok(Blocked),
+        "InReview" => Ok(InReview),
+        "Integrated" => Ok(Integrated),
+        "Done" => Ok(Done),
+        "Superseded" => Ok(Superseded),
+        "Abandoned" => Ok(Abandoned),
+        other => Err(DirectorError::Parse(format!("unknown WorkStatus: {other}"))),
+    }
+}
+
+/// Build the display-oriented `context::DirectorState` from store snapshots.
+/// All `WorkStatus` and `BundleStatus` values are stringified at this seam
+/// so `context` does not import `domain` FSM enums.
+pub async fn build_director_state<S: DirectorStore>(
+    plan_id: &PlanId,
+    store: &S,
+) -> Result<CtxDirectorState, DirectorError> {
+    let works = store.list_works_for_plan(plan_id).await?;
+    let bundles = store.list_bundles_for_plan(plan_id).await?;
+
+    let work_lines = works
+        .iter()
+        .map(|w| context::WorkLine {
+            id: w.id.to_string(),
+            title: w.title.clone(),
+            status: work_status_str(w.status).to_string(),
+            attempt_count: w.attempt_count,
+        })
+        .collect();
+    let bundle_lines = bundles
+        .iter()
+        .map(|b| context::BundleLine {
+            id: b.id.to_string(),
+            work_id: b.work_id.to_string(),
+            status: bundle_status_str(b.status).to_string(),
+        })
+        .collect();
+
+    Ok(CtxDirectorState {
+        plan_id: plan_id.to_string(),
+        works: work_lines,
+        bundles: bundle_lines,
+        blocked_reason: None,
+    })
+}
+
+/// Reconcile sweep. Promotes any `Integrated` Work to `Done` and reports
+/// whether the Plan has reached GoalComplete (every Work terminal AND at
+/// least one Done). Phase 1 scope; the design doc's deferred stuck-state
+/// cases (Triaged-no-Reviewer, Accepted-no-Integrator, InProgress-no-
+/// Implementer) land in Phase 2 of the broader Director roadmap when
+/// `WorkSpawner` grows to expose live-task visibility.
+#[instrument(
+    name = "director.reconcile",
+    level = "debug",
+    skip_all,
+    fields(
+        plan_id = %plan_id,
+        works_count = tracing::field::Empty,
+        promoted_count = tracing::field::Empty,
+        goal_complete = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn reconcile_director<S: DirectorStore, P: WorkSpawner>(
+    plan_id: &PlanId,
+    store: &S,
+    spawner: &P,
+) -> Result<bool, DirectorError> {
+    let works = store.list_works_for_plan(plan_id).await?;
+    let span = tracing::Span::current();
+    span.record("works_count", works.len());
+
+    if works.is_empty() {
+        warn!(plan_id = %plan_id, "reconcile: zero works for plan; treating as not GoalComplete");
+        span.record("promoted_count", 0u32);
+        span.record("goal_complete", false);
+        return Ok(false);
+    }
+
+    let mut promoted = 0u32;
+    for w in works.iter().filter(|w| w.status == WorkStatus::Integrated) {
+        spawner.override_work(w.id.clone(), WorkStatus::Done, "reconcile: Integrated->Done".into());
+        promoted += 1;
+    }
+    span.record("promoted_count", promoted);
+
+    let all_terminal = works.iter().all(|w| w.status.is_terminal());
+    let any_done = works.iter().any(|w| w.status == WorkStatus::Done);
+    let goal_complete = all_terminal && any_done;
+    span.record("goal_complete", goal_complete);
+    Ok(goal_complete)
+}
+
+/// Long-running per-Plan supervisor task.
+#[instrument(
+    name = "director.run",
+    level = "info",
+    skip_all,
+    fields(
+        plan_id = %plan_id,
+        iteration = tracing::field::Empty,
+        restart = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn run_director<L, S, C, P>(plan_id: &PlanId, deps: &DirectorDeps<L, S, C, P>) -> Result<(), DirectorError>
 where
     L: LlmClient,
     S: DirectorStore,
     C: ContextBuilder,
     P: WorkSpawner,
 {
-    // Use lifeguard to keep the import live until Phase 2 wires it in. The
-    // construction is cheap and side-effect-free.
-    let _lifeguard = lifeguard::Lifeguard::new(0, 0);
-    todo!("Phase 2 of director-phase-1 ships run_director's loop body")
+    let max_restarts = deps.config.max_restarts;
+    let mut restart: u32 = 0;
+
+    'restart: loop {
+        let result: Result<(), DirectorError> = run_director_inner(plan_id, deps).await;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(DirectorError::NeedHelp(reason)) => return Err(DirectorError::NeedHelp(reason)),
+            Err(e) if restart < max_restarts => {
+                restart += 1;
+                tracing::Span::current().record("restart", restart);
+                warn!(error = %e, restart, max_restarts, "director restart");
+                continue 'restart;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// One restart-attempt of the Director loop. Returns `Ok(())` on
+/// GoalComplete; surface-level errors propagate to the outer restart
+/// dispatcher.
+async fn run_director_inner<L, S, C, P>(plan_id: &PlanId, deps: &DirectorDeps<L, S, C, P>) -> Result<(), DirectorError>
+where
+    L: LlmClient,
+    S: DirectorStore,
+    C: ContextBuilder,
+    P: WorkSpawner,
+{
+    let mut history: Vec<Message> = Vec::new();
+    // `max_repeat_action` is irrelevant for Director; we never call
+    // `lifeguard.check_action`. Pass 0 so the field is initialised; only
+    // `record_parse_failure` is exercised, governed by `max_parse_failures`.
+    let mut lifeguard = Lifeguard::new(0, deps.config.max_parse_failures);
+    let mut iteration: u32 = 0;
+
+    loop {
+        // 1. Reconcile sweep.
+        let goal_done = reconcile_director(plan_id, &deps.store, &deps.spawner).await?;
+        if goal_done {
+            info!(plan_id = %plan_id, "director: goal complete; exiting");
+            return Ok(());
+        }
+
+        iteration += 1;
+        tracing::Span::current().record("iteration", iteration);
+        info!(iteration, plan_id = %plan_id, "director iteration start");
+
+        // 2. Build state.
+        let state = build_director_state(plan_id, &deps.store).await?;
+
+        // 3. Context + LLM.
+        let assembled = deps
+            .context
+            .build_for_director(&state, &history, deps.config.token_budget)?;
+
+        // 4. Same-iteration parse-retry sub-loop. Only a successful turn
+        //    enters cross-iteration history; failed turns stay local to the
+        //    sub-loop, preventing user/user adjacency on the next iteration.
+        let mut messages = assembled.messages.clone();
+        let actions: Vec<DirectorAction> = loop {
+            let (raw, _usage) = deps
+                .llm
+                .complete_free(&assembled.system_prompt, &messages, Some(deps.config.model.as_str()))
+                .await?;
+            match parse_director_actions(&raw) {
+                Ok(parsed) => {
+                    lifeguard.reset_parse_failures();
+                    // Append the successful turn (state user msg + assistant)
+                    // to cross-iteration history before breaking.
+                    if let Some(last) = assembled.messages.last() {
+                        history.push(last.clone());
+                    }
+                    history.push(Message::assistant(raw));
+                    break parsed;
+                }
+                Err(e) => {
+                    warn!(iteration, error = %e, "director parse failure in sub-loop");
+                    messages.push(Message::assistant(raw));
+                    messages.push(Message::user(format!(
+                        "ERROR: Could not parse response as a JSON array of action objects. {e}\n\
+                         Respond with ONLY a valid JSON array of action objects."
+                    )));
+                    let requeries_used = (messages.len() - 1) / 2;
+                    if requeries_used as u32 >= deps.config.max_requeries {
+                        if let Decision::Escalate(reason) = lifeguard.record_parse_failure() {
+                            return Err(DirectorError::Lifeguard(reason));
+                        }
+                        // Lifeguard counts the strike but allows the outer
+                        // loop to try again on a fresh iteration.
+                        break Vec::new();
+                    }
+                }
+            }
+        };
+
+        // 5. Execute parsed actions.
+        let mut took_action = false;
+        for action in &actions {
+            match action {
+                DirectorAction::AcceptBundle { bundle_id } => {
+                    let id = bundle_id
+                        .parse::<BundleId>()
+                        .map_err(|e| DirectorError::Id(format!("bundle_id={bundle_id}: {e}")))?;
+                    deps.spawner.accept_bundle(id);
+                    took_action = true;
+                }
+                DirectorAction::OverrideWork {
+                    work_id,
+                    target_status,
+                    reason,
+                } => {
+                    let wid = work_id
+                        .parse::<WorkId>()
+                        .map_err(|e| DirectorError::Id(format!("work_id={work_id}: {e}")))?;
+                    let target = parse_work_status(target_status)?;
+                    deps.spawner.override_work(wid, target, reason.clone());
+                    took_action = true;
+                }
+                DirectorAction::AssignWork { work_id } => {
+                    let wid = work_id
+                        .parse::<WorkId>()
+                        .map_err(|e| DirectorError::Id(format!("work_id={work_id}: {e}")))?;
+                    deps.spawner.assign_work(wid);
+                    took_action = true;
+                }
+                DirectorAction::Done { summary } => {
+                    debug!(iteration, summary = %summary, "director done iteration");
+                }
+                DirectorAction::NeedHelp { reason } => {
+                    return Err(DirectorError::NeedHelp(reason.clone()));
+                }
+            }
+        }
+
+        // 6. Sleep.
+        let secs = if took_action {
+            deps.config.poll_interval_secs
+        } else {
+            deps.config.idle_interval_secs
+        };
+        debug!(iteration, sleep_secs = secs, took_action, "director sleeping");
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(secs)) => {}
+            _ = deps.shutdown.notified() => {
+                info!(plan_id = %plan_id, "director shutdown notified; exiting");
+                return Ok(());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -85,7 +85,8 @@ impl Default for ReviewerConfig {
 
 /// Knob bag for the Director agent. Director Phase 1 (long-lived per-Plan
 /// supervisor running on Opus) reads `poll_interval_secs`,
-/// `idle_interval_secs`, `max_restarts`, `model`, and `token_budget`.
+/// `idle_interval_secs`, `max_restarts`, `max_requeries`,
+/// `max_parse_failures`, `model`, and `token_budget`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct DirectorConfig {
@@ -95,6 +96,17 @@ pub struct DirectorConfig {
     pub idle_interval_secs: u64,
     /// Max restarts on transient failure.
     pub max_restarts: u32,
+    /// Maximum LLM re-prompts within the parse-retry sub-loop for a
+    /// single iteration. Mirrors `ImplementerConfig.max_requeries`.
+    /// Strict-greater-than check: the first call is "free"; the (N+1)th
+    /// parse failure within one iteration triggers a `record_parse_failure`
+    /// strike from the lifeguard.
+    pub max_requeries: u32,
+    /// Consecutive full-iteration parse failures before the lifeguard
+    /// escalates. Mirrors `ImplementerConfig.max_parse_failures`. A
+    /// strike fires only when every requery within an iteration also
+    /// fails.
+    pub max_parse_failures: u32,
     /// Anthropic model for Director calls.
     pub model: String,
     /// Token budget per LLM call (system + history + state summary).
@@ -107,6 +119,8 @@ impl Default for DirectorConfig {
             poll_interval_secs: 5,
             idle_interval_secs: 15,
             max_restarts: 3,
+            max_requeries: 3,
+            max_parse_failures: 3,
             model: "claude-opus-4-7".to_string(),
             token_budget: 100_000,
         }
