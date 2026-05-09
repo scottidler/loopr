@@ -34,15 +34,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use domain::{BundleStatus, Role, WorkStatus};
+use agents::{DirectorDeps, DirectorError, run_director};
+use domain::{BundleStatus, PlanStatus, WorkStatus};
 use llm::LlmClient;
 use store::Store;
 
-use domain::PlanStatus;
-
-use crate::daemon::context::{
-    DaemonContext, block_dependent_siblings, promote_unblocked_siblings, transition_and_persist_bundle,
-};
+use crate::daemon::context::{DaemonContext, DaemonSpawner, block_dependent_siblings, promote_unblocked_siblings};
 use crate::error::LooprError;
 
 /// Summary of one reconcile pass, returned so the daemon can log it and
@@ -105,6 +102,11 @@ where
     // the gap where a dep went Done before a crash and left its
     // dependents stranded in Pending forever.
     sweep_dep_promotions(ctx).await;
+
+    // Director Phase 3 wiring: respawn a Director task for every
+    // non-terminal Plan so a daemon restart resumes per-Plan supervision
+    // without manual intervention.
+    startup_reconcile_directors(ctx).await;
 
     tracing::info!(
         cleaned = report.cleaned,
@@ -279,28 +281,17 @@ where
                 report.reviewers_requeued += 1;
             }
             BundleStatus::Reviewed => {
-                // Reactor transitions Reviewed -> Accepted in place so
-                // the Integrator's pre-flight accepts the Bundle.
-                let mut b = bundle.clone();
-                if let Err(e) =
-                    transition_and_persist_bundle(&*ctx.summary_fanout, &mut b, BundleStatus::Accepted, Role::Reactor)
-                        .await
-                {
-                    tracing::warn!(
-                        bundle_id = %bundle.id,
-                        error = %e,
-                        "sweep_bundles: Reviewed -> Accepted transition failed; skipping"
-                    );
-                    continue;
-                }
-                let integrator_ctx = Arc::clone(ctx);
-                let mut its = ctx.integrator_tasks.lock().await;
-                its.spawn(integrator_ctx.spawn_integrator_for_bundle(b));
+                // Director Phase 3: Reviewed bundles wait for the
+                // per-Plan Director to emit `accept_bundle`. The startup
+                // hook below (`startup_reconcile_directors`) respawns
+                // a Director for every Active Plan, so a Bundle stranded
+                // at Reviewed across a daemon restart is picked up on the
+                // Director's first poll. The Stage 8 inline auto-accept
+                // is intentionally removed here.
                 tracing::info!(
                     bundle_id = %bundle.id,
-                    "sweep_bundles: Reviewed -> Accepted, requeued integrator"
+                    "sweep_bundles: Reviewed bundle awaiting Director acceptance"
                 );
-                report.integrators_requeued += 1;
             }
             BundleStatus::Accepted | BundleStatus::Integrating => {
                 let integrator_ctx = Arc::clone(ctx);
@@ -360,6 +351,53 @@ where
                 }
             }
         }
+    }
+}
+
+/// Director Phase 3 startup hook. Lists every Active Plan and spawns a
+/// `run_director` task into `ctx.director_tasks`. A daemon restart with an
+/// in-flight Plan resumes Director supervision without manual
+/// intervention. Best-effort: store errors are logged and skipped so a
+/// single bad Plan does not block boot.
+async fn startup_reconcile_directors<L>(ctx: &Arc<DaemonContext<L>>)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    let plans = match ctx.store.plans().list().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "startup_reconcile_directors: plans().list() failed; skipping");
+            return;
+        }
+    };
+    let active: Vec<_> = plans.into_iter().filter(|p| p.status == PlanStatus::Active).collect();
+    tracing::info!(
+        plan_count = active.len(),
+        "startup_reconcile_directors: scanning Active Plans"
+    );
+    for plan in active {
+        let plan_id = plan.id.clone();
+        let deps = DirectorDeps {
+            llm: Arc::clone(&ctx.llm),
+            store: Arc::clone(&ctx.store),
+            context: Arc::clone(&ctx.context_builder),
+            spawner: DaemonSpawner(Arc::clone(ctx)),
+            config: ctx.director_config.clone(),
+            shutdown: Arc::clone(&ctx.shutdown_notify),
+        };
+        let mut directors = ctx.director_tasks.lock().await;
+        let plan_id_for_log = plan_id.clone();
+        directors.spawn(async move {
+            match run_director(&plan_id, &deps).await {
+                Ok(()) => tracing::info!(plan_id = %plan_id_for_log, "director task exited Ok"),
+                Err(DirectorError::NeedHelp(reason)) => tracing::warn!(
+                    plan_id = %plan_id_for_log,
+                    reason = %reason,
+                    "director exited with NeedHelp"
+                ),
+                Err(e) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
+            }
+        });
     }
 }
 

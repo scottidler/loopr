@@ -1,13 +1,23 @@
-//! Stage 8 exit criterion: full Plan → Tick pipeline with stubbed LLMs
-//! on a real-git tempdir.
+//! Stage 9 / Director Phase 3 integration test: full Plan -> Tick pipeline
+//! with the per-Plan Director driving Bundle acceptance.
 //!
-//! Scripts a decomposer response (one Work), an implementer response
-//! (one `write` tool call + `propose_bundle` in one iteration), and a
-//! reviewer `Accept` verdict. Drives `plan.create` over the real IPC,
-//! polls the on-disk JSONL store for terminal state (Work.Done +
-//! Bundle.Merged + Tick row), and asserts. Races the poll against the
-//! daemon task so any panic inside a spawned agent task surfaces as a
-//! JoinError instead of a silent timeout.
+//! Differs from `stage_8_plan_to_tick.rs` only in framing: `stage_8`
+//! tests the deterministic Implementer -> Reviewer -> Director ->
+//! Integrator path; this file is the canonical Phase 3 deliverable
+//! called out in `docs/design/2026-05-08-director-phase-1.md` and
+//! pinned to that handoff. Asserts:
+//!
+//! 1. Director's `accept_bundle` action drives the Reviewed Bundle to
+//!    Accepted, and the Integrator runs to completion.
+//! 2. Director's reconcile sweep promotes Integrated -> Done.
+//! 3. Director's GoalComplete check exits the per-Plan task once every
+//!    Work is terminal with at least one Done (the Director task drains
+//!    cleanly at shutdown).
+//!
+//! Stubbed Anthropic; real `Store`. The Director's LLM responses are
+//! routed via the model-aware ScriptedLlm queue
+//! (`queue_free_for("claude-opus-4-7", ...)`); Implementer / Reviewer
+//! responses go through the default queue.
 
 mod common;
 
@@ -19,12 +29,11 @@ use tokio::time::sleep;
 
 use domain::{Bundle, BundleStatus, PlanId, Tick, Work, WorkStatus};
 use ipc::{MethodName, PROTOCOL_VERSION, PlanCreateResult};
-use llm::{ScriptedLlm, ToolCall};
+use llm::{LlmClient, LlmError, Message, MessageContent, MessageRole, ScriptedLlm, ToolCall, ToolSchema, Usage};
 use loopr::transport::IpcClient;
 
 use common::harness::{TestDaemon, spawn_test_daemon};
 
-/// Decomposer tool call: one Work, top-level VERSION.md, no deps.
 fn decomposer_response() -> ToolCall {
     ToolCall {
         tool_name: "submit_decomposition".to_string(),
@@ -41,38 +50,25 @@ fn decomposer_response() -> ToolCall {
     }
 }
 
-/// Implementer ralph-loop response: write VERSION.md then propose_bundle
-/// in a single iteration. The dispatcher's `propose_bundle` auto-stages
-/// and commits the write before returning BundleCreated.
 const IMPLEMENTER_RESPONSE: &str = r#"[
   {"type":"run_tool","tool":"write","input":{"path":"VERSION.md","content":"v1\n"}},
   {"type":"propose_bundle","claims":["added VERSION.md"]}
 ]"#;
 
-/// Reviewer verdict: Accept with a one-line summary.
 const REVIEWER_RESPONSE: &str = r#"{"kind":"accept","summary":"VERSION.md created at repo root"}"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn plan_to_tick_happy_path() {
+async fn director_plan_to_tick_happy_path() {
     let stub = ScriptedLlm::new();
     stub.queue_tool(Ok(decomposer_response()));
     stub.queue_free(Ok(IMPLEMENTER_RESPONSE.to_string()));
     stub.queue_free(Ok(REVIEWER_RESPONSE.to_string()));
 
-    // Director's per-Plan supervisor reads the assembled state summary,
-    // observes Bundle status, and emits `accept_bundle` when it sees a
-    // Reviewed Bundle. The Bundle id is unknown until the Implementer
-    // creates it at runtime, so we wrap the ScriptedLlm in a smart
-    // dispatcher that inspects the Director's prompt and emits the right
-    // action. Non-Director call sites (Implementer / Reviewer) pass
-    // through to the underlying ScriptedLlm queue.
-    let llm = Stage8DirectorAwareLlm::new(stub.clone());
-
+    let llm = DirectorAwareLlm::new(stub.clone());
     let probe = stub.clone();
     let mut daemon = spawn_test_daemon(llm).await.expect("spawn_test_daemon");
     let target = daemon.target().to_path_buf();
 
-    // Drive plan.create over real IPC.
     let mut client = IpcClient::connect(daemon.handle().socket_path())
         .await
         .expect("connect");
@@ -82,9 +78,7 @@ async fn plan_to_tick_happy_path() {
     let (resp, _events) = client
         .request(
             MethodName::PlanCreate,
-            json!({
-                "goal": "Add a VERSION.md file to the repo root"
-            }),
+            json!({"goal": "Add a VERSION.md file to the repo root"}),
         )
         .await
         .expect("plan.create request");
@@ -92,53 +86,50 @@ async fn plan_to_tick_happy_path() {
     let plan_create_result: PlanCreateResult =
         serde_json::from_value(resp.result.expect("result")).expect("decode PlanCreateResult");
     let plan_id = plan_create_result.plan.id.clone();
-
     drop(client);
 
-    // Race three futures: success, fast-fail on Blocked, daemon task panic.
     let deadline = Duration::from_secs(20);
     let success = wait_for_tick(&target, &plan_id, deadline);
     tokio::select! {
         r = success => r.expect("pipeline reached terminal success before deadline"),
         join = daemon.task_mut() => {
             let err_msg = match join {
-                Ok(Ok(_)) => "daemon returned Ok(Ok(_)) before the test asserted".to_string(),
-                Ok(Err(e)) => format!("daemon returned LooprError: {e}"),
-                Err(join_err) => format!("daemon task join error (panic?): {join_err}"),
+                Ok(Ok(_)) => "daemon returned Ok before assertion".to_string(),
+                Ok(Err(e)) => format!("daemon LooprError: {e}"),
+                Err(j) => format!("daemon join error: {j}"),
             };
             panic!("daemon task completed early: {err_msg}");
         }
     }
 
-    // Final snapshot assertions.
     let works = load_works(&target, &plan_id);
-    assert_eq!(works.len(), 1, "expected exactly one Work for the Plan");
-    assert_eq!(works[0].status, WorkStatus::Done);
+    assert_eq!(works.len(), 1);
+    assert_eq!(
+        works[0].status,
+        WorkStatus::Done,
+        "Director must promote Integrated -> Done"
+    );
 
     let bundles = load_bundles(&target, works[0].id.as_ref());
-    assert_eq!(bundles.len(), 1, "expected exactly one Bundle for the Work");
-    assert_eq!(bundles[0].status, BundleStatus::Merged);
+    assert_eq!(bundles.len(), 1);
+    assert_eq!(
+        bundles[0].status,
+        BundleStatus::Merged,
+        "Director's accept_bundle must drive Bundle to Merged via Integrator"
+    );
 
     let ticks = load_ticks(&target, &plan_id);
-    assert_eq!(ticks.len(), 1, "expected exactly one Tick for the Plan");
+    assert_eq!(ticks.len(), 1, "Integrator must produce exactly one Tick");
 
     daemon.shutdown().await.expect("shutdown");
 
-    // Scripted queue should be fully drained — 1 tool call + 2 free calls.
     assert!(
         probe.is_empty(),
-        "scripted responses left unused: {:?}",
+        "scripted (non-Director) responses left unused: {:?}",
         probe.remaining()
     );
 }
 
-/// Poll the on-disk JSONL store until we see either:
-/// - success: Work.status == Done AND >= 1 Tick row for the Plan
-/// - fast-fail: Work.status == Blocked (surface a pointer to the run log)
-/// - deadline: return error
-///
-/// Reads JSONL files directly — no second Store handle to avoid contending
-/// on the daemon's live AsyncStore.
 async fn wait_for_tick(target: &Path, plan_id: &PlanId, deadline: Duration) -> Result<(), String> {
     let start = Instant::now();
     while Instant::now().duration_since(start) < deadline {
@@ -152,10 +143,9 @@ async fn wait_for_tick(target: &Path, plan_id: &PlanId, deadline: Duration) -> R
                     }
                 }
                 WorkStatus::Blocked => {
-                    let runs = target.join(".loopr").join("runs");
                     return Err(format!(
-                        "Work reached Blocked; see {}/*/events.log for the reason",
-                        runs.display()
+                        "Work reached Blocked; see {}/.loopr/runs for the reason",
+                        target.display()
                     ));
                 }
                 _ => {}
@@ -190,9 +180,6 @@ fn load_ticks(target: &Path, plan_id: &PlanId) -> Vec<Tick> {
         .collect()
 }
 
-/// Read a JSONL file, parsing the LATEST snapshot per record. taskstore
-/// appends new snapshots of the same record as new lines, so the last
-/// entry for a given id wins. We just keep the last line for every id.
 fn read_jsonl<T: serde::de::DeserializeOwned + HasId>(path: &Path) -> Vec<T> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
@@ -214,54 +201,42 @@ fn read_jsonl<T: serde::de::DeserializeOwned + HasId>(path: &Path) -> Vec<T> {
 trait HasId {
     fn record_id(&self) -> String;
 }
-
 impl HasId for Work {
     fn record_id(&self) -> String {
         self.id.as_ref().to_string()
     }
 }
-
 impl HasId for Bundle {
     fn record_id(&self) -> String {
         self.id.as_ref().to_string()
     }
 }
-
 impl HasId for Tick {
     fn record_id(&self) -> String {
         self.id.as_ref().to_string()
     }
 }
 
-// Keep TestDaemon type visible so task_mut's lifetime annotations compile.
 #[allow(dead_code)]
-fn _type_sink(_: &TestDaemon<Stage8DirectorAwareLlm>) {}
+fn _type_sink(_: &TestDaemon<DirectorAwareLlm>) {}
 
 // ---------------------------------------------------------------------------
-// Stage8DirectorAwareLlm: smart wrapper that routes Director responses by
-// inspecting the prompt's Bundle table for a Reviewed entry.
+// DirectorAwareLlm: smart wrapper that watches the Director's prompts for
+// a Reviewed Bundle and emits `accept_bundle` for that id. All other call
+// sites pass through to the underlying ScriptedLlm.
 // ---------------------------------------------------------------------------
 
-use llm::{LlmClient, LlmError, Message, MessageContent, MessageRole, ToolSchema, Usage};
-
-/// Wraps a `ScriptedLlm` so that Director-routed `complete_free` calls
-/// (model = `Some("claude-opus-4-7")`) emit `accept_bundle` once the
-/// prompt's Bundle table contains a `Reviewed` row, and `done` otherwise.
-/// Implementer / Reviewer / decomposer calls forward to the inner stub.
 #[derive(Clone)]
-struct Stage8DirectorAwareLlm {
+struct DirectorAwareLlm {
     inner: ScriptedLlm,
 }
 
-impl Stage8DirectorAwareLlm {
+impl DirectorAwareLlm {
     fn new(inner: ScriptedLlm) -> Self {
         Self { inner }
     }
 }
 
-/// Pull the first Reviewed Bundle id out of the Director's user prompt.
-/// The Director's `user.pmt` renders one line per Bundle (`id, work_id,
-/// status`); we grep for `Reviewed` and the colocated `bd-…` token.
 fn extract_reviewed_bundle_id(text: &str) -> Option<String> {
     for line in text.lines() {
         if !line.contains("Reviewed") {
@@ -276,7 +251,7 @@ fn extract_reviewed_bundle_id(text: &str) -> Option<String> {
     None
 }
 
-impl LlmClient for Stage8DirectorAwareLlm {
+impl LlmClient for DirectorAwareLlm {
     async fn complete_with_tool(
         &self,
         system: &str,
@@ -294,7 +269,6 @@ impl LlmClient for Stage8DirectorAwareLlm {
         model: Option<&str>,
     ) -> Result<(String, Usage), LlmError> {
         if model == Some("claude-opus-4-7") {
-            // Inspect the most recent user turn for a Reviewed bundle id.
             let last_user = messages.iter().rev().find(|m| matches!(m.role, MessageRole::User));
             let user_text = last_user
                 .and_then(|m| {

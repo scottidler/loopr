@@ -118,6 +118,40 @@ pub trait DirectorStore: Send + Sync + 'static {
     async fn list_bundles_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError>;
 }
 
+/// `DirectorStore` impl on `store::Store`. `list_bundles_for_plan` walks
+/// the Plan's Works and unions their `list_by_work_id` queries — per the
+/// design doc, the in-memory join is acceptable for first-gate Plan sizes
+/// (single-digit Works per Plan, low-double-digit Bundles per Work).
+impl DirectorStore for store::Store {
+    async fn list_works_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Work>, StoreError> {
+        self.works().list_by_parent_id(plan_id).await
+    }
+
+    async fn list_bundles_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError> {
+        let works = self.works().list_by_parent_id(plan_id).await?;
+        let mut bundles = Vec::new();
+        for work in &works {
+            let chunk = self.bundles().list_by_work_id(&work.id).await?;
+            bundles.extend(chunk);
+        }
+        Ok(bundles)
+    }
+}
+
+/// Forwarding `DirectorStore` impl for `Arc<S>`. Mirrors the pattern used
+/// by `BundleSink` in this crate. (No `&S` forwarding impl: `DirectorStore`
+/// requires `'static` ownership for `tokio::spawn` of the per-Plan task,
+/// and a borrowed reference cannot satisfy that bound.)
+impl<S: DirectorStore + ?Sized> DirectorStore for Arc<S> {
+    async fn list_works_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Work>, StoreError> {
+        (**self).list_works_for_plan(plan_id).await
+    }
+
+    async fn list_bundles_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError> {
+        (**self).list_bundles_for_plan(plan_id).await
+    }
+}
+
 /// Dependencies injected into `run_director`. Mirrors the Implementer's
 /// `Deps<L, T, S, C>` pattern: one generic flows through the function
 /// signature; concrete trait bounds live here.

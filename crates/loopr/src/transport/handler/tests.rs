@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use agents::{ImplementerConfig, ReviewerConfig};
+use agents::{DirectorConfig, ImplementerConfig, ReviewerConfig};
 use context::InlineContextBuilder;
 use ipc::{
     DaemonRequest, HandshakeParams, HandshakeResult, PROTOCOL_VERSION, PlanCreateResult, RecordKind, RecordListParams,
@@ -60,6 +60,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
         ImplementerConfig::default(),
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
+        DirectorConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
     ));

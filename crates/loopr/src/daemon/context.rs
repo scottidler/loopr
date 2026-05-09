@@ -17,11 +17,15 @@ use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use agents::{
-    Deps, ImplementerConfig, ImplementerError, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError, run_implementer,
-    run_reviewer,
+    Deps, DirectorConfig, ImplementerConfig, ImplementerError, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError,
+    WorkSpawner, run_implementer, run_reviewer,
 };
 use context::{InlineContextBuilder, StateSummary};
-use domain::{Bundle, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
+// Stage 8 used to consume `BundleUpdateError` here; Director Phase 3
+// shifts that match into the `WorkSpawner::accept_bundle` path which
+// matches `StoreError::Stale` directly. The import is kept available for
+// callers/sinks even though it's no longer named in this module.
 use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use ipc::DaemonEvent;
 use llm::LlmClient;
@@ -140,6 +144,10 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// Configuration for the Integrator (git_timeout, allow_multi_bundle).
     /// Cloned per Bundle-integration.
     pub integrator_config: IntegratorConfig,
+    /// Configuration for the Director per-Plan supervisor (poll/idle
+    /// intervals, restart cap, parse-failure cap, model, token budget).
+    /// Cloned per Plan when `handle_plan_create` spawns the Director.
+    pub director_config: DirectorConfig,
     /// Intra-daemon working-tree serializer. Shared into every
     /// `IntegratorDeps` so two concurrent `integrate` calls on the same
     /// target do not race on `git checkout` / `git merge`. First gate:
@@ -165,6 +173,12 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// shutdown so in-flight Reviewers with an Accept verdict can
     /// enqueue their Integrator before the Integrator drain begins.
     pub integrator_tasks: Mutex<JoinSet<()>>,
+    /// In-flight Director tasks (one per active Plan). Drained AFTER
+    /// `integrator_tasks` at shutdown so a Director that triggers a
+    /// final Integrator can finish before the Director itself winds
+    /// down. Spawned by `handle_plan_create` and (after a daemon
+    /// restart) `startup_reconcile_directors`.
+    pub director_tasks: Mutex<JoinSet<()>>,
     /// Per-process counter snapshot. Held in a `std::sync::Mutex`
     /// because every emitter is short, non-async, and the value is
     /// shared with the panic hook and SIGQUIT handler (both of which
@@ -200,6 +214,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         implementer_config: ImplementerConfig,
         reviewer_config: ReviewerConfig,
         integrator_config: IntegratorConfig,
+        director_config: DirectorConfig,
         worktree_cleanup_policy: AttemptCleanupPolicy,
         snapshot: Arc<StdMutex<ProcessSnapshot>>,
     ) -> Self {
@@ -231,11 +246,13 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             implementer_config,
             reviewer_config,
             integrator_config,
+            director_config,
             git_lock: Arc::new(Mutex::new(())),
             worktree_cleanup_policy,
             implementer_tasks: Mutex::new(JoinSet::new()),
             reviewer_tasks: Mutex::new(JoinSet::new()),
             integrator_tasks: Mutex::new(JoinSet::new()),
+            director_tasks: Mutex::new(JoinSet::new()),
             snapshot,
         }
     }
@@ -550,34 +567,18 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         // Step 6: route Verdict.
         match verdict {
             Verdict::Accept { summary } => {
-                info!(summary = %summary, "reviewer accepted bundle");
-                // Re-read Bundle: run_reviewer transitioned it to Reviewed
-                // internally (via OCC on a clone) so our local copy is
-                // stale. Fresh read gives us the new updated_at snapshot.
-                let mut reviewed_bundle = match self.store.bundles().get(&bundle.id).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        error!(error = %e, "bundle re-read after Accept failed");
-                        return;
-                    }
-                };
-                let expected = reviewed_bundle.updated_at;
-                if let Err(e) = reviewed_bundle.transition(BundleStatus::Accepted, Role::Reactor) {
-                    error!(error = %e, "Reviewed -> Accepted transition rejected by FSM");
-                    return;
-                }
-                if let Err(e) = self.store.bundles().update(reviewed_bundle.clone(), expected).await {
-                    warn!(error = %e, "Reviewed -> Accepted OCC update failed");
-                    return;
-                }
-                // Stage 8 Phase 3 handoff: spawn Integrator task for the
-                // Accepted Bundle. Shutdown-guard so a signal arriving here
-                // does not spawn a task that will never drain.
-                if !self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
-                    let integrator_ctx = Arc::clone(&self);
-                    let mut its = self.integrator_tasks.lock().await;
-                    its.spawn(integrator_ctx.spawn_integrator_for_bundle(reviewed_bundle));
-                }
+                // Director Phase 3 handoff: the Bundle is now `Reviewed` and
+                // stays there. Director's poll loop sees it, emits
+                // `accept_bundle`, and `WorkSpawner::accept_bundle` fires
+                // `Reviewed -> Accepted` + spawns Integrator. Stage 8's
+                // inline auto-accept and Integrator spawn are intentionally
+                // removed here (see docs/design/2026-05-08-director-phase-1.md
+                // "Stage 8 Handoff: Bundle Acceptance").
+                info!(
+                    bundle_id = %bundle.id,
+                    summary = %summary,
+                    "reviewer accepted bundle; Bundle remains Reviewed for Director acceptance"
+                );
             }
             Verdict::ChangeRequested { summary, reasons } => {
                 warn!(summary = %summary, reason_count = reasons.len(), "reviewer requested changes; Work -> Blocked");
@@ -976,33 +977,6 @@ where
         .map_err(|e| format!("works().update: {e}"))
 }
 
-/// Mirror of `transition_and_persist_work` for `Bundle` records.
-/// Uses the OCC-aware `BundlesStore::update` with the pre-transition
-/// `updated_at` as `expected_updated_at`. Consumed by
-/// `sweep_bundles` to transition `Reviewed -> Accepted` during
-/// crash-recovery (the Reviewer already fired that transition on the
-/// happy path, so this helper exists for the reconcile path only).
-pub(crate) async fn transition_and_persist_bundle<S>(
-    sink: &S,
-    bundle: &mut Bundle,
-    target: BundleStatus,
-    role: Role,
-) -> Result<(), String>
-where
-    S: store::BundleUpdateSink,
-{
-    let expected = bundle.updated_at;
-    let result = bundle
-        .transition(target, role)
-        .map_err(|e| format!("fsm transition rejected: {e}"))?;
-    if result == domain::Transition::Unchanged {
-        return Ok(());
-    }
-    sink.update(bundle.clone(), expected)
-        .await
-        .map_err(|e| format!("bundles().update: {e}"))
-}
-
 /// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
 /// the Integrator spawn's `Active -> Complete` check once every sibling
 /// Work is terminal.
@@ -1030,4 +1004,180 @@ where
     sink.update(plan.clone(), children)
         .await
         .map_err(|e| format!("plans().update: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// WorkSpawner: Director's fire-and-forget surface into the daemon.
+// ---------------------------------------------------------------------------
+
+/// Thin wrapper around `Arc<DaemonContext<L>>` so `WorkSpawner` (defined
+/// in `agents`) can be implemented for a local type. Rust's orphan rule
+/// forbids `impl WorkSpawner for Arc<DaemonContext<L>>` directly because
+/// neither `WorkSpawner` nor `Arc` is local to this crate. The newtype
+/// is local; `WorkSpawner` becomes a one-line forwarding impl.
+pub struct DaemonSpawner<L: LlmClient + Send + Sync + 'static>(pub Arc<DaemonContext<L>>);
+
+impl<L: LlmClient + Send + Sync + 'static> Clone for DaemonSpawner<L> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+/// `WorkSpawner` impl on `DaemonSpawner<L>`. Each method clones the inner
+/// Arc and spawns a tokio task into the relevant `*_tasks` JoinSet so
+/// the daemon's drain ordering still applies.
+///
+/// Stage 8 used to fire `Reviewed -> Accepted` + spawn Integrator inline
+/// from `spawn_reviewer_for_bundle`; Phase 3 hands that decision to the
+/// Director. `accept_bundle` is the resulting code path.
+impl<L> WorkSpawner for DaemonSpawner<L>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    fn accept_bundle(&self, bundle_id: BundleId) {
+        let ctx = Arc::clone(&self.0);
+        tokio::spawn(async move {
+            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                debug!(bundle_id = %bundle_id, "shutdown in progress; skipping accept_bundle");
+                return;
+            }
+            // Re-read Bundle: the Director's loop snapshot is stale by
+            // the time the action lands here.
+            let mut bundle = match ctx.store.bundles().get(&bundle_id).await {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: bundle lookup failed");
+                    return;
+                }
+            };
+            // Idempotent: a Director restart after a clear-history can
+            // re-emit `accept_bundle` for a Bundle already at Accepted.
+            // No-op silently on already-Accepted; warn on anything else.
+            match bundle.status {
+                BundleStatus::Accepted => {
+                    debug!(bundle_id = %bundle_id, "accept_bundle: already Accepted; no-op");
+                    return;
+                }
+                BundleStatus::Reviewed => {}
+                other => {
+                    warn!(
+                        bundle_id = %bundle_id,
+                        status = ?other,
+                        "accept_bundle: unexpected status; skipping"
+                    );
+                    return;
+                }
+            }
+            let expected = bundle.updated_at;
+            if let Err(e) = bundle.transition(BundleStatus::Accepted, Role::Director) {
+                warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
+                return;
+            }
+            if let Err(e) = ctx.store.bundles().update(bundle.clone(), expected).await {
+                // Stale OCC errors are expected when the daemon's reconcile
+                // sweep races the Director; swallow and continue.
+                if let store::StoreError::Stale { .. } = e {
+                    debug!(bundle_id = %bundle_id, "accept_bundle: OCC Stale; another writer beat us");
+                    return;
+                }
+                warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
+                return;
+            }
+            // Spawn Integrator into the existing pool so the drain order
+            // still applies.
+            let integrator_ctx = Arc::clone(&ctx);
+            let mut its = ctx.integrator_tasks.lock().await;
+            its.spawn(integrator_ctx.spawn_integrator_for_bundle(bundle));
+        });
+    }
+
+    fn override_work(&self, work_id: WorkId, target_status: WorkStatus, reason: String) {
+        let ctx = Arc::clone(&self.0);
+        tokio::spawn(async move {
+            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                debug!(work_id = %work_id, "shutdown in progress; skipping override_work");
+                return;
+            }
+            let mut work = match ctx.store.works().get(&work_id).await {
+                Ok(w) => w,
+                Err(e) => {
+                    warn!(error = %e, work_id = %work_id, "override_work: work lookup failed");
+                    return;
+                }
+            };
+            // FSM is the source of truth for what's permitted; the impl
+            // logs the reason so an operator scrolling logs sees why the
+            // Director moved the Work.
+            info!(
+                work_id = %work_id,
+                from = ?work.status,
+                to = ?target_status,
+                reason = %reason,
+                "override_work: applying Director-issued FSM override"
+            );
+            if let Err(e) = transition_and_persist_work(
+                &*ctx.summary_fanout,
+                &mut work,
+                target_status,
+                Role::Director,
+                true, // override
+            )
+            .await
+            {
+                warn!(error = %e, work_id = %work_id, "override_work: persist failed");
+            }
+            // If the override pushed the Work to Ready, kick the Implementer
+            // pipeline. The Director's primary recovery path is
+            // `Blocked -> Ready` to retry a previously-rejected Bundle;
+            // without this spawn, the Work would sit Ready forever until
+            // a sibling completion triggered `promote_unblocked_siblings`.
+            if work.status == WorkStatus::Ready && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                let task_ctx = Arc::clone(&ctx);
+                let mut tasks = ctx.implementer_tasks.lock().await;
+                tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+            }
+        });
+    }
+
+    fn assign_work(&self, work_id: WorkId) {
+        let ctx = Arc::clone(&self.0);
+        tokio::spawn(async move {
+            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                debug!(work_id = %work_id, "shutdown in progress; skipping assign_work");
+                return;
+            }
+            let work = match ctx.store.works().get(&work_id).await {
+                Ok(w) => w,
+                Err(e) => {
+                    warn!(error = %e, work_id = %work_id, "assign_work: work lookup failed");
+                    return;
+                }
+            };
+            // Dep-gate: re-read siblings and confirm every dep is Done.
+            // Director may emit `assign_work` for a Work whose deps are
+            // not yet complete; the contract is to silently no-op rather
+            // than spawn a doomed Implementer.
+            let siblings = match ctx.store.works().list_by_parent_id(&work.parent_id).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, work_id = %work_id, "assign_work: sibling list failed");
+                    return;
+                }
+            };
+            if !work.all_deps_done(&siblings) {
+                warn!(work_id = %work_id, "assign_work: deps not all Done; ignoring");
+                return;
+            }
+            // Only Pending or Ready Works are eligible; everything else
+            // means the dep-gate reactive path or Director already moved
+            // on. No-op without churning the FSM.
+            if !matches!(work.status, WorkStatus::Pending | WorkStatus::Ready) {
+                debug!(work_id = %work_id, status = ?work.status, "assign_work: not eligible; skipping");
+                return;
+            }
+            let task_ctx = Arc::clone(&ctx);
+            let mut tasks = ctx.implementer_tasks.lock().await;
+            tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+        });
+    }
 }

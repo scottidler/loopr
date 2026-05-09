@@ -78,6 +78,12 @@ pub const REVIEWER_DRAIN_TIMEOUT_SECS: u64 = 30;
 /// an expected wait.
 pub const INTEGRATOR_DRAIN_TIMEOUT_SECS: u64 = 15;
 
+/// Soft timeout for draining in-flight Director tasks at shutdown.
+/// Director makes Opus LLM calls; budget is sized to allow a single
+/// in-flight Opus completion to return cleanly. Sleep is interruptible
+/// via `shutdown_notify` so an idle/poll wait never burns this budget.
+pub const DIRECTOR_DRAIN_TIMEOUT_SECS: u64 = 30;
+
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
@@ -147,6 +153,36 @@ async fn drain_integrator_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<
             timeout_secs = INTEGRATOR_DRAIN_TIMEOUT_SECS,
             remaining = tasks.len(),
             "integrator task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Drain `ctx.director_tasks` with `DIRECTOR_DRAIN_TIMEOUT_SECS` budget.
+/// Runs AFTER `drain_integrator_tasks` so a Director that just dispatched
+/// a final `accept_bundle` (which spawns into the Integrator pool) lets
+/// the Integrator land before the Director itself winds down. The
+/// Director's sleep is `tokio::select!` against `shutdown_notify`, so
+/// this drain typically completes in milliseconds — the timeout is a
+/// ceiling for the case where a Director is mid-Opus call when shutdown
+/// fires.
+async fn drain_director_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
+    let mut tasks = ctx.director_tasks.lock().await;
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len();
+    tracing::info!(count = n, "draining director tasks");
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(DIRECTOR_DRAIN_TIMEOUT_SECS), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_secs = DIRECTOR_DRAIN_TIMEOUT_SECS,
+            remaining = tasks.len(),
+            "director task drain timed out; aborting remainder"
         );
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
@@ -489,8 +525,9 @@ where
         LooprError::DaemonStartup(format!("prompt loader construction failed for target {target:?}: {e}"))
     })?);
     let context_builder = Arc::new(::context::InlineContextBuilder::with_loader(prompt_loader));
-    let implementer_config = ::agents::ImplementerConfig::default();
-    let reviewer_config = ::agents::ReviewerConfig::default();
+    let implementer_config = config.agents.implementer.clone();
+    let reviewer_config = config.agents.reviewer.clone();
+    let director_config = config.agents.director.clone();
     let integrator_config = config.integrator.into_integrator_config();
     let worktree_cleanup_policy = config.worktree.cleanup_policy;
 
@@ -510,6 +547,7 @@ where
         implementer_config,
         reviewer_config,
         integrator_config,
+        director_config,
         worktree_cleanup_policy,
         snapshot,
     ));
@@ -621,6 +659,12 @@ where
     // in-flight Reviewer with an Accept verdict can enqueue its
     // Integrator before the pool drains.
     drain_integrator_tasks(&ctx).await;
+
+    // Director Phase 3 wiring: drain Director tasks AFTER Integrator so
+    // a Director that fired `accept_bundle` (which spawns into
+    // integrator_tasks) lets that Integrator land before the Director
+    // itself winds down.
+    drain_director_tasks(&ctx).await;
 
     // Phase 7: write the per-process digest after the task pools
     // drain and before the caller's `Arc::try_unwrap`. Best-effort:

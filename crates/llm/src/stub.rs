@@ -8,7 +8,7 @@
 //! can clone the stub BEFORE handing it to a daemon or agent and retain a
 //! probe for post-run assertions (e.g. assert the queue was fully drained).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use crate::client::LlmClient;
@@ -17,10 +17,21 @@ use crate::message::Message;
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
+/// Per-model free-response queues. The key `None` is the default route
+/// for callers that pass `model: None` to `complete_free` (Implementer,
+/// Reviewer, Decomposer); `Some("claude-opus-4-7")` etc. routes the
+/// Director's per-model overrides to a separate queue. Tool-call routing
+/// follows the same shape.
+type ModelKey = Option<String>;
+type ToolQueue = VecDeque<Result<ToolCall, LlmError>>;
+type FreeQueue = VecDeque<Result<String, LlmError>>;
+type ToolMap = HashMap<ModelKey, ToolQueue>;
+type FreeMap = HashMap<ModelKey, FreeQueue>;
+
 #[derive(Clone, Default)]
 pub struct ScriptedLlm {
-    tool_responses: Arc<Mutex<VecDeque<Result<ToolCall, LlmError>>>>,
-    free_responses: Arc<Mutex<VecDeque<Result<String, LlmError>>>>,
+    tool_responses: Arc<Mutex<ToolMap>>,
+    free_responses: Arc<Mutex<FreeMap>>,
 }
 
 impl ScriptedLlm {
@@ -28,17 +39,43 @@ impl ScriptedLlm {
         Self::default()
     }
 
+    /// Queue a tool response on the default route (model=None). Existing
+    /// callers preserved without change.
     pub fn queue_tool(&self, result: Result<ToolCall, LlmError>) {
+        self.queue_tool_inner(None, result);
+    }
+
+    /// Queue a tool response routed to a specific model.
+    pub fn queue_tool_for(&self, model: &str, result: Result<ToolCall, LlmError>) {
+        self.queue_tool_inner(Some(model.to_string()), result);
+    }
+
+    fn queue_tool_inner(&self, key: ModelKey, result: Result<ToolCall, LlmError>) {
         self.tool_responses
             .lock()
             .expect("tool_responses lock")
+            .entry(key)
+            .or_default()
             .push_back(result);
     }
 
+    /// Queue a free-form response on the default route (model=None).
     pub fn queue_free(&self, result: Result<String, LlmError>) {
+        self.queue_free_inner(None, result);
+    }
+
+    /// Queue a free-form response routed to a specific model. Director
+    /// responses use `queue_free_for("claude-opus-4-7", ...)`.
+    pub fn queue_free_for(&self, model: &str, result: Result<String, LlmError>) {
+        self.queue_free_inner(Some(model.to_string()), result);
+    }
+
+    fn queue_free_inner(&self, key: ModelKey, result: Result<String, LlmError>) {
         self.free_responses
             .lock()
             .expect("free_responses lock")
+            .entry(key)
+            .or_default()
             .push_back(result);
     }
 
@@ -48,8 +85,20 @@ impl ScriptedLlm {
     }
 
     pub fn remaining(&self) -> (usize, usize) {
-        let t = self.tool_responses.lock().expect("tool_responses lock").len();
-        let f = self.free_responses.lock().expect("free_responses lock").len();
+        let t: usize = self
+            .tool_responses
+            .lock()
+            .expect("tool_responses lock")
+            .values()
+            .map(|q| q.len())
+            .sum();
+        let f: usize = self
+            .free_responses
+            .lock()
+            .expect("free_responses lock")
+            .values()
+            .map(|q| q.len())
+            .sum();
         (t, f)
     }
 }
@@ -60,16 +109,20 @@ impl LlmClient for ScriptedLlm {
         _system: &str,
         _user: &str,
         _tool: ToolSchema,
-        _model: Option<&str>,
+        model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
-        let popped = self.tool_responses.lock().expect("tool_responses lock").pop_front();
+        let key: ModelKey = model.map(|m| m.to_string());
+        let popped = {
+            let mut map = self.tool_responses.lock().expect("tool_responses lock");
+            map.get_mut(&key).and_then(|q| q.pop_front())
+        };
         match popped {
             Some(Ok(tc)) => Ok((tc, Usage::default())),
             Some(Err(e)) => Err(e),
             None => {
                 let (t, f) = self.remaining();
                 panic!(
-                    "ScriptedLlm: complete_with_tool called with empty queue (tool remaining: {t}, free remaining: {f})"
+                    "ScriptedLlm: complete_with_tool called with empty queue for model={model:?} (tool remaining: {t}, free remaining: {f})"
                 );
             }
         }
@@ -79,15 +132,21 @@ impl LlmClient for ScriptedLlm {
         &self,
         _system: &str,
         _messages: &[Message],
-        _model: Option<&str>,
+        model: Option<&str>,
     ) -> Result<(String, Usage), LlmError> {
-        let popped = self.free_responses.lock().expect("free_responses lock").pop_front();
+        let key: ModelKey = model.map(|m| m.to_string());
+        let popped = {
+            let mut map = self.free_responses.lock().expect("free_responses lock");
+            map.get_mut(&key).and_then(|q| q.pop_front())
+        };
         match popped {
             Some(Ok(s)) => Ok((s, Usage::default())),
             Some(Err(e)) => Err(e),
             None => {
                 let (t, f) = self.remaining();
-                panic!("ScriptedLlm: complete_free called with empty queue (tool remaining: {t}, free remaining: {f})");
+                panic!(
+                    "ScriptedLlm: complete_free called with empty queue for model={model:?} (tool remaining: {t}, free remaining: {f})"
+                );
             }
         }
     }

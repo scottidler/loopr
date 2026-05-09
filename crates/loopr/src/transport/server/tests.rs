@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 use tokio::time::timeout;
 use tokio_util::codec::{Framed, LinesCodec};
 
-use agents::{ImplementerConfig, ReviewerConfig};
+use agents::{DirectorConfig, ImplementerConfig, ReviewerConfig};
 use context::InlineContextBuilder;
 use ipc::{DaemonRequest, DaemonResponse, HandshakeParams, PROTOCOL_VERSION};
 use llm::{AnthropicClient, LlmConfig};
@@ -53,6 +53,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
         ImplementerConfig::default(),
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
+        DirectorConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
     ))

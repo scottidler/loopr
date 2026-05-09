@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use tracing::{info, instrument, warn};
 
+use agents::{DirectorDeps, DirectorError, run_director};
 use ipc::{
     BundleSummary, DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION,
     PlanCreateParams, PlanCreateResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult,
@@ -17,6 +18,7 @@ use ipc::{
 use llm::LlmClient;
 use store::StoreError;
 
+use crate::daemon::context::DaemonSpawner;
 use crate::daemon::{DAEMON_VERSION, DaemonContext};
 
 /// Per-connection handshake state. Every new connection starts `Pending`;
@@ -208,6 +210,8 @@ where
                         let task_ctx = Arc::clone(ctx);
                         tasks.spawn(task_ctx.spawn_implementer_for_work(work.clone()));
                     }
+                    drop(tasks);
+                    spawn_director_for_plan(ctx, plan_snapshot.id.clone()).await;
                 }
                 Err(e) => warn!(
                     request_id = id,
@@ -364,6 +368,43 @@ fn map_store_error(err: StoreError) -> RpcError {
             "duplicate tick: existing tick_id={tick_id} for plan_id={plan_id} with bundles={bundles:?}"
         )),
     }
+}
+
+/// Spawn a Director task into `ctx.director_tasks` for the given Plan.
+/// Director Phase 3 wiring: every newly-created Plan gets a per-Plan
+/// Director task that polls TaskStore, accepts Reviewed Bundles, and
+/// recovers Blocked Works. Errors at task-exit emit `error!`; the
+/// Director's restart logic and lifeguard handle recoverable failures
+/// in-task.
+async fn spawn_director_for_plan<L>(ctx: &Arc<DaemonContext<L>>, plan_id: domain::PlanId)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+        warn!(plan_id = %plan_id, "shutdown in progress; skipping Director spawn");
+        return;
+    }
+    let deps = DirectorDeps {
+        llm: Arc::clone(&ctx.llm),
+        store: Arc::clone(&ctx.store),
+        context: Arc::clone(&ctx.context_builder),
+        spawner: DaemonSpawner(Arc::clone(ctx)),
+        config: ctx.director_config.clone(),
+        shutdown: Arc::clone(&ctx.shutdown_notify),
+    };
+    let mut directors = ctx.director_tasks.lock().await;
+    let plan_id_for_log = plan_id.clone();
+    directors.spawn(async move {
+        match run_director(&plan_id, &deps).await {
+            Ok(()) => info!(plan_id = %plan_id_for_log, "director task exited Ok"),
+            Err(DirectorError::NeedHelp(reason)) => warn!(
+                plan_id = %plan_id_for_log,
+                reason = %reason,
+                "director exited with NeedHelp"
+            ),
+            Err(e) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
+        }
+    });
 }
 
 #[cfg(test)]

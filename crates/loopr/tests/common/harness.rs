@@ -132,6 +132,12 @@ where
     // tests that want to exercise sandbox paths can build their own Config.
     let mut config = Config::default();
     config.tools.sandbox = SandboxMode::Off;
+    // Director polls every 5s by default and idles 15s - far too slow for
+    // tests. Both intervals are 0 so each tokio::time::sleep just yields,
+    // giving the Director a tight reactive loop on the test runtime.
+    // Production callers override via config.yml.
+    config.agents.director.poll_interval_secs = 0;
+    config.agents.director.idle_interval_secs = 0;
 
     // Tests boot with a clean target, so the corruption gate is a no-op
     // by default (no JSONL exists yet). Pass `false` to keep the

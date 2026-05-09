@@ -47,7 +47,7 @@ use crate::{FsmError, Role, Transition};
         Triaged     => Accepted          by (Reactor),
         Triaged     => Rejected          by (Reactor, Reviewer),
         Triaged     => Superseded        by (Reactor),
-        Reviewed    => Accepted          by (Reactor),
+        Reviewed    => Accepted          by (Reactor, Director),
         Reviewed    => Rejected          by (Reactor, Reviewer),
         Reviewed    => Superseded        by (Reactor),
         Accepted    => Integrating       by (Integrator),
