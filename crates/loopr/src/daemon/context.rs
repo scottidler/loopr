@@ -386,7 +386,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         let result = run_implementer(&work, &worktree, &deps).await;
         match result {
             Ok(bundle) => {
-                info!(bundle_id = %bundle.id, "implementer produced bundle");
+                // Phase 6: the canonical "implementer produced bundle" event
+                // is emitted from `agents::dispatch::propose_bundle` with
+                // the full paths/patch_id manifest. The daemon-context
+                // site is intentionally silent here to avoid a duplicate
+                // log line on a different target/span ancestry. See
+                // docs/design/2026-05-09-comprehensive-telemetry.md Phase 6.
                 // `Role::Implementer` as identifier: daemon fires the FSM
                 // transition on the Implementer's behalf once `run_implementer`
                 // returns Ok. The FSM's authored-edge table lists this as

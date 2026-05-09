@@ -14,7 +14,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tokio::process::Command;
-use tracing::{Span, debug, instrument, warn};
+use tracing::{Span, debug, info, instrument, warn};
 
 use domain::{Bundle, Work};
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
@@ -280,24 +280,72 @@ async fn propose_bundle(
             .unwrap_or_default()
     };
 
+    // Phase 6 manifest: classify the branch diff into added / modified
+    // / deleted, plus a stable patch_id capped at PATCH_ID_OVERSIZE_CAP.
+    let manifest = if worktree.sha().is_empty() {
+        NameStatusManifest {
+            added: Vec::new(),
+            modified: Vec::new(),
+            deleted: Vec::new(),
+        }
+    } else {
+        git_diff_name_status(worktree.path(), worktree.sha())
+            .await
+            .unwrap_or(NameStatusManifest {
+                added: Vec::new(),
+                modified: Vec::new(),
+                deleted: Vec::new(),
+            })
+    };
+    let paths_added = &manifest.added;
+    let paths_modified = &manifest.modified;
+    let paths_deleted = &manifest.deleted;
+    let (patch_id, diff_bytes) = match (head_commit.as_deref(), worktree.sha().is_empty()) {
+        (Some(commit), false) => git_patch_id(worktree.path(), commit, PATCH_ID_OVERSIZE_CAP)
+            .await
+            .unwrap_or((None, 0)),
+        _ => (None, 0),
+    };
+    let patch_id_str = match patch_id {
+        Some(id) => id,
+        None if diff_bytes > PATCH_ID_OVERSIZE_CAP => "oversize".to_string(),
+        None => String::new(),
+    };
+
     let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), claims);
     bundle.head_commit = head_commit.clone();
     bundle.loc_changed = loc_changed;
     bundle.paths = branch_paths.clone();
-    debug!(
+
+    // Phase 6 canonical "implementer produced bundle" event. The
+    // earlier daemon-context site is now silent; this is the
+    // one-and-only emission. Span ancestry is `propose_bundle` so
+    // the agents.dispatch target shows up on the line.
+    info!(
         bundle_id = %bundle.id,
         work_id = %worktree.work_id(),
         head_commit = ?head_commit,
         loc_changed = ?loc_changed,
+        paths_added = ?paths_added,
+        paths_modified = ?paths_modified,
+        paths_deleted = ?paths_deleted,
         path_count = branch_paths.len(),
+        patch_id = %patch_id_str,
+        diff_bytes,
         dropped_count = total_dropped.len(),
-        "dispatch: propose_bundle ok"
+        "implementer produced bundle"
     );
     Ok(ActionResult::BundleCreated {
         bundle,
         dropped: total_dropped,
     })
 }
+
+/// Maximum bytes of `git show <commit>` output for which we compute a
+/// stable `patch_id`. Beyond this, `propose_bundle` emits the literal
+/// `"oversize"` and only `diff_bytes` so a runaway implementer is
+/// visible without paying the patch-id compute cost.
+const PATCH_ID_OVERSIZE_CAP: usize = 1024 * 1024;
 
 /// Run `git status --porcelain --untracked-files=all` and parse the
 /// result via `scope::parse_porcelain_status`. The `-uall` flag is
@@ -350,6 +398,125 @@ async fn git_diff_name_only(path: &Path, base_sha: &str) -> Result<Vec<String>, 
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect())
+}
+
+/// (added, modified, deleted) lists from `git diff --name-status`.
+/// Folded into a typed return so clippy's `complex_type` lint doesn't
+/// fire on the tuple form.
+struct NameStatusManifest {
+    added: Vec<String>,
+    modified: Vec<String>,
+    deleted: Vec<String>,
+}
+
+/// Phase 6: classify the branch's changed paths into added /
+/// modified / deleted via `git diff --name-status <base>..HEAD`. Used
+/// by `propose_bundle`'s manifest event so a reader can grep
+/// `paths_added` directly without re-running git. Renames (`R<score>`)
+/// are folded into `paths_modified`; copies (`C<score>`) into
+/// `paths_added`. Unknown statuses (`U`, `T`) fall through to
+/// `paths_modified` rather than being dropped.
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), base_sha = base_sha), err)]
+async fn git_diff_name_status(path: &Path, base_sha: &str) -> Result<NameStatusManifest, DispatchError> {
+    let spec = format!("{base_sha}..HEAD");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["diff", "--name-status", &spec])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(DispatchError::Git(format!(
+            "git diff --name-status failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let mut manifest = NameStatusManifest {
+        added: Vec::new(),
+        modified: Vec::new(),
+        deleted: Vec::new(),
+    };
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let (status, rest) = line.split_at(1);
+        let trimmed = rest.trim_start();
+        // Renames carry two paths: `R<score>\told\tnew`. The destination
+        // is the relevant one for an "after" view of the branch; take
+        // the last tab-separated field.
+        let path_str = trimmed.split('\t').next_back().unwrap_or(trimmed).to_string();
+        match status {
+            "A" | "C" => manifest.added.push(path_str),
+            "D" => manifest.deleted.push(path_str),
+            _ => manifest.modified.push(path_str),
+        }
+    }
+    Ok(manifest)
+}
+
+/// Phase 6: compute a stable patch id via `git show <commit> | git
+/// patch-id --stable`. Whitespace- and context-line-stable across
+/// `diff.algorithm` and `diff.context` settings, unlike a raw
+/// `sha256(unified diff)`. Returns the first whitespace-delimited
+/// token from `git patch-id`'s output (`<patch-id> <commit>`).
+///
+/// `oversize_cap_bytes` short-circuits to `Ok((None, byte_count))`
+/// when `git show` produces more bytes than the cap; the caller emits
+/// `patch_id = "oversize"` plus `diff_bytes` so a runaway implementer
+/// is visible without paying the patch-id compute cost.
+#[instrument(level = "trace", skip_all, fields(path = %path.display(), commit = commit), err)]
+async fn git_patch_id(
+    path: &Path,
+    commit: &str,
+    oversize_cap_bytes: usize,
+) -> Result<(Option<String>, usize), DispatchError> {
+    let show = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["show", commit])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !show.status.success() {
+        return Err(DispatchError::Git(format!(
+            "git show {commit} failed: {}",
+            String::from_utf8_lossy(&show.stderr)
+        )));
+    }
+    let diff_bytes = show.stdout.len();
+    if diff_bytes > oversize_cap_bytes {
+        return Ok((None, diff_bytes));
+    }
+
+    let mut patch_id_proc = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["patch-id", "--stable"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = patch_id_proc.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(&show.stdout).await?;
+        stdin.shutdown().await?;
+    }
+    let patch_out = patch_id_proc.wait_with_output().await?;
+    if !patch_out.status.success() {
+        return Err(DispatchError::Git(format!(
+            "git patch-id failed: {}",
+            String::from_utf8_lossy(&patch_out.stderr)
+        )));
+    }
+    let patch_id = String::from_utf8_lossy(&patch_out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string);
+    Ok((patch_id, diff_bytes))
 }
 
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
