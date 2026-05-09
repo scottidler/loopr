@@ -141,6 +141,14 @@ crates/domain/src/work.rs (already shipped in v0.7.10 alongside trait-variant cl
   FSM table: Blocked => Ready by (Reactor, Director)
   FSM table: Integrated => Done by (Reactor, Director)
 
+crates/domain/src/bundle.rs (shipped in Phase 3 alongside daemon wiring)
+  FSM table: Reviewed => Accepted by (Reactor, Director)
+  Not in the original Phase 0a scope (which only listed Work FSM edits);
+  added at Phase 3 implementation time because WorkSpawner::accept_bundle
+  fires Reviewed -> Accepted with Role::Director. Without this edit the
+  impl would have to spoof Role::Reactor, which lies in logs and breaks
+  the FSM contract that Role identifies the actor.
+
 crates/context/prompts/agents/director/ (amended)
   system.pmt: replace stub with real action vocabulary + role persona
   user.pmt: replace stub with real state-table template
@@ -184,12 +192,25 @@ pub struct DirectorConfig {
     pub idle_interval_secs: u64,     // default: 15
     /// Max restarts on transient failure.
     pub max_restarts: u32,           // default: 3
+    /// Maximum LLM re-prompts within the parse-retry sub-loop for a
+    /// single iteration. Mirrors `ImplementerConfig.max_requeries`.
+    /// Strict-greater-than check: the first call is "free"; the (N+1)th
+    /// parse failure within one iteration triggers a `record_parse_failure`
+    /// strike from the lifeguard.
+    pub max_requeries: u32,          // default: 3
+    /// Consecutive full-iteration parse failures before the lifeguard
+    /// escalates. Mirrors `ImplementerConfig.max_parse_failures`. A
+    /// strike fires only when every requery within an iteration also
+    /// fails.
+    pub max_parse_failures: u32,     // default: 3
     /// Anthropic model for Director calls.
     pub model: String,               // default: "claude-opus-4-7"
     /// Token budget per LLM call (system + history + state summary).
     pub token_budget: usize,         // default: 100_000
 }
 ```
+
+`max_requeries` and `max_parse_failures` are not in the original design body; they were added at Phase 2 implementation time to bound the parse-retry sub-loop introduced when the doc's outer-loop retry pattern was rejected as Anthropic-API-incompatible (see "Parse-failure handling" under Run Loop below).
 
 Composed into `AgentsConfig.director: DirectorConfig` and read from `config.yml agents.director`. Default-fallback path is identical to `AgentsConfig.implementer`.
 
@@ -307,6 +328,10 @@ pub trait DirectorStore: Send + Sync + 'static {
 - `list_bundles_for_plan` → `self.bundles().list_all()` filtered by `work.parent_id`. The `BundlesStore` currently has no `list_by_plan_id`; Phase 1 implementation can add it to `store` or do the in-memory filter. Either is acceptable for first-gate Plan counts. **Decision deferred to Phase 1 implementer; in-memory filter is fine for now.**
 
 ### Run Loop
+
+> **Implementation deviation: parse-failure path.** The pseudocode below shows an outer-loop retry on parse failure: `history.push(Message::assistant(response))` + `history.push(Message::user("ERROR: ..."))`, then `continue`. This pattern was rejected at Phase 2 implementation time. `context::build_for_director` unconditionally appends a fresh state user message at the end of every call (`crates/context/src/implementer.rs:343`, `trimmed.push(state_msg)`), so a turn whose assistant reply was followed by a `user("ERROR: ...")` would, on iteration N+1, produce `[..., assistant(garbage), user(error), user(state_n+1)]` — a `User/User` adjacency that the Anthropic Messages API rejects with HTTP 400.
+>
+> The shipped implementation uses the Implementer's same-iteration parse-retry sub-loop pattern instead: failed parses stay local to the iteration's `messages` vector and never enter cross-iteration `history`; only successful turns get appended. `DirectorConfig.max_requeries` bounds the per-iteration retry budget; `DirectorConfig.max_parse_failures` bounds the cross-iteration lifeguard escalation. See `crates/agents/src/director.rs::run_director_inner` for the actual code; the pseudocode below is preserved as-is for the rest of its structure (reconcile sweep, action dispatch, sleep, restart) which the implementation does follow.
 
 ```rust
 pub async fn run_director<L, S, C, P>(plan_id, deps) {
@@ -534,6 +559,8 @@ These changes unblock every subsequent phase. Neither touches agent logic; both 
   - ✅ FSM table: `Role::Director` added to the `Blocked => Ready` transition (`by (Reactor, Director)`).
   - ✅ FSM table: `Role::Director` added to the `Integrated => Done` transition (`by (Reactor, Director)`).
   - ✅ `otto ci` green at v0.7.10.
+- `crates/domain/src/bundle.rs`: **Out-of-scope addition; landed in Phase 3 (v0.7.11).** The original Phase 0a list omitted this; Phase 3 surfaced the need because `WorkSpawner::accept_bundle` fires the FSM transition with `Role::Director`. Recorded here so the FSM-edit checklist is complete.
+  - ✅ FSM table: `Role::Director` added to the `Reviewed => Accepted` transition (`by (Reactor, Director)`).
 - `crates/llm/src/client.rs`: **PENDING.** As of the trait-variant cleanup (docs/design/2026-05-08-trait-variant-cleanup.md, shipped v0.7.10) the trait uses `#[trait_variant::make(Send)]` over `async fn` and there are no per-method `<'a>` lifetimes. Edits below reflect the post-cleanup shape:
   - Add `model: Option<&str>` as the last parameter to `complete_free` and `complete_with_tool` on the `LlmClient` trait. Methods are plain `async fn`; do not reintroduce `<'a>` or hand-rolled `impl Future`.
   - Update the `Arc<L>` forwarding impl to pass `model` through. The forwarding bound today is `L: LlmClient + Send + Sync + ?Sized`; preserve it.
