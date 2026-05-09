@@ -9,7 +9,7 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use context::{AssembledContext, ContextBuilder, ContextError, DirectorState as CtxDirectorState};
-use domain::{Bundle, BundleId, BundleStatus, PlanId, Verdict, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleId, BundleStatus, PlanId, Work, WorkId, WorkStatus};
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use store::StoreError;
 
@@ -616,11 +616,3 @@ async fn run_director_need_help_exits_immediately() {
     assert_eq!(deps.llm.calls(), 1, "NeedHelp must not retry");
 }
 
-// Silence unused-warning for the workspace's strict lints when a Verdict
-// import sneaks in via an example; force a use of imports we actually need
-// downstream. (Keeping this trivial — Verdict is referenced for future use
-// in seam tests but not directly here.)
-#[allow(dead_code)]
-fn _verdict_imported(v: Verdict) -> Verdict {
-    v
-}
