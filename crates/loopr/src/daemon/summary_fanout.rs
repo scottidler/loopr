@@ -22,7 +22,6 @@
 //! parents on the c-extended Work-update path emit `debug!` and skip
 //! silently — Plan-summary refresh is best-effort.
 
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -142,25 +141,18 @@ impl<S> PlanUpdateSink for SummaryFanout<S>
 where
     S: PlanUpdateSink,
 {
-    #[allow(clippy::manual_async_fn)]
-    fn update<'a>(
-        &'a self,
-        plan: Plan,
-        children: Vec<Work>,
-    ) -> impl Future<Output = Result<(), PlanUpdateError>> + Send + 'a {
-        async move {
-            let plan_for_summary = plan.clone();
-            let children_for_summary = children.clone();
-            self.inner.update(plan, children).await?;
-            if let Err(e) = summary::write_plan(&self.target, &plan_for_summary, &children_for_summary) {
-                warn!(
-                    plan_id = %plan_for_summary.id,
-                    error = %e,
-                    "summary::write_plan failed (non-fatal)"
-                );
-            }
-            Ok(())
+    async fn update(&self, plan: Plan, children: Vec<Work>) -> Result<(), PlanUpdateError> {
+        let plan_for_summary = plan.clone();
+        let children_for_summary = children.clone();
+        self.inner.update(plan, children).await?;
+        if let Err(e) = summary::write_plan(&self.target, &plan_for_summary, &children_for_summary) {
+            warn!(
+                plan_id = %plan_for_summary.id,
+                error = %e,
+                "summary::write_plan failed (non-fatal)"
+            );
         }
+        Ok(())
     }
 }
 
