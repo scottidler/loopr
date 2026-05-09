@@ -18,7 +18,7 @@ These items are framed in the existing design docs as Stage 7+ deferrals, but th
 
 ### 1.1 Dependency DAG enforcement
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-dependency-gate.md`
+- **Proposed filename:** [`docs/design/2026-05-07-dependency-gate.md`](design/2026-05-07-dependency-gate.md) **Status: Implemented**
 - **Crates touched:** `loopr` (daemon), `domain` (work), `agents` (dispatch)
 - **Depends on:** none
 - **What it covers.** A hard gate before any Work transitions `Pending -> Ready -> InProgress`. Reads `work.dependencies: Vec<WorkId>`, requires every named dep to be `Done`. Two design choices to settle in the doc: (a) gate at the daemon's `spawn_implementer_for_work` call site, returning early if deps unmet, vs. (b) gate at the action layer with a typed `DependencyNotMet` result fed back to a Coordinator (which v5 does not yet have, so option (a) is the Tier-1-compatible choice). Also resolves whether the gate is hard (refuse to dispatch) or soft (dispatch and let the agent see deps in its prompt context). Companion: a `next_assignable_work` selector in `crates/loopr/src/daemon/` that filters Ready Works whose deps are all Done.
@@ -39,7 +39,7 @@ These items are framed in the existing design docs as Stage 7+ deferrals, but th
 
 > Was "Coordinator / reactor agent" pre-ADR-0002. Reframed as Phase 1 of the Director agent (the v3-Coordinator-equivalent). Tier 3.1 is Phase 2. The split is by *delivery* — Phase 1 unblocks Stage 9, Phase 2 reaches v4 parity — not by *role*; there is one agent.
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-director-phase-1.md`
+- **Proposed filename:** [`docs/design/2026-05-08-director-phase-1.md`](design/2026-05-08-director-phase-1.md) **Status: Design Approved**
 - **Crates touched:** `agents`, `domain`, `loopr` (daemon dispatch), `context` (state-summary prompt assembly), `store`
 - **Depends on:** 1.1 (dep gate is referenced by the Coordinator's dispatch logic), 2.4 (multi-turn LLM history)
 - **What it covers.** A long-lived LLM agent (Opus tier per vision.md model budget) that owns the orchestration plane: it polls TaskStore (or, post-2.2 event bus, subscribes), assembles a state summary, decides on actions, and emits them via a typed action vocabulary. v3 had this as `~/repos/scottidler/loopr/src/agents/coordinator.rs` (47KB). The doc must define: (a) the FSM Coordinator runs through (`Interviewing -> Decomposing -> Planning -> Executing -> GoalComplete` is the v3 shape; v5 may collapse since interview is currently CLI-side); (b) the action vocabulary (`assign_agent`, `override_work`, `accept_bundle`, `redecompose`, `abandon`, plus how each action lands as a state mutation); (c) the state-summary builder that surfaces "Rejected Bundles", "Blocked Works", "SLA breaches", "stuck Bundles in Review", to the LLM as a structured prompt; (d) the reconciliation sweep cadence during Executing; (e) the loop's failure / restart story (v3's `max_restarts: 3`).
@@ -82,7 +82,7 @@ These items are framed in the existing design docs as Stage 7+ deferrals, but th
 
 ### 1.4 Validation execution
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-validation.md`
+- **Proposed filename:** [`docs/design/2026-05-08-validation.md`](design/2026-05-08-validation.md) **Status: Implemented**
 - **Crates touched:** `integrator`, `domain` (tick), `tools` (probably; we likely run a configured shell command), `loopr` (daemon orchestration)
 - **Depends on:** none (orthogonal to 1.1-1.3, but probably authored after them since 1.3 covers what happens when validation fails)
 - **What it covers.** Post-merge validation that the integration branch is not broken. The design doc was deferred by [docs/design/2026-04-22-integrator.md](design/2026-04-22-integrator.md) and [docs/design/2026-04-22-stage-8-wiring.md](design/2026-04-22-stage-8-wiring.md) explicitly as needing its own doc driven by a real-run failure. The python-api run shipped a Tick on `b04af23` and `fe250f1` while `main.py` only had a stub; validation would have caught this. Doc must define: (a) where validation commands come from (config file in target's `.loopr/validate.yml`? CLI flag? convention-detected `cargo check` / `pytest` / `npm test`?); (b) what counts as failure (non-zero exit, timeout, output pattern); (c) what happens on failure (Tick goes to a new `IntegrationFailed` Tick state? roll back the merge? mark the contributing Bundles for re-review?); (d) how validation interacts with `docker compose run --rm test`-style commands that the python-api target uses.
@@ -392,6 +392,7 @@ These items are paragraph-sized. Most should fold into adjacent docs rather than
 - **Cross-process OCC and git contention.** From [docs/design/2026-04-22-reviewer.md](design/2026-04-22-reviewer.md), [docs/design/2026-04-22-integrator.md](design/2026-04-22-integrator.md). Out of scope until multi-daemon-per-target is wanted.
 - **Protocol evolution beyond v1, full method vocabulary, record-typed payloads, outer message discriminator.** From [docs/design/2026-04-19-protocol.md](design/2026-04-19-protocol.md). Earn each per use case.
 - **Streaming chunked IPC responses.** From [docs/design/2026-04-19-protocol.md](design/2026-04-19-protocol.md). Folds into 4.1 TUI or 3.2 event bus.
+- **`trait_variant` cleanup of async-fn-in-trait desugaring.** Existing draft at [docs/design/2026-05-08-trait-variant-cleanup.md](design/2026-05-08-trait-variant-cleanup.md). Replaces the manual `fn method<'a>(&'a self, ...) -> impl Future<...> + Send + 'a` pattern with `#[trait_variant::make(Send)]` plus plain `async fn` across 8 traits and 52 sites in `store`, `integrator`, `agents`, `llm`, `loopr`. Drops roughly 50 of the workspace's 133 lifetime annotations and removes every `#[allow(clippy::manual_async_fn)]`. Mechanical, no API change, no runtime cost. Ship opportunistically when a phase boundary opens; not blocking any Tier 1-4 work.
 
 ---
 
