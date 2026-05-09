@@ -338,6 +338,7 @@ pub async fn reconcile_director<S: DirectorStore, P: WorkSpawner>(
         plan_id = %plan_id,
         iteration = tracing::field::Empty,
         restart = tracing::field::Empty,
+        restart_reason = tracing::field::Empty,
     ),
     err,
 )]
@@ -358,13 +359,53 @@ where
             Err(DirectorError::NeedHelp(reason)) => return Err(DirectorError::NeedHelp(reason)),
             Err(e) if restart < max_restarts => {
                 restart += 1;
+                let reason = restart_reason_for(&e);
                 tracing::Span::current().record("restart", restart);
-                warn!(error = %e, restart, max_restarts, "director restart");
+                tracing::Span::current().record("restart_reason", reason);
+                warn!(error = %e, restart, restart_reason = reason, max_restarts, "director restart");
                 continue 'restart;
             }
             Err(e) => return Err(e),
         }
     }
+}
+
+/// Phase 7: classify a `DirectorError` into a stable `&'static str`
+/// reason so log readers can grep `restart_reason="llm_retryable"`
+/// vs `restart_reason="parse_failure"` without parsing the error
+/// message. The set is closed; new error variants must extend this
+/// table on landing.
+fn restart_reason_for(err: &DirectorError) -> &'static str {
+    match err {
+        DirectorError::Llm(_) => "llm_retryable",
+        DirectorError::Parse(_) => "parse_failure",
+        DirectorError::Context(_) => "context_failure",
+        DirectorError::Store(_) => "store_failure",
+        DirectorError::Id(_) => "id_failure",
+        DirectorError::Lifeguard(_) => "lifeguard_escalation",
+        DirectorError::NeedHelp(_) => "need_help",
+    }
+}
+
+/// Phase 7: routing event emitted when the Director's LLM-emitted
+/// `accept_bundle` action fires. The Director does not transition
+/// the Bundle itself (the daemon's WorkSpawner does); this span
+/// records that the Director chose to accept this Bundle so a
+/// `director.accept_bundle` grep finds every per-Bundle decision
+/// without parsing the iteration log.
+#[instrument(
+    name = "director.accept_bundle",
+    level = "info",
+    skip_all,
+    fields(plan_id = %plan_id, bundle_id = %bundle_id),
+)]
+pub fn director_accept_bundle<P: WorkSpawner>(plan_id: &PlanId, bundle_id: &BundleId, spawner: &P) {
+    spawner.accept_bundle(bundle_id.clone());
+    info!(
+        plan_id = %plan_id,
+        bundle_id = %bundle_id,
+        "director: accept_bundle dispatched"
+    );
 }
 
 /// One restart-attempt of the Director loop. Returns `Ok(())` on
@@ -452,7 +493,7 @@ where
                     let id = bundle_id
                         .parse::<BundleId>()
                         .map_err(|e| DirectorError::Id(format!("bundle_id={bundle_id}: {e}")))?;
-                    deps.spawner.accept_bundle(id);
+                    director_accept_bundle(plan_id, &id, &deps.spawner);
                     took_action = true;
                 }
                 DirectorAction::OverrideWork {

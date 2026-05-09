@@ -16,7 +16,7 @@ pub use action::AgentAction;
 pub use config::{AgentsConfig, DirectorConfig, ImplementerConfig, ReviewerConfig};
 pub use director::{
     DirectorAction, DirectorDeps, DirectorError, DirectorStore, WorkSpawner, build_director_state,
-    parse_director_actions, reconcile_director, run_director,
+    director_accept_bundle, parse_director_actions, reconcile_director, run_director,
 };
 pub use dispatch::{ActionResult, DispatchError, RealTools, ToolExecutor, dispatch_action};
 pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
