@@ -123,14 +123,21 @@ crates/loopr/src/daemon/startup.rs (amended)
     Director crashes without daemon restart)
 
 crates/llm/src/client.rs (amended)
-  LlmClient::complete_free: add model: Option<&'a str> parameter
-  LlmClient::complete_with_tool: add model: Option<&'a str> parameter
+  LlmClient::complete_free: add model: Option<&str> parameter
+  LlmClient::complete_with_tool: add model: Option<&str> parameter
   AnthropicClient impls: use model override when Some, fall back to self.config.model when None
-  Arc<L> forwarding impl: pass model through
+  Arc<L> forwarding impl: pass model through (impl bound: L: LlmClient + Send + Sync + ?Sized)
   All existing call sites: pass None (no behavior change for Implementer/Reviewer/Decomposer)
   Director call site: pass Some(deps.config.model.as_str())
 
-crates/domain/src/work.rs (amended)
+  Note: as of v0.7.10 the trait uses `#[trait_variant::make(Send)]` over plain
+  `async fn`, so the new param is `model: Option<&str>` (not `Option<&'a str>`)
+  and impls add the param via `async fn complete_free(&self, system: &str,
+  messages: &[Message], model: Option<&str>) -> Result<...>`. The hand-rolled
+  `impl Future + Send + 'a` shape and `<'a>` lifetimes were removed in the
+  trait-variant cleanup (docs/design/2026-05-08-trait-variant-cleanup.md).
+
+crates/domain/src/work.rs (already shipped in v0.7.10 alongside trait-variant cleanup)
   FSM table: Blocked => Ready by (Reactor, Director)
   FSM table: Integrated => Done by (Reactor, Director)
 
@@ -535,19 +542,22 @@ Remove `transition_and_persist_bundle(Reviewed → Accepted)` + `spawn_integrato
 
 These changes unblock every subsequent phase. Neither touches agent logic; both are small mechanical edits with high blast radius on call sites.
 
-- `crates/domain/src/work.rs`:
-  - FSM table: add `Role::Director` to the `Blocked => Ready` transition (`by (Reactor, Director)`).
-  - FSM table: add `Role::Director` to the `Integrated => Done` transition (`by (Reactor, Director)`).
-  - `otto ci` in `crates/domain` must pass before continuing.
-- `crates/llm/src/client.rs`:
-  - Add `model: Option<&'a str>` as the last parameter to `complete_free` and `complete_with_tool` on the `LlmClient` trait.
-  - Update the `Arc<L>` forwarding impl to pass `model` through.
+**Phase 0 status (2026-05-08): partially shipped.** The two `domain` FSM edits below landed in v0.7.10 alongside the trait-variant cleanup. The `llm` `model:` parameter work is still pending and is what an executor of this doc should pick up first. The trait-variant cleanup also reshaped the `LlmClient` trait — see the bullet notes below for the post-cleanup edit shape.
+
+- `crates/domain/src/work.rs`: **DONE in v0.7.10.**
+  - ✅ FSM table: `Role::Director` added to the `Blocked => Ready` transition (`by (Reactor, Director)`).
+  - ✅ FSM table: `Role::Director` added to the `Integrated => Done` transition (`by (Reactor, Director)`).
+  - ✅ `otto ci` green at v0.7.10.
+- `crates/llm/src/client.rs`: **PENDING.** As of the trait-variant cleanup (docs/design/2026-05-08-trait-variant-cleanup.md, shipped v0.7.10) the trait uses `#[trait_variant::make(Send)]` over `async fn` and there are no per-method `<'a>` lifetimes. Edits below reflect the post-cleanup shape:
+  - Add `model: Option<&str>` as the last parameter to `complete_free` and `complete_with_tool` on the `LlmClient` trait. Methods are plain `async fn`; do not reintroduce `<'a>` or hand-rolled `impl Future`.
+  - Update the `Arc<L>` forwarding impl to pass `model` through. The forwarding bound today is `L: LlmClient + Send + Sync + ?Sized`; preserve it.
   - Update `AnthropicClient::complete_free` and `complete_with_tool`: use `model.unwrap_or(&self.config.model)` when building the request body.
   - Update all existing call sites in `agents` and `decomposer` to pass `None` (mechanical, no behavior change).
-  - Update stub (`ScriptedLlm`) and metered (`MeteredLlmClient`) impls to accept and ignore the new param.
+  - Update stub (`ScriptedLlm` in `crates/llm/src/stub.rs`) and metered (`MeteredLlmClient` in `crates/llm/src/metered.rs`) impls to accept and ignore the new param.
+  - Update test fakes that impl `LlmClient`: `FakeLlm` in `agents/src/implementer/tests.rs`, `FakeLlm` in `agents/src/reviewer/tests.rs`, `GatedLlm` in `agents/tests/seam_reviewer_concurrency.rs`. All use plain `async fn` post-cleanup; just add the param to each.
   - `otto ci` at repo root must pass before continuing.
 - Tests:
-  - `crates/domain`: existing FSM tests confirm Director role is now permitted for those two transitions.
+  - `crates/domain`: existing FSM tests already confirm Director role is permitted for those two transitions (verified at v0.7.10).
   - `crates/llm`: add one unit test asserting that passing `Some("claude-opus-4-7")` to a mock server call sends that model string in the request body.
 
 #### Phase 1: Scaffolding (DirectorAction + DirectorConfig + WorkSpawner trait)
