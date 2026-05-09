@@ -14,7 +14,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use domain::{AcceptanceCriteria, Plan, PlanStatus, Role, Work, WorkStatus};
-use loopr::daemon::context::{transition_and_persist_plan, transition_and_persist_work};
+use loopr::daemon::context::{PlanSummaryExtras, transition_and_persist_plan, transition_and_persist_work};
 use store::Store;
 
 // ---------- Harness ----------
@@ -128,9 +128,16 @@ async fn plan_terminal_summary_emits_on_complete_transition() {
         // Plan::new starts at Active per docs/design (Stage 5 has no clarity
         // loop); transition Active -> Complete to land on the terminal
         // summary.
-        transition_and_persist_plan::<Store>(&store, &mut plan, children.clone(), PlanStatus::Complete, Role::Reactor)
-            .await
-            .expect("plan transition ok");
+        transition_and_persist_plan::<Store>(
+            &store,
+            &mut plan,
+            children.clone(),
+            PlanStatus::Complete,
+            Role::Reactor,
+            PlanSummaryExtras::default(),
+        )
+        .await
+        .expect("plan transition ok");
     }
     store.close().await.unwrap();
 
@@ -150,4 +157,10 @@ async fn plan_terminal_summary_emits_on_complete_transition() {
         Some(2),
         "both children should be Done"
     );
+    // Phase 8 extras: present (== 0 here because the test uses
+    // PlanSummaryExtras::default(); production callers populate
+    // them from store queries).
+    assert_eq!(f.get("ticks").and_then(|v| v.as_u64()), Some(0));
+    assert_eq!(f.get("bundles_accepted").and_then(|v| v.as_u64()), Some(0));
+    assert_eq!(f.get("bundles_rejected").and_then(|v| v.as_u64()), Some(0));
 }

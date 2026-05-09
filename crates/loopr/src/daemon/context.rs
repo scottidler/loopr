@@ -748,6 +748,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     let all_terminal = !siblings.is_empty() && siblings.iter().all(|w| w.status.is_terminal());
                     let any_done = siblings.iter().any(|w| w.status == WorkStatus::Done);
                     if all_terminal && any_done {
+                        // Phase 8: compute Plan-level summary extras
+                        // (ticks + bundle terminal counts) from the
+                        // store. Best-effort: a query failure leaves
+                        // the field at 0 rather than failing the
+                        // Plan transition.
+                        let extras = compute_plan_summary_extras(&self.store, &plan_mut.id, &siblings).await;
                         // Phase 6: c-extended (option c) — pass siblings as
                         // the children arg so SummaryFanout's PlanUpdateSink
                         // impl can render the Plan summary against the
@@ -758,6 +764,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                             siblings,
                             PlanStatus::Complete,
                             Role::Reactor,
+                            extras,
                         )
                         .await
                         {
@@ -1011,12 +1018,58 @@ where
 /// Alternatives §4 option (c-extended): the caller fetches children
 /// before invoking this helper, and the sink (typically a
 /// `SummaryFanout`) renders the Plan summary from `(plan, children)`.
+/// Extra Plan-level counts surfaced on the `plan: terminal-state
+/// summary` event. Computed at the daemon call site from the store
+/// (Tick / Bundle queries) so the helper itself doesn't need a store
+/// handle. `Default::default()` is acceptable for tests; production
+/// callers should populate from real queries.
+#[derive(Default)]
+pub struct PlanSummaryExtras {
+    pub ticks: u64,
+    pub bundles_accepted: u64,
+    pub bundles_rejected: u64,
+}
+
+/// Compute `PlanSummaryExtras` for a finishing Plan. `ticks` is a
+/// direct query; `bundles_accepted` / `bundles_rejected` walk the
+/// Plan's child Works fanned out to each Work's Bundle list. A
+/// `bundle.status` of `Reviewed` / `Accepted` / `Integrating` /
+/// `Merged` counts as accepted; `Rejected` / `IntegrationFailed`
+/// counts as rejected. Other statuses (Triaged, ProposedNoop, etc.)
+/// are pre-decision and don't contribute to either count.
+///
+/// Best-effort: any individual store error is folded into the
+/// running counter rather than aborting — a missing Bundle list for
+/// one Work shouldn't block the Plan's terminal summary.
+async fn compute_plan_summary_extras(store: &Store, plan_id: &PlanId, children: &[Work]) -> PlanSummaryExtras {
+    let mut extras = PlanSummaryExtras::default();
+    if let Ok(ticks) = store.ticks().list_by_plan_id(plan_id).await {
+        extras.ticks = ticks.len() as u64;
+    }
+    for work in children {
+        let Ok(bundles) = store.bundles().list_by_work_id(&work.id).await else {
+            continue;
+        };
+        for b in bundles {
+            match b.status {
+                BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating | BundleStatus::Merged => {
+                    extras.bundles_accepted += 1
+                }
+                BundleStatus::Rejected | BundleStatus::IntegrationFailed => extras.bundles_rejected += 1,
+                _ => {}
+            }
+        }
+    }
+    extras
+}
+
 pub async fn transition_and_persist_plan<S>(
     sink: &S,
     plan: &mut Plan,
     children: Vec<Work>,
     target: PlanStatus,
     role: Role,
+    extras: PlanSummaryExtras,
 ) -> Result<(), String>
 where
     S: store::PlanUpdateSink,
@@ -1055,13 +1108,14 @@ where
         .await
         .map_err(|e| format!("plans().update: {e}"))?;
 
-    // Phase 8: per-Plan terminal summary. LLM token + cost
-    // aggregation is owned by `MeteredLlmClient`'s `ProcessSnapshot`
-    // and lives in the per-process digest, not on the FSM transition
-    // path; emitting them here would require threading a snapshot
-    // handle into this helper. For now the event records what's
-    // locally knowable: terminal state + per-Work counts. A future
-    // commit can extend with token + cost fields.
+    // Phase 8: per-Plan terminal summary. `ticks`, `bundles_accepted`,
+    // `bundles_rejected` come from the daemon-side `extras`
+    // (computed from store queries at the call site, where a store
+    // handle is available). `total_input_tokens` / `total_output_tokens`
+    // / `total_cost_usd` are deferred — those numbers live on
+    // `ProcessSnapshot` / `MeteredLlmClient` and would require
+    // threading a snapshot handle in. Tracked as Open Question on
+    // `docs/design/2026-05-09-comprehensive-telemetry.md`.
     if plan_terminal {
         info!(
             plan_id = %plan_id,
@@ -1071,6 +1125,9 @@ where
             works_done = works_done.unwrap_or(0),
             works_failed = works_failed.unwrap_or(0),
             works_blocked = works_blocked.unwrap_or(0),
+            ticks = extras.ticks,
+            bundles_accepted = extras.bundles_accepted,
+            bundles_rejected = extras.bundles_rejected,
             "plan: terminal-state summary"
         );
     }
