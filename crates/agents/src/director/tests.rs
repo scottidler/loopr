@@ -615,4 +615,3 @@ async fn run_director_need_help_exits_immediately() {
     // Exactly one LLM call: no restart, no retry on NeedHelp.
     assert_eq!(deps.llm.calls(), 1, "NeedHelp must not retry");
 }
-
