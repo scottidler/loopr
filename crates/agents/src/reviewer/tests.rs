@@ -158,6 +158,7 @@ fn make_deps<L: LlmClient, S: BundleUpdateSink>(
         context: InlineContextBuilder::new(),
         config,
         target,
+        path_deny_patterns: Vec::new(),
     }
 }
 

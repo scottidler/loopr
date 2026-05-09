@@ -96,6 +96,7 @@ async fn full_roundtrip_accept_verdict_persists_reviewed_bundle() {
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
         target: repo_path.clone(),
+        path_deny_patterns: Vec::new(),
     };
 
     // Re-fetch the Bundle so the `updated_at` we pass matches what is
@@ -156,6 +157,7 @@ async fn change_requested_verdict_persists_rejected_bundle() {
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
         target: repo_path,
+        path_deny_patterns: Vec::new(),
     };
 
     let stored_before = deps.store.bundles().get(&bundle.id).await.unwrap();

@@ -98,6 +98,15 @@ where
     /// and for rendering file contents on noop Bundles. Daemon-
     /// constant; cheap to clone on `Deps` construction.
     pub target: PathBuf,
+    /// Path-deny patterns applied to per-AC `evidence` fields before
+    /// emitting `reviewer.ac` events. Mirrors the implementer
+    /// dispatcher's redaction surface so caller-supplied sensitive
+    /// paths (`secrets.toml`, `.env*`, etc.) never land in events.log
+    /// even when the LLM cites them in a review reason. Default
+    /// (empty Vec) is permissive — enable by wiring patterns at
+    /// daemon startup. See Phase 5 of `docs/design/2026-05-09-comprehensive-telemetry.md`.
+    #[doc(hidden)]
+    pub path_deny_patterns: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +170,12 @@ where
         assembled.first_user_text().unwrap_or_default(),
     )
     .await?;
+
+    // Phase 5 (events-only): synthesize per-AC results from the parsed
+    // Verdict + Work's acceptance_criteria, then emit one
+    // `reviewer.ac` debug event per AC plus a roll-up info event.
+    // Verdict is unchanged; per-AC data lives in events.log only.
+    emit_ac_events(&verdict, work, &bundle.id, &deps.path_deny_patterns);
 
     // Best-effort transcript write. Reviewer is single-turn (modulo
     // parse-retry sub-loop, which we collapse to "the verdict that
@@ -377,6 +392,139 @@ fn truncate_for_error(s: &str) -> String {
         cut -= 1;
     }
     format!("{}...", &s[..cut])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: per-AC observability (events-only)
+// ---------------------------------------------------------------------------
+
+/// Synthesized per-AC result for events.log emission. Not persisted;
+/// not part of the `Verdict` shape.
+struct AcResult<'a> {
+    criterion: &'a str,
+    status: &'static str,
+    evidence: String,
+}
+
+/// Emit one `reviewer.ac` debug event per AC plus a roll-up info
+/// event with the four counts. Synthesized from the `Verdict` +
+/// `Work.acceptance_criteria` because today's reviewer prompt does
+/// not enumerate per-AC outcomes in a structured form. Per-AC info
+/// is observability, not a domain record.
+///
+/// Status mapping:
+/// - `Accept` -> every AC: `verified`.
+/// - `ChangeRequested` -> ACs whose text appears in any reason's
+///   `message` are `failed` (with the reason's location/message as
+///   evidence); the rest are `not_applicable` (we can't tell from
+///   the freeform output whether they were verified or skipped).
+/// - `Reject` -> every AC: `not_applicable` (the rejection reason
+///   is at the verdict level, not per-AC).
+fn emit_ac_events(verdict: &Verdict, work: &Work, bundle_id: &domain::BundleId, path_deny_patterns: &[String]) {
+    let acs: &[String] = &work.acceptance_criteria.0;
+    if acs.is_empty() {
+        // No ACs declared; skip the per-AC events. The Verdict-level
+        // accept/reject decision still drives the FSM.
+        return;
+    }
+
+    let results: Vec<AcResult<'_>> = match verdict {
+        Verdict::Accept { .. } => acs
+            .iter()
+            .map(|c| AcResult {
+                criterion: c.as_str(),
+                status: "verified",
+                evidence: String::new(),
+            })
+            .collect(),
+        Verdict::ChangeRequested { reasons, .. } => acs
+            .iter()
+            .map(|c| {
+                let lower = c.to_lowercase();
+                let matching: Vec<&ReviewIssue> =
+                    reasons.iter().filter(|r| issue_mentions_criterion(r, &lower)).collect();
+                if matching.is_empty() {
+                    AcResult {
+                        criterion: c.as_str(),
+                        status: "not_applicable",
+                        evidence: String::new(),
+                    }
+                } else {
+                    let evidence = matching
+                        .iter()
+                        .map(|r| {
+                            let location = match r.line {
+                                Some(l) => format!("{}:{}", r.file, l),
+                                None => r.file.clone(),
+                            };
+                            format!("{location}: {}", r.message)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    AcResult {
+                        criterion: c.as_str(),
+                        status: "failed",
+                        evidence,
+                    }
+                }
+            })
+            .collect(),
+        Verdict::Reject { .. } => acs
+            .iter()
+            .map(|c| AcResult {
+                criterion: c.as_str(),
+                status: "not_applicable",
+                evidence: String::new(),
+            })
+            .collect(),
+    };
+
+    let mut verified = 0u64;
+    let mut failed = 0u64;
+    let mut skipped = 0u64;
+    for r in &results {
+        let evidence_redacted = telemetry::transcript::redact_paths(&r.evidence, path_deny_patterns);
+        debug!(
+            target: "reviewer.ac",
+            bundle_id = %bundle_id,
+            work_id = %work.id,
+            criterion = %r.criterion,
+            status = r.status,
+            evidence = %evidence_redacted,
+            "reviewer: ac evaluated"
+        );
+        match r.status {
+            "verified" => verified += 1,
+            "failed" => failed += 1,
+            "not_applicable" | "skipped" => skipped += 1,
+            _ => {}
+        }
+    }
+
+    info!(
+        bundle_id = %bundle_id,
+        work_id = %work.id,
+        ac_count = results.len(),
+        ac_verified = verified,
+        ac_skipped = skipped,
+        ac_failed = failed,
+        "reviewer: ac roll-up"
+    );
+}
+
+/// Heuristic match: a `ReviewIssue` "mentions" an AC if any
+/// whitespace-delimited word of length >= 4 from the AC's lowercase
+/// form appears in the issue's lowercase `message`. Length floor
+/// rules out filler (`is`, `the`, `and`); whole-word match avoids
+/// "test" matching "fastest". This is best-effort — the whole point
+/// of synthesizing AC results is that the LLM's response doesn't
+/// structure them, so the mapping is necessarily fuzzy.
+fn issue_mentions_criterion(issue: &ReviewIssue, criterion_lower: &str) -> bool {
+    let message_lower = issue.message.to_lowercase();
+    criterion_lower
+        .split_whitespace()
+        .filter(|w| w.len() >= 4)
+        .any(|w| message_lower.contains(w))
 }
 
 // ---------------------------------------------------------------------------

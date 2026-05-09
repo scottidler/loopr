@@ -120,6 +120,7 @@ async fn two_concurrent_reviewers_exactly_one_wins_occ() {
             context: InlineContextBuilder::new(),
             config: ReviewerConfig::default(),
             target: repo1,
+            path_deny_patterns: Vec::new(),
         };
         run_reviewer(&stored1, &work1, &deps).await
     });
@@ -134,6 +135,7 @@ async fn two_concurrent_reviewers_exactly_one_wins_occ() {
             context: InlineContextBuilder::new(),
             config: ReviewerConfig::default(),
             target: repo2,
+            path_deny_patterns: Vec::new(),
         };
         run_reviewer(&stored2, &work2, &deps).await
     });

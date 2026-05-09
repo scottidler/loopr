@@ -125,6 +125,7 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
         target: repo_path,
+        path_deny_patterns: Vec::new(),
     };
     let verdict = run_reviewer(&triaged_bundle, &work, &rev_deps).await.unwrap();
     assert!(matches!(verdict, Verdict::Accept { .. }));

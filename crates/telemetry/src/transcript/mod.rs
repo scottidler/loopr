@@ -24,7 +24,7 @@ pub mod model;
 pub mod render;
 
 pub use model::TranscriptIteration;
-pub use render::render_iteration;
+pub use render::{redact_paths, render_iteration};
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};

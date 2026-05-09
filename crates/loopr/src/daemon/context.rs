@@ -533,6 +533,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             context: Arc::clone(&self.context_builder),
             config: self.reviewer_config.clone(),
             target: self.target.clone(),
+            path_deny_patterns: self.path_deny_patterns.clone(),
         };
 
         // Step 5: single LLM turn (plus bounded parse-retry inside run_reviewer).
