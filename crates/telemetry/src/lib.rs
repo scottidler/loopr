@@ -37,7 +37,9 @@ pub use query::{QueryError, SessionEntry, list_sessions, tail_latest_session};
 pub use session::{SessionId, SessionIdAllocError, SessionIdParseError};
 pub use session_fanout::SessionFanoutLayer;
 pub use slug::{TargetSlugError, target_slug};
-pub use subscriber::{Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, init};
+pub use subscriber::{
+    Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, TestSubscriberGuard, init, init_for_test,
+};
 pub use xdg::{XdgError, session_dir, session_run_dir, session_target_dir, xdg_root};
 
 #[cfg(test)]

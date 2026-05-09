@@ -189,6 +189,95 @@ pub fn init(
     })
 }
 
+/// Test-only entry point: build a thread-local subscriber whose layer
+/// composition mirrors production `init`'s, writing `events.log` /
+/// `loopr.log` under `run_dir`. Returns a guard that uninstalls the
+/// subscriber and flushes the writers when dropped.
+///
+/// Sharing the layer builder (`compose_subscriber`) with production is
+/// deliberate — it is the mechanism that lets the contract test in
+/// `crates/telemetry/tests/events_log_contract.rs` catch regressions in
+/// production layer shape.
+///
+/// # Sync-only constraint
+///
+/// `set_default` is **thread-local**: events emitted on a different thread
+/// (notably tokio worker threads spawned via `tokio::spawn`) will not
+/// reach the subscriber installed here. Phase-1 smoke tests are sync;
+/// future phases that exercise async code (e.g. decomposer) will need a
+/// parallel async-aware harness or `tracing::instrument`-on-future
+/// adaptation. This helper deliberately does not try to bridge that gap.
+pub fn init_for_test(run_dir: &Path, directive: &str) -> Result<TestSubscriberGuard, TelemetryInitError> {
+    EnvFilter::try_new(directive).map_err(|e| TelemetryInitError::InvalidFilter {
+        directive: directive.to_string(),
+        reason: e.to_string(),
+    })?;
+    let console_directive = floor_at_info(directive);
+    EnvFilter::try_new(&console_directive).map_err(|e| TelemetryInitError::InvalidFilter {
+        directive: console_directive.clone(),
+        reason: e.to_string(),
+    })?;
+
+    std::fs::create_dir_all(run_dir).map_err(|source| TelemetryInitError::DirCreate {
+        path: run_dir.to_path_buf(),
+        source,
+    })?;
+
+    let json_path = run_dir.join("events.log");
+    let pretty_path = run_dir.join("loopr.log");
+    let json_file = open_append(&json_path)?;
+    let pretty_file = open_append(&pretty_path)?;
+
+    let json_writer = SharedWriter::new(json_file);
+    let pretty_writer = SharedWriter::new(pretty_file);
+
+    let fanout = WorkFanoutLayer::new(run_dir);
+    let fanout_cache = fanout.cache_handle();
+
+    // Per-session fanout writes under `run_dir/sessions/...` so it can never
+    // escape the tempdir. The smoke scenarios don't exercise the session
+    // fanout — its presence here keeps the test's layer composition
+    // identical to production.
+    let session_fanout = SessionFanoutLayer::new(run_dir.to_path_buf(), "test-target".to_string());
+    let session_fanout_cache = session_fanout.cache_handle();
+
+    // Tests never want stderr noise; pass `stderr_is_tty=false` so the
+    // console layer is skipped.
+    let subscriber = compose_subscriber(
+        directive,
+        &console_directive,
+        json_writer.clone(),
+        pretty_writer.clone(),
+        fanout,
+        session_fanout,
+        false,
+    );
+    let default_guard = tracing::subscriber::set_default(subscriber);
+
+    Ok(TestSubscriberGuard {
+        // Drop order matters: `_default` first (uninstall thread-local
+        // subscriber so no further events route through these writers),
+        // then `_writers` (Guard's Drop flushes any line-buffered partials
+        // before the test reads `events.log`). Field declaration order is
+        // drop order in Rust.
+        _default: default_guard,
+        _writers: Guard {
+            json_writer,
+            pretty_writer,
+            fanout_cache,
+            session_fanout_cache,
+        },
+    })
+}
+
+/// Guard returned by [`init_for_test`]. Holds the thread-local default
+/// subscriber installation alive plus the writer-flush guard.
+#[must_use = "TestSubscriberGuard must be held until the scenario completes; dropping early uninstalls the subscriber"]
+pub struct TestSubscriberGuard {
+    _default: tracing::subscriber::DefaultGuard,
+    _writers: Guard,
+}
+
 fn open_append(path: &Path) -> Result<File, TelemetryInitError> {
     OpenOptions::new()
         .create(true)
@@ -200,16 +289,19 @@ fn open_append(path: &Path) -> Result<File, TelemetryInitError> {
         })
 }
 
-/// Build and install the subscriber. Separated from `init` so tests can
-/// exercise subscriber composition with local `SharedWriter` instances via
-/// `with_default`, avoiding the global once-per-process constraint.
+/// Build the layered subscriber. Separated from `init` so tests can install
+/// the same shape via `set_default` (thread-local) instead of `try_init`
+/// (process-global). Sharing this builder is the keystone of the contract
+/// test from `docs/design/2026-05-09-comprehensive-telemetry.md`: a
+/// regression in production layer composition is caught by the contract
+/// test only because both paths route through here.
 ///
 /// `directive` is the user's raw filter (used by json, pretty, fanout).
 /// `console_directive` is the same directive with an INFO floor applied — all
 /// four layers therefore carry the same `EnvFilter` type, which keeps a
 /// future runtime-reload (e.g. Stage 4's hypothetical `loopr logs tail
 /// --level debug`) straightforward.
-fn compose(
+fn compose_subscriber(
     directive: &str,
     console_directive: &str,
     json_writer: SharedWriter,
@@ -217,7 +309,7 @@ fn compose(
     fanout: WorkFanoutLayer,
     session_fanout: SessionFanoutLayer,
     stderr_is_tty: bool,
-) -> Result<(), TelemetryInitError> {
+) -> impl tracing::Subscriber + Send + Sync + 'static {
     // `directive` has been validated by `init` (or constructed directly in
     // tests); every `expect` below is an invariant, not a runtime gamble.
     let json_layer = fmt::layer()
@@ -252,8 +344,31 @@ fn compose(
         .with(console_layer)
         .with(fanout.with_filter(parse_validated(directive)))
         .with(session_fanout.with_filter(parse_validated(directive)))
-        .try_init()
-        .map_err(|_| TelemetryInitError::AlreadyInitialized)?;
+}
+
+/// Install the layered subscriber as this process's global subscriber.
+/// Production-only path; tests use `init_for_test` which routes through
+/// the same `compose_subscriber` builder but installs thread-locally.
+fn compose(
+    directive: &str,
+    console_directive: &str,
+    json_writer: SharedWriter,
+    pretty_writer: SharedWriter,
+    fanout: WorkFanoutLayer,
+    session_fanout: SessionFanoutLayer,
+    stderr_is_tty: bool,
+) -> Result<(), TelemetryInitError> {
+    compose_subscriber(
+        directive,
+        console_directive,
+        json_writer,
+        pretty_writer,
+        fanout,
+        session_fanout,
+        stderr_is_tty,
+    )
+    .try_init()
+    .map_err(|_| TelemetryInitError::AlreadyInitialized)?;
     Ok(())
 }
 
