@@ -55,45 +55,33 @@ impl ScriptedLlm {
 }
 
 impl LlmClient for ScriptedLlm {
-    #[allow(clippy::manual_async_fn)]
-    fn complete_with_tool<'a>(
-        &'a self,
-        _system: &'a str,
-        _user: &'a str,
+    async fn complete_with_tool(
+        &self,
+        _system: &str,
+        _user: &str,
         _tool: ToolSchema,
-    ) -> impl std::future::Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
-        async move {
-            let popped = self.tool_responses.lock().expect("tool_responses lock").pop_front();
-            match popped {
-                Some(Ok(tc)) => Ok((tc, Usage::default())),
-                Some(Err(e)) => Err(e),
-                None => {
-                    let (t, f) = self.remaining();
-                    panic!(
-                        "ScriptedLlm: complete_with_tool called with empty queue (tool remaining: {t}, free remaining: {f})"
-                    );
-                }
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        let popped = self.tool_responses.lock().expect("tool_responses lock").pop_front();
+        match popped {
+            Some(Ok(tc)) => Ok((tc, Usage::default())),
+            Some(Err(e)) => Err(e),
+            None => {
+                let (t, f) = self.remaining();
+                panic!(
+                    "ScriptedLlm: complete_with_tool called with empty queue (tool remaining: {t}, free remaining: {f})"
+                );
             }
         }
     }
 
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        _system: &'a str,
-        _messages: &'a [Message],
-    ) -> impl std::future::Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
-        async move {
-            let popped = self.free_responses.lock().expect("free_responses lock").pop_front();
-            match popped {
-                Some(Ok(s)) => Ok((s, Usage::default())),
-                Some(Err(e)) => Err(e),
-                None => {
-                    let (t, f) = self.remaining();
-                    panic!(
-                        "ScriptedLlm: complete_free called with empty queue (tool remaining: {t}, free remaining: {f})"
-                    );
-                }
+    async fn complete_free(&self, _system: &str, _messages: &[Message]) -> Result<(String, Usage), LlmError> {
+        let popped = self.free_responses.lock().expect("free_responses lock").pop_front();
+        match popped {
+            Some(Ok(s)) => Ok((s, Usage::default())),
+            Some(Err(e)) => Err(e),
+            None => {
+                let (t, f) = self.remaining();
+                panic!("ScriptedLlm: complete_free called with empty queue (tool remaining: {t}, free remaining: {f})");
             }
         }
     }

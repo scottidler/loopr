@@ -8,7 +8,6 @@
 //! first matching `tool_use` content block becomes the returned
 //! `ToolCall`.
 
-use std::future::Future;
 use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -185,129 +184,119 @@ fn build_system_block(system: &str) -> Value {
 }
 
 impl LlmClient for AnthropicClient {
-    #[allow(clippy::manual_async_fn)] // explicit `+ Send` required; see trait
-    fn complete_with_tool<'a>(
-        &'a self,
-        system: &'a str,
-        user: &'a str,
+    async fn complete_with_tool(
+        &self,
+        system: &str,
+        user: &str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
-        async move {
-            // Span fields per design doc Security → Telemetry rules:
-            // model + prompt byte-lengths + previews (truncated to
-            // PROMPT_PREVIEW_MAX_BYTES) + duration. NEVER the tool
-            // schema, ToolCall.input, headers, or API key.
-            let span = info_span!(
-                "llm.anthropic",
-                model = %self.config.model,
-                system_len = system.len(),
-                user_len = user.len(),
-                system_preview = %truncate_preview(system),
-                user_preview = %truncate_preview(user),
-                tool_name = %tool.name,
-                duration_ms = tracing::field::Empty,
-                outcome = tracing::field::Empty,
-                cache_creation_input_tokens = tracing::field::Empty,
-                cache_read_input_tokens = tracing::field::Empty,
-                cache_hit_ratio = tracing::field::Empty,
-            );
-            let _enter = span.enter();
-            let started = Instant::now();
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        // Span fields per design doc Security → Telemetry rules:
+        // model + prompt byte-lengths + previews (truncated to
+        // PROMPT_PREVIEW_MAX_BYTES) + duration. NEVER the tool
+        // schema, ToolCall.input, headers, or API key.
+        let span = info_span!(
+            "llm.anthropic",
+            model = %self.config.model,
+            system_len = system.len(),
+            user_len = user.len(),
+            system_preview = %truncate_preview(system),
+            user_preview = %truncate_preview(user),
+            tool_name = %tool.name,
+            duration_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            cache_creation_input_tokens = tracing::field::Empty,
+            cache_read_input_tokens = tracing::field::Empty,
+            cache_hit_ratio = tracing::field::Empty,
+        );
+        let _enter = span.enter();
+        let started = Instant::now();
 
-            let result = self.send_request(system, user, &tool).await;
+        let result = self.send_request(system, user, &tool).await;
 
-            let elapsed = started.elapsed().as_millis() as u64;
-            span.record("duration_ms", elapsed);
-            match &result {
-                Ok((_, usage)) => {
-                    span.record("outcome", "ok");
-                    span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
-                    span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
-                    span.record("cache_hit_ratio", usage.cache_hit_ratio());
-                    debug!(
-                        target: "llm.anthropic.cache",
-                        created = usage.cache_creation_input_tokens,
-                        read = usage.cache_read_input_tokens,
-                        ratio = usage.cache_hit_ratio(),
-                        "llm.anthropic call succeeded"
-                    );
-                }
-                Err(LlmError::Retryable { reason }) => {
-                    span.record("outcome", "retryable");
-                    warn!(reason = %reason, "llm.anthropic call failed (retryable)");
-                }
-                Err(LlmError::Fatal { reason }) => {
-                    span.record("outcome", "fatal");
-                    warn!(reason = ?reason, "llm.anthropic call failed (fatal)");
-                }
+        let elapsed = started.elapsed().as_millis() as u64;
+        span.record("duration_ms", elapsed);
+        match &result {
+            Ok((_, usage)) => {
+                span.record("outcome", "ok");
+                span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
+                span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
+                span.record("cache_hit_ratio", usage.cache_hit_ratio());
+                debug!(
+                    target: "llm.anthropic.cache",
+                    created = usage.cache_creation_input_tokens,
+                    read = usage.cache_read_input_tokens,
+                    ratio = usage.cache_hit_ratio(),
+                    "llm.anthropic call succeeded"
+                );
             }
-            result
+            Err(LlmError::Retryable { reason }) => {
+                span.record("outcome", "retryable");
+                warn!(reason = %reason, "llm.anthropic call failed (retryable)");
+            }
+            Err(LlmError::Fatal { reason }) => {
+                span.record("outcome", "fatal");
+                warn!(reason = ?reason, "llm.anthropic call failed (fatal)");
+            }
         }
+        result
     }
 
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        system: &'a str,
-        messages: &'a [Message],
-    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
-        async move {
-            let last_user_preview = messages
-                .last()
-                .and_then(|m| m.content.first())
-                .and_then(|c| {
-                    if let MessageContent::Text { text } = c {
-                        Some(truncate_preview(text))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-            let span = info_span!(
-                "llm.anthropic.free",
-                model = %self.config.model,
-                system_len = system.len(),
-                message_count = messages.len(),
-                system_preview = %truncate_preview(system),
-                last_user_preview = %last_user_preview,
-                duration_ms = tracing::field::Empty,
-                outcome = tracing::field::Empty,
-                cache_creation_input_tokens = tracing::field::Empty,
-                cache_read_input_tokens = tracing::field::Empty,
-                cache_hit_ratio = tracing::field::Empty,
-            );
-            let _enter = span.enter();
-            let started = Instant::now();
+    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
+        let last_user_preview = messages
+            .last()
+            .and_then(|m| m.content.first())
+            .and_then(|c| {
+                if let MessageContent::Text { text } = c {
+                    Some(truncate_preview(text))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let span = info_span!(
+            "llm.anthropic.free",
+            model = %self.config.model,
+            system_len = system.len(),
+            message_count = messages.len(),
+            system_preview = %truncate_preview(system),
+            last_user_preview = %last_user_preview,
+            duration_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            cache_creation_input_tokens = tracing::field::Empty,
+            cache_read_input_tokens = tracing::field::Empty,
+            cache_hit_ratio = tracing::field::Empty,
+        );
+        let _enter = span.enter();
+        let started = Instant::now();
 
-            let result = self.send_free_request(system, messages).await;
+        let result = self.send_free_request(system, messages).await;
 
-            let elapsed = started.elapsed().as_millis() as u64;
-            span.record("duration_ms", elapsed);
-            match &result {
-                Ok((_, usage)) => {
-                    span.record("outcome", "ok");
-                    span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
-                    span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
-                    span.record("cache_hit_ratio", usage.cache_hit_ratio());
-                    debug!(
-                        target: "llm.anthropic.cache",
-                        created = usage.cache_creation_input_tokens,
-                        read = usage.cache_read_input_tokens,
-                        ratio = usage.cache_hit_ratio(),
-                        "llm.anthropic.free call succeeded"
-                    );
-                }
-                Err(LlmError::Retryable { reason }) => {
-                    span.record("outcome", "retryable");
-                    warn!(reason = %reason, "llm.anthropic.free call failed (retryable)");
-                }
-                Err(LlmError::Fatal { reason }) => {
-                    span.record("outcome", "fatal");
-                    warn!(reason = ?reason, "llm.anthropic.free call failed (fatal)");
-                }
+        let elapsed = started.elapsed().as_millis() as u64;
+        span.record("duration_ms", elapsed);
+        match &result {
+            Ok((_, usage)) => {
+                span.record("outcome", "ok");
+                span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
+                span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
+                span.record("cache_hit_ratio", usage.cache_hit_ratio());
+                debug!(
+                    target: "llm.anthropic.cache",
+                    created = usage.cache_creation_input_tokens,
+                    read = usage.cache_read_input_tokens,
+                    ratio = usage.cache_hit_ratio(),
+                    "llm.anthropic.free call succeeded"
+                );
             }
-            result
+            Err(LlmError::Retryable { reason }) => {
+                span.record("outcome", "retryable");
+                warn!(reason = %reason, "llm.anthropic.free call failed (retryable)");
+            }
+            Err(LlmError::Fatal { reason }) => {
+                span.record("outcome", "fatal");
+                warn!(reason = ?reason, "llm.anthropic.free call failed (fatal)");
+            }
         }
+        result
     }
 }
 

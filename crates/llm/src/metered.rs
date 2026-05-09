@@ -7,7 +7,6 @@
 //! `Mutex`, then forwards the payload. The wrapper is the sole
 //! counter — call sites continue to use `let (x, _usage) = ...`.
 
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use telemetry::digest::process::ProcessSnapshot;
@@ -32,31 +31,21 @@ impl<L> MeteredLlmClient<L> {
 }
 
 impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
-    #[allow(clippy::manual_async_fn)]
-    fn complete_with_tool<'a>(
-        &'a self,
-        system: &'a str,
-        user: &'a str,
+    async fn complete_with_tool(
+        &self,
+        system: &str,
+        user: &str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
-        async move {
-            let (tc, usage) = self.inner.complete_with_tool(system, user, tool).await?;
-            record(&self.snapshot, &usage);
-            Ok((tc, usage))
-        }
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        let (tc, usage) = self.inner.complete_with_tool(system, user, tool).await?;
+        record(&self.snapshot, &usage);
+        Ok((tc, usage))
     }
 
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        system: &'a str,
-        messages: &'a [Message],
-    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
-        async move {
-            let (raw, usage) = self.inner.complete_free(system, messages).await?;
-            record(&self.snapshot, &usage);
-            Ok((raw, usage))
-        }
+    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
+        let (raw, usage) = self.inner.complete_free(system, messages).await?;
+        record(&self.snapshot, &usage);
+        Ok((raw, usage))
     }
 }
 

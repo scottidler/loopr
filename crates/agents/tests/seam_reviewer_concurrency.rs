@@ -6,7 +6,6 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::Arc;
@@ -30,26 +29,18 @@ struct GatedLlm {
 }
 
 impl LlmClient for GatedLlm {
-    #[allow(clippy::manual_async_fn)]
-    fn complete_with_tool<'a>(
-        &'a self,
-        _system: &'a str,
-        _user: &'a str,
+    async fn complete_with_tool(
+        &self,
+        _system: &str,
+        _user: &str,
         _tool: LlmToolSchema,
-    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
-        async move { panic!("unused") }
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        panic!("unused")
     }
 
-    #[allow(clippy::manual_async_fn)]
-    fn complete_free<'a>(
-        &'a self,
-        _system: &'a str,
-        _messages: &'a [Message],
-    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
-        async move {
-            self.barrier.wait().await;
-            Ok((self.response.clone(), Usage::default()))
-        }
+    async fn complete_free(&self, _system: &str, _messages: &[Message]) -> Result<(String, Usage), LlmError> {
+        self.barrier.wait().await;
+        Ok((self.response.clone(), Usage::default()))
     }
 }
 

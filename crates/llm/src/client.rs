@@ -6,14 +6,9 @@
 //! as additional trait methods on this same trait when the agents
 //! crate motivates them.
 //!
-//! Generics rather than `dyn` (scope memo U+4). `impl Future<...> +
-//! Send` rather than `async fn` in trait so the Send bound is explicit
-//! (tokio-spawned tasks need it). A single named lifetime `'a` binds
-//! `&self`, `system`, and `user` so the returned future captures all
-//! three under one constraint; using anonymous `'_` instead fails to
-//! unify the parameter lifetimes and the compiler rejects it.
-
-use std::future::Future;
+//! Generics rather than `dyn` (scope memo U+4). `#[trait_variant::make(Send)]`
+//! generates the explicit `+ Send` bound on returned futures (tokio-spawned
+//! tasks need it) from a clean `async fn` source.
 
 use crate::error::LlmError;
 use crate::message::Message;
@@ -29,7 +24,7 @@ use crate::usage::Usage;
 /// digest can record cache-hit ratios without re-instrumenting every
 /// call site. Callers that don't care about token counts destructure
 /// with `let (payload, _usage) = ...`.
-#[allow(clippy::manual_async_fn)] // explicit `+ Send` bound required for tokio::spawn (design doc Alt 2)
+#[trait_variant::make(Send)]
 pub trait LlmClient {
     /// Send a tool-constrained completion. The backend forces the
     /// model to invoke exactly the supplied tool (`tool_choice = {type:
@@ -38,12 +33,12 @@ pub trait LlmClient {
     ///
     /// `system` and `user` are fully-assembled prompt strings; this
     /// crate does NOT touch them beyond forwarding.
-    fn complete_with_tool<'a>(
-        &'a self,
-        system: &'a str,
-        user: &'a str,
+    async fn complete_with_tool(
+        &self,
+        system: &str,
+        user: &str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a;
+    ) -> Result<(ToolCall, Usage), LlmError>;
 
     /// Send a free-form multi-turn completion. No `tool_choice`, no
     /// `tools`: the model replies with plain text (possibly JSON, at
@@ -61,31 +56,23 @@ pub trait LlmClient {
     /// `ToolUse`/`ToolResult` content blocks in `messages` are type-
     /// level defined but not yet wired; `AnthropicClient` returns
     /// `Fatal(NotImplemented)` if encountered until 2.1 ships.
-    fn complete_free<'a>(
-        &'a self,
-        system: &'a str,
-        messages: &'a [Message],
-    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a;
+    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError>;
 }
 
 /// Forwarding impl for `Arc<L>` so daemon code can build
 /// `agents::Deps { llm: Arc::clone(&ctx.llm), .. }` without
 /// unwrapping or cloning the underlying client.
-impl<L: LlmClient + ?Sized> LlmClient for std::sync::Arc<L> {
-    fn complete_with_tool<'a>(
-        &'a self,
-        system: &'a str,
-        user: &'a str,
+impl<L: LlmClient + Send + Sync + ?Sized> LlmClient for std::sync::Arc<L> {
+    async fn complete_with_tool(
+        &self,
+        system: &str,
+        user: &str,
         tool: ToolSchema,
-    ) -> impl Future<Output = Result<(ToolCall, Usage), LlmError>> + Send + 'a {
-        (**self).complete_with_tool(system, user, tool)
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        (**self).complete_with_tool(system, user, tool).await
     }
 
-    fn complete_free<'a>(
-        &'a self,
-        system: &'a str,
-        messages: &'a [Message],
-    ) -> impl Future<Output = Result<(String, Usage), LlmError>> + Send + 'a {
-        (**self).complete_free(system, messages)
+    async fn complete_free(&self, system: &str, messages: &[Message]) -> Result<(String, Usage), LlmError> {
+        (**self).complete_free(system, messages).await
     }
 }

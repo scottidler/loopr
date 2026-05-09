@@ -19,6 +19,7 @@ serde_json.workspace = true
 telemetry = { path = "../telemetry" }
 thiserror = "2.0.18"
 tracing.workspace = true
+trait-variant.workspace = true
 url = "2.5.8"
 
 [dev-dependencies]
