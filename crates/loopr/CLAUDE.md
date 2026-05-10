@@ -52,6 +52,30 @@ Per-request scope fields available on the daemon's `ipc.connection` span (set in
 
 **Visibility (2026-05-09 sweep).** `transition_and_persist_work` emits an `info!("work: terminal-state summary", ...)` when a Work transition lands on a terminal state; `transition_and_persist_plan` emits an `info!("plan: terminal-state summary", ...)` on the Plan terminal transition with per-Work counts. The richer per-run rollups (LLM tokens, cost, lifeguard fires) live on `ProcessSnapshot` and the per-process digest under `runs/<pid>/summary.md`. The contract test `tests/work_plan_summary_visibility.rs` exercises both helpers under the production telemetry subscriber. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
 
+## Shutdown drain order
+
+The daemon drains its task pools in reverse-spawn-chain order at the end of `run_active_daemon`:
+
+```
+implementer -> reviewer -> director -> work_spawner -> integrator
+```
+
+The fourth pool (`work_spawner_tasks`) holds Director-issued `accept_bundle` / `override_work` / `assign_work` tasks; it lands between `director_tasks` (its upstream) and `integrator_tasks` (its downstream, which `accept_bundle` spawns into). Reverse-toposort drain guarantees no pool can receive a new spawn after its drain returns. The defensive `shutting_down` check at every spawned task body's entry stays as belt-and-suspenders.
+
+Design doc: [`docs/design/2026-05-09-director-phase-1-followups.md`](../../docs/design/2026-05-09-director-phase-1-followups.md). Drain helpers live in `crates/loopr/src/daemon.rs`; the inline rationale comment at the call site is the canonical short version, and the design doc's "Drain Ordering Rationale" section is the long version.
+
+## Retry-budget enforcement (Director)
+
+Three layers gate `Work.attempt_count` so a Plan's retry budget can't loop indefinitely:
+
+1. **Layer 1 — increment.** `transition_and_persist_work` (`crates/loopr/src/daemon/context.rs`) bumps `Work.attempt_count` by 1 on any successful transition into `WorkStatus::Ready`, before the persist write. 1-based: a Work that has run once has `attempt_count == 1`. Fires for both initial `Pending -> Ready` dispatch and Director-issued `Blocked -> Ready` retries.
+2. **Layer 2 — Director-layer soft cap.** `run_director_inner`'s `OverrideWork { target_status: "Ready" }` arm checks `work.attempt_count >= deps.config.max_work_attempts` (default 3, operator-tunable via `agents.director.max-work-attempts`). On exhaustion, the Director transitions the Plan to `PlanStatus::Stalled` and returns `DirectorError::NeedHelp` without dispatching the override. Persist precedes NeedHelp so a daemon restart's `startup_reconcile_directors` skips the Stalled Plan and the cold-boot loop closes.
+3. **Layer 3 — spawner-layer hard cap.** `MAX_WORK_ATTEMPTS_HARD_CAP = 100` in `transition_and_persist_work` refuses the persist when `attempt_count >= HARD_CAP`. Defense-in-depth backstop behind Layer 2's soft cap; should never fire in well-behaved deployments.
+
+Operator-recovery path: a `Stalled` Plan transitions back to `Active` via the Director-role override (`Stalled => Active`). The CLI verb is the existing `loopr plan override <plan-id> --to active` (no new verb).
+
+Tests: `tests/retry_budget.rs` (Layer 1 + 3), `crates/agents/src/director/tests.rs` (Layer 2), `tests/director_reconcile.rs::convergence_retry_exhaustion_stalls_plan_and_skips_on_restart` (end-to-end).
+
 ## IPC and daemon-startup timeouts
 
 Every wait that could hang on a peer or on disk is bounded. Defaults live on `TransportSection::default()` in `crates/loopr/src/config.rs`; operators override per-target via `.loopr/config.yml`:
