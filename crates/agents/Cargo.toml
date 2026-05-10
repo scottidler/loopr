@@ -28,3 +28,4 @@ llm = { path = "../llm", features = ["stub"] }
 tracing-subscriber = { workspace = true }
 telemetry = { path = "../telemetry" }
 serde_json.workspace = true
+serde_yaml.workspace = true

@@ -1020,6 +1020,14 @@ where
     // Layer 3 hard cap: refuse persist when attempt_count is already at
     // the hard cap. Pre-increment (>=) check keeps the cap strict — the
     // current attempt would be the (HARD_CAP+1)th if it landed.
+    //
+    // Order note: the design doc's Phase 4 prose puts this check
+    // *after* Layer 1's increment. Implementing in that order requires
+    // a `>` comparison against `HARD_CAP+1` (the post-increment value)
+    // to fire on the same attempt; the as-implemented "check before
+    // increment with `>=`" is the same boundary expressed without the
+    // off-by-one. Documented here so a future reader doesn't try to
+    // "fix" it back to the spec's literal sequence.
     if matches!(target, WorkStatus::Ready) && work.attempt_count >= MAX_WORK_ATTEMPTS_HARD_CAP {
         return Err(format!(
             "work {} attempt_count={} hit MAX_WORK_ATTEMPTS_HARD_CAP={}; refusing persist",

@@ -86,7 +86,7 @@ Five phases, with a hard dependency from Phase 1 → Phase 2 → Phase 4. Phase 
 2. If `work.attempt_count >= deps.config.max_work_attempts`, do NOT call `spawner.override_work(...)`. Instead:
    a. Read the Plan via `deps.store.plans().get(plan_id).await?`.
    b. Call `plan.transition(PlanStatus::Stalled, Role::Director)`.
-   c. Persist via `deps.store.plans().update(plan, expected_updated_at).await`. On `StoreError::Stale`, re-read and retry once; on second Stale, log a `warn!` and proceed to NeedHelp anyway — the Plan is moving, the daemon will reconverge on next reconcile.
+   c. Persist via `deps.store.plans().update(plan).await`. **Implementation correction (post-ship):** the original prose called for `update(plan, expected_updated_at)` with a Stale-retry-once loop. That assumed Plans were OCC-tracked. They aren't — `PlansStore::update(&self, plan: Plan)` is a blind write per `crates/store/src/plans.rs:105` and never returns `StoreError::Stale`. The retry loop would have been dead code; the implementation calls `update(plan)` and propagates any non-Stale `StoreError` upward unchanged.
    d. Return `Err(DirectorError::NeedHelp(format!("retry budget exhausted on work {work_id} (attempt_count={} >= max_work_attempts={})", work.attempt_count, deps.config.max_work_attempts)))`.
 
 The Director-layer cap is the soft, well-behaved exit: Plan transitions to Stalled, Director exits with NeedHelp, daemon stays up cleanly.
@@ -315,7 +315,7 @@ The "opus" call here is because the enforcement path interacts with FSM transiti
   3. If `work.attempt_count >= deps.config.max_work_attempts`, do NOT call `spawner.override_work(...)`. Instead:
      - Read the Plan via `deps.store.plans().get(plan_id).await?`.
      - Call `plan.transition(PlanStatus::Stalled, Role::Director)?`.
-     - Persist via `deps.store.plans().update(plan.clone(), expected_updated_at).await`. On `StoreError::Stale`, re-read and retry once; on second Stale, log a `warn!` and continue to the `NeedHelp` return.
+     - Persist via `deps.store.plans().update(plan.clone()).await`. (See the post-ship correction above: Plans are not OCC-tracked, so the originally-specified Stale-retry loop would have been dead code.)
      - Return `Err(DirectorError::NeedHelp(format!("retry budget exhausted on work {work_id} (attempt_count={} >= max_work_attempts={})", work.attempt_count, deps.config.max_work_attempts)))`.
   4. Otherwise (cap not exhausted), dispatch through `spawner.override_work(...)` as today.
 - Persist order matters: persist `Stalled` BEFORE returning `NeedHelp`. The cold-boot loop closes only if the Plan is Stalled when the daemon restarts.

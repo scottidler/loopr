@@ -148,6 +148,28 @@ fn director_config_default_values() {
     assert_eq!(cfg.max_parse_failures, 3);
     assert_eq!(cfg.model, "claude-opus-4-7");
     assert_eq!(cfg.token_budget, 100_000);
+    assert_eq!(cfg.max_work_attempts, 3);
+}
+
+#[test]
+fn director_config_yaml_round_trip_max_work_attempts() {
+    // Pins the kebab-case wire form for `max_work_attempts` and the
+    // serde-default fall-through. An operator's `.loopr/config.yml`
+    // setting `agents.director.max-work-attempts: 7` must land on the
+    // typed field; an absent field must default to 3.
+    let yaml = "max-work-attempts: 7\n";
+    let cfg: crate::config::DirectorConfig = serde_yaml::from_str(yaml).expect("deserialize");
+    assert_eq!(cfg.max_work_attempts, 7, "kebab-case wire form must populate the field");
+
+    let serialized = serde_yaml::to_string(&cfg).expect("serialize");
+    assert!(
+        serialized.contains("max-work-attempts: 7"),
+        "serialized output must use kebab-case: {serialized}"
+    );
+
+    // Absent field falls back to Default::default() (= 3).
+    let empty: crate::config::DirectorConfig = serde_yaml::from_str("{}").expect("deserialize empty");
+    assert_eq!(empty.max_work_attempts, 3, "missing field must default to 3");
 }
 
 // ---------------------------------------------------------------------------
@@ -795,5 +817,92 @@ async fn override_to_non_ready_skips_cap_check() {
         deps.store.plan_status(),
         Some(PlanStatus::Active),
         "Plan must NOT be touched"
+    );
+}
+
+#[tokio::test]
+async fn override_to_ready_with_zero_cap_trips_on_first_attempt() {
+    // cap=0: any attempt_count (>= 0) trips. Operator-tunable corner
+    // case — a config that disables retries entirely must reject the
+    // very first Director-issued override -> Ready and Stall the Plan.
+    let plan_id = PlanId::new();
+    let mut work = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    work.attempt_count = 0;
+    let work_id_s = work.id.to_string();
+    let plan = Plan::new("zero-cap".to_string());
+
+    let store = FakeStore::with_plan(vec![work.clone()], vec![], plan);
+    let llm = FakeLlm::new(vec![
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    ]);
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    config.max_work_attempts = 0;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown);
+
+    let err = run_director(&plan_id, &deps).await.expect_err("must exit NeedHelp");
+    assert!(
+        matches!(err, DirectorError::NeedHelp(_)),
+        "expected NeedHelp, got {err:?}"
+    );
+    assert!(
+        spawner.override_work_calls.lock().unwrap().is_empty(),
+        "cap=0 must refuse the very first Ready override"
+    );
+    assert_eq!(deps.store.plan_status(), Some(PlanStatus::Stalled));
+}
+
+#[tokio::test]
+async fn override_to_ready_with_high_cap_below_attempt_dispatches() {
+    // cap=5, attempt_count=4: 4 < 5, below the cap. The override falls
+    // through to the spawner and the Plan stays Active. Mirror of the
+    // `at_cap_stalls` test for an operator-raised soft cap.
+    let plan_id = PlanId::new();
+    let mut work = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    work.attempt_count = 4;
+    let work_id_s = work.id.to_string();
+    let plan = Plan::new("high-cap".to_string());
+
+    let store = FakeStore::with_plan(vec![work.clone()], vec![], plan);
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    config.max_work_attempts = 5;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    assert!(
+        !spawner.override_work_calls.lock().unwrap().is_empty(),
+        "cap=5 with attempt=4 must NOT trip"
+    );
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Active),
+        "Plan must NOT be Stalled when below the (raised) cap"
     );
 }
