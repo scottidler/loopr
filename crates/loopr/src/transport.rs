@@ -15,8 +15,59 @@ use std::time::{Duration, Instant};
 
 pub use client::IpcClient;
 
+use crate::config::TransportSection;
 use crate::daemon::sentinel;
 use crate::error::LooprError;
+
+/// Client-side IPC timeouts. Built from `TransportSection` (or default).
+/// Carried on `IpcClient` so each `request_impl` call uses the same budget
+/// without re-reading config.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientTimeouts {
+    /// Wall-clock cap on `request_impl` (send + response loop).
+    pub request: Duration,
+}
+
+impl Default for ClientTimeouts {
+    fn default() -> Self {
+        Self::from(&TransportSection::default())
+    }
+}
+
+impl From<&TransportSection> for ClientTimeouts {
+    fn from(t: &TransportSection) -> Self {
+        Self {
+            request: Duration::from_secs(t.client_request_secs),
+        }
+    }
+}
+
+/// Server-side IPC timeouts. Built from `TransportSection`. Held on
+/// `DaemonContext` so every `handle_client` task reads the same budgets.
+#[derive(Debug, Clone, Copy)]
+pub struct ServerTimeouts {
+    /// Wall-clock cap on read silence inside `handle_client`. Reset only
+    /// on real client traffic from `framed.next()`; broadcasts do not reset.
+    pub idle: Duration,
+    /// Wall-clock cap on each `framed.send(...).await` inside
+    /// `handle_client` (response-write and event-broadcast-write).
+    pub write: Duration,
+}
+
+impl Default for ServerTimeouts {
+    fn default() -> Self {
+        Self::from(&TransportSection::default())
+    }
+}
+
+impl From<&TransportSection> for ServerTimeouts {
+    fn from(t: &TransportSection) -> Self {
+        Self {
+            idle: Duration::from_secs(t.server_idle_secs),
+            write: Duration::from_secs(t.server_write_secs),
+        }
+    }
+}
 
 /// Polling cadence used by `connect_or_wait` while waiting for a freshly-
 /// forked daemon to bind its socket. v4 value; matches `POLL_INTERVAL_MS`

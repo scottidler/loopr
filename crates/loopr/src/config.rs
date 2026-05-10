@@ -60,6 +60,46 @@ impl IntegratorSection {
     }
 }
 
+/// IPC transport timeouts. Bounds every place where the daemon, its
+/// per-connection handlers, or a short-lived client could otherwise wait
+/// forever on a peer or on disk. See
+/// `docs/design/2026-05-09-ipc-timeouts.md` for the full rationale.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct TransportSection {
+    /// Wall-clock cap on `IpcClient::request_impl` (initial send + response
+    /// loop). Catches a daemon that accepted the connection but is now
+    /// hung. Default: 10s.
+    pub client_request_secs: u64,
+
+    /// Wall-clock cap on read silence inside `handle_client`. The pinned
+    /// `Sleep` driving this is reset only when `framed.next()` yields real
+    /// client traffic; broadcast events do NOT reset it. Default: 15s.
+    pub server_idle_secs: u64,
+
+    /// Wall-clock cap on each `framed.send(...).await` inside
+    /// `handle_client` (both response-write and event-broadcast-write
+    /// paths). Bounds the SIGSTOPped-client / full-send-buffer hang.
+    /// Default: 10s.
+    pub server_write_secs: u64,
+
+    /// Wall-clock cap on `build_context` (Store::open + startup::reconcile +
+    /// excludes install). Beyond this, the grandchild exits with
+    /// `LooprError::DaemonStartup` rather than orphaning. Default: 60s.
+    pub daemon_startup_secs: u64,
+}
+
+impl Default for TransportSection {
+    fn default() -> Self {
+        Self {
+            client_request_secs: 10,
+            server_idle_secs: 15,
+            server_write_secs: 10,
+            daemon_startup_secs: 60,
+        }
+    }
+}
+
 /// Top-level configuration composed from each stage crate's config.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
@@ -80,6 +120,10 @@ pub struct Config {
     /// user-facing surface; git_timeout stays internal.
     #[serde(default)]
     pub integrator: IntegratorSection,
+    /// IPC transport timeouts. Bounds dead-daemon, zombie-connection,
+    /// and stuck-startup hangs.
+    #[serde(default)]
+    pub transport: TransportSection,
 }
 
 impl Config {

@@ -171,6 +171,62 @@ fn env_overrides_config_for_worktree_cleanup() {
 }
 
 #[test]
+fn config_transport_default_values() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.transport.client_request_secs, 10);
+    assert_eq!(cfg.transport.server_idle_secs, 15);
+    assert_eq!(cfg.transport.server_write_secs, 10);
+    assert_eq!(cfg.transport.daemon_startup_secs, 60);
+}
+
+#[test]
+fn config_transport_round_trip_yaml() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir");
+    let yml = "
+transport:
+  client-request-secs: 5
+  server-idle-secs: 7
+  server-write-secs: 3
+  daemon-startup-secs: 30
+";
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.transport.client_request_secs, 5);
+    assert_eq!(cfg.transport.server_idle_secs, 7);
+    assert_eq!(cfg.transport.server_write_secs, 3);
+    assert_eq!(cfg.transport.daemon_startup_secs, 30);
+
+    let serialized = serde_yaml::to_string(&cfg.transport).expect("serialize");
+    assert!(serialized.contains("client-request-secs: 5"));
+    assert!(serialized.contains("server-idle-secs: 7"));
+    assert!(serialized.contains("server-write-secs: 3"));
+    assert!(serialized.contains("daemon-startup-secs: 30"));
+}
+
+#[test]
+fn config_transport_unknown_field_rejected() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir");
+    let yml = "
+transport:
+  client-request-secs: 10
+  bogus-field: 99
+";
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+    let err = Config::load(dir.path()).expect_err("unknown field rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("bogus-field") || msg.contains("unknown"), "got: {msg}");
+}
+
+#[test]
 fn env_invalid_value_errors_cleanly() {
     let _g = LOAD_MUTEX.lock().unwrap();
     let dir = TempDir::new().expect("tempdir");
