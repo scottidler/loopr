@@ -554,6 +554,7 @@ where
     let implementer_config = config.agents.implementer.clone();
     let reviewer_config = config.agents.reviewer.clone();
     let director_config = config.agents.director.clone();
+    let server_timeouts = crate::transport::ServerTimeouts::from(&config.transport);
     let integrator_config = config.integrator.into_integrator_config();
     let worktree_cleanup_policy = config.worktree.cleanup_policy;
 
@@ -576,6 +577,7 @@ where
         director_config,
         worktree_cleanup_policy,
         snapshot,
+        server_timeouts,
     ));
 
     tracing::info!(

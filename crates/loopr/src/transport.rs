@@ -19,19 +19,16 @@ use crate::config::TransportSection;
 use crate::daemon::sentinel;
 use crate::error::LooprError;
 
-/// Client-side IPC timeouts. Built from `TransportSection` (or default).
-/// Carried on `IpcClient` so each `request_impl` call uses the same budget
-/// without re-reading config.
+/// Client-side IPC timeouts. Production builds these from
+/// `TransportSection` via `From`, so the operator-facing knob in
+/// `.loopr/config.yml` is the single source of truth for the numbers.
+/// The `Default` impl is `#[cfg(test)]` only — tests get a one-liner that
+/// still routes through `TransportSection::default()` (no duplicate
+/// constants).
 #[derive(Debug, Clone, Copy)]
 pub struct ClientTimeouts {
     /// Wall-clock cap on `request_impl` (send + response loop).
     pub request: Duration,
-}
-
-impl Default for ClientTimeouts {
-    fn default() -> Self {
-        Self::from(&TransportSection::default())
-    }
 }
 
 impl From<&TransportSection> for ClientTimeouts {
@@ -42,8 +39,17 @@ impl From<&TransportSection> for ClientTimeouts {
     }
 }
 
-/// Server-side IPC timeouts. Built from `TransportSection`. Held on
-/// `DaemonContext` so every `handle_client` task reads the same budgets.
+#[cfg(test)]
+impl Default for ClientTimeouts {
+    fn default() -> Self {
+        Self::from(&TransportSection::default())
+    }
+}
+
+/// Server-side IPC timeouts. Production builds these from
+/// `TransportSection` via `From`. Held on `DaemonContext` so every
+/// `handle_client` task reads the same budgets. The `Default` impl is
+/// `#[cfg(test)]` only — same rationale as `ClientTimeouts`.
 #[derive(Debug, Clone, Copy)]
 pub struct ServerTimeouts {
     /// Wall-clock cap on read silence inside `handle_client`. Reset only
@@ -54,18 +60,19 @@ pub struct ServerTimeouts {
     pub write: Duration,
 }
 
-impl Default for ServerTimeouts {
-    fn default() -> Self {
-        Self::from(&TransportSection::default())
-    }
-}
-
 impl From<&TransportSection> for ServerTimeouts {
     fn from(t: &TransportSection) -> Self {
         Self {
             idle: Duration::from_secs(t.server_idle_secs),
             write: Duration::from_secs(t.server_write_secs),
         }
+    }
+}
+
+#[cfg(test)]
+impl Default for ServerTimeouts {
+    fn default() -> Self {
+        Self::from(&TransportSection::default())
     }
 }
 

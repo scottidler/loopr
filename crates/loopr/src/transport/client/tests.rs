@@ -67,6 +67,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
         DirectorConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
+        crate::transport::ServerTimeouts::default(),
     ))
 }
 

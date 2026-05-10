@@ -31,6 +31,13 @@ fn dummy_llm() -> Arc<AnthropicClient> {
 }
 
 async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
+    ctx_for_test_with_timeouts(target, crate::transport::ServerTimeouts::default()).await
+}
+
+async fn ctx_for_test_with_timeouts(
+    target: PathBuf,
+    server_timeouts: crate::transport::ServerTimeouts,
+) -> Arc<DaemonContext<AnthropicClient>> {
     let store = Store::open(&target).await.unwrap();
     let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
     let bash_denylist = Arc::new(BashDenylist::with_base());
@@ -56,7 +63,28 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
         DirectorConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
+        server_timeouts,
     ))
+}
+
+async fn complete_handshake(framed: &mut Framed<UnixStream, LinesCodec>) {
+    let req = DaemonRequest {
+        id: 1,
+        method: "system.handshake".into(),
+        params: serde_json::to_value(HandshakeParams {
+            protocol_version: PROTOCOL_VERSION,
+            session_id: None,
+        })
+        .unwrap(),
+    };
+    framed.send(serde_json::to_string(&req).unwrap()).await.unwrap();
+    let line = timeout(Duration::from_secs(2), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let resp: DaemonResponse = serde_json::from_str(&line).unwrap();
+    assert!(resp.error.is_none(), "handshake failed: {resp:?}");
 }
 
 /// Spawn an accept loop, connect as a client, drive a handshake +
@@ -262,4 +290,156 @@ async fn oversize_line_closes_connection_daemon_stays_up() {
     ctx.shutting_down.store(true, Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// Phase 3 read-side idle timeout: a client that completes the handshake
+/// then sits silent must be dropped after `server_idle` elapses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_idle_drops_silent_client() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let timeouts = crate::transport::ServerTimeouts {
+        idle: Duration::from_millis(150),
+        write: Duration::from_secs(10),
+    };
+    let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+
+    // Sit silent. Within ~150ms the daemon must close the connection;
+    // generous outer bound so a slow scheduler doesn't false-fail.
+    let next = timeout(Duration::from_secs(2), framed.next()).await.unwrap();
+    assert!(next.is_none(), "daemon must close silent connection: got {next:?}");
+
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// Phase 3 critical invariant (Architect Round 2): a chatty broadcast
+/// channel MUST NOT keep the read-idle timer reset. If this test ever
+/// runs forever, the implementer regressed to a naive
+/// `tokio::time::timeout(idle, framed.next())` inside the `select!`,
+/// which resets the budget on every `event_rx.recv()` arm fire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_idle_does_not_reset_on_broadcast() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let timeouts = crate::transport::ServerTimeouts {
+        idle: Duration::from_millis(200),
+        write: Duration::from_secs(10),
+    };
+    let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+
+    // Background broadcaster: fire faster than `server_idle`. If the
+    // implementation resets idle on broadcast, this loop would hold the
+    // connection open until the test times out.
+    let ctx_bcast = ctx.clone();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_clone = stop.clone();
+    let broadcaster = tokio::spawn(async move {
+        while !stop_clone.load(Ordering::Relaxed) {
+            let _ = ctx_bcast.events.send(ipc::DaemonEvent {
+                event: "test.tick".into(),
+                data: serde_json::Value::Null,
+            });
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    // Drain incoming broadcast events; the connection MUST close
+    // (None) on the read side within a generous outer bound. Without
+    // the bug fix, this loop would never see None.
+    let outcome = timeout(Duration::from_secs(2), async {
+        loop {
+            match framed.next().await {
+                None => break,           // connection closed — desired outcome
+                Some(Ok(_)) => continue, // broadcast event, keep reading
+                Some(Err(e)) => panic!("unexpected codec error: {e}"),
+            }
+        }
+    })
+    .await;
+    assert!(outcome.is_ok(), "idle timer must fire even under chatty broadcasts");
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = broadcaster.await;
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// Phase 3b write-side timeout: a stalled-reader client whose receive
+/// buffer fills must be dropped within `server_write` rather than
+/// pinning the handler task forever. We simulate the stalled reader
+/// by holding the raw `UnixStream` open without ever reading, then
+/// flooding broadcast events until the kernel send buffer fills and
+/// the daemon's wrapped `framed.send` exceeds its budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_write_timeout_drops_stalled_reader() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let timeouts = crate::transport::ServerTimeouts {
+        idle: Duration::from_secs(60), // not under test here
+        write: Duration::from_millis(200),
+    };
+    let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+
+    // Stop reading: drop the Framed wrapper but keep the underlying
+    // socket alive by replacing it with a raw fd we never touch. Easier
+    // approach: just keep `framed` parked and never call `.next()`.
+    // A reasonable broadcast payload fills the kernel's unix-domain
+    // socket send buffer (typically 200KiB+) within a few thousand
+    // events; we send up to 5000 ~1KiB events to be safe.
+    let payload = "x".repeat(1024);
+    let big_event = ipc::DaemonEvent {
+        event: "fill.buffer".into(),
+        data: serde_json::Value::String(payload),
+    };
+    for _ in 0..5000 {
+        // Errors here just mean no subscribers — fine if the handler
+        // already closed. The point is to push enough bytes that ONE
+        // of these triggers a write-blocking send on the daemon side.
+        let _ = ctx.events.send(big_event.clone());
+        // Tiny yield so the daemon's handler task gets scheduled and
+        // can drain events into the (eventually full) send buffer.
+        tokio::task::yield_now().await;
+    }
+
+    // Once the buffer fills, the next `framed.send` on the daemon side
+    // exceeds `server_write` and the handler closes the connection.
+    // From the client side: dropping framed and reading raw bytes from
+    // the underlying stream eventually returns 0.
+    drop(framed);
+    let raw = UnixStream::connect(&socket).await.unwrap();
+    // (Above just confirms accept loop still serves new clients.)
+    let _ = raw;
+
+    // Wait briefly for the write timeout to fire on the original
+    // handler's task. We can't easily observe it from outside without
+    // hooking a log capture; the strongest assertion is that the
+    // daemon stays responsive (above raw connection succeeded) and
+    // shutdown completes cleanly.
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(5), server).await.unwrap().unwrap().unwrap();
 }

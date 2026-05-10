@@ -154,6 +154,15 @@ where
     let mut event_rx = ctx.events.subscribe();
     let mut state = HandshakeState::Pending;
 
+    // Read-side idle timer. Hoisted outside the loop and `Pin::reset` only
+    // when `framed.next()` yields real client traffic — broadcasts on
+    // `event_rx` deliberately do NOT reset it (otherwise a chatty daemon
+    // would keep a silent client alive forever). See
+    // docs/design/2026-05-09-ipc-timeouts.md Phase 3.
+    let server_idle = ctx.server_timeouts.idle;
+    let server_write = ctx.server_timeouts.write;
+    let mut idle = Box::pin(tokio::time::sleep(server_idle));
+
     loop {
         // Fast loop-top shutdown check (same reason as `accept_loop`).
         if ctx.shutting_down.load(Ordering::Relaxed) {
@@ -162,8 +171,14 @@ where
         tokio::select! {
             biased;
             _ = ctx.shutdown_notify.notified() => return,
+            _ = &mut idle => {
+                warn!(server_idle_secs = server_idle.as_secs(), "server idle timeout exceeded; closing connection");
+                return;
+            }
             line = framed.next() => match line {
                 Some(Ok(line)) => {
+                    // Real client traffic — reset the read-idle timer.
+                    idle.as_mut().reset(tokio::time::Instant::now() + server_idle);
                     match decode_request_line(line.as_bytes()) {
                         Ok(req) => {
                             info!(
@@ -181,8 +196,23 @@ where
                                     return;
                                 }
                             };
-                            if framed.send(line_out).await.is_err() {
-                                return;
+                            // Bound the response-write so a SIGSTOPped /
+                            // stalled-reader client whose socket buffer has
+                            // filled cannot pin this task forever. See
+                            // docs/design/2026-05-09-ipc-timeouts.md Phase 3b.
+                            match timeout(server_write, framed.send(line_out)).await {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    warn!("response send failed: {e}; closing connection");
+                                    return;
+                                }
+                                Err(_elapsed) => {
+                                    warn!(
+                                        server_write_secs = server_write.as_secs(),
+                                        "server write timeout exceeded (response); closing connection"
+                                    );
+                                    return;
+                                }
                             }
                             if close_after {
                                 // Forward-compatibility: close on version
@@ -222,6 +252,11 @@ where
                 None => return, // client disconnected
             },
             event = event_rx.recv() => match event {
+                // NOTE: `idle` is intentionally NOT reset here. Broadcasts
+                // are server-originated and do not constitute proof of life
+                // on the read side; resetting on broadcast would let a
+                // chatty daemon hold a silent or SIGSTOPped client open
+                // indefinitely.
                 Ok(event) => {
                     let line_out = match serde_json::to_string(&event) {
                         Ok(s) => s,
@@ -230,8 +265,19 @@ where
                             continue;
                         }
                     };
-                    if framed.send(line_out).await.is_err() {
-                        return;
+                    // Bound the broadcast-write for the same reason as the
+                    // response-write above: a stalled reader's full send
+                    // buffer would otherwise pin this task forever.
+                    match timeout(server_write, framed.send(line_out)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => return,
+                        Err(_elapsed) => {
+                            warn!(
+                                server_write_secs = server_write.as_secs(),
+                                "server write timeout exceeded (event); closing connection"
+                            );
+                            return;
+                        }
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,

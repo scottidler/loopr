@@ -186,6 +186,9 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// can't .await). Phase 7 of the Tier-1 cleanup wires this in;
     /// the daemon writes a per-process digest at exit.
     pub snapshot: Arc<StdMutex<ProcessSnapshot>>,
+    /// Server-side IPC timeouts (idle + write). Built from
+    /// `config.transport` at boot; read by every `handle_client` task.
+    pub server_timeouts: crate::transport::ServerTimeouts,
 }
 
 impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
@@ -217,6 +220,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         director_config: DirectorConfig,
         worktree_cleanup_policy: AttemptCleanupPolicy,
         snapshot: Arc<StdMutex<ProcessSnapshot>>,
+        server_timeouts: crate::transport::ServerTimeouts,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         let store = Arc::new(store);
@@ -254,6 +258,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             integrator_tasks: Mutex::new(JoinSet::new()),
             director_tasks: Mutex::new(JoinSet::new()),
             snapshot,
+            server_timeouts,
         }
     }
 
