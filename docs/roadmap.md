@@ -63,6 +63,7 @@
 **Design docs:**
 - `crates/loopr/docs/design/daemon-lifecycle.md` — fork-to-daemon, PID lock, stale-socket detection, client connect-or-fork-daemon logic.
 - `crates/loopr/docs/design/ipc-transport.md` — async socket acceptance, connection lifecycle, serde framing bridge to the `ipc` crate.
+- [`design/2026-05-09-ipc-timeouts.md`](design/2026-05-09-ipc-timeouts.md) — bounded waits on every hangable path: client request, server read-idle, server write, daemon startup. Operator overrides via `transport:` section in `.loopr/config.yml`.
 
 **Crates touched:** `loopr`, `ipc`, `telemetry`.
 
