@@ -12,7 +12,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 mod common;
-use common::init_git_repo;
+use common::{DaemonAutoStop, init_git_repo, stop_daemon_for};
 
 /// XDG-isolated `loopr` subprocess so session state stays per-test
 /// instead of polluting `~/.local/share/loopr/`.
@@ -44,39 +44,11 @@ fn session_target_runs_dir(target: &std::path::Path) -> std::path::PathBuf {
         .join("runs")
 }
 
-/// Stage 4 Phase 3+ hook: client commands that need a daemon (plan,
-/// daemon status, and later list/show) auto-fork one on first use.
-/// That leaves a background process alive past the end of the test,
-/// which leaks state into the next test and prevents the `TempDir` from
-/// cleaning up (the daemon holds the log directory open).
-///
-/// Every smoke test that triggers an auto-fork must `defer` this helper
-/// to SIGTERM the daemon and wait for it to exit. Reads
-/// `.loopr/daemon.pid` directly (Phase 3 has no `daemon stop` subcommand
-/// yet; that lands in Phase 5).
+// `stop_daemon` moved to `common::stop_daemon_for` so all daemon-spawning
+// integration tests share the same panic-safe `DaemonAutoStop` guard.
+// Local alias kept for the existing call sites' minimal-diff path.
 fn stop_daemon(target: &std::path::Path) {
-    let pid_file = target.join(".loopr").join("daemon.pid");
-    let pid: u32 = match fs::read_to_string(&pid_file) {
-        Ok(s) => match s.trim().parse() {
-            Ok(p) => p,
-            Err(_) => return,
-        },
-        Err(_) => return,
-    };
-    // SAFETY: kill with SIGTERM on a known PID. Worst case the process is
-    // already gone and we get ESRCH, which we ignore.
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        // SAFETY: kill(pid, 0) probes liveness.
-        let alive = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        if alive != 0 {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    // Escalate.
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    stop_daemon_for(target);
 }
 
 /// Return process-run dirs under XDG that are NOT the daemon's. The
@@ -104,6 +76,7 @@ fn client_run_dirs(target: &std::path::Path) -> Vec<std::path::PathBuf> {
 #[test]
 fn version_prints_something_sensible() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .arg("--version")
         .assert()
@@ -114,6 +87,7 @@ fn version_prints_something_sensible() {
 #[test]
 fn help_lists_surviving_subcommands() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     let expected_subcommands = ["init", "plan", "daemon", "logs"];
     let mut cmd = loopr(td.path());
     let output = cmd.arg("--help").assert().success();
@@ -134,6 +108,7 @@ fn plan_on_tempdir_creates_and_prints_plan() {
     // Stage 8 wiring adds a git-init requirement because handle_plan_create
     // now creates an integration branch before persisting the Plan.
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     let output = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
@@ -153,6 +128,7 @@ fn plan_on_tempdir_creates_and_prints_plan() {
 #[test]
 fn plans_lists_created_plans_as_summary_projections() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     // Create two plans via the binary so the test exercises the full
     // round-trip (client -> daemon -> store -> summary projection -> client).
@@ -187,6 +163,7 @@ fn plans_lists_created_plans_as_summary_projections() {
 #[test]
 fn plans_on_fresh_target_emits_empty_records_array() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     let output = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "-o", "json", "plans"])
@@ -205,6 +182,7 @@ fn plans_on_fresh_target_emits_empty_records_array() {
 #[test]
 fn show_on_created_plan_returns_full_record() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     // Create a plan and capture its id from the `plan` output.
     let plan_out = loopr(td.path())
@@ -247,6 +225,7 @@ fn show_on_created_plan_returns_full_record() {
 #[test]
 fn show_with_unknown_prefix_errors_cleanly_without_ipc() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     // No daemon started; CLI should reject the id purely on prefix check.
     loopr(td.path())
@@ -262,6 +241,7 @@ fn bare_invocation_routes_to_tui_and_errors_tui_not_installed() {
     // normalizes to Command::Tui. Until the TUI crate lands this exits
     // non-zero with a clear "TUI is not built into this binary" message.
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap()])
         .assert()
@@ -272,6 +252,7 @@ fn bare_invocation_routes_to_tui_and_errors_tui_not_installed() {
 #[test]
 fn explicit_tui_subcommand_errors_tui_not_installed() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "tui"])
         .assert()
@@ -282,6 +263,7 @@ fn explicit_tui_subcommand_errors_tui_not_installed() {
 #[test]
 fn source_guard_blocks_target_with_sentinel() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     fs::write(td.path().join(".loopr-source-guard"), "").unwrap();
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
@@ -298,6 +280,7 @@ fn source_guard_trips_from_within_loopr_v5_checkout() {
     // at the repo root. This is the live-fire check that the sentinel
     // actually blocks loopr from operating on its own source tree.
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["plan", "x"])
@@ -309,6 +292,7 @@ fn source_guard_trips_from_within_loopr_v5_checkout() {
 #[test]
 fn target_invalid_when_path_does_not_exist() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .args(["-C", "/does/not/exist/42", "plan", "x"])
         .assert()
@@ -319,6 +303,7 @@ fn target_invalid_when_path_does_not_exist() {
 #[test]
 fn target_is_file_hints_at_parent() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     let file = td.path().join("a-file");
     fs::write(&file, "").unwrap();
     loopr(td.path())
@@ -335,6 +320,7 @@ fn daemon_start_forks_daemon_and_writes_sentinels() {
     // writes pid / version / process-id sentinels and binds the socket, then
     // awaits shutdown. The client-side caller returns immediately.
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "start"])
         .assert()
@@ -378,6 +364,7 @@ fn run_plan(target: &std::path::Path) {
 #[test]
 fn plan_writes_events_and_pretty_logs() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     run_plan(td.path());
 
     let runs_dir = session_target_runs_dir(td.path());
@@ -408,6 +395,7 @@ fn plan_writes_events_and_pretty_logs() {
 #[test]
 fn events_log_is_valid_json_with_expected_span() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     run_plan(td.path());
 
     // Pick the client's process-run dir (not the daemon's) so we exercise
@@ -455,6 +443,7 @@ fn events_log_is_valid_json_with_expected_span() {
 #[test]
 fn logs_tail_reads_pretty_from_latest_run() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     run_plan(td.path());
     let output = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "logs", "tail", "--lines", "20"])
@@ -483,6 +472,7 @@ fn logs_runs_succeeds_after_plan() {
     // plan just verifies the command succeeds; the current session is
     // excluded from the listing, so output count is not load-bearing.
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     run_plan(td.path());
 
     loopr(td.path())
@@ -496,6 +486,7 @@ fn logs_runs_succeeds_after_plan() {
 #[test]
 fn logs_tail_no_runs_errors_cleanly() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "logs", "tail"])
         .assert()
@@ -506,6 +497,7 @@ fn logs_tail_no_runs_errors_cleanly() {
 #[test]
 fn log_level_gate_suppresses_debug_at_info_default() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     run_plan(td.path());
     // Stage 4 Phase 3: use the client run dir, not whichever dir happens
     // to be first from read_dir. The daemon writes to its own session-id,
@@ -524,6 +516,7 @@ fn log_level_gate_suppresses_debug_at_info_default() {
 #[test]
 fn log_level_debug_emits_debug_events() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "--log-level", "debug", "plan", "x"])
@@ -543,6 +536,7 @@ fn log_level_debug_emits_debug_events() {
 #[test]
 fn log_level_via_env_var() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     loopr(td.path())
         .env("LOOPR_LOG_LEVEL", "debug")
@@ -567,6 +561,7 @@ fn console_layer_gated_on_tty() {
     // Stage 5: `plan` now succeeds and prints the plan to stdout; stderr
     // should be empty of the invocation span regardless.
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     let assertion = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])

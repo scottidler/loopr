@@ -20,12 +20,16 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
 use std::process::Command as StdCommand;
 use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
 use tempfile::TempDir;
+
+use common::{DaemonAutoStop, stop_daemon_for};
 
 fn loopr() -> Command {
     Command::cargo_bin("loopr").unwrap()
@@ -53,34 +57,20 @@ fn init_target(target: &std::path::Path) {
     run(&["commit", "-q", "-m", "seed", "--no-gpg-sign"]);
 }
 
-/// SIGTERM the auto-forked daemon and wait for it to exit. Mirrors
-/// `smoke.rs::stop_daemon`; duplicated here to keep Stage 7's regression
-/// guard self-contained.
-fn stop_daemon(target: &std::path::Path) {
-    let pid_file = target.join(".loopr").join("daemon.pid");
-    let pid: u32 = match fs::read_to_string(&pid_file) {
-        Ok(s) => match s.trim().parse() {
-            Ok(p) => p,
-            Err(_) => return,
-        },
-        Err(_) => return,
-    };
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-}
+// `stop_daemon` lives in `common::stop_daemon_for` so all daemon-spawning
+// integration tests share the same panic-safe `DaemonAutoStop` guard.
 
 #[test]
 fn plan_create_exercises_stage_7_spawn_path_without_crash() {
     let td = TempDir::new().unwrap();
     let target = td.path();
     init_target(target);
+
+    // Panic-safe daemon cleanup: even if the `assert().success()` below
+    // unwinds (the common failure path), Drop runs and SIGTERMs the
+    // auto-forked daemon. Without this guard the daemon is reparented
+    // to init and accumulates as an orphan across test runs.
+    let _stop = DaemonAutoStop::for_target(target);
 
     // Run `loopr plan "..."`; this auto-forks a daemon, persists a Plan,
     // runs the decomposer (which either yields Works or errors out with no
@@ -91,8 +81,11 @@ fn plan_create_exercises_stage_7_spawn_path_without_crash() {
         .success();
 
     // Shutdown the daemon; exercises drain_implementer_tasks on whatever
-    // implementer tasks are in-flight (zero or more).
-    stop_daemon(target);
+    // implementer tasks are in-flight (zero or more). (The guard above
+    // would also fire on success, but ordering matters for the
+    // `taskstore` assertions below: stop_daemon_for blocks until the
+    // daemon has flushed its final writes.)
+    stop_daemon_for(target);
 
     // Plan was persisted even if decompose failed.
     let plans_jsonl = target.join(".loopr").join("taskstore").join("plans.jsonl");
@@ -118,6 +111,8 @@ fn plan_create_daemon_shutdown_drains_implementer_tasks_cleanly() {
     let target = td.path();
     init_target(target);
 
+    let _stop = DaemonAutoStop::for_target(target);
+
     // One plan, then immediate shutdown. Even with zero in-flight
     // implementer tasks, the drain_implementer_tasks step must handle
     // the empty-JoinSet path without deadlock or timeout.
@@ -127,7 +122,7 @@ fn plan_create_daemon_shutdown_drains_implementer_tasks_cleanly() {
         .success();
 
     let start = Instant::now();
-    stop_daemon(target);
+    stop_daemon_for(target);
     let elapsed = start.elapsed();
 
     // The empty-drain path should return immediately. If we hit the

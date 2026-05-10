@@ -15,7 +15,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 mod common;
-use common::init_git_repo;
+use common::{DaemonAutoStop, init_git_repo};
 
 /// Build a `loopr` subprocess with `XDG_DATA_HOME` pointed at a
 /// test-local dir so session state doesn't pollute the real user's
@@ -79,6 +79,7 @@ fn start_daemon(target: &Path) {
 #[test]
 fn ac3_version_file_matches_git_describe() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
 
     let written = fs::read_to_string(td.path().join(".loopr").join("daemon.version")).unwrap();
@@ -96,6 +97,7 @@ fn ac3_version_file_matches_git_describe() {
 #[test]
 fn ac4_process_id_file_points_to_extant_run_dir() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
 
     let session_id = fs::read_to_string(td.path().join(".loopr").join("active-session")).unwrap();
@@ -125,6 +127,7 @@ fn ac4_process_id_file_points_to_extant_run_dir() {
 #[test]
 fn ac5_daemon_emits_started_event_to_its_own_events_log() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
 
     let session_id = fs::read_to_string(td.path().join(".loopr").join("active-session"))
@@ -172,6 +175,7 @@ fn ac5_daemon_emits_started_event_to_its_own_events_log() {
 #[test]
 fn ac14_foreground_start_blocked_by_running_background_daemon() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
     let pid = read_pid(td.path()).unwrap();
 
@@ -202,6 +206,7 @@ fn ac14_foreground_start_blocked_by_running_background_daemon() {
 #[test]
 fn ac6_daemon_status_prints_human_readable() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
 
     let output = loopr(td.path())
@@ -222,6 +227,7 @@ fn ac6_daemon_status_prints_human_readable() {
 #[test]
 fn ac7_daemon_stop_removes_sentinels() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
     let pid = read_pid(td.path()).unwrap();
 
@@ -262,6 +268,7 @@ fn ac7_daemon_stop_removes_sentinels() {
 #[test]
 fn ac8_daemon_stop_no_daemon_prints_message() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "daemon", "stop"])
         .assert()
@@ -276,6 +283,7 @@ fn ac8_daemon_stop_no_daemon_prints_message() {
 #[test]
 fn ac9_plan_auto_forks_daemon_and_creates_plan() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
@@ -292,6 +300,7 @@ fn ac9_plan_auto_forks_daemon_and_creates_plan() {
 #[test]
 fn ac10_plan_reuses_running_daemon() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
@@ -311,6 +320,7 @@ fn ac10_plan_reuses_running_daemon() {
 #[test]
 fn ac11_second_daemon_start_is_idempotent() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
 
@@ -333,6 +343,7 @@ fn ac11_second_daemon_start_is_idempotent() {
 #[test]
 fn ac12_stale_pid_triggers_cleanup_and_fresh_fork() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     fs::create_dir_all(td.path().join(".loopr")).unwrap();
     // Use a PID that is almost certainly not alive and not named `loopr`.
     fs::write(td.path().join(".loopr").join("daemon.pid"), "999999\n").unwrap();
@@ -352,6 +363,7 @@ fn ac12_stale_pid_triggers_cleanup_and_fresh_fork() {
 #[test]
 fn ac13_version_mismatch_triggers_silent_restart() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     start_daemon(td.path());
     let pid_before = read_pid(td.path()).unwrap();
@@ -376,6 +388,7 @@ fn ac13_version_mismatch_triggers_silent_restart() {
 #[test]
 fn ac15_pid_reuse_protection_rejects_non_loopr() {
     let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
     fs::create_dir_all(td.path().join(".loopr")).unwrap();
     fs::write(td.path().join(".loopr").join("daemon.pid"), "1\n").unwrap();
 
