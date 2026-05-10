@@ -179,6 +179,15 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// down. Spawned by `handle_plan_create` and (after a daemon
     /// restart) `startup_reconcile_directors`.
     pub director_tasks: Mutex<JoinSet<()>>,
+    /// In-flight `WorkSpawner`-issued tasks. The Director's
+    /// `accept_bundle`, `override_work`, and `assign_work` calls each
+    /// spawn into this pool so shutdown can drain them deterministically
+    /// (vs. v0.7.11's bare `tokio::spawn`, whose handles were never
+    /// joined). Drained AFTER `director_tasks` and BEFORE
+    /// `integrator_tasks` per the spawn DAG: the Director feeds this
+    /// pool, this pool feeds the Integrator pool. See `daemon.rs`'s
+    /// drain rationale comment for the full case.
+    pub work_spawner_tasks: Mutex<JoinSet<()>>,
     /// Per-process counter snapshot. Held in a `std::sync::Mutex`
     /// because every emitter is short, non-async, and the value is
     /// shared with the panic hook and SIGQUIT handler (both of which
@@ -257,6 +266,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             reviewer_tasks: Mutex::new(JoinSet::new()),
             integrator_tasks: Mutex::new(JoinSet::new()),
             director_tasks: Mutex::new(JoinSet::new()),
+            work_spawner_tasks: Mutex::new(JoinSet::new()),
             snapshot,
             server_timeouts,
         }
@@ -1168,149 +1178,178 @@ where
     L: LlmClient + Send + Sync + 'static,
 {
     fn accept_bundle(&self, bundle_id: BundleId) {
+        let ctx_for_lock = Arc::clone(&self.0);
         let ctx = Arc::clone(&self.0);
+        // Shim: bridge the sync `WorkSpawner` trait to the async
+        // `work_spawner_tasks` lock. The shim itself runs as a detached
+        // tokio task; on shutdown it observes `shutting_down` either via
+        // the early-return below or via the no-op behavior of the inner
+        // task body. The inner spawn lands in `work_spawner_tasks` so
+        // the daemon's drain order can join it deterministically.
         tokio::spawn(async move {
-            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
-                debug!(bundle_id = %bundle_id, "shutdown in progress; skipping accept_bundle");
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
-            // Re-read Bundle: the Director's loop snapshot is stale by
-            // the time the action lands here.
-            let mut bundle = match ctx.store.bundles().get(&bundle_id).await {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: bundle lookup failed");
+            let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            tasks.spawn(async move {
+                if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!(bundle_id = %bundle_id, "shutdown in progress; skipping accept_bundle");
                     return;
                 }
-            };
-            // Idempotent: a Director restart after a clear-history can
-            // re-emit `accept_bundle` for a Bundle already at Accepted.
-            // No-op silently on already-Accepted; warn on anything else.
-            match bundle.status {
-                BundleStatus::Accepted => {
-                    debug!(bundle_id = %bundle_id, "accept_bundle: already Accepted; no-op");
+                // Re-read Bundle: the Director's loop snapshot is stale by
+                // the time the action lands here.
+                let mut bundle = match ctx.store.bundles().get(&bundle_id).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: bundle lookup failed");
+                        return;
+                    }
+                };
+                // Idempotent: a Director restart after a clear-history can
+                // re-emit `accept_bundle` for a Bundle already at Accepted.
+                // No-op silently on already-Accepted; warn on anything else.
+                match bundle.status {
+                    BundleStatus::Accepted => {
+                        debug!(bundle_id = %bundle_id, "accept_bundle: already Accepted; no-op");
+                        return;
+                    }
+                    BundleStatus::Reviewed => {}
+                    other => {
+                        warn!(
+                            bundle_id = %bundle_id,
+                            status = ?other,
+                            "accept_bundle: unexpected status; skipping"
+                        );
+                        return;
+                    }
+                }
+                let expected = bundle.updated_at;
+                if let Err(e) = bundle.transition(BundleStatus::Accepted, Role::Director) {
+                    warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
                     return;
                 }
-                BundleStatus::Reviewed => {}
-                other => {
-                    warn!(
-                        bundle_id = %bundle_id,
-                        status = ?other,
-                        "accept_bundle: unexpected status; skipping"
-                    );
+                if let Err(e) = ctx.store.bundles().update(bundle.clone(), expected).await {
+                    // Stale OCC errors are expected when the daemon's reconcile
+                    // sweep races the Director; swallow and continue.
+                    if let store::StoreError::Stale { .. } = e {
+                        debug!(bundle_id = %bundle_id, "accept_bundle: OCC Stale; another writer beat us");
+                        return;
+                    }
+                    warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
                     return;
                 }
-            }
-            let expected = bundle.updated_at;
-            if let Err(e) = bundle.transition(BundleStatus::Accepted, Role::Director) {
-                warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
-                return;
-            }
-            if let Err(e) = ctx.store.bundles().update(bundle.clone(), expected).await {
-                // Stale OCC errors are expected when the daemon's reconcile
-                // sweep races the Director; swallow and continue.
-                if let store::StoreError::Stale { .. } = e {
-                    debug!(bundle_id = %bundle_id, "accept_bundle: OCC Stale; another writer beat us");
-                    return;
-                }
-                warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
-                return;
-            }
-            // Spawn Integrator into the existing pool so the drain order
-            // still applies.
-            let integrator_ctx = Arc::clone(&ctx);
-            let mut its = ctx.integrator_tasks.lock().await;
-            its.spawn(integrator_ctx.spawn_integrator_for_bundle(bundle));
+                // Spawn Integrator into the existing pool so the drain order
+                // still applies.
+                let integrator_ctx = Arc::clone(&ctx);
+                let mut its = ctx.integrator_tasks.lock().await;
+                its.spawn(integrator_ctx.spawn_integrator_for_bundle(bundle));
+            });
         });
     }
 
     fn override_work(&self, work_id: WorkId, target_status: WorkStatus, reason: String) {
+        let ctx_for_lock = Arc::clone(&self.0);
         let ctx = Arc::clone(&self.0);
+        // Shim: see `accept_bundle` above for the bridging rationale.
         tokio::spawn(async move {
-            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
-                debug!(work_id = %work_id, "shutdown in progress; skipping override_work");
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
-            let mut work = match ctx.store.works().get(&work_id).await {
-                Ok(w) => w,
-                Err(e) => {
-                    warn!(error = %e, work_id = %work_id, "override_work: work lookup failed");
+            let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            tasks.spawn(async move {
+                if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!(work_id = %work_id, "shutdown in progress; skipping override_work");
                     return;
                 }
-            };
-            // FSM is the source of truth for what's permitted; the impl
-            // logs the reason so an operator scrolling logs sees why the
-            // Director moved the Work.
-            info!(
-                work_id = %work_id,
-                from = ?work.status,
-                to = ?target_status,
-                reason = %reason,
-                "override_work: applying Director-issued FSM override"
-            );
-            if let Err(e) = transition_and_persist_work(
-                &*ctx.summary_fanout,
-                &mut work,
-                target_status,
-                Role::Director,
-                true, // override
-            )
-            .await
-            {
-                warn!(error = %e, work_id = %work_id, "override_work: persist failed");
-            }
-            // If the override pushed the Work to Ready, kick the Implementer
-            // pipeline. The Director's primary recovery path is
-            // `Blocked -> Ready` to retry a previously-rejected Bundle;
-            // without this spawn, the Work would sit Ready forever until
-            // a sibling completion triggered `promote_unblocked_siblings`.
-            if work.status == WorkStatus::Ready && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
-                let task_ctx = Arc::clone(&ctx);
-                let mut tasks = ctx.implementer_tasks.lock().await;
-                tasks.spawn(task_ctx.spawn_implementer_for_work(work));
-            }
+                let mut work = match ctx.store.works().get(&work_id).await {
+                    Ok(w) => w,
+                    Err(e) => {
+                        warn!(error = %e, work_id = %work_id, "override_work: work lookup failed");
+                        return;
+                    }
+                };
+                // FSM is the source of truth for what's permitted; the impl
+                // logs the reason so an operator scrolling logs sees why the
+                // Director moved the Work.
+                info!(
+                    work_id = %work_id,
+                    from = ?work.status,
+                    to = ?target_status,
+                    reason = %reason,
+                    "override_work: applying Director-issued FSM override"
+                );
+                if let Err(e) = transition_and_persist_work(
+                    &*ctx.summary_fanout,
+                    &mut work,
+                    target_status,
+                    Role::Director,
+                    true, // override
+                )
+                .await
+                {
+                    warn!(error = %e, work_id = %work_id, "override_work: persist failed");
+                }
+                // If the override pushed the Work to Ready, kick the Implementer
+                // pipeline. The Director's primary recovery path is
+                // `Blocked -> Ready` to retry a previously-rejected Bundle;
+                // without this spawn, the Work would sit Ready forever until
+                // a sibling completion triggered `promote_unblocked_siblings`.
+                if work.status == WorkStatus::Ready && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    let task_ctx = Arc::clone(&ctx);
+                    let mut tasks = ctx.implementer_tasks.lock().await;
+                    tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                }
+            });
         });
     }
 
     fn assign_work(&self, work_id: WorkId) {
+        let ctx_for_lock = Arc::clone(&self.0);
         let ctx = Arc::clone(&self.0);
+        // Shim: see `accept_bundle` above for the bridging rationale.
         tokio::spawn(async move {
-            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
-                debug!(work_id = %work_id, "shutdown in progress; skipping assign_work");
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
-            let work = match ctx.store.works().get(&work_id).await {
-                Ok(w) => w,
-                Err(e) => {
-                    warn!(error = %e, work_id = %work_id, "assign_work: work lookup failed");
+            let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            tasks.spawn(async move {
+                if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!(work_id = %work_id, "shutdown in progress; skipping assign_work");
                     return;
                 }
-            };
-            // Dep-gate: re-read siblings and confirm every dep is Done.
-            // Director may emit `assign_work` for a Work whose deps are
-            // not yet complete; the contract is to silently no-op rather
-            // than spawn a doomed Implementer.
-            let siblings = match ctx.store.works().list_by_parent_id(&work.parent_id).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(error = %e, work_id = %work_id, "assign_work: sibling list failed");
+                let work = match ctx.store.works().get(&work_id).await {
+                    Ok(w) => w,
+                    Err(e) => {
+                        warn!(error = %e, work_id = %work_id, "assign_work: work lookup failed");
+                        return;
+                    }
+                };
+                // Dep-gate: re-read siblings and confirm every dep is Done.
+                // Director may emit `assign_work` for a Work whose deps are
+                // not yet complete; the contract is to silently no-op rather
+                // than spawn a doomed Implementer.
+                let siblings = match ctx.store.works().list_by_parent_id(&work.parent_id).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(error = %e, work_id = %work_id, "assign_work: sibling list failed");
+                        return;
+                    }
+                };
+                if !work.all_deps_done(&siblings) {
+                    warn!(work_id = %work_id, "assign_work: deps not all Done; ignoring");
                     return;
                 }
-            };
-            if !work.all_deps_done(&siblings) {
-                warn!(work_id = %work_id, "assign_work: deps not all Done; ignoring");
-                return;
-            }
-            // Only Pending or Ready Works are eligible; everything else
-            // means the dep-gate reactive path or Director already moved
-            // on. No-op without churning the FSM.
-            if !matches!(work.status, WorkStatus::Pending | WorkStatus::Ready) {
-                debug!(work_id = %work_id, status = ?work.status, "assign_work: not eligible; skipping");
-                return;
-            }
-            let task_ctx = Arc::clone(&ctx);
-            let mut tasks = ctx.implementer_tasks.lock().await;
-            tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                // Only Pending or Ready Works are eligible; everything else
+                // means the dep-gate reactive path or Director already moved
+                // on. No-op without churning the FSM.
+                if !matches!(work.status, WorkStatus::Pending | WorkStatus::Ready) {
+                    debug!(work_id = %work_id, status = ?work.status, "assign_work: not eligible; skipping");
+                    return;
+                }
+                let task_ctx = Arc::clone(&ctx);
+                let mut tasks = ctx.implementer_tasks.lock().await;
+                tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+            });
         });
     }
 }

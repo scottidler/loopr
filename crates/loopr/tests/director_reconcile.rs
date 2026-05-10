@@ -30,9 +30,9 @@ use llm::ScriptedLlm;
 use loopr::config::Config;
 use loopr::daemon::{DaemonContext, build_context};
 use store::Store;
-use tempfile::TempDir;
 use telemetry::digest::process::ProcessSnapshot;
 use telemetry::{ProcessId, SessionId};
+use tempfile::TempDir;
 use tools::SandboxMode;
 
 use common::init_git_repo;
@@ -137,8 +137,7 @@ async fn build_test_context(target: &Path) -> Arc<DaemonContext<ScriptedLlm>> {
 /// the Arc and close the store. Mirrors `TestDaemon::shutdown` minus the
 /// IPC accept-loop drain.
 async fn teardown(ctx: Arc<DaemonContext<ScriptedLlm>>) {
-    ctx.shutting_down
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     {
         let mut tasks = ctx.director_tasks.lock().await;

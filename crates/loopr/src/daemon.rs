@@ -84,6 +84,12 @@ pub const INTEGRATOR_DRAIN_TIMEOUT_SECS: u64 = 15;
 /// via `shutdown_notify` so an idle/poll wait never burns this budget.
 pub const DIRECTOR_DRAIN_TIMEOUT_SECS: u64 = 30;
 
+/// Soft timeout for draining in-flight `WorkSpawner` tasks at shutdown.
+/// Spawner tasks do a Store read + small mutation + (in
+/// `accept_bundle`) one Integrator spawn — non-LLM, sub-second
+/// typical. The 10s budget is a ceiling, not an expected wait.
+pub const WORK_SPAWNER_DRAIN_TIMEOUT_SECS: u64 = 10;
+
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
@@ -183,6 +189,35 @@ async fn drain_director_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<Da
             timeout_secs = DIRECTOR_DRAIN_TIMEOUT_SECS,
             remaining = tasks.len(),
             "director task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Drain `ctx.work_spawner_tasks` with `WORK_SPAWNER_DRAIN_TIMEOUT_SECS`
+/// budget. Runs AFTER `drain_director_tasks` so a Director that
+/// dispatched a final action (`accept_bundle` / `override_work` /
+/// `assign_work`) has its spawner task land in this pool before the
+/// drain. Runs BEFORE `drain_integrator_tasks` so an
+/// `accept_bundle` that spawns an Integrator can enqueue it before
+/// that pool drains.
+async fn drain_work_spawner_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
+    let mut tasks = ctx.work_spawner_tasks.lock().await;
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len();
+    tracing::info!(count = n, "draining work-spawner tasks");
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(WORK_SPAWNER_DRAIN_TIMEOUT_SECS), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_secs = WORK_SPAWNER_DRAIN_TIMEOUT_SECS,
+            remaining = tasks.len(),
+            "work-spawner task drain timed out; aborting remainder"
         );
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
@@ -671,28 +706,31 @@ where
     // `crate::transport::server::accept_loop`).
     let accept_result = crate::transport::server::accept_loop(listener, ctx.clone()).await;
 
-    // Stage 7 wiring: drain in-flight Implementer tasks. Each task holds
-    // an `Arc<DaemonContext>` clone (the `self: Arc<Self>` parameter of
-    // `spawn_implementer_for_work`); they MUST complete before
-    // `Arc::try_unwrap` in the caller, or the Store falls back to its sync
-    // Drop which can panic on the tokio runtime.
+    // Drain in reverse-spawn-chain order so no pool can receive a NEW
+    // spawn after its drain has returned. Spawn DAG today:
+    //
+    //   Implementer ─spawns─▶ Reviewer ─spawns─▶ Integrator
+    //                                              ▲
+    //   Director    ─spawns─▶ work_spawner ────────┘
+    //                              │
+    //                              └─ spawns Integrator (accept_bundle)
+    //
+    // Reverse-toposort drain: implementer → reviewer → director →
+    // work_spawner → integrator. Each task in a downstream pool holds
+    // an `Arc<DaemonContext>` clone (via `Arc::clone(&self.0)` or the
+    // `self: Arc<Self>` receiver); they MUST complete before
+    // `Arc::try_unwrap` in `serve` reclaims the Store, or Store falls
+    // back to its sync Drop which can panic on the tokio runtime.
+    //
+    // See docs/design/2026-05-09-director-phase-1-followups.md "Drain
+    // Ordering Rationale" for why this differs from v0.7.11's
+    // (defensively-correct but structurally-muddled)
+    // implementer→reviewer→integrator→director order.
     drain_implementer_tasks(&ctx).await;
-
-    // Stage 8 wiring: drain Reviewer tasks AFTER Implementer tasks so a
-    // successful Implementer on the wire can enqueue its Reviewer into
-    // the pool before the Reviewer drain begins.
     drain_reviewer_tasks(&ctx).await;
-
-    // Stage 8 wiring: drain Integrator tasks AFTER Reviewer tasks so an
-    // in-flight Reviewer with an Accept verdict can enqueue its
-    // Integrator before the pool drains.
-    drain_integrator_tasks(&ctx).await;
-
-    // Director Phase 3 wiring: drain Director tasks AFTER Integrator so
-    // a Director that fired `accept_bundle` (which spawns into
-    // integrator_tasks) lets that Integrator land before the Director
-    // itself winds down.
     drain_director_tasks(&ctx).await;
+    drain_work_spawner_tasks(&ctx).await;
+    drain_integrator_tasks(&ctx).await;
 
     // Phase 7: write the per-process digest after the task pools
     // drain and before the caller's `Arc::try_unwrap`. Best-effort:
