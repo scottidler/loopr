@@ -111,6 +111,14 @@ pub struct DirectorConfig {
     pub model: String,
     /// Token budget per LLM call (system + history + state summary).
     pub token_budget: usize,
+    /// Cross-iteration cap on retries of a single Work. The Director's
+    /// `Blocked -> Ready` retry path increments `Work.attempt_count`
+    /// (Layer 1 in `transition_and_persist_work`); when
+    /// `work.attempt_count >= max_work_attempts`, the soft cap (Layer 2)
+    /// transitions the Plan to `Stalled` and exits the Director with
+    /// `NeedHelp` instead of dispatching another retry. Default 3 to
+    /// match the system prompt's "3 attempts" framing.
+    pub max_work_attempts: u32,
 }
 
 impl Default for DirectorConfig {
@@ -123,6 +131,7 @@ impl Default for DirectorConfig {
             max_parse_failures: 3,
             model: "claude-opus-4-7".to_string(),
             token_budget: 100_000,
+            max_work_attempts: 3,
         }
     }
 }

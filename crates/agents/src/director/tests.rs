@@ -9,7 +9,7 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use context::{AssembledContext, ContextBuilder, ContextError, DirectorState as CtxDirectorState};
-use domain::{Bundle, BundleId, BundleStatus, PlanId, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Work, WorkId, WorkStatus};
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use store::StoreError;
 
@@ -229,10 +229,13 @@ impl LlmClient for FakeLlm {
 }
 
 /// Fake `DirectorStore` returning the works/bundles set at construction.
+/// Holds an optional Plan so the Layer-2 retry-budget cap test can read +
+/// write it; tests that don't exercise the cap leave it at the default.
 #[derive(Default)]
 struct FakeStore {
     works: Mutex<Vec<Work>>,
     bundles: Mutex<Vec<Bundle>>,
+    plan: Mutex<Option<Plan>>,
 }
 
 impl FakeStore {
@@ -240,7 +243,20 @@ impl FakeStore {
         Self {
             works: Mutex::new(works),
             bundles: Mutex::new(bundles),
+            plan: Mutex::new(None),
         }
+    }
+
+    fn with_plan(works: Vec<Work>, bundles: Vec<Bundle>, plan: Plan) -> Self {
+        Self {
+            works: Mutex::new(works),
+            bundles: Mutex::new(bundles),
+            plan: Mutex::new(Some(plan)),
+        }
+    }
+
+    fn plan_status(&self) -> Option<PlanStatus> {
+        self.plan.lock().unwrap().as_ref().map(|p| p.status)
     }
 }
 
@@ -251,6 +267,31 @@ impl DirectorStore for FakeStore {
 
     async fn list_bundles_for_plan(&self, _plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError> {
         Ok(self.bundles.lock().unwrap().clone())
+    }
+
+    async fn get_work(&self, work_id: &WorkId) -> Result<Work, StoreError> {
+        self.works
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|w| &w.id == work_id)
+            .cloned()
+            .ok_or(StoreError::RecordNotFound {
+                collection: "works",
+                id: work_id.to_string(),
+            })
+    }
+
+    async fn get_plan(&self, plan_id: &PlanId) -> Result<Plan, StoreError> {
+        self.plan.lock().unwrap().clone().ok_or(StoreError::RecordNotFound {
+            collection: "plans",
+            id: plan_id.to_string(),
+        })
+    }
+
+    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
+        *self.plan.lock().unwrap() = Some(plan);
+        Ok(())
     }
 }
 
@@ -614,4 +655,145 @@ async fn run_director_need_help_exits_immediately() {
     }
     // Exactly one LLM call: no restart, no retry on NeedHelp.
     assert_eq!(deps.llm.calls(), 1, "NeedHelp must not retry");
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2 (Director-layer) retry-budget cap
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn override_to_ready_below_cap_dispatches_through_spawner() {
+    // attempt_count=2, cap=3 (1-based): 2 < 3, so the cap is NOT tripped
+    // and the override falls through to `spawner.override_work`.
+    let plan_id = PlanId::new();
+    let mut work = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    work.attempt_count = 2;
+    let work_id_s = work.id.to_string();
+    let plan = Plan::new("retry-budget-test".to_string());
+
+    let store = FakeStore::with_plan(vec![work.clone()], vec![], plan);
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    config.max_work_attempts = 3;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps)
+        .await
+        .expect("director exits Ok on shutdown");
+
+    let calls = spawner.override_work_calls.lock().unwrap();
+    assert!(!calls.is_empty(), "below-cap override must reach spawner");
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Active),
+        "Plan must NOT be Stalled below cap"
+    );
+}
+
+#[tokio::test]
+async fn override_to_ready_at_cap_stalls_plan_and_returns_need_help() {
+    // attempt_count=3, cap=3: 3 >= 3 trips the cap. Plan must transition
+    // to Stalled and `run_director` must return NeedHelp without invoking
+    // the spawner.
+    let plan_id = PlanId::new();
+    let mut work = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    work.attempt_count = 3;
+    let work_id_s = work.id.to_string();
+    let plan = Plan::new("retry-budget-exhausted".to_string());
+
+    let store = FakeStore::with_plan(vec![work.clone()], vec![], plan);
+    let llm = FakeLlm::new(vec![
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    ]);
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    config.max_work_attempts = 3;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown);
+
+    let err = run_director(&plan_id, &deps).await.expect_err("must exit NeedHelp");
+    match err {
+        DirectorError::NeedHelp(reason) => {
+            assert!(reason.contains("retry budget exhausted"), "NeedHelp reason: {reason}")
+        }
+        other => panic!("expected NeedHelp, got {other:?}"),
+    }
+    assert!(
+        spawner.override_work_calls.lock().unwrap().is_empty(),
+        "spawner.override_work MUST NOT be called when cap trips"
+    );
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Stalled),
+        "Plan must transition to Stalled BEFORE NeedHelp returns"
+    );
+}
+
+#[tokio::test]
+async fn override_to_non_ready_skips_cap_check() {
+    // Cap only fires on `target == Ready`; an override to Blocked must
+    // dispatch through the spawner regardless of attempt_count.
+    let plan_id = PlanId::new();
+    let mut work = make_work(plan_id.clone(), "wk-1", WorkStatus::InProgress);
+    work.attempt_count = 99;
+    let work_id_s = work.id.to_string();
+    let plan = Plan::new("non-ready-target".to_string());
+
+    let store = FakeStore::with_plan(vec![work.clone()], vec![], plan);
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Blocked",
+            "reason": "stuck on dep"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    config.max_work_attempts = 3;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let calls = spawner.override_work_calls.lock().unwrap();
+    assert!(!calls.is_empty(), "non-Ready override must reach spawner");
+    assert!(calls.iter().all(|(_, status, _)| *status == WorkStatus::Blocked));
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Active),
+        "Plan must NOT be touched"
+    );
 }

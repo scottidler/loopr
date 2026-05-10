@@ -43,7 +43,7 @@ use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
 
 use context::{ContextBuilder, ContextError, DirectorState as CtxDirectorState};
-use domain::{Bundle, BundleId, BundleStatus, PlanId, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Work, WorkId, WorkStatus};
 use llm::{LlmClient, Message};
 use store::StoreError;
 
@@ -94,6 +94,8 @@ pub enum DirectorError {
     Context(#[from] ContextError),
     #[error("invalid id: {0}")]
     Id(String),
+    #[error("fsm transition failed: {0}")]
+    Fsm(String),
 }
 
 /// Fire-and-forget spawn surface injected into `run_director`. Implemented
@@ -110,12 +112,18 @@ pub trait WorkSpawner: Send + Sync + 'static {
     fn assign_work(&self, work_id: WorkId);
 }
 
-/// Narrow read-only store surface the Director needs. Two methods only;
-/// keeps test fakes tiny.
+/// Narrow read+write store surface the Director needs. Five methods:
+/// the original two list helpers, plus `get_work` / `get_plan` /
+/// `update_plan` consumed by the retry-budget enforcement path
+/// (`max_work_attempts` -> Plan::Stalled). Kept narrow on purpose so
+/// test fakes stay small.
 #[trait_variant::make(Send)]
 pub trait DirectorStore: Send + Sync + 'static {
     async fn list_works_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Work>, StoreError>;
     async fn list_bundles_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError>;
+    async fn get_work(&self, work_id: &WorkId) -> Result<Work, StoreError>;
+    async fn get_plan(&self, plan_id: &PlanId) -> Result<Plan, StoreError>;
+    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError>;
 }
 
 /// `DirectorStore` impl on `store::Store`. `list_bundles_for_plan` walks
@@ -136,6 +144,18 @@ impl DirectorStore for store::Store {
         }
         Ok(bundles)
     }
+
+    async fn get_work(&self, work_id: &WorkId) -> Result<Work, StoreError> {
+        self.works().get(work_id).await
+    }
+
+    async fn get_plan(&self, plan_id: &PlanId) -> Result<Plan, StoreError> {
+        self.plans().get(plan_id).await
+    }
+
+    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
+        self.plans().update(plan).await
+    }
 }
 
 /// Forwarding `DirectorStore` impl for `Arc<S>`. Mirrors the pattern used
@@ -149,6 +169,18 @@ impl<S: DirectorStore + ?Sized> DirectorStore for Arc<S> {
 
     async fn list_bundles_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError> {
         (**self).list_bundles_for_plan(plan_id).await
+    }
+
+    async fn get_work(&self, work_id: &WorkId) -> Result<Work, StoreError> {
+        (**self).get_work(work_id).await
+    }
+
+    async fn get_plan(&self, plan_id: &PlanId) -> Result<Plan, StoreError> {
+        (**self).get_plan(plan_id).await
+    }
+
+    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
+        (**self).update_plan(plan).await
     }
 }
 
@@ -384,6 +416,7 @@ fn restart_reason_for(err: &DirectorError) -> &'static str {
         DirectorError::Id(_) => "id_failure",
         DirectorError::Lifeguard(_) => "lifeguard_escalation",
         DirectorError::NeedHelp(_) => "need_help",
+        DirectorError::Fsm(_) => "fsm_failure",
     }
 }
 
@@ -505,6 +538,39 @@ where
                         .parse::<WorkId>()
                         .map_err(|e| DirectorError::Id(format!("work_id={work_id}: {e}")))?;
                     let target = parse_work_status(target_status)?;
+                    // Layer 2 retry-budget cap. Only fires when the
+                    // Director is asking to push a Work back to Ready
+                    // (the recovery path); other override targets are
+                    // unrelated to retry semantics. Persist Plan ->
+                    // Stalled BEFORE returning NeedHelp so a daemon
+                    // restart's `startup_reconcile_directors` skips the
+                    // Plan instead of respawning a Director that would
+                    // immediately re-exhaust the same budget. Layer 1
+                    // (in `transition_and_persist_work`) makes
+                    // `attempt_count` 1-based; a Work that has reached
+                    // Ready three times has `attempt_count = 3`, and
+                    // with default `max_work_attempts = 3` the cap
+                    // refuses the 4th retry.
+                    if target == WorkStatus::Ready {
+                        let work = deps.store.get_work(&wid).await?;
+                        if work.attempt_count >= deps.config.max_work_attempts {
+                            warn!(
+                                plan_id = %plan_id,
+                                work_id = %wid,
+                                attempt_count = work.attempt_count,
+                                max_work_attempts = deps.config.max_work_attempts,
+                                "director: retry budget exhausted; transitioning Plan -> Stalled"
+                            );
+                            let mut plan = deps.store.get_plan(plan_id).await?;
+                            plan.transition(PlanStatus::Stalled, Role::Director)
+                                .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
+                            deps.store.update_plan(plan).await?;
+                            return Err(DirectorError::NeedHelp(format!(
+                                "retry budget exhausted on work {wid} (attempt_count={} >= max_work_attempts={})",
+                                work.attempt_count, deps.config.max_work_attempts
+                            )));
+                        }
+                    }
                     deps.spawner.override_work(wid, target, reason.clone());
                     took_action = true;
                 }

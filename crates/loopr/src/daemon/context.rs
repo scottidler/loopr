@@ -971,6 +971,15 @@ async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Err
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Spawner-layer hard cap on `Work.attempt_count` — defense-in-depth
+/// circuit breaker. The Director-layer soft cap
+/// (`DirectorConfig.max_work_attempts`, default 3) is the well-behaved
+/// exit path; this constant catches retry paths that bypass the soft cap
+/// (rogue caller, manual CLI intervention, future bug) and push a Work
+/// to Ready a hundred-plus times. Set far above any plausible
+/// operator-tunable soft cap.
+pub const MAX_WORK_ATTEMPTS_HARD_CAP: u32 = 100;
+
 /// Transition a Work via the FSM (transition or override) and persist via
 /// `WorksStore::update`. Returns Err if the FSM rejects the transition or
 /// if persistence fails; the caller logs and decides whether to continue.
@@ -979,6 +988,13 @@ async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Err
 /// which mutated `work.status = ...` by raw assignment and bypassed the
 /// FSM entirely. Every Work-state change in the pipeline flows through
 /// this helper.
+///
+/// **Retry-budget instrumentation (Director Phase 1 follow-ups, Layers 1
+/// and 3).** On any successful transition where the new status is `Ready`,
+/// `work.attempt_count` increments by 1 BEFORE the persist write, so a
+/// Work that has run once has `attempt_count == 1` (1-based). Layer 3's
+/// hard cap pre-checks the count BEFORE the increment; the persist is
+/// refused if `attempt_count >= MAX_WORK_ATTEMPTS_HARD_CAP`.
 pub async fn transition_and_persist_work<S>(
     sink: &S,
     work: &mut Work,
@@ -1000,6 +1016,24 @@ where
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
+
+    // Layer 3 hard cap: refuse persist when attempt_count is already at
+    // the hard cap. Pre-increment (>=) check keeps the cap strict — the
+    // current attempt would be the (HARD_CAP+1)th if it landed.
+    if matches!(target, WorkStatus::Ready) && work.attempt_count >= MAX_WORK_ATTEMPTS_HARD_CAP {
+        return Err(format!(
+            "work {} attempt_count={} hit MAX_WORK_ATTEMPTS_HARD_CAP={}; refusing persist",
+            work.id, work.attempt_count, MAX_WORK_ATTEMPTS_HARD_CAP
+        ));
+    }
+
+    // Layer 1 increment: bump the cross-iteration retry counter on any
+    // path to Ready. Fires for both the initial Pending->Ready dispatch
+    // (first attempt) and Director-issued Blocked->Ready retries.
+    if matches!(target, WorkStatus::Ready) {
+        work.attempt_count = work.attempt_count.saturating_add(1);
+    }
+
     sink.update(work.clone(), expected_updated_at)
         .await
         .map_err(|e| format!("works().update: {e}"))?;
