@@ -69,9 +69,12 @@ async fn director_plan_to_tick_happy_path() {
     let mut daemon = spawn_test_daemon(llm).await.expect("spawn_test_daemon");
     let target = daemon.target().to_path_buf();
 
-    let mut client = IpcClient::connect(daemon.handle().socket_path())
-        .await
-        .expect("connect");
+    let mut client = IpcClient::connect(
+        daemon.handle().socket_path(),
+        loopr::transport::ClientTimeouts::default(),
+    )
+    .await
+    .expect("connect");
     let hs = client.handshake(None).await.expect("handshake");
     assert_eq!(hs.protocol_version, PROTOCOL_VERSION);
 

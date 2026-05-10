@@ -81,7 +81,9 @@ async fn client_handshake_then_status() {
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
-    let mut client = IpcClient::connect(&socket).await.unwrap();
+    let mut client = IpcClient::connect(&socket, crate::transport::ClientTimeouts::default())
+        .await
+        .unwrap();
     let hs = client.handshake(None).await.unwrap();
     assert_eq!(hs.protocol_version, PROTOCOL_VERSION);
 
@@ -110,7 +112,9 @@ async fn client_request_raw_unknown_method_returns_method_not_found() {
     let ctx_server = ctx.clone();
     let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
 
-    let mut client = IpcClient::connect(&socket).await.unwrap();
+    let mut client = IpcClient::connect(&socket, crate::transport::ClientTimeouts::default())
+        .await
+        .unwrap();
     client.handshake(None).await.unwrap();
     let (resp, _) = client
         .request_raw("bogus.method", serde_json::json!({"goal": "x"}))
@@ -145,7 +149,9 @@ async fn client_handshake_version_mismatch_closes_connection() {
     unsafe {
         std::env::set_var("LOOPR_PROTOCOL_VERSION_OVERRIDE", "9999");
     }
-    let mut client = IpcClient::connect(&socket).await.unwrap();
+    let mut client = IpcClient::connect(&socket, crate::transport::ClientTimeouts::default())
+        .await
+        .unwrap();
     let err = client.handshake(None).await.unwrap_err();
     unsafe {
         std::env::remove_var("LOOPR_PROTOCOL_VERSION_OVERRIDE");
@@ -161,4 +167,53 @@ async fn client_handshake_version_mismatch_closes_connection() {
     ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// Phase 4 client request timeout: a daemon that accepts the connection
+/// then never replies must surface as `ClientIo("request timed out
+/// after Ns")` within roughly the configured budget. Built without the
+/// real accept_loop so the daemon side simply receives bytes and
+/// drops them; the client's wall-clock cap is what fires.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_request_times_out_against_silent_server() {
+    let _env_guard = env_mutex().await;
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+
+    // Sham server: accept the connection, then never reply. We don't run
+    // the real `accept_loop` here because we want the daemon side to be
+    // observably silent regardless of any handshake handling. Hold the
+    // accepted stream until the test ends so the client's connection
+    // doesn't see EOF.
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        // Park the stream — never read, never write.
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        drop(stream);
+    });
+
+    let timeouts = crate::transport::ClientTimeouts {
+        request: Duration::from_millis(150),
+    };
+    let mut client = IpcClient::connect(&socket, timeouts).await.unwrap();
+
+    // The handshake itself routes through `request_impl`, so the
+    // configured `request_budget` is what bounds the silent-server
+    // hang. Anything calling `request_impl` against this server
+    // should surface as `ClientIo("request timed out after ...")`.
+    let start = std::time::Instant::now();
+    let err = client.handshake(None).await.unwrap_err();
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "timeout must fire promptly, took {elapsed:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("request timed out after"),
+        "expected timeout error string, got: {msg}"
+    );
+
+    server.abort();
 }

@@ -20,20 +20,28 @@ use ipc::{
 };
 
 use crate::error::LooprError;
+use crate::transport::ClientTimeouts;
 
 /// Short-lived IPC client. Owns a `Framed` sink + stream over the Unix
 /// socket; drops on exit.
 pub struct IpcClient {
     framed: Framed<UnixStream, LinesCodec>,
     next_id: AtomicU64,
+    timeouts: ClientTimeouts,
 }
 
 impl IpcClient {
     /// Connect to the daemon's socket. Returns `ClientIo` on any
     /// failure; callers that expect "daemon might still be starting up"
     /// should use `transport::connect_or_wait` instead.
+    ///
+    /// `timeouts` carries the per-call budgets (currently just the
+    /// request wall-clock cap). Build via
+    /// `ClientTimeouts::from(&config.transport)` to honor operator
+    /// overrides, or via `connect_or_wait` (which threads
+    /// `TransportSection::default()` for the no-config-file path).
     #[tracing::instrument(name = "client.connect", level = "debug", skip_all, fields(socket = %socket.display()), err)]
-    pub async fn connect(socket: &Path) -> Result<Self, LooprError> {
+    pub async fn connect(socket: &Path, timeouts: ClientTimeouts) -> Result<Self, LooprError> {
         let stream = UnixStream::connect(socket)
             .await
             .map_err(|e| LooprError::ClientIo(format!("connect {}: {e}", socket.display())))?;
@@ -41,6 +49,7 @@ impl IpcClient {
         Ok(Self {
             framed,
             next_id: AtomicU64::new(1),
+            timeouts,
         })
     }
 
@@ -111,36 +120,53 @@ impl IpcClient {
             params,
         };
         let line = serde_json::to_string(&req).map_err(|e| LooprError::ClientIo(format!("serialize request: {e}")))?;
-        self.framed
-            .send(line)
-            .await
-            .map_err(|e| LooprError::ClientIo(format!("send: {e}")))?;
 
-        // Collect messages until we get the response whose id matches.
-        // Broadcast events from the daemon interleave with responses; we
-        // buffer them for the caller (Stage 4's callers ignore them).
-        let mut events: Vec<DaemonEvent> = Vec::new();
-        loop {
-            let line = match self.framed.next().await {
-                Some(Ok(line)) => line,
-                Some(Err(e)) => return Err(LooprError::ClientIo(format!("codec error: {e}"))),
-                None => return Err(LooprError::ClientIo("daemon closed connection".into())),
-            };
-            let msg = decode_line(line.as_bytes()).map_err(|e| LooprError::ClientIo(format!("decode: {e}")))?;
-            match msg {
-                IpcMessage::Response(resp) if resp.id == id => return Ok((resp, events)),
-                IpcMessage::Response(other) => {
-                    // Stage 4's connection-scoped request/response model
-                    // guarantees ids are monotonic within a connection;
-                    // a mismatch means the daemon replied out of order
-                    // or re-used an id, which is a protocol error.
-                    return Err(LooprError::ClientIo(format!(
-                        "response id mismatch: expected {id}, got {}",
-                        other.id
-                    )));
+        // Wrap both the initial send and the response-collection loop in a
+        // single wall-clock cap. Wrapping both directions catches the case
+        // where the daemon accepted the connection but its read side has
+        // hung (kernel send buffer eventually fills; `framed.send` blocks)
+        // as well as the more common dead-daemon-doesn't-reply case.
+        let request_budget = self.timeouts.request;
+        let framed = &mut self.framed;
+        let body = async move {
+            framed
+                .send(line)
+                .await
+                .map_err(|e| LooprError::ClientIo(format!("send: {e}")))?;
+
+            // Collect messages until we get the response whose id matches.
+            // Broadcast events from the daemon interleave with responses; we
+            // buffer them for the caller (Stage 4's callers ignore them).
+            let mut events: Vec<DaemonEvent> = Vec::new();
+            loop {
+                let line = match framed.next().await {
+                    Some(Ok(line)) => line,
+                    Some(Err(e)) => return Err(LooprError::ClientIo(format!("codec error: {e}"))),
+                    None => return Err(LooprError::ClientIo("daemon closed connection".into())),
+                };
+                let msg = decode_line(line.as_bytes()).map_err(|e| LooprError::ClientIo(format!("decode: {e}")))?;
+                match msg {
+                    IpcMessage::Response(resp) if resp.id == id => return Ok((resp, events)),
+                    IpcMessage::Response(other) => {
+                        // Stage 4's connection-scoped request/response model
+                        // guarantees ids are monotonic within a connection;
+                        // a mismatch means the daemon replied out of order
+                        // or re-used an id, which is a protocol error.
+                        return Err(LooprError::ClientIo(format!(
+                            "response id mismatch: expected {id}, got {}",
+                            other.id
+                        )));
+                    }
+                    IpcMessage::Event(ev) => events.push(ev),
                 }
-                IpcMessage::Event(ev) => events.push(ev),
             }
+        };
+        match tokio::time::timeout(request_budget, body).await {
+            Ok(res) => res,
+            Err(_elapsed) => Err(LooprError::ClientIo(format!(
+                "request timed out after {}s",
+                request_budget.as_secs()
+            ))),
         }
     }
 }

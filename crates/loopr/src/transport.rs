@@ -22,9 +22,8 @@ use crate::error::LooprError;
 /// Client-side IPC timeouts. Production builds these from
 /// `TransportSection` via `From`, so the operator-facing knob in
 /// `.loopr/config.yml` is the single source of truth for the numbers.
-/// The `Default` impl is `#[cfg(test)]` only — tests get a one-liner that
-/// still routes through `TransportSection::default()` (no duplicate
-/// constants).
+/// `Default` is provided as a convenience that routes through
+/// `TransportSection::default()` — same numbers, no duplicate constants.
 #[derive(Debug, Clone, Copy)]
 pub struct ClientTimeouts {
     /// Wall-clock cap on `request_impl` (send + response loop).
@@ -39,7 +38,6 @@ impl From<&TransportSection> for ClientTimeouts {
     }
 }
 
-#[cfg(test)]
 impl Default for ClientTimeouts {
     fn default() -> Self {
         Self::from(&TransportSection::default())
@@ -48,8 +46,8 @@ impl Default for ClientTimeouts {
 
 /// Server-side IPC timeouts. Production builds these from
 /// `TransportSection` via `From`. Held on `DaemonContext` so every
-/// `handle_client` task reads the same budgets. The `Default` impl is
-/// `#[cfg(test)]` only — same rationale as `ClientTimeouts`.
+/// `handle_client` task reads the same budgets. `Default` routes through
+/// `TransportSection::default()` so the numbers stay in one place.
 #[derive(Debug, Clone, Copy)]
 pub struct ServerTimeouts {
     /// Wall-clock cap on read silence inside `handle_client`. Reset only
@@ -69,7 +67,6 @@ impl From<&TransportSection> for ServerTimeouts {
     }
 }
 
-#[cfg(test)]
 impl Default for ServerTimeouts {
     fn default() -> Self {
         Self::from(&TransportSection::default())
@@ -86,18 +83,26 @@ pub const POLL_INTERVAL_MS: u64 = 100;
 /// doc's `START_TIMEOUT_SECS`.
 pub const START_TIMEOUT_SECS: u64 = 3;
 
-/// Connect to the daemon at `<target>/.loopr/socket`. Polls for the
-/// socket up to `START_TIMEOUT_SECS` at `POLL_INTERVAL_MS` cadence; by
-/// the time any async code runs, `lib::run`'s pre-telemetry hoist has
-/// already decided whether to fork a daemon, so this function only
-/// needs to wait for the grandchild's `bind`. It never forks: that
-/// authority lives in `daemon::ensure_daemon[_if_needed]`.
-#[tracing::instrument(name = "client.connect_or_wait", level = "debug", skip_all, fields(target = %target.display()), err)]
+/// Connect to the daemon at `<target>/.loopr/socket` using the
+/// no-config-file defaults from `TransportSection::default()`. Short-
+/// lived CLI invocations call this; commands that want operator-tunable
+/// budgets call `connect_or_wait_with_timeouts` after loading `Config`.
 pub async fn connect_or_wait(target: &Path) -> Result<IpcClient, LooprError> {
+    connect_or_wait_with_timeouts(target, ClientTimeouts::from(&TransportSection::default())).await
+}
+
+/// Connect with explicit `ClientTimeouts`. Polls for the socket up to
+/// `START_TIMEOUT_SECS` at `POLL_INTERVAL_MS` cadence; by the time any
+/// async code runs, `lib::run`'s pre-telemetry hoist has already
+/// decided whether to fork a daemon, so this function only needs to
+/// wait for the grandchild's `bind`. It never forks: that authority
+/// lives in `daemon::ensure_daemon[_if_needed]`.
+#[tracing::instrument(name = "client.connect_or_wait", level = "debug", skip_all, fields(target = %target.display()), err)]
+pub async fn connect_or_wait_with_timeouts(target: &Path, timeouts: ClientTimeouts) -> Result<IpcClient, LooprError> {
     let socket = sentinel::socket_path(target);
     let deadline = Instant::now() + Duration::from_secs(START_TIMEOUT_SECS);
     loop {
-        if let Ok(client) = IpcClient::connect(&socket).await {
+        if let Ok(client) = IpcClient::connect(&socket, timeouts).await {
             return Ok(client);
         }
         if Instant::now() > deadline {
