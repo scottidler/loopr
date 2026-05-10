@@ -234,4 +234,84 @@ fn plan_status_terminal_states() {
     assert!(!PlanStatus::Draft.is_terminal());
     assert!(!PlanStatus::Pending.is_terminal());
     assert!(!PlanStatus::Active.is_terminal());
+    // Stalled is intentionally non-terminal: it has an outgoing
+    // `Stalled => Active` override (operator recovery), and the FSM
+    // derive forbids terminal states from having outgoing edges.
+    assert!(!PlanStatus::Stalled.is_terminal());
+}
+
+// ---------------------------------------------------------------------------
+// Stalled: retry-budget-exhaustion FSM (Director-only)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plan_transition_active_stalled_by_director() {
+    let mut plan = Plan::new("g".to_string());
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let before = plan.updated_at;
+    let result = plan.transition(PlanStatus::Stalled, Role::Director).unwrap();
+    assert_eq!(result, Transition::Changed);
+    assert_eq!(plan.status, PlanStatus::Stalled);
+    assert!(plan.updated_at > before);
+}
+
+#[test]
+fn plan_transition_active_stalled_by_reactor_rejects() {
+    let mut plan = Plan::new("g".to_string());
+    let before_updated_at = plan.updated_at;
+    let err = plan.transition(PlanStatus::Stalled, Role::Reactor).unwrap_err();
+    assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
+    assert_eq!(plan.status, PlanStatus::Active);
+    assert_eq!(plan.updated_at, before_updated_at);
+}
+
+#[test]
+fn plan_transition_active_stalled_by_decomposer_rejects() {
+    let mut plan = Plan::new("g".to_string());
+    let err = plan.transition(PlanStatus::Stalled, Role::Decomposer).unwrap_err();
+    assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
+    assert_eq!(plan.status, PlanStatus::Active);
+}
+
+#[test]
+fn plan_override_stalled_active_by_director() {
+    // Operator-recovery path: Stalled -> Active via override only.
+    let mut plan = Plan::new("g".to_string());
+    plan.transition(PlanStatus::Stalled, Role::Director).unwrap();
+    assert_eq!(plan.status, PlanStatus::Stalled);
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let before = plan.updated_at;
+    let result = plan.override_status(PlanStatus::Active, Role::Director).unwrap();
+    assert_eq!(result, Transition::Override);
+    assert_eq!(plan.status, PlanStatus::Active);
+    assert!(plan.updated_at > before);
+}
+
+#[test]
+fn plan_transition_stalled_active_rejects() {
+    // Stalled -> Active is override-only; the normal transition table
+    // does not contain it.
+    let mut plan = Plan::new("g".to_string());
+    plan.transition(PlanStatus::Stalled, Role::Director).unwrap();
+    let err = plan.transition(PlanStatus::Active, Role::Director).unwrap_err();
+    assert_eq!(err.kind, FsmErrorKind::NoTransition);
+    assert_eq!(plan.status, PlanStatus::Stalled);
+}
+
+#[test]
+fn plan_transition_stalled_self_is_unchanged() {
+    let mut plan = Plan::new("g".to_string());
+    plan.transition(PlanStatus::Stalled, Role::Director).unwrap();
+    let before_updated_at = plan.updated_at;
+    let result = plan.transition(PlanStatus::Stalled, Role::Director).unwrap();
+    assert_eq!(result, Transition::Unchanged);
+    assert_eq!(plan.status, PlanStatus::Stalled);
+    assert_eq!(plan.updated_at, before_updated_at);
+}
+
+#[test]
+fn plan_status_stalled_display_lowercase() {
+    // Display output (used by Record's index map) must match the serde
+    // wire form. Locks the kebab/lowercase contract for the new variant.
+    assert_eq!(format!("{}", PlanStatus::Stalled), "stalled");
 }

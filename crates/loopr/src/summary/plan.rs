@@ -55,6 +55,7 @@ fn status_str(status: PlanStatus) -> &'static str {
         PlanStatus::Pending => "Pending",
         PlanStatus::Active => "Active",
         PlanStatus::Complete => "Complete",
+        PlanStatus::Stalled => "Stalled",
         PlanStatus::Superseded => "Superseded",
         PlanStatus::Abandoned => "Abandoned",
     }

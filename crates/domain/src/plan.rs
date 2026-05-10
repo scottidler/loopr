@@ -25,6 +25,11 @@ use crate::{FsmError, Role, Transition};
 #[strum(serialize_all = "lowercase")]
 #[fsm(
     role = crate::Role,
+    // `Stalled` is intentionally absent: the FSM derive forbids terminal
+    // states from having outgoing edges, and `Stalled => Active` is a
+    // legitimate operator-recovery override. `Stalled.is_terminal()`
+    // therefore returns `false` — Stalled is a quiescent, non-terminal
+    // state that the daemon's reconcile loop must skip.
     terminal = [Complete, Superseded, Abandoned],
     transitions(
         Draft   => Pending    by (Reactor),
@@ -35,12 +40,14 @@ use crate::{FsmError, Role, Transition};
         Pending => Superseded by (Reactor, Director),
         Pending => Abandoned  by (Reactor, Director),
         Active  => Complete   by (Reactor, Decomposer),
+        Active  => Stalled    by (Director),
         Active  => Superseded by (Reactor, Director),
         Active  => Abandoned  by (Reactor, Director),
     ),
     overrides(
-        Active  => Draft by (Director),
-        Pending => Draft by (Director),
+        Active  => Draft  by (Director),
+        Pending => Draft  by (Director),
+        Stalled => Active by (Director),
     ),
 )]
 pub enum PlanStatus {
@@ -48,6 +55,7 @@ pub enum PlanStatus {
     Pending,
     Active,
     Complete,
+    Stalled,
     Superseded,
     Abandoned,
 }
