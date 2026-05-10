@@ -110,6 +110,52 @@ pub trait WorkSpawner: Send + Sync + 'static {
     /// Dep-gate check + spawn Implementer for a Ready Work. No-op if the
     /// Work's deps are not all Done.
     fn assign_work(&self, work_id: WorkId);
+
+    // ---------- Phase 2 stuck-state recovery surface ----------
+    //
+    // These five methods support `reconcile_director`'s detection of
+    // crash-interrupted FSM states (Triaged-no-Reviewer, Accepted-no-
+    // Integrator, InProgress-no-Implementer). The `list_running_*_ids`
+    // helpers expose the daemon's per-task sidecar maps so the sweep
+    // can decide whether a stuck record needs re-firing. The
+    // `spawn_reviewer` / `spawn_integrator` methods are the re-fire
+    // path itself.
+    //
+    // Defaults are intentionally narrow so existing test fakes do not
+    // break: list helpers default to empty `Vec` (no live tasks),
+    // spawn helpers default to no-op. Production impls in `crates/loopr`
+    // override all five.
+
+    /// Re-spawn a Reviewer task for a Bundle stuck in `Triaged` status.
+    /// Production impl validates Bundle is currently Triaged; logs and
+    /// skips otherwise (re-running a Reviewer on already-Reviewed redoes
+    /// work). Default no-op.
+    fn spawn_reviewer(&self, _bundle_id: BundleId) {}
+
+    /// Re-spawn an Integrator task for a Bundle stuck in `Accepted`
+    /// status with no live Integrator. Production impl validates Bundle
+    /// is currently Accepted; logs and skips otherwise. Default no-op.
+    fn spawn_integrator(&self, _bundle_id: BundleId) {}
+
+    /// Snapshot of Work IDs currently being worked on by a live
+    /// Implementer task. Used by reconcile to detect InProgress Works
+    /// whose Implementer panicked. Default empty (test fakes can
+    /// override if behavior matters to the test).
+    fn list_running_work_ids(&self) -> Vec<WorkId> {
+        Vec::new()
+    }
+
+    /// Snapshot of Bundle IDs currently being reviewed by a live
+    /// Reviewer task. Default empty.
+    fn list_running_reviewer_bundle_ids(&self) -> Vec<BundleId> {
+        Vec::new()
+    }
+
+    /// Snapshot of Bundle IDs currently being integrated by a live
+    /// Integrator task. Default empty.
+    fn list_running_integrator_bundle_ids(&self) -> Vec<BundleId> {
+        Vec::new()
+    }
 }
 
 /// Narrow read+write store surface the Director needs. Five methods:

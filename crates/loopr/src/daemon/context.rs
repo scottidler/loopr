@@ -4,9 +4,12 @@
 //! the signal-watcher task. Values are set once at startup and read-only
 //! thereafter; the only mutable cell is `shutting_down`.
 
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -51,6 +54,44 @@ pub const INTEGRATOR_BACKOFF: &[Duration] = &[
 /// Capacity of the daemon's event broadcast channel. Stage 4 never sends
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
 pub const EVENTS_CAPACITY: usize = 64;
+
+/// Phase 2 sidecar-map presence guard. Inserts `key` into `map` on
+/// construction; removes on `Drop` so `panic!` or normal exit both clean
+/// up. Owns an `Arc` clone of the map (no borrow lifetime) so it can be
+/// moved into a `tokio::spawn` body that requires `'static`.
+///
+/// Used by the three task-body wrappers (`spawn_implementer_for_work`,
+/// `spawn_reviewer_for_bundle`, `spawn_integrator_for_bundle`) to
+/// expose live-task IDs through the `WorkSpawner::list_running_*_ids`
+/// surface. The `Drop` write uses blocking `write()`; the lock is held
+/// for one `HashMap::remove` call and never crosses an `.await`.
+pub struct ScopedIdGuard<K: Hash + Eq + Clone> {
+    map: Arc<StdRwLock<HashMap<K, ()>>>,
+    key: K,
+}
+
+impl<K: Hash + Eq + Clone> ScopedIdGuard<K> {
+    /// Insert `key` into `map`, returning a guard that removes it on `Drop`.
+    pub fn new(map: Arc<StdRwLock<HashMap<K, ()>>>, key: K) -> Self {
+        if let Ok(mut m) = map.write() {
+            m.insert(key.clone(), ());
+        }
+        Self { map, key }
+    }
+}
+
+impl<K: Hash + Eq + Clone> Drop for ScopedIdGuard<K> {
+    fn drop(&mut self) {
+        // Blocking write: the lock is contended only by other inserts /
+        // removes from sibling task bodies, each of which holds it for
+        // microseconds. Poison (writer panicked while holding the lock)
+        // degrades to a leaked entry; that's acceptable - the worst case
+        // is the reconcile sweep skipping a phantom-live ID once.
+        if let Ok(mut m) = self.map.write() {
+            m.remove(&self.key);
+        }
+    }
+}
 
 pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     pub target: PathBuf,
@@ -188,6 +229,19 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// pool, this pool feeds the Integrator pool. See `daemon.rs`'s
     /// drain rationale comment for the full case.
     pub work_spawner_tasks: Mutex<JoinSet<()>>,
+    /// Phase 2 sidecar map: live Implementer tasks indexed by `WorkId`.
+    /// Inserted at the top of `spawn_implementer_for_work`'s body via a
+    /// `ScopedIdGuard`; removed on `Drop` (panic or success).
+    /// `WorkSpawner::list_running_work_ids` reads the keys to support
+    /// `reconcile_director`'s detection of `InProgress` Works whose
+    /// Implementer panicked. Uses `std::sync::RwLock` (sync) so the
+    /// `WorkSpawner` trait's sync `list_running_*_ids` methods do not
+    /// need an async bridge.
+    pub implementer_work_ids: Arc<StdRwLock<HashMap<WorkId, ()>>>,
+    /// Phase 2 sidecar map: live Reviewer tasks indexed by `BundleId`.
+    pub reviewer_bundle_ids: Arc<StdRwLock<HashMap<BundleId, ()>>>,
+    /// Phase 2 sidecar map: live Integrator tasks indexed by `BundleId`.
+    pub integrator_bundle_ids: Arc<StdRwLock<HashMap<BundleId, ()>>>,
     /// Per-process counter snapshot. Held in a `std::sync::Mutex`
     /// because every emitter is short, non-async, and the value is
     /// shared with the panic hook and SIGQUIT handler (both of which
@@ -267,6 +321,9 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             integrator_tasks: Mutex::new(JoinSet::new()),
             director_tasks: Mutex::new(JoinSet::new()),
             work_spawner_tasks: Mutex::new(JoinSet::new()),
+            implementer_work_ids: Arc::new(StdRwLock::new(HashMap::new())),
+            reviewer_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
+            integrator_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             snapshot,
             server_timeouts,
         }
@@ -308,6 +365,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         fields(work_id = %work.id, work_status = ?work.status),
     )]
     pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
+        // Phase 2 sidecar-map insert. Guard is dropped on every exit
+        // (panic or normal return), so `WorkSpawner::list_running_work_ids`
+        // observes the live set even across abrupt panics.
+        let _id_guard = ScopedIdGuard::new(Arc::clone(&self.implementer_work_ids), work.id.clone());
+
         // Advance Work through the pipeline-start transitions via the FSM.
         // Guarded: reconcile or a prior call may have advanced us already.
         if work.status == WorkStatus::Pending
@@ -489,6 +551,9 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         fields(bundle_id = %bundle.id, work_id = %bundle.work_id, bundle_status = ?bundle.status),
     )]
     pub async fn spawn_reviewer_for_bundle(self: Arc<Self>, mut bundle: Bundle) {
+        // Phase 2 sidecar-map insert; mirrors `spawn_implementer_for_work`.
+        let _id_guard = ScopedIdGuard::new(Arc::clone(&self.reviewer_bundle_ids), bundle.id.clone());
+
         if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
             debug!("shutdown in progress; skipping reviewer spawn");
             return;
@@ -646,6 +711,9 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         fields(bundle_id = %bundle.id, work_id = %bundle.work_id),
     )]
     pub async fn spawn_integrator_for_bundle(self: Arc<Self>, bundle: Bundle) {
+        // Phase 2 sidecar-map insert; mirrors the implementer/reviewer wrappers.
+        let _id_guard = ScopedIdGuard::new(Arc::clone(&self.integrator_bundle_ids), bundle.id.clone());
+
         if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
             debug!("shutdown in progress; skipping integrator spawn");
             return;
@@ -1395,3 +1463,6 @@ where
         });
     }
 }
+
+#[cfg(test)]
+mod tests;
