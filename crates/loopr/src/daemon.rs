@@ -429,19 +429,45 @@ async fn run_active_daemon(
     )));
     let metered = llm::MeteredLlmClient::new(anthropic, Arc::clone(&snapshot));
 
-    let ctx = build_context(
-        target,
-        session_id,
-        target_slug,
-        process_id,
-        pid,
-        metered,
-        config,
-        accept_corruption,
-        Arc::clone(&snapshot),
+    // Phase B startup watchdog: bound `build_context` (Store::open +
+    // worktree::ensure_loopr_excludes + startup::reconcile) so a hung
+    // disk operation surfaces as a real error in the run log instead
+    // of orphaning the grandchild before it ever binds the socket.
+    // `serve` is intentionally OUTSIDE the wrap — the accept loop runs
+    // for the whole daemon lifetime.
+    let startup_budget = Duration::from_secs(config.transport.daemon_startup_secs);
+    let ctx = bound_startup(
+        startup_budget,
+        build_context(
+            target,
+            session_id,
+            target_slug,
+            process_id,
+            pid,
+            metered,
+            config,
+            accept_corruption,
+            Arc::clone(&snapshot),
+        ),
     )
     .await?;
     serve(ctx).await
+}
+
+/// Wrap a startup future with the configured budget. On timeout, surface
+/// `LooprError::DaemonStartup` so the run log records the budget breach
+/// and `daemon_main` cleans up sentinel files in its Phase B exit path.
+pub async fn bound_startup<F, T>(budget: Duration, fut: F) -> Result<T, LooprError>
+where
+    F: std::future::Future<Output = Result<T, LooprError>>,
+{
+    match tokio::time::timeout(budget, fut).await {
+        Ok(res) => res,
+        Err(_elapsed) => Err(LooprError::DaemonStartup(format!(
+            "build_context exceeded {}s startup budget",
+            budget.as_secs()
+        ))),
+    }
 }
 
 /// Construct a `DaemonContext<L>` ready for `serve` / `serve_core`. This
@@ -801,3 +827,6 @@ fn spawn_signal_watcher<L: LlmClient + Send + Sync + 'static>(
         ctx.shutdown_notify.notify_waiters();
     })
 }
+
+#[cfg(test)]
+mod tests;
