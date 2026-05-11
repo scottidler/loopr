@@ -169,3 +169,100 @@ fn director_chat_nonexistent_plan_fails_cleanly() {
 
     stop_daemon_for(target);
 }
+
+/// Persist an `OperatorNote` for `plan_id` directly through the
+/// in-process Store. Used to seed a note WHILE the daemon is down so
+/// the cold-boot path's first Director iteration picks it up. Returns
+/// the new `NoteId`.
+fn seed_note(target: &std::path::Path, plan_id: &domain::PlanId, message: &str) -> domain::NoteId {
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let store = store::Store::open(target).await.expect("Store::open");
+        let note = domain::OperatorNote::new(plan_id.clone(), "test-operator".to_string(), message.to_string());
+        let note_id = note.id.clone();
+        store.notes().create(note).await.expect("notes().create");
+        store.close().await.expect("store.close");
+        note_id
+    })
+}
+
+/// Restart-pickup proof. The design (`docs/design/2026-05-12-director-phase-2-followups.md`
+/// Phase 1) requires that a note arriving while the daemon is down
+/// gets ingested by the post-restart Director's first iteration. The
+/// gap this closes is the daemon cold-boot boundary that unit tests
+/// cannot exercise: `startup_reconcile_directors` spawns Directors
+/// from persisted state, and the freshly spawned Director's first
+/// `list_unread_notes_for_plan` call must find the note. A
+/// successful LLM round-trip stamps `read_at`, which is the
+/// observable signal we assert on.
+#[test]
+fn note_persists_across_daemon_restart() {
+    let td = TempDir::new().unwrap();
+    let target = td.path();
+    init_target(target);
+
+    // 1. Seed a Plan that the daemon will pick up via
+    //    `startup_reconcile_directors` on both forks.
+    let plan_id = seed_plan(target, "restart-pickup-target");
+
+    // 2. Auto-fork daemon #1. The DaemonAutoStop guard is panic-safe
+    //    cleanup of last resort; we stop the daemon explicitly below
+    //    so the seed-note write happens with no concurrent writer.
+    {
+        let _stop = DaemonAutoStop::for_target(target);
+        loopr()
+            .args(["-C", target.to_str().unwrap(), "plans"])
+            .assert()
+            .success();
+
+        // 3. Bring daemon #1 down deterministically. The Store's
+        //    SQLite lock must release before step 4 opens its own
+        //    handle. `stop_daemon_for` waits up to 5s for process exit.
+        stop_daemon_for(target);
+    }
+
+    // 4. Seed an unread `OperatorNote` while the daemon is offline.
+    //    JSONL is append-only and SQLite cache is rebuilt on next
+    //    daemon boot, so no read-after-write race against the cache.
+    let chat_msg = "post-restart pickup probe";
+    let note_id = seed_note(target, &plan_id, chat_msg);
+
+    // 5. Auto-fork daemon #2. `startup_reconcile_directors` finds the
+    //    Active Plan, spawns a fresh Director, whose first iteration
+    //    calls `list_unread_notes_for_plan` and (after a successful
+    //    LLM round-trip) `mark_notes_read`.
+    let _stop2 = DaemonAutoStop::for_target(target);
+    loopr()
+        .args(["-C", target.to_str().unwrap(), "plans"])
+        .assert()
+        .success();
+
+    // 6. Poll the notes JSONL for a line that marks the seeded note
+    //    read. `mark_read` appends a fresh full-record line with
+    //    `read_at` populated (numeric, not `null`). Generous deadline
+    //    covers the Director's restart, context build, and one
+    //    Anthropic round-trip. Reading the JSONL directly avoids
+    //    opening a competing SQLite handle.
+    let notes_jsonl = target.join(".loopr").join("taskstore").join("operatornotes.jsonl");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    let note_id_str = note_id.to_string();
+    let mut last_body = String::new();
+    let read = loop {
+        if notes_jsonl.is_file() {
+            last_body = fs::read_to_string(&notes_jsonl).unwrap_or_default();
+            if last_body.lines().any(|line| {
+                line.contains(&note_id_str) && !line.contains("\"read_at\":null") && line.contains("\"read_at\":")
+            }) {
+                break true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
+    assert!(
+        read,
+        "post-restart Director never marked seeded note {note_id_str} as read within 90s; jsonl body:\n{last_body}"
+    );
+}
