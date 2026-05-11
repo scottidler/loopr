@@ -119,6 +119,13 @@ pub struct DirectorConfig {
     /// `NeedHelp` instead of dispatching another retry. Default 3 to
     /// match the system prompt's "3 attempts" framing.
     pub max_work_attempts: u32,
+    /// Grace window (seconds) gating reconcile-sweep stuck-state recovery
+    /// against a record's `updated_at`. Bundles / Works whose current
+    /// status is fresher than this window skip recovery; the window
+    /// absorbs the spawn-chain race (sidecar map insert lands a few
+    /// hundred ms after the FSM transition persists). Phase 2 of
+    /// `docs/design/2026-05-09-director-phase-2.md`.
+    pub reconcile_grace_secs: u64,
 }
 
 impl Default for DirectorConfig {
@@ -132,6 +139,7 @@ impl Default for DirectorConfig {
             model: "claude-opus-4-7".to_string(),
             token_budget: 100_000,
             max_work_attempts: 3,
+            reconcile_grace_secs: 30,
         }
     }
 }

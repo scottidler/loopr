@@ -348,4 +348,71 @@ where
             .map(|map| map.keys().cloned().collect())
             .unwrap_or_default()
     }
+
+    /// Reactive recovery for an `InProgress` Work whose Implementer is no
+    /// longer live. Mirrors `override_work`'s shim pattern (shim ->
+    /// work_spawner_tasks -> transition_and_persist_work) with two
+    /// deliberate differences:
+    ///
+    /// 1. **`Role::Reactor`, not `Role::Director`.** The Work FSM's override
+    ///    table allows `InProgress -> Ready` for Reactor only, by design;
+    ///    this recovery is mechanical (sidecar map says no live Implementer),
+    ///    not LLM judgment, so Reactor is the correct semantic role.
+    /// 2. **No Implementer spawn after persist.** Unlike `override_work` (which
+    ///    re-kicks the Implementer because the Director's primary use is
+    ///    `Blocked -> Ready` retry), this recovery only flips the FSM. The
+    ///    daemon's dep-gate watcher and the Director's next-iteration
+    ///    `assign_work` together handle `Ready -> InProgress` re-promotion.
+    ///    Per Phase 2 of the design doc, "the recovery does NOT itself spawn
+    ///    an Implementer." Phase 3's integration test asserts the Ready
+    ///    transition and `attempt_count` bump; re-promotion is a separate
+    ///    concern owned by the reactive layer.
+    fn recover_in_progress_work(&self, work_id: WorkId, reason: String) {
+        let ctx_for_lock = Arc::clone(&self.0);
+        let ctx = Arc::clone(&self.0);
+        tokio::spawn(async move {
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            tasks.spawn(async move {
+                if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!(work_id = %work_id, "shutdown in progress; skipping recover_in_progress_work");
+                    return;
+                }
+                let mut work = match ctx.store.works().get(&work_id).await {
+                    Ok(w) => w,
+                    Err(e) => {
+                        warn!(error = %e, work_id = %work_id, "recover_in_progress_work: work lookup failed");
+                        return;
+                    }
+                };
+                if work.status != WorkStatus::InProgress {
+                    debug!(
+                        work_id = %work_id,
+                        status = ?work.status,
+                        "recover_in_progress_work: work no longer InProgress; skipping"
+                    );
+                    return;
+                }
+                info!(
+                    work_id = %work_id,
+                    attempt_count = work.attempt_count,
+                    reason = %reason,
+                    "recover_in_progress_work: applying Reactor-role InProgress -> Ready override"
+                );
+                if let Err(e) = transition_and_persist_work(
+                    &*ctx.summary_fanout,
+                    &mut work,
+                    WorkStatus::Ready,
+                    Role::Reactor,
+                    true, // override
+                )
+                .await
+                {
+                    warn!(error = %e, work_id = %work_id, "recover_in_progress_work: persist failed");
+                }
+            });
+        });
+    }
 }

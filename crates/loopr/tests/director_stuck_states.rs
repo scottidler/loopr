@@ -15,10 +15,10 @@ mod common;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use agents::WorkSpawner;
-use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Work, WorkId};
+use agents::{WorkSpawner, reconcile_director};
+use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, Role, Work, WorkId, WorkStatus};
 use llm::ScriptedLlm;
 use loopr::config::Config;
 use loopr::daemon::build_context;
@@ -294,5 +294,135 @@ async fn spawn_integrator_fires_for_accepted_bundle() {
         "Integrator pool must grow for an Accepted Bundle (spawn_integrator must fire)"
     );
 
+    teardown(ctx).await;
+}
+
+// ---------- Phase 3 end-to-end: reconcile sweep -> stuck-state recovery ----------
+
+/// Phase 3 of `docs/design/2026-05-09-director-phase-2.md`: end-to-end
+/// proof that the reconcile sweep detects a stuck `InProgress` Work
+/// (no live Implementer in the sidecar map) and recovers it via
+/// `recover_in_progress_work`, which routes through
+/// `transition_and_persist_work` under `Role::Reactor` and lands the
+/// Work in `Ready` with `attempt_count` bumped (Layer-1 increment).
+///
+/// We seed a Work straight into `InProgress` without ever spawning an
+/// Implementer, so `implementer_work_ids` stays empty -> the
+/// `list_running_work_ids` snapshot does not contain this Work's id.
+/// `grace_ms=0` is used so any age qualifies; the production grace of
+/// 30s would force a real-time wait or `updated_at` mutation, both
+/// avoidable here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconcile_recovers_in_progress_work_with_no_live_implementer() {
+    let tempdir = TempDir::new().unwrap();
+    init_git_repo(tempdir.path());
+    let ctx = build_test_context(tempdir.path()).await;
+
+    // Seed: Plan + Work walked to InProgress via the FSM.
+    let plan = Plan::new("phase-3-stuck-work".to_string());
+    let plan_id: PlanId = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut work = Work::new(plan_id.clone(), "phase-3-stuck".to_string());
+    let work_id: WorkId = work.id.clone();
+    ctx.store.works().create(work.clone()).await.unwrap();
+
+    // Walk Pending -> Ready -> InProgress under Role::Reactor via direct
+    // store update. This path bypasses `transition_and_persist_work`'s
+    // Layer-1 attempt_count increment by design (the daemon helper is the
+    // only writer that bumps); seeding directly leaves attempt_count at 0,
+    // which is the cleanest baseline for asserting the recovery path's
+    // increment.
+    for target in [WorkStatus::Ready, WorkStatus::InProgress] {
+        let expected = work.updated_at;
+        work.transition(target, Role::Reactor).unwrap();
+        ctx.store.works().update(work.clone(), expected).await.unwrap();
+        work = ctx.store.works().get(&work_id).await.unwrap();
+    }
+    assert_eq!(work.status, WorkStatus::InProgress);
+    let attempt_at_inprogress = work.attempt_count;
+
+    // Run the reconcile sweep. `grace_ms = 0` so the InProgress record
+    // (created milliseconds ago) qualifies as past-grace.
+    let spawner = DaemonSpawner(Arc::clone(&ctx));
+    let goal_complete = reconcile_director(&plan_id, &ctx.store, &spawner, 0)
+        .await
+        .expect("reconcile_director must succeed");
+    assert!(!goal_complete, "Work is not Done; Plan cannot be GoalComplete");
+
+    // The recovery is fire-and-forget through two layers of tokio::spawn;
+    // poll until the Work flips to Ready (or the budget elapses).
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut observed_ready = false;
+    while Instant::now() < deadline {
+        let w = ctx.store.works().get(&work_id).await.unwrap();
+        if w.status == WorkStatus::Ready {
+            observed_ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(observed_ready, "Work must transition to Ready after reconcile recovery");
+
+    let final_work = ctx.store.works().get(&work_id).await.unwrap();
+    assert_eq!(final_work.status, WorkStatus::Ready);
+    assert!(
+        final_work.attempt_count > attempt_at_inprogress,
+        "recover_in_progress_work must trigger Layer-1 attempt_count bump on the new Ready transition (was {}, now {})",
+        attempt_at_inprogress,
+        final_work.attempt_count
+    );
+
+    teardown(ctx).await;
+}
+
+/// Phase 3: reconcile must NOT recover an `InProgress` Work whose id is
+/// in the live-implementer sidecar map. The `ScopedIdGuard` RAII helper
+/// is the production insertion path; we hold one for the duration of
+/// the test to simulate "the Implementer is still alive."
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconcile_skips_in_progress_work_with_live_implementer_sidecar() {
+    let tempdir = TempDir::new().unwrap();
+    init_git_repo(tempdir.path());
+    let ctx = build_test_context(tempdir.path()).await;
+
+    let plan = Plan::new("phase-3-live-implementer".to_string());
+    let plan_id: PlanId = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut work = Work::new(plan_id.clone(), "phase-3-live".to_string());
+    let work_id: WorkId = work.id.clone();
+    ctx.store.works().create(work.clone()).await.unwrap();
+    for target in [WorkStatus::Ready, WorkStatus::InProgress] {
+        let expected = work.updated_at;
+        work.transition(target, Role::Reactor).unwrap();
+        ctx.store.works().update(work.clone(), expected).await.unwrap();
+        work = ctx.store.works().get(&work_id).await.unwrap();
+    }
+    let attempt_at_inprogress = work.attempt_count;
+
+    // Hold the sidecar guard so the live snapshot contains this work_id.
+    let _guard = ScopedIdGuard::new(Arc::clone(&ctx.implementer_work_ids), work_id.clone());
+
+    let spawner = DaemonSpawner(Arc::clone(&ctx));
+    let _ = reconcile_director(&plan_id, &ctx.store, &spawner, 0)
+        .await
+        .expect("reconcile_director must succeed");
+
+    // Brief window for any (incorrect) spawn-chain to land.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let final_work = ctx.store.works().get(&work_id).await.unwrap();
+    assert_eq!(
+        final_work.status,
+        WorkStatus::InProgress,
+        "InProgress Work with a live Implementer in the sidecar map must NOT be recovered"
+    );
+    assert_eq!(
+        final_work.attempt_count, attempt_at_inprogress,
+        "attempt_count must not bump when reconcile skips this record"
+    );
+
+    drop(_guard);
     teardown(ctx).await;
 }
