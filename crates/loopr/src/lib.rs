@@ -97,6 +97,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         | Command::Bundles
         | Command::Ticks
         | Command::Show { .. }
+        | Command::Director { .. }
         | Command::Daemon { cmd: DaemonCmd::Status } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
@@ -200,6 +201,7 @@ fn dispatch(
             LogsCmd::Runs => logs::handle_runs(target, Some(session_id)),
         },
         Command::Sessions { cmd } => commands::sessions::run(target, cmd),
+        Command::Director { cmd } => commands::director::run(target, cmd),
         Command::Tui => Err(LooprError::TuiNotInstalled),
     }
 }

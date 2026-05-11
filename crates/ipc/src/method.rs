@@ -19,6 +19,10 @@ pub enum MethodName {
     RecordList,
     #[strum(serialize = "record.get")]
     RecordGet,
+    /// Operator-to-Director chat. Phase 8 of
+    /// `docs/design/2026-05-09-director-phase-2.md`.
+    #[strum(serialize = "director.chat")]
+    DirectorChat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +32,7 @@ pub enum Method {
     PlanCreate(PlanCreateParams),
     RecordList(RecordListParams),
     RecordGet(RecordGetParams),
+    DirectorChat(DirectorChatParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +52,32 @@ pub struct HandshakeParams {
 pub struct PlanCreateParams {
     pub goal: String,
 }
+
+/// `director.chat` request. The operator submits a message routed
+/// into the Director's per-iteration user prompt. Phase 8 of
+/// `docs/design/2026-05-09-director-phase-2.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectorChatParams {
+    /// Target Plan; the daemon validates this exists before persisting.
+    pub plan_id: String,
+    /// Operator's message. The daemon truncates anything beyond
+    /// 4096 bytes (see `DIRECTOR_CHAT_MESSAGE_BYTE_CAP`) and appends a
+    /// truncation marker so the LLM sees a bounded payload.
+    pub message: String,
+}
+
+/// `director.chat` response: the newly persisted note's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectorChatResult {
+    pub note_id: String,
+}
+
+/// Hard cap on the post-truncation message stored in the note. Bounds
+/// the LLM prompt-injection-by-volume surface; longer operator advice
+/// should be summarized before submission.
+pub const DIRECTOR_CHAT_MESSAGE_BYTE_CAP: usize = 4096;
 
 impl TryFrom<&DaemonRequest> for Method {
     type Error = RpcError;
@@ -79,6 +110,11 @@ impl TryFrom<&DaemonRequest> for Method {
                 let params: RecordGetParams =
                     serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
                 Ok(Method::RecordGet(params))
+            }
+            MethodName::DirectorChat => {
+                let params: DirectorChatParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::DirectorChat(params))
             }
         }
     }

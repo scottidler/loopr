@@ -100,6 +100,13 @@ pub enum Command {
         cmd: SessionsCmd,
     },
 
+    /// Director operator interaction (chat, status, ...). Phase 8 of
+    /// `docs/design/2026-05-09-director-phase-2.md`.
+    Director {
+        #[command(subcommand)]
+        cmd: DirectorCmd,
+    },
+
     /// Launch the TUI. Same as bare `loopr` (no subcommand).
     Tui,
 }
@@ -131,9 +138,26 @@ impl Command {
                 SessionsCmd::End => "sessions-end",
                 SessionsCmd::Status => "sessions-status",
             },
+            Command::Director { cmd } => match cmd {
+                DirectorCmd::Chat { .. } => "director-chat",
+            },
             Command::Tui => "tui",
         }
     }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DirectorCmd {
+    /// Send a chat message to the Director task for the given Plan.
+    /// The message is persisted as an `OperatorNote` and read by the
+    /// Director's next iteration. Messages longer than 4 KB are
+    /// truncated with a marker server-side.
+    Chat {
+        /// Target Plan id, e.g. `pl-abc12`.
+        plan_id: String,
+        /// One-shot message to route to the Director's user prompt.
+        message: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

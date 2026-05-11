@@ -10,6 +10,7 @@
 //! Tests for each body live alongside the body file, per
 //! `rules/rust.md` §Test file placement.
 
+pub mod director;
 pub mod init;
 pub mod list;
 pub mod sessions;

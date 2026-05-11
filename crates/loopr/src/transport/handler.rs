@@ -11,9 +11,10 @@ use tracing::{info, instrument, warn};
 
 use agents::{DirectorDeps, DirectorError, run_director};
 use ipc::{
-    BundleSummary, DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION,
-    PlanCreateParams, PlanCreateResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult,
-    RecordsResult, RpcError, StatusResult, TickSummary, WorkSummary,
+    BundleSummary, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DaemonRequest, DaemonResponse, DirectorChatParams,
+    DirectorChatResult, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult,
+    PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult, RpcError, StatusResult,
+    TickSummary, WorkSummary,
 };
 use llm::LlmClient;
 use store::StoreError;
@@ -78,6 +79,7 @@ where
         Method::PlanCreate(params) => handle_plan_create(req.id, params, ctx).await,
         Method::RecordList(params) => handle_record_list(req.id, params, ctx).await,
         Method::RecordGet(params) => handle_record_get(req.id, params, ctx).await,
+        Method::DirectorChat(params) => handle_director_chat(req.id, params, ctx).await,
     }
 }
 
@@ -337,6 +339,107 @@ async fn handle_record_get<L: LlmClient + Send + Sync + 'static>(
         Ok(v) => DaemonResponse::ok(id, v),
         Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize record.get: {e}"))),
     }
+}
+
+/// Handle `director.chat`: persist an operator message as an
+/// `OperatorNote` routed to the named Plan's Director task. Phase 8
+/// of `docs/design/2026-05-09-director-phase-2.md`.
+///
+/// Steps:
+/// 1. Parse `plan_id` (PlanId::from_str is Infallible; string parse
+///    just wraps it). Validate the Plan exists by fetching it from
+///    the store; missing -> `RpcError::NotFound`.
+/// 2. Truncate the message at
+///    `DIRECTOR_CHAT_MESSAGE_BYTE_CAP` and append a marker so the
+///    LLM sees a bounded payload (prompt-injection-by-volume bound).
+/// 3. Construct an `OperatorNote` with the daemon's resolved `USER`
+///    env var as author (falls back to `"operator"` if unset).
+/// 4. Persist via `NotesStore::create`. Phase 9 will add the
+///    `Notify::notify_one()` wakeup on the per-Plan `Arc<Notify>`;
+///    this handler only persists so a daemon downtime cannot lose
+///    the note.
+#[instrument(
+    name = "ipc.director_chat",
+    level = "info",
+    skip_all,
+    fields(
+        request_id = id,
+        plan_id = %params.plan_id,
+        message_bytes = params.message.len(),
+        note_id = tracing::field::Empty,
+    ),
+)]
+async fn handle_director_chat<L>(id: u64, params: DirectorChatParams, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    use std::str::FromStr;
+    let plan_id = match domain::PlanId::from_str(&params.plan_id) {
+        Ok(p) => p,
+        Err(_) => {
+            // PlanId::from_str is Infallible; this branch is
+            // unreachable but the match is here for forward
+            // compatibility if the typed-id parse ever gains
+            // validation.
+            return DaemonResponse::err(
+                id,
+                RpcError::InvalidParams(format!("plan_id parse failed: {}", params.plan_id)),
+            );
+        }
+    };
+
+    // Validate the Plan exists. The Plan record itself is not modified
+    // by `director.chat`; this is a foreign-key check only.
+    if let Err(e) = ctx.store.plans().get(&plan_id).await {
+        warn!(request_id = id, plan_id = %plan_id, error = %e, "director.chat: plan not found");
+        return DaemonResponse::err(id, map_store_error(e));
+    }
+
+    let message = truncate_chat_message(&params.message);
+    let author = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
+    let note = domain::OperatorNote::new(plan_id, author, message);
+    let note_id = note.id.clone();
+    tracing::Span::current().record("note_id", note_id.to_string().as_str());
+
+    if let Err(e) = ctx.store.notes().create(note).await {
+        warn!(request_id = id, error = %e, "director.chat: note create failed");
+        return DaemonResponse::err(id, map_store_error(e));
+    }
+
+    info!(
+        request_id = id,
+        note_id = %note_id,
+        "director.chat: note persisted"
+    );
+
+    let result = DirectorChatResult {
+        note_id: note_id.to_string(),
+    };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize director.chat: {e}"))),
+    }
+}
+
+/// Truncate the operator's message to `DIRECTOR_CHAT_MESSAGE_BYTE_CAP`
+/// bytes, appending a marker so the LLM and downstream log readers
+/// see that the payload was clipped. Truncation respects char
+/// boundaries — the cut point retreats to the previous codepoint
+/// boundary so the result is valid UTF-8 even when the byte cap falls
+/// mid-codepoint.
+fn truncate_chat_message(message: &str) -> String {
+    if message.len() <= DIRECTOR_CHAT_MESSAGE_BYTE_CAP {
+        return message.to_string();
+    }
+    let original_bytes = message.len();
+    let mut cut = DIRECTOR_CHAT_MESSAGE_BYTE_CAP;
+    while cut > 0 && !message.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut out = String::with_capacity(cut + 64);
+    out.push_str(&message[..cut]);
+    out.push_str(&format!("\n[truncated: original {original_bytes} bytes]"));
+    out
 }
 
 fn store_err_response(id: u64, err: StoreError, collection: &'static str) -> DaemonResponse {

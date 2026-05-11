@@ -5,7 +5,10 @@ use domain::Plan;
 use crate::envelope::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::error::RpcError;
 use crate::frame::{ParseError, decode_line, decode_request_line, encode_line};
-use crate::method::{HandshakeParams, HandshakeResult, Method, PlanCreateParams, PlanCreateResult, StatusResult};
+use crate::method::{
+    DirectorChatParams, DirectorChatResult, HandshakeParams, HandshakeResult, Method, PlanCreateParams,
+    PlanCreateResult, StatusResult,
+};
 use crate::records::{
     BundleSummary, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
 };
@@ -676,6 +679,54 @@ fn e2e_event_roundtrip() {
         IpcMessage::Event(e) => assert_eq!(e, event),
         IpcMessage::Response(_) => panic!("expected Event"),
     }
+}
+
+// --- director.chat (Phase 8 of director-phase-2) ---
+
+#[test]
+fn method_name_director_chat_wire_form() {
+    let name: &'static str = crate::method::MethodName::DirectorChat.into();
+    assert_eq!(name, "director.chat");
+}
+
+#[test]
+fn method_try_from_director_chat() {
+    let req = DaemonRequest {
+        id: 9,
+        method: "director.chat".into(),
+        params: json!({ "plan_id": "pl-12345", "message": "retry the build" }),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::DirectorChat(DirectorChatParams {
+            plan_id: "pl-12345".to_string(),
+            message: "retry the build".to_string(),
+        })
+    );
+}
+
+#[test]
+fn director_chat_unknown_field_is_rejected() {
+    let req = DaemonRequest {
+        id: 9,
+        method: "director.chat".into(),
+        params: json!({ "plan_id": "pl-x", "message": "hi", "extra": "nope" }),
+    };
+    let err = Method::try_from(&req).unwrap_err();
+    assert!(
+        matches!(err, RpcError::InvalidParams(_)),
+        "deny_unknown_fields must reject extras: {err:?}"
+    );
+}
+
+#[test]
+fn director_chat_result_round_trip() {
+    let result = DirectorChatResult {
+        note_id: "nt-abcde".to_string(),
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: DirectorChatResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, result);
 }
 
 #[test]
