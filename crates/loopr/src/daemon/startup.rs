@@ -377,6 +377,11 @@ where
     );
     for plan in active {
         let plan_id = plan.id.clone();
+        let operator_notify = Arc::new(tokio::sync::Notify::new());
+        ctx.operator_notifies
+            .write()
+            .await
+            .insert(plan_id.clone(), Arc::clone(&operator_notify));
         let deps = DirectorDeps {
             llm: Arc::clone(&ctx.llm),
             store: Arc::clone(&ctx.store),
@@ -384,9 +389,12 @@ where
             spawner: DaemonSpawner(Arc::clone(ctx)),
             config: ctx.director_config.clone(),
             shutdown: Arc::clone(&ctx.shutdown_notify),
+            operator_notify,
         };
         let mut directors = ctx.director_tasks.lock().await;
         let plan_id_for_log = plan_id.clone();
+        let operator_notifies = Arc::clone(&ctx.operator_notifies);
+        let plan_id_for_cleanup = plan_id.clone();
         directors.spawn(async move {
             match run_director(&plan_id, &deps).await {
                 Ok(()) => tracing::info!(plan_id = %plan_id_for_log, "director task exited Ok"),
@@ -397,6 +405,12 @@ where
                 ),
                 Err(e) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
             }
+            // Phase 9: drop the per-Plan operator Notify on Director
+            // task exit. Director exits on terminal Plan transitions
+            // (GoalComplete -> Ok, Stalled -> NeedHelp) or daemon
+            // shutdown; either way the Notify has no remaining
+            // consumer.
+            operator_notifies.write().await.remove(&plan_id_for_cleanup);
         });
     }
 }

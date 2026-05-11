@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use agents::{DirectorDeps, DirectorError, run_director};
 use ipc::{
@@ -397,7 +397,7 @@ where
 
     let message = truncate_chat_message(&params.message);
     let author = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
-    let note = domain::OperatorNote::new(plan_id, author, message);
+    let note = domain::OperatorNote::new(plan_id.clone(), author, message);
     let note_id = note.id.clone();
     tracing::Span::current().record("note_id", note_id.to_string().as_str());
 
@@ -411,6 +411,22 @@ where
         note_id = %note_id,
         "director.chat: note persisted"
     );
+
+    // Phase 9: wake the Director task. The Notify is per-Plan; absence
+    // from the map means either the Plan has no live Director (terminal
+    // or pre-startup-reconcile) or the Director will pick up the note
+    // on its next iteration via `list_unread_notes_for_plan`. Either
+    // way, missing the wake-up is recoverable (latency-only).
+    if let Some(notify) = ctx.operator_notifies.read().await.get(&plan_id) {
+        notify.notify_one();
+        debug!(request_id = id, plan_id = %plan_id, "director.chat: wakeup signalled");
+    } else {
+        debug!(
+            request_id = id,
+            plan_id = %plan_id,
+            "director.chat: no live Director Notify; note will be picked up on next iteration"
+        );
+    }
 
     let result = DirectorChatResult {
         note_id: note_id.to_string(),
@@ -487,6 +503,11 @@ where
         warn!(plan_id = %plan_id, "shutdown in progress; skipping Director spawn");
         return;
     }
+    let operator_notify = Arc::new(tokio::sync::Notify::new());
+    ctx.operator_notifies
+        .write()
+        .await
+        .insert(plan_id.clone(), Arc::clone(&operator_notify));
     let deps = DirectorDeps {
         llm: Arc::clone(&ctx.llm),
         store: Arc::clone(&ctx.store),
@@ -494,9 +515,12 @@ where
         spawner: DaemonSpawner(Arc::clone(ctx)),
         config: ctx.director_config.clone(),
         shutdown: Arc::clone(&ctx.shutdown_notify),
+        operator_notify,
     };
     let mut directors = ctx.director_tasks.lock().await;
     let plan_id_for_log = plan_id.clone();
+    let operator_notifies = Arc::clone(&ctx.operator_notifies);
+    let plan_id_for_cleanup = plan_id.clone();
     directors.spawn(async move {
         match run_director(&plan_id, &deps).await {
             Ok(()) => info!(plan_id = %plan_id_for_log, "director task exited Ok"),
@@ -507,6 +531,9 @@ where
             ),
             Err(e) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
         }
+        // Phase 9: drop the per-Plan operator Notify on Director task
+        // exit. See startup_reconcile_directors for the rationale.
+        operator_notifies.write().await.remove(&plan_id_for_cleanup);
     });
 }
 

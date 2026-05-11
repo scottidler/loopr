@@ -9,7 +9,10 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use context::{AssembledContext, ContextBuilder, ContextError, DirectorState as CtxDirectorState};
-use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Work, WorkId, WorkStatus, now_millis};
+use domain::{
+    Bundle, BundleId, BundleStatus, NoteId, OperatorNote, Plan, PlanId, PlanStatus, Work, WorkId, WorkStatus,
+    now_millis,
+};
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use store::StoreError;
 
@@ -302,6 +305,7 @@ struct FakeStore {
     works: Mutex<Vec<Work>>,
     bundles: Mutex<Vec<Bundle>>,
     plan: Mutex<Option<Plan>>,
+    notes: Mutex<Vec<OperatorNote>>,
 }
 
 impl FakeStore {
@@ -310,6 +314,7 @@ impl FakeStore {
             works: Mutex::new(works),
             bundles: Mutex::new(bundles),
             plan: Mutex::new(None),
+            notes: Mutex::new(Vec::new()),
         }
     }
 
@@ -318,6 +323,7 @@ impl FakeStore {
             works: Mutex::new(works),
             bundles: Mutex::new(bundles),
             plan: Mutex::new(Some(plan)),
+            notes: Mutex::new(Vec::new()),
         }
     }
 
@@ -357,6 +363,29 @@ impl DirectorStore for FakeStore {
 
     async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
         *self.plan.lock().unwrap() = Some(plan);
+        Ok(())
+    }
+
+    async fn list_unread_notes_for_plan(&self, _plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError> {
+        let mut notes: Vec<OperatorNote> = self
+            .notes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|n| n.is_unread())
+            .cloned()
+            .collect();
+        notes.sort_by_key(|n| n.created_at);
+        Ok(notes)
+    }
+
+    async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError> {
+        let mut notes = self.notes.lock().unwrap();
+        for n in notes.iter_mut() {
+            if note_ids.contains(&n.id) && n.is_unread() {
+                n.mark_read(now_millis());
+            }
+        }
         Ok(())
     }
 }
@@ -459,13 +488,24 @@ impl ContextBuilder for StubContextBuilder {
         // run_director_inner internals. The production user.pmt
         // renders `**Director mode:** {{mode}}`; this stub matches
         // the label literal so a contains() check works on either.
-        let user = format!(
+        let mut user = format!(
             "plan={} **Director mode:** {} works={} bundles={}",
             state.plan_id,
             if state.mode.is_empty() { "Normal" } else { &state.mode },
             state.works.len(),
             state.bundles.len()
         );
+        // Phase 9: mirror the production user.pmt's `### Operator
+        // Notes` section so tests asserting on the rendered notes work
+        // against the same shape they would see in production.
+        if !state.operator_notes.is_empty() {
+            user.push_str("\n\n### Operator Notes\n");
+            for n in &state.operator_notes {
+                user.push_str("- ");
+                user.push_str(n);
+                user.push('\n');
+            }
+        }
         let mut messages: Vec<Message> = history.to_vec();
         messages.push(Message::user(user));
         Ok(AssembledContext {
@@ -529,6 +569,7 @@ fn make_deps<L: LlmClient>(
         spawner,
         config,
         shutdown,
+        operator_notify: Arc::new(Notify::new()),
     }
 }
 
@@ -1263,5 +1304,164 @@ async fn run_director_repeated_override_promotes_mode_to_conservative() {
         prompts[0].contains("**Director mode:** Normal"),
         "first iteration must show Normal mode; got: {}",
         prompts[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9: Operator note path
+// ---------------------------------------------------------------------------
+
+/// Operator note rendered into the user prompt AND demotes Conservative
+/// to Normal AND is marked read so the next iteration's prompt does NOT
+/// re-include it. This is the end-to-end test for Phase 9.
+#[tokio::test]
+async fn operator_note_renders_demotes_conservative_and_marks_read() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let work_id_s = blocked.id.to_string();
+    let store = FakeStore::with(vec![blocked], vec![]);
+    // Pre-seed an operator note so the very FIRST iteration sees it.
+    let note = OperatorNote::new(
+        plan_id.clone(),
+        "scott".to_string(),
+        "try the failing test in verbose mode".to_string(),
+    );
+    store.notes.lock().unwrap().push(note.clone());
+
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let mut config = fast_config();
+    config.patterns = crate::config::DirectorConfig::default().patterns;
+    config.max_work_attempts = 100;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let prompts = deps.llm.last_user_messages();
+    assert!(!prompts.is_empty(), "expected at least one LLM call");
+    // First iteration's user prompt must include the operator note body
+    // under the `### Operator Notes` section.
+    assert!(
+        prompts[0].contains("### Operator Notes"),
+        "first iteration prompt must include the Operator Notes section; got: {}",
+        prompts[0]
+    );
+    assert!(
+        prompts[0].contains("try the failing test in verbose mode"),
+        "first iteration prompt must include the note body; got: {}",
+        prompts[0]
+    );
+    // After the first iteration, the note is marked read (it was
+    // already unread on entry, and OperatorNoteArrived demotes to
+    // Normal regardless of starting mode). Subsequent iterations'
+    // prompts must NOT re-include the body — that would be a missing
+    // mark_read.
+    if prompts.len() >= 2 {
+        for (i, p) in prompts.iter().enumerate().skip(1) {
+            assert!(
+                !p.contains("try the failing test in verbose mode"),
+                "iteration {i} re-rendered the marked-read note body; got: {p}"
+            );
+        }
+    }
+}
+
+/// Render-then-mark ordering regression guard: when the LLM-loop fails
+/// before parse succeeds (lifeguard escalates on three consecutive
+/// parse failures), `mark_notes_read` must NOT have fired and the note
+/// must remain unread so the next Director restart re-renders it.
+#[tokio::test]
+async fn unread_note_remains_unread_on_lifeguard_escalation() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let store = FakeStore::with(vec![blocked], vec![]);
+    let note = OperatorNote::new(plan_id.clone(), "scott".into(), "investigate".into());
+    let note_id = note.id.clone();
+    store.notes.lock().unwrap().push(note);
+
+    // Three consecutive non-JSON responses; with `max_requeries=0` and
+    // `max_parse_failures=3` the Lifeguard escalates on the third
+    // failure WITHOUT ever reaching parse-success and therefore
+    // without calling `mark_notes_read`.
+    let llm = FakeLlm::repeating("not json".to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let mut config = fast_config();
+    config.max_requeries = 0;
+    config.max_parse_failures = 3;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let err = run_director(&plan_id, &deps).await.expect_err("must escalate");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("Lifeguard") || msg.contains("lifeguard"),
+        "expected lifeguard escalation; got: {msg}"
+    );
+
+    let notes = deps.store.notes.lock().unwrap();
+    let persisted = notes.iter().find(|n| n.id == note_id).expect("note persisted");
+    assert!(
+        persisted.is_unread(),
+        "note must remain unread when the LLM round-trip never reached parse-success; got read_at={:?}",
+        persisted.read_at
+    );
+}
+
+/// Operator note's `OperatorNoteArrived` observation demotes
+/// Conservative to Normal AND clears `no_progress_streak`. Driven
+/// at the unit level via `next_mode` + `reset_no_progress_streak`
+/// rather than mid-run because timing a note injection past the
+/// Conservative trip would be racy against the iteration cadence
+/// (the `mode/tests.rs` unit tests already cover `next_mode`'s
+/// demotion arm, and `pattern/tests.rs` covers the tracker side).
+#[tokio::test]
+async fn unread_note_marked_read_after_render() {
+    // Regression guard for the render-then-mark ordering: after a
+    // single iteration with one unread note, `is_unread()` must
+    // return false on the persisted note. Failure means the
+    // `mark_notes_read` call is missing or fires before the LLM
+    // round-trip completes.
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Ready);
+    let store = FakeStore::with(vec![work], vec![]);
+    let note = OperatorNote::new(plan_id.clone(), "scott".into(), "review".into());
+    let note_id = note.id.clone();
+    store.notes.lock().unwrap().push(note);
+
+    let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ack" }]).to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let config = fast_config();
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let notes = deps.store.notes.lock().unwrap();
+    let persisted = notes.iter().find(|n| n.id == note_id).expect("note persisted");
+    assert!(
+        !persisted.is_unread(),
+        "note should be marked read after a successful LLM round-trip; got read_at={:?}",
+        persisted.read_at
     );
 }

@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use tokio::process::Command;
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
@@ -242,6 +242,16 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     pub reviewer_bundle_ids: Arc<StdRwLock<HashMap<BundleId, ()>>>,
     /// Phase 2 sidecar map: live Integrator tasks indexed by `BundleId`.
     pub integrator_bundle_ids: Arc<StdRwLock<HashMap<BundleId, ()>>>,
+    /// Phase 9 (Director Phase 2): per-Plan operator-note wake-up
+    /// channels. The `director.chat` IPC handler resolves the Plan's
+    /// `Arc<Notify>` from this map and calls `notify_one()` after the
+    /// note is persisted, preempting the Director's inter-iteration
+    /// sleep. Inserts happen in `handle_plan_create` and
+    /// `startup_reconcile_directors`; removal happens in
+    /// `transition_and_persist_plan` when the Plan reaches a terminal
+    /// state. Using `tokio::sync::RwLock` so the async chat handler
+    /// can `await` while reading.
+    pub operator_notifies: Arc<RwLock<HashMap<PlanId, Arc<Notify>>>>,
     /// Per-process counter snapshot. Held in a `std::sync::Mutex`
     /// because every emitter is short, non-async, and the value is
     /// shared with the panic hook and SIGQUIT handler (both of which
@@ -324,6 +334,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             implementer_work_ids: Arc::new(StdRwLock::new(HashMap::new())),
             reviewer_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             integrator_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
+            operator_notifies: Arc::new(RwLock::new(HashMap::new())),
             snapshot,
             server_timeouts,
         }

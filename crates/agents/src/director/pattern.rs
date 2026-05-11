@@ -142,6 +142,13 @@ pub enum PatternObservation {
     /// Hash moved AND the action history shows variety; mode reverts to
     /// Normal. Streak resets.
     Recovered,
+    /// Operator-submitted note arrived this iteration. NOT emitted by
+    /// `observe()` — this variant is constructed by the Director loop
+    /// (Phase 9) when `list_unread_notes_for_plan` returns non-empty
+    /// and threaded directly into `next_mode`. Treating operator
+    /// engagement as a first-class FSM input keeps the mode demotion
+    /// logic in one place.
+    OperatorNoteArrived,
 }
 
 /// In-memory pattern tracker. One per Director task; reset on restart.
@@ -165,6 +172,19 @@ impl DirectorPatternTracker {
 
     pub fn config(&self) -> &PatternConfig {
         &self.config
+    }
+
+    /// Reset the `no_progress_streak` counter. Phase 9: the Director
+    /// loop calls this when an operator note arrives AND the mode FSM
+    /// is demoting Conservative or NeedsOperator back to Normal — the
+    /// streak otherwise persists across the demotion and the next
+    /// iteration of stale no-progress can immediately bounce the mode
+    /// back. Operator engagement is treated as a fresh start for the
+    /// no-progress detector. SameActionTripped's internal counter is
+    /// derived from `action_history` and clears naturally when the
+    /// LLM emits any new fingerprint, so no reset is needed for it.
+    pub fn reset_no_progress_streak(&mut self) {
+        self.no_progress_streak = 0;
     }
 
     /// Record an iteration's emitted action + post-iteration state

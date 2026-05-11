@@ -426,3 +426,31 @@ fn pattern_config_empty_yaml_all_defaults() {
     assert_eq!(cfg.escalation_threshold, 8);
     assert_eq!(cfg.window, 16);
 }
+
+// ---------------------------------------------------------------------------
+// OperatorNoteArrived is NOT emitted by `observe()` (Phase 9)
+//
+// `OperatorNoteArrived` is constructed by the Director loop when
+// `list_unread_notes_for_plan` returns non-empty and threaded directly
+// into `next_mode`. The pattern tracker's `observe()` never sees the
+// note event itself and must never synthesize this variant — that
+// would route operator engagement through `next_mode` twice.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn observe_never_emits_operator_note_arrived() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id, "W", WorkStatus::Ready);
+    let hash = compute_state_hash(&[work], &[]);
+    let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
+    for i in 0..32 {
+        let action = if i % 2 == 0 { done() } else { accept("b") };
+        let obs = tracker.observe(action, hash.wrapping_add(i as u64));
+        if let Some(o) = obs {
+            assert!(
+                !matches!(o, PatternObservation::OperatorNoteArrived),
+                "observe() must never emit OperatorNoteArrived; got {o:?}"
+            );
+        }
+    }
+}

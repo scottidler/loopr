@@ -26,4 +26,14 @@
 {{blocked_reason}}
 {{/if}}
 
+{{#if operator_notes}}
+### Operator Notes
+
+The operator submitted the following note(s) this iteration. Treat them as direct, authoritative guidance; favor `done` or `need_help` over `override_work` retries when a note addresses the current blocker.
+
+{{#each operator_notes}}
+- {{this}}
+{{/each}}
+{{/if}}
+
 Decide what actions to take next. Respond with a JSON array of action objects only.

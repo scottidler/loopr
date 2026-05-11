@@ -265,6 +265,7 @@ struct DirectorUserCtx<'a> {
     works: Vec<WorkLineCtx<'a>>,
     bundles: Vec<BundleLineCtx<'a>>,
     blocked_reason: Option<&'a str>,
+    operator_notes: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -325,6 +326,7 @@ impl InlineContextBuilder {
                 })
                 .collect(),
             blocked_reason: state.blocked_reason.as_deref(),
+            operator_notes: &state.operator_notes,
         };
         let state_message = self.loader.render("agents/director/user.pmt", &user_ctx)?;
         let state_msg = Message::user(state_message);

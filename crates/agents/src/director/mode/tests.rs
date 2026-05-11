@@ -125,6 +125,18 @@ fn needs_operator_stays_on_non_recovered_observations() {
 }
 
 #[test]
+fn any_mode_to_normal_on_operator_note_arrived() {
+    // Operator engagement (Phase 9 chat) demotes Conservative and
+    // NeedsOperator back to Normal so the Director's prompt reverts to
+    // the standard block on the very next iteration. Normal +
+    // OperatorNoteArrived is the idempotent edge.
+    let obs = PatternObservation::OperatorNoteArrived;
+    assert_eq!(next_mode(DirectorMode::Normal, &obs), DirectorMode::Normal);
+    assert_eq!(next_mode(DirectorMode::Conservative, &obs), DirectorMode::Normal);
+    assert_eq!(next_mode(DirectorMode::NeedsOperator, &obs), DirectorMode::Normal);
+}
+
+#[test]
 fn mode_as_str_returns_pascal_case() {
     assert_eq!(DirectorMode::Normal.as_str(), "Normal");
     assert_eq!(DirectorMode::Conservative.as_str(), "Conservative");

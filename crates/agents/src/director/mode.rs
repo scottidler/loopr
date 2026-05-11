@@ -66,6 +66,15 @@ impl DirectorMode {
 /// - Any mode -> `Normal` on `Recovered`. Recovery from
 ///   `Conservative` and `NeedsOperator` is the SOLE demotion path; no
 ///   time-based auto-revert (Architect Round 1 rejection).
+/// - Any mode -> `Normal` on `OperatorNoteArrived`. Operator engagement
+///   (Phase 9 chat) is treated as an explicit "I'm here, retry under
+///   my watch" signal: it demotes Conservative and NeedsOperator back
+///   to Normal so the Director's prompt reverts to the standard block
+///   on the very next iteration. `Normal + OperatorNoteArrived` is the
+///   idempotent edge — the Director loop (Phase 9) still resets the
+///   tracker's `no_progress_streak` on this observation regardless of
+///   mode, so a repeat note while already Normal does not silently
+///   accumulate state.
 /// - All other (mode, observation) pairs are sticky.
 pub fn next_mode(current: DirectorMode, obs: &PatternObservation) -> DirectorMode {
     use DirectorMode::*;
@@ -75,6 +84,7 @@ pub fn next_mode(current: DirectorMode, obs: &PatternObservation) -> DirectorMod
         (Normal, NoProgressTripped { .. }) => Conservative,
         (Conservative, EscalationTripped { .. }) => NeedsOperator,
         (_, Recovered) => Normal,
+        (_, OperatorNoteArrived) => Normal,
         (mode, _) => mode,
     }
 }

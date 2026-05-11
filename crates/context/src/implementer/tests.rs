@@ -218,6 +218,7 @@ fn sample_director_state(mode: &str) -> DirectorState {
             status: "Reviewed".to_string(),
         }],
         blocked_reason: None,
+        operator_notes: Vec::new(),
     }
 }
 
@@ -242,6 +243,43 @@ fn director_user_prompt_renders_mode_label_needs_operator() {
     assert!(
         user.contains("**Director mode:** NeedsOperator"),
         "user prompt must surface NeedsOperator mode label: {user}"
+    );
+}
+
+#[test]
+fn director_user_prompt_renders_operator_notes_section() {
+    let builder = InlineContextBuilder::new();
+    let mut state = sample_director_state("Normal");
+    state.operator_notes = vec![
+        "try the failing test in verbose mode".to_string(),
+        "check the env var FOO".to_string(),
+    ];
+    let out = builder.build_for_director(&state, &[], 100_000).unwrap();
+    let user = out.first_user_text().expect("director state user message");
+    assert!(
+        user.contains("### Operator Notes"),
+        "user prompt must include the Operator Notes section header when notes present: {user}"
+    );
+    assert!(
+        user.contains("try the failing test in verbose mode"),
+        "user prompt must include first note body: {user}"
+    );
+    assert!(
+        user.contains("check the env var FOO"),
+        "user prompt must include second note body: {user}"
+    );
+}
+
+#[test]
+fn director_user_prompt_omits_operator_notes_section_when_empty() {
+    let builder = InlineContextBuilder::new();
+    let state = sample_director_state("Normal");
+    assert!(state.operator_notes.is_empty(), "sample state defaults to no notes");
+    let out = builder.build_for_director(&state, &[], 100_000).unwrap();
+    let user = out.first_user_text().expect("director state user message");
+    assert!(
+        !user.contains("### Operator Notes"),
+        "user prompt must NOT include the Operator Notes section when the vector is empty: {user}"
     );
 }
 

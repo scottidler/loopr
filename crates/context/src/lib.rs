@@ -103,6 +103,16 @@ pub struct DirectorState {
     /// `docs/design/2026-05-09-director-phase-2.md`. Default `"Normal"`
     /// so callers that pre-date Phase 6 still render a sensible label.
     pub mode: String,
+    /// Operator-submitted note bodies that arrived since the previous
+    /// Director iteration. Rendered as a `## Operator Notes` section
+    /// in the user prompt. Phase 9 of
+    /// `docs/design/2026-05-09-director-phase-2.md`. Empty by default
+    /// so callers that pre-date Phase 9 still produce a valid prompt.
+    /// The Director loop reads `NotesStore::list_unread_notes_for_plan`
+    /// each iteration, populates this field with the raw bodies, and
+    /// (after a successful LLM round-trip) marks the notes read so the
+    /// next iteration's vector is empty unless a new note arrived.
+    pub operator_notes: Vec<String>,
 }
 
 /// One Work row in a `DirectorState`.

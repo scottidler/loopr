@@ -44,7 +44,10 @@ use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
 
 use context::{ContextBuilder, ContextError, DirectorState as CtxDirectorState};
-use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Work, WorkId, WorkStatus, now_millis};
+use domain::{
+    Bundle, BundleId, BundleStatus, NoteId, OperatorNote, Plan, PlanId, PlanStatus, Role, Work, WorkId, WorkStatus,
+    now_millis,
+};
 use llm::{LlmClient, Message};
 use store::StoreError;
 
@@ -182,6 +185,18 @@ pub trait DirectorStore: Send + Sync + 'static {
     async fn get_work(&self, work_id: &WorkId) -> Result<Work, StoreError>;
     async fn get_plan(&self, plan_id: &PlanId) -> Result<Plan, StoreError>;
     async fn update_plan(&self, plan: Plan) -> Result<(), StoreError>;
+    /// Phase 9: list the unread operator notes for a Plan, oldest-first.
+    /// `run_director_inner` calls this at the top of every iteration;
+    /// non-empty returns synthesize a `PatternObservation::OperatorNoteArrived`
+    /// for the mode FSM and render into the user prompt's `## Operator Notes`
+    /// section.
+    async fn list_unread_notes_for_plan(&self, plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError>;
+    /// Phase 9: mark a batch of notes read after a successful LLM round-trip.
+    /// Render-then-mark ordering is load-bearing: marking before render
+    /// means a daemon crash between mark and render loses the note;
+    /// marking after a successful LLM call ensures the note has been
+    /// observed before its `read_at` is stamped.
+    async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError>;
 }
 
 /// `DirectorStore` impl on `store::Store`. `list_bundles_for_plan` walks
@@ -214,6 +229,14 @@ impl DirectorStore for store::Store {
     async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
         self.plans().update(plan).await
     }
+
+    async fn list_unread_notes_for_plan(&self, plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError> {
+        self.notes().list_unread_for_plan(plan_id).await
+    }
+
+    async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError> {
+        self.notes().mark_read(note_ids, now_millis()).await
+    }
 }
 
 /// Forwarding `DirectorStore` impl for `Arc<S>`. Mirrors the pattern used
@@ -240,6 +263,14 @@ impl<S: DirectorStore + ?Sized> DirectorStore for Arc<S> {
     async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
         (**self).update_plan(plan).await
     }
+
+    async fn list_unread_notes_for_plan(&self, plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError> {
+        (**self).list_unread_notes_for_plan(plan_id).await
+    }
+
+    async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError> {
+        (**self).mark_notes_read(note_ids).await
+    }
 }
 
 /// Dependencies injected into `run_director`. Mirrors the Implementer's
@@ -260,6 +291,14 @@ where
     /// Fires when the daemon is shutting down; Director exits its sleep loop.
     /// Injected from `DaemonContext::shutdown_notify` at spawn time.
     pub shutdown: Arc<Notify>,
+    /// Phase 9: per-Plan wake-up channel. The IPC handler for
+    /// `director.chat` calls `notify_one()` on the matching Plan's
+    /// `Notify` after persisting the OperatorNote so the Director
+    /// preempts its inter-iteration sleep instead of waiting for the
+    /// next `idle_interval_secs` tick. One `Arc<Notify>` per Plan
+    /// keeps notes routed precisely; a process-wide channel would
+    /// spuriously wake every Director task on every note.
+    pub operator_notify: Arc<Notify>,
 }
 
 /// Parse the LLM response into a `Vec<DirectorAction>`.
@@ -374,6 +413,10 @@ pub async fn build_director_state<S: DirectorStore>(
         works: work_lines,
         bundles: bundle_lines,
         blocked_reason: None,
+        // Phase 9: `run_director_inner` overrides `operator_notes`
+        // before calling the context builder. Empty here is the
+        // test-only path's no-notes baseline.
+        operator_notes: Vec::new(),
     })
 }
 
@@ -630,6 +673,48 @@ where
         let mut state = build_director_state(plan_id, &deps.store).await?;
         state.mode = current_mode.as_str().to_string();
 
+        // 2a. Phase 9: surface any unread operator notes. Notes are
+        //     rendered into the `## Operator Notes` section of the user
+        //     prompt; their arrival also drives the mode FSM via the
+        //     out-of-band `PatternObservation::OperatorNoteArrived`
+        //     variant (NOT emitted by the pattern tracker). Demotion
+        //     from Conservative/NeedsOperator -> Normal also resets
+        //     the tracker's `no_progress_streak` so the next iteration
+        //     starts the no-progress detector fresh under operator
+        //     watch. Mark-read is deferred until AFTER a successful
+        //     LLM round-trip (step 4) so a parse-loop failure or LLM
+        //     error does not lose the note's content.
+        let unread_notes = deps.store.list_unread_notes_for_plan(plan_id).await?;
+        let unread_note_ids: Vec<NoteId> = unread_notes.iter().map(|n| n.id.clone()).collect();
+        if !unread_notes.is_empty() {
+            state.operator_notes = unread_notes.iter().map(|n| n.message.clone()).collect();
+            let next = next_mode(current_mode, &PatternObservation::OperatorNoteArrived);
+            if next != current_mode {
+                info!(
+                    plan_id = %plan_id,
+                    iteration,
+                    from = current_mode.as_str(),
+                    to = next.as_str(),
+                    trigger = "operator_note",
+                    note_count = unread_notes.len(),
+                    "director.mode_change"
+                );
+                pattern_tracker.reset_no_progress_streak();
+                current_mode = next;
+                // Re-stamp the mode label so the user prompt reflects
+                // the post-demotion state on this very iteration.
+                state.mode = current_mode.as_str().to_string();
+            } else {
+                debug!(
+                    plan_id = %plan_id,
+                    iteration,
+                    mode = current_mode.as_str(),
+                    note_count = unread_notes.len(),
+                    "director: operator note observed; mode unchanged (idempotent edge)"
+                );
+            }
+        }
+
         // 3. Context + LLM.
         let assembled = deps
             .context
@@ -653,6 +738,24 @@ where
                         history.push(last.clone());
                     }
                     history.push(Message::assistant(raw));
+                    // Phase 9: render-then-mark. The notes have now
+                    // been observed by the LLM (their bodies were in
+                    // the rendered user prompt), so it is safe to
+                    // stamp `read_at`. Failures here log and continue
+                    // — a re-read on the next iteration is benign
+                    // (the body just re-renders), so we never let
+                    // taskstore hiccups drop the iteration.
+                    if !unread_note_ids.is_empty()
+                        && let Err(e) = deps.store.mark_notes_read(&unread_note_ids).await
+                    {
+                        warn!(
+                            plan_id = %plan_id,
+                            iteration,
+                            note_count = unread_note_ids.len(),
+                            error = %e,
+                            "director: mark_notes_read failed; notes will re-render next iteration"
+                        );
+                    }
                     break parsed;
                 }
                 Err(e) => {
@@ -791,6 +894,9 @@ where
                 info!(plan_id = %plan_id, "director shutdown notified; exiting");
                 return Ok(());
             }
+            _ = deps.operator_notify.notified() => {
+                debug!(plan_id = %plan_id, iteration, "director operator-note wakeup");
+            }
         }
     }
 }
@@ -820,6 +926,7 @@ fn pattern_observation_trigger(obs: &PatternObservation) -> &'static str {
         PatternObservation::NoProgressTripped { .. } => "no_progress",
         PatternObservation::EscalationTripped { .. } => "escalation",
         PatternObservation::Recovered => "recovered",
+        PatternObservation::OperatorNoteArrived => "operator_note",
     }
 }
 
