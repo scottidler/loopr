@@ -729,6 +729,44 @@ fn director_chat_result_round_trip() {
     assert_eq!(restored, result);
 }
 
+// --- plan.override (Phase 10 of director-phase-2) ---
+
+#[test]
+fn method_name_plan_override_wire_form() {
+    let name: &'static str = crate::method::MethodName::PlanOverride.into();
+    assert_eq!(name, "plan.override");
+}
+
+#[test]
+fn method_try_from_plan_override() {
+    let req = DaemonRequest {
+        id: 11,
+        method: "plan.override".into(),
+        params: json!({ "plan_id": "pl-stalled", "target_status": "active" }),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::PlanOverride(crate::method::PlanOverrideParams {
+            plan_id: "pl-stalled".to_string(),
+            target_status: "active".to_string(),
+        })
+    );
+}
+
+#[test]
+fn plan_override_unknown_field_is_rejected() {
+    let req = DaemonRequest {
+        id: 12,
+        method: "plan.override".into(),
+        params: json!({ "plan_id": "pl-x", "target_status": "active", "extra": "nope" }),
+    };
+    let err = Method::try_from(&req).unwrap_err();
+    assert!(
+        matches!(err, RpcError::InvalidParams(_)),
+        "deny_unknown_fields must reject extras: {err:?}"
+    );
+}
+
 #[test]
 fn version_advertisement_in_handshake_bytes() {
     let req = DaemonRequest {

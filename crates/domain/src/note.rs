@@ -20,9 +20,9 @@ use derive::Record;
 use crate::id::{NoteId, PlanId, now_millis};
 
 /// Operator-submitted message routed into the Director's user prompt.
-/// Stored at `<target>/.loopr/taskstore/operator_notes.jsonl` via the
-/// `Record` derive (the on-disk filename mirrors the struct name in
-/// snake_case).
+/// Stored at `<target>/.loopr/taskstore/operatornotes.jsonl` via the
+/// `Record` derive (the on-disk filename is the struct ident
+/// lowercased and pluralized; no snake_case transform).
 #[derive(Debug, Clone, Serialize, Deserialize, Record)]
 #[serde(deny_unknown_fields)]
 pub struct OperatorNote {

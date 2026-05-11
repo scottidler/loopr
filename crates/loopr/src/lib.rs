@@ -176,7 +176,10 @@ fn dispatch(
 ) -> Result<(), LooprError> {
     match command {
         Command::Init { force } => commands::init::run(target, force),
-        Command::Plan { goal } => plan_command(target, goal),
+        Command::Plan { cmd } => match cmd {
+            cli::PlanCmd::Create { goal } => plan_create_command(target, goal),
+            cli::PlanCmd::Override { plan_id, to } => plan_override_command(target, plan_id, to),
+        },
         Command::Plans => commands::list::run(target, output_format, ipc::RecordKind::Plan),
         Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),
         Command::Bundles => commands::list::run(target, output_format, ipc::RecordKind::Bundle),
@@ -278,7 +281,7 @@ fn daemon_status(target: &Path) -> Result<(), LooprError> {
     fields(target = %target.display(), goal_len = goal.len(), subcommand = "plan"),
     err,
 )]
-fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
+fn plan_create_command(target: &Path, goal: String) -> Result<(), LooprError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -300,6 +303,47 @@ fn plan_command(target: &Path, goal: String) -> Result<(), LooprError> {
             .map_err(|e| LooprError::ClientIo(format!("decode plan.create: {e}")))?;
         println!("plan:   {}", result.plan.id);
         println!("goal:   {}", result.plan.goal);
+        println!("status: {}", result.plan.status);
+        Ok(())
+    })
+}
+
+/// `loopr plan override <plan-id> --to <status>` body. Phase 10 of
+/// `docs/design/2026-05-09-director-phase-2.md`: revive a Stalled
+/// Plan via the `Stalled -> Active` override, or transition the Plan
+/// to any other operator-permitted status. The daemon performs the
+/// FSM check + persist; this function is a thin IPC client.
+#[tracing::instrument(
+    name = "client.plan_override_command",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), plan_id = %plan_id, to = %to, subcommand = "plan-override"),
+    err,
+)]
+fn plan_override_command(target: &Path, plan_id: String, to: String) -> Result<(), LooprError> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
+    rt.block_on(async {
+        let mut client = transport::connect_or_wait(target).await?;
+        client.handshake(None).await?;
+        let params = ipc::PlanOverrideParams {
+            plan_id,
+            target_status: to,
+        };
+        let params_value = serde_json::to_value(&params)
+            .map_err(|e| LooprError::ClientIo(format!("serialize plan.override params: {e}")))?;
+        let (resp, _events) = client.request(ipc::MethodName::PlanOverride, params_value).await?;
+        if let Some(err) = resp.error {
+            return Err(LooprError::Rpc(err));
+        }
+        let result_value = resp
+            .result
+            .ok_or_else(|| LooprError::ClientIo("plan.override response missing result".into()))?;
+        let result: ipc::PlanOverrideResult = serde_json::from_value(result_value)
+            .map_err(|e| LooprError::ClientIo(format!("decode plan.override: {e}")))?;
+        println!("plan:   {}", result.plan.id);
         println!("status: {}", result.plan.status);
         Ok(())
     })

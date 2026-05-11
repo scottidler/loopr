@@ -408,6 +408,118 @@ async fn director_chat_oversized_message_is_truncated_in_store() {
     assert_eq!(stored.plan_id, plan_id);
 }
 
+// --- plan.override (Phase 10 of director-phase-2) ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_override_stalled_to_active_persists_and_responds() {
+    let (_td, ctx) = stub_ctx().await;
+    // Seed a Stalled Plan directly.
+    let mut plan = domain::Plan::new("phase-10-override-target".to_string());
+    plan.status = domain::PlanStatus::Stalled;
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 60,
+        method: "plan.override".into(),
+        params: serde_json::json!({
+            "plan_id": plan_id.to_string(),
+            "target_status": "active",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 60);
+    assert!(
+        resp.error.is_none(),
+        "plan.override Stalled -> Active must succeed: {:?}",
+        resp.error
+    );
+    let result_value = resp.result.expect("result");
+    let result: ipc::PlanOverrideResult = serde_json::from_value(result_value).unwrap();
+    assert_eq!(result.plan.status, domain::PlanStatus::Active);
+
+    // Persisted Plan reflects the new status.
+    let after = ctx.store.plans().get(&plan_id).await.unwrap();
+    assert_eq!(after.status, domain::PlanStatus::Active);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_override_nonexistent_plan_yields_not_found() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 61,
+        method: "plan.override".into(),
+        params: serde_json::json!({
+            "plan_id": "pl-zzzzz",
+            "target_status": "active",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 61);
+    assert!(matches!(resp.error, Some(RpcError::NotFound(_))));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_override_unknown_target_status_yields_invalid_params() {
+    let (_td, ctx) = stub_ctx().await;
+    let plan = domain::Plan::new("status-parser-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 62,
+        method: "plan.override".into(),
+        params: serde_json::json!({
+            "plan_id": plan_id.to_string(),
+            "target_status": "FROBNICATE",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 62);
+    match resp.error {
+        Some(RpcError::InvalidParams(msg)) => {
+            assert!(msg.contains("FROBNICATE"), "expected status string in error: {msg}");
+        }
+        other => panic!("expected InvalidParams for bogus status; got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_override_rejected_fsm_edge_yields_invalid_request() {
+    // Active -> Complete is allowed only for `(Reactor, Decomposer)`
+    // per the Plan FSM transition table — `Role::Director` is not in
+    // the role list. The handler must surface the FSM rejection as
+    // InvalidRequest, not panic, and must not mutate the Plan.
+    let (_td, ctx) = stub_ctx().await;
+    let plan = domain::Plan::new("fsm-reject-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 63,
+        method: "plan.override".into(),
+        params: serde_json::json!({
+            "plan_id": plan_id.to_string(),
+            "target_status": "complete",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 63);
+    match resp.error {
+        Some(RpcError::InvalidRequest(msg)) => {
+            assert!(msg.contains("FSM"), "expected FSM rejection in error: {msg}");
+        }
+        other => panic!("expected InvalidRequest for FSM rejection; got {other:?}"),
+    }
+    // Plan must NOT have been mutated.
+    let after = ctx.store.plans().get(&plan_id).await.unwrap();
+    assert_eq!(after.status, domain::PlanStatus::Active);
+}
+
 // RFC-8259 newline-safety: a literal `\n` inside a string field must not
 // split the NDJSON line prematurely. `serde_json::to_string` ASCII-
 // escapes `\n` to `\\n` in compact mode, so the only `0x0A` on the wire

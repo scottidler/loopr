@@ -25,10 +25,26 @@ fn test_cli_parses_init_with_force() {
 
 #[test]
 fn test_cli_parses_plan() {
-    let cli = Cli::parse_from(["loopr", "plan", "add --version flag"]);
+    let cli = Cli::parse_from(["loopr", "plan", "create", "add --version flag"]);
     match cli.command.unwrap() {
-        Command::Plan { goal } => assert_eq!(goal, "add --version flag"),
-        _ => panic!("expected Plan"),
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Create { goal },
+        } => assert_eq!(goal, "add --version flag"),
+        _ => panic!("expected Plan::Create"),
+    }
+}
+
+#[test]
+fn test_cli_parses_plan_override() {
+    let cli = Cli::parse_from(["loopr", "plan", "override", "pl-abc12", "--to", "active"]);
+    match cli.command.unwrap() {
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Override { plan_id, to },
+        } => {
+            assert_eq!(plan_id, "pl-abc12");
+            assert_eq!(to, "active");
+        }
+        _ => panic!("expected Plan::Override"),
     }
 }
 
@@ -76,11 +92,13 @@ fn test_cli_parses_output_json_global() {
 #[test]
 fn test_cli_parses_output_yaml_short() {
     use crate::output::Format;
-    let cli = Cli::parse_from(["loopr", "-o", "yaml", "plan", "x"]);
+    let cli = Cli::parse_from(["loopr", "-o", "yaml", "plan", "create", "x"]);
     assert_eq!(cli.output, Some(Format::Yaml));
     match cli.command.unwrap() {
-        Command::Plan { goal } => assert_eq!(goal, "x"),
-        _ => panic!("expected Plan"),
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Create { goal },
+        } => assert_eq!(goal, "x"),
+        _ => panic!("expected Plan::Create"),
     }
 }
 
@@ -176,11 +194,13 @@ fn test_cli_parses_bare_invocation_as_none() {
 
 #[test]
 fn test_cli_parses_chdir_global() {
-    let cli = Cli::parse_from(["loopr", "-C", "/tmp/target", "plan", "x"]);
+    let cli = Cli::parse_from(["loopr", "-C", "/tmp/target", "plan", "create", "x"]);
     assert_eq!(cli.chdir, Some(PathBuf::from("/tmp/target")));
     match cli.command.unwrap() {
-        Command::Plan { goal } => assert_eq!(goal, "x"),
-        _ => panic!("expected Plan"),
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Create { goal },
+        } => assert_eq!(goal, "x"),
+        _ => panic!("expected Plan::Create"),
     }
 }
 
@@ -210,11 +230,13 @@ fn test_cli_log_level_defaults_to_none() {
 
 #[test]
 fn test_cli_log_level_is_global() {
-    let cli = Cli::parse_from(["loopr", "plan", "-l", "debug", "goal"]);
+    let cli = Cli::parse_from(["loopr", "plan", "create", "-l", "debug", "goal"]);
     assert_eq!(cli.log_level.as_deref(), Some("debug"));
     match cli.command.unwrap() {
-        Command::Plan { goal } => assert_eq!(goal, "goal"),
-        _ => panic!("expected Plan"),
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Create { goal },
+        } => assert_eq!(goal, "goal"),
+        _ => panic!("expected Plan::Create"),
     }
 }
 
@@ -222,7 +244,11 @@ fn test_cli_log_level_is_global() {
 fn test_command_label_covers_every_variant() {
     let cases = [
         (&["loopr", "init"][..], "init"),
-        (&["loopr", "plan", "x"][..], "plan"),
+        (&["loopr", "plan", "create", "x"][..], "plan-create"),
+        (
+            &["loopr", "plan", "override", "pl-abc", "--to", "active"][..],
+            "plan-override",
+        ),
         (&["loopr", "plans"][..], "plans"),
         (&["loopr", "works"][..], "works"),
         (&["loopr", "bundles"][..], "bundles"),

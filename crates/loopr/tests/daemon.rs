@@ -286,7 +286,7 @@ fn ac9_plan_auto_forks_daemon_and_creates_plan() {
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success()
         .stdout(predicate::str::contains("plan:"));
@@ -306,7 +306,7 @@ fn ac10_plan_reuses_running_daemon() {
     let pid_before = read_pid(td.path()).unwrap();
 
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success();
     let pid_after = read_pid(td.path()).unwrap();
@@ -372,7 +372,7 @@ fn ac13_version_mismatch_triggers_silent_restart() {
     fs::write(td.path().join(".loopr").join("daemon.version"), "not-a-real-version\n").unwrap();
 
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success();
     let pid_after = read_pid(td.path()).unwrap();

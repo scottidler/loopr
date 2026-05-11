@@ -23,6 +23,14 @@ pub enum MethodName {
     /// `docs/design/2026-05-09-director-phase-2.md`.
     #[strum(serialize = "director.chat")]
     DirectorChat,
+    /// Operator-issued FSM override on a Plan. Used today to revive a
+    /// Stalled Plan via `Stalled -> Active`. Phase 10 of
+    /// `docs/design/2026-05-09-director-phase-2.md`. The handler runs
+    /// the override under `Role::Director` (the only role permitted to
+    /// edge from `Stalled`); other operator-driven overrides ride the
+    /// same verb in the future.
+    #[strum(serialize = "plan.override")]
+    PlanOverride,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +41,7 @@ pub enum Method {
     RecordList(RecordListParams),
     RecordGet(RecordGetParams),
     DirectorChat(DirectorChatParams),
+    PlanOverride(PlanOverrideParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +88,29 @@ pub struct DirectorChatResult {
 /// should be summarized before submission.
 pub const DIRECTOR_CHAT_MESSAGE_BYTE_CAP: usize = 4096;
 
+/// `plan.override` request. The operator nominates a target FSM status
+/// for the Plan; the daemon runs the override under `Role::Director`,
+/// which is the only role permitted to edge from `Stalled`. Today the
+/// only practical use is `Stalled -> Active` (revive an escalated Plan).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanOverrideParams {
+    /// Target Plan id; daemon validates existence before the FSM call.
+    pub plan_id: String,
+    /// Target Plan status, lowercase string matching `PlanStatus`'s
+    /// `Display` impl (e.g. `"active"`, `"stalled"`, `"complete"`).
+    pub target_status: String,
+}
+
+/// `plan.override` response: the updated Plan record post-transition.
+/// `Plan` does not implement `PartialEq`/`Eq`; wire round-trip is
+/// asserted via byte stability in the seam tests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanOverrideResult {
+    pub plan: Plan,
+}
+
 impl TryFrom<&DaemonRequest> for Method {
     type Error = RpcError;
     fn try_from(req: &DaemonRequest) -> Result<Self, Self::Error> {
@@ -115,6 +147,11 @@ impl TryFrom<&DaemonRequest> for Method {
                 let params: DirectorChatParams =
                     serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
                 Ok(Method::DirectorChat(params))
+            }
+            MethodName::PlanOverride => {
+                let params: PlanOverrideParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::PlanOverride(params))
             }
         }
     }

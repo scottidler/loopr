@@ -13,8 +13,8 @@ use agents::{DirectorDeps, DirectorError, run_director};
 use ipc::{
     BundleSummary, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DaemonRequest, DaemonResponse, DirectorChatParams,
     DirectorChatResult, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult,
-    PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult, RpcError, StatusResult,
-    TickSummary, WorkSummary,
+    PlanOverrideParams, PlanOverrideResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult,
+    RecordsResult, RpcError, StatusResult, TickSummary, WorkSummary,
 };
 use llm::LlmClient;
 use store::StoreError;
@@ -80,6 +80,7 @@ where
         Method::RecordList(params) => handle_record_list(req.id, params, ctx).await,
         Method::RecordGet(params) => handle_record_get(req.id, params, ctx).await,
         Method::DirectorChat(params) => handle_director_chat(req.id, params, ctx).await,
+        Method::PlanOverride(params) => handle_plan_override(req.id, params, ctx).await,
     }
 }
 
@@ -434,6 +435,102 @@ where
     match serde_json::to_value(&result) {
         Ok(v) => DaemonResponse::ok(id, v),
         Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize director.chat: {e}"))),
+    }
+}
+
+/// Handle `plan.override`. The operator nominates a target status; the
+/// daemon runs `Plan::override_status(target, Role::Director)` and
+/// persists the result. Today the only practical case is `Stalled ->
+/// Active` (revive an escalated Plan). On the successful Stalled ->
+/// Active transition, the daemon respawns a Director task for the
+/// Plan so the operator does not need to restart the daemon to resume
+/// supervision. Phase 10 of
+/// `docs/design/2026-05-09-director-phase-2.md`.
+#[instrument(
+    name = "ipc.plan_override",
+    level = "info",
+    skip_all,
+    fields(request_id = id, plan_id = %params.plan_id, target_status = %params.target_status),
+)]
+async fn handle_plan_override<L>(id: u64, params: PlanOverrideParams, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    use std::str::FromStr;
+    let plan_id = match domain::PlanId::from_str(&params.plan_id) {
+        Ok(p) => p,
+        Err(_) => {
+            return DaemonResponse::err(
+                id,
+                RpcError::InvalidParams(format!("plan_id parse failed: {}", params.plan_id)),
+            );
+        }
+    };
+    let target_status = match parse_plan_status(&params.target_status) {
+        Ok(s) => s,
+        Err(e) => {
+            return DaemonResponse::err(id, RpcError::InvalidParams(e));
+        }
+    };
+
+    let mut plan = match ctx.store.plans().get(&plan_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(request_id = id, plan_id = %plan_id, error = %e, "plan.override: plan not found");
+            return DaemonResponse::err(id, map_store_error(e));
+        }
+    };
+    let prior_status = plan.status;
+
+    if let Err(e) = plan.override_status(target_status, domain::Role::Director) {
+        warn!(
+            request_id = id,
+            plan_id = %plan_id,
+            from = %prior_status,
+            to = %target_status,
+            error = %e,
+            "plan.override: FSM rejected"
+        );
+        return DaemonResponse::err(id, RpcError::InvalidRequest(format!("FSM override rejected: {e}")));
+    }
+
+    if let Err(e) = ctx.store.plans().update(plan.clone()).await {
+        warn!(request_id = id, error = %e, "plan.override: persist failed");
+        return DaemonResponse::err(id, map_store_error(e));
+    }
+
+    info!(
+        request_id = id,
+        plan_id = %plan_id,
+        from = %prior_status,
+        to = %target_status,
+        "plan.override: persisted"
+    );
+
+    // Stalled -> Active means the operator revived an escalated Plan;
+    // respawn the Director so supervision resumes without a daemon
+    // restart. `spawn_director_for_plan` is a no-op (warn) during
+    // shutdown, which is the only state where the respawn could race.
+    if prior_status == domain::PlanStatus::Stalled && target_status == domain::PlanStatus::Active {
+        spawn_director_for_plan(ctx, plan_id.clone()).await;
+    }
+
+    let result = PlanOverrideResult { plan };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.override: {e}"))),
+    }
+}
+
+/// Parse a lowercase Plan status string into the typed `PlanStatus`
+/// enum. Mirrors the closed set in `domain::PlanStatus`.
+fn parse_plan_status(s: &str) -> Result<domain::PlanStatus, String> {
+    match s {
+        "draft" => Ok(domain::PlanStatus::Draft),
+        "active" => Ok(domain::PlanStatus::Active),
+        "complete" => Ok(domain::PlanStatus::Complete),
+        "stalled" => Ok(domain::PlanStatus::Stalled),
+        other => Err(format!("unknown plan status: {other}")),
     }
 }
 

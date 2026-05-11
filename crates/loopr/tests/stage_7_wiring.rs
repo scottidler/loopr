@@ -76,7 +76,7 @@ fn plan_create_exercises_stage_7_spawn_path_without_crash() {
     // runs the decomposer (which either yields Works or errors out with no
     // API key), and for any yielded Work invokes the Stage 7 spawn path.
     loopr()
-        .args(["-C", target.to_str().unwrap(), "plan", "toy stage 7 goal"])
+        .args(["-C", target.to_str().unwrap(), "plan", "create", "toy stage 7 goal"])
         .assert()
         .success();
 
@@ -117,7 +117,7 @@ fn plan_create_daemon_shutdown_drains_implementer_tasks_cleanly() {
     // implementer tasks, the drain_implementer_tasks step must handle
     // the empty-JoinSet path without deadlock or timeout.
     loopr()
-        .args(["-C", target.to_str().unwrap(), "plan", "drain-test"])
+        .args(["-C", target.to_str().unwrap(), "plan", "create", "drain-test"])
         .assert()
         .success();
 

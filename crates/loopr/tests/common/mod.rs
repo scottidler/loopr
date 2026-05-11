@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 /// Usage:
 /// ```ignore
 /// let _stop = DaemonAutoStop::for_target(target);
-/// loopr().args(["-C", target.to_str().unwrap(), "plan", "x"]).assert().success();
+/// loopr().args(["-C", target.to_str().unwrap(), "plan", "create", "x"]).assert().success();
 /// // _stop drops at end of scope, SIGTERMs the daemon either way.
 /// ```
 #[must_use = "DaemonAutoStop leaks daemons unless bound to a variable for its scope"]

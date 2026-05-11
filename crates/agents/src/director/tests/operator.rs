@@ -1,0 +1,243 @@
+#![allow(clippy::unwrap_used)]
+//! Phase 9-10 tests: operator-note path through the Director run loop
+//! plus the `NeedsOperator -> Stalled` grace counter. Pulled out of
+//! `director/tests.rs` to keep both files under the 1500-line cap
+//! enforced by `otto ci`'s bloat task.
+//!
+//! `use super::*;` imports the scaffolding (`FakeLlm`, `FakeStore`,
+//! `RecordingSpawner`, `make_work`, `fast_config`, `make_deps`, etc.)
+//! from the parent `tests` module via submodule privilege.
+
+use std::sync::Arc;
+
+use serde_json::json;
+use tokio::sync::Notify;
+
+use domain::{OperatorNote, Plan, PlanId, PlanStatus, WorkStatus};
+
+use super::{FakeLlm, FakeStore, RecordingSpawner, fast_config, make_deps, make_work};
+use crate::director::run_director;
+
+// ---------------------------------------------------------------------------
+// Phase 9: Operator note path
+// ---------------------------------------------------------------------------
+
+/// Operator note rendered into the user prompt AND demotes Conservative
+/// to Normal AND is marked read so the next iteration's prompt does NOT
+/// re-include it. This is the end-to-end test for Phase 9.
+#[tokio::test]
+async fn operator_note_renders_demotes_conservative_and_marks_read() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let work_id_s = blocked.id.to_string();
+    let store = FakeStore::with(vec![blocked], vec![]);
+    // Pre-seed an operator note so the very FIRST iteration sees it.
+    let note = OperatorNote::new(
+        plan_id.clone(),
+        "scott".to_string(),
+        "try the failing test in verbose mode".to_string(),
+    );
+    store.notes.lock().unwrap().push(note.clone());
+
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let mut config = fast_config();
+    config.patterns = crate::config::DirectorConfig::default().patterns;
+    config.max_work_attempts = 100;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let prompts = deps.llm.last_user_messages();
+    assert!(!prompts.is_empty(), "expected at least one LLM call");
+    assert!(
+        prompts[0].contains("### Operator Notes"),
+        "first iteration prompt must include the Operator Notes section; got: {}",
+        prompts[0]
+    );
+    assert!(
+        prompts[0].contains("try the failing test in verbose mode"),
+        "first iteration prompt must include the note body; got: {}",
+        prompts[0]
+    );
+    if prompts.len() >= 2 {
+        for (i, p) in prompts.iter().enumerate().skip(1) {
+            assert!(
+                !p.contains("try the failing test in verbose mode"),
+                "iteration {i} re-rendered the marked-read note body; got: {p}"
+            );
+        }
+    }
+}
+
+/// Render-then-mark ordering regression guard: when the LLM-loop fails
+/// before parse succeeds (lifeguard escalates on three consecutive
+/// parse failures), `mark_notes_read` must NOT have fired and the note
+/// must remain unread so the next Director restart re-renders it.
+#[tokio::test]
+async fn unread_note_remains_unread_on_lifeguard_escalation() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let store = FakeStore::with(vec![blocked], vec![]);
+    let note = OperatorNote::new(plan_id.clone(), "scott".into(), "investigate".into());
+    let note_id = note.id.clone();
+    store.notes.lock().unwrap().push(note);
+
+    let llm = FakeLlm::repeating("not json".to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let mut config = fast_config();
+    config.max_requeries = 0;
+    config.max_parse_failures = 3;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let err = run_director(&plan_id, &deps).await.expect_err("must escalate");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("Lifeguard") || msg.contains("lifeguard"),
+        "expected lifeguard escalation; got: {msg}"
+    );
+
+    let notes = deps.store.notes.lock().unwrap();
+    let persisted = notes.iter().find(|n| n.id == note_id).expect("note persisted");
+    assert!(
+        persisted.is_unread(),
+        "note must remain unread when the LLM round-trip never reached parse-success; got read_at={:?}",
+        persisted.read_at
+    );
+}
+
+/// After a successful LLM round-trip, the note is marked read so the
+/// next iteration's prompt does NOT re-include it.
+#[tokio::test]
+async fn unread_note_marked_read_after_render() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Ready);
+    let store = FakeStore::with(vec![work], vec![]);
+    let note = OperatorNote::new(plan_id.clone(), "scott".into(), "review".into());
+    let note_id = note.id.clone();
+    store.notes.lock().unwrap().push(note);
+
+    let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ack" }]).to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let config = fast_config();
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let notes = deps.store.notes.lock().unwrap();
+    let persisted = notes.iter().find(|n| n.id == note_id).expect("note persisted");
+    assert!(
+        !persisted.is_unread(),
+        "note should be marked read after a successful LLM round-trip; got read_at={:?}",
+        persisted.read_at
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10: NeedsOperator -> Stalled grace
+// ---------------------------------------------------------------------------
+
+/// After the Director enters NeedsOperator, if no operator note arrives
+/// within `needs_operator_grace_iters` consecutive iterations the
+/// Director must transition the Plan -> Stalled (Director role) and
+/// exit with `NeedHelp`.
+#[tokio::test]
+async fn needs_operator_grace_exceeded_stalls_plan_and_returns_need_help() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let work_id_s = blocked.id.to_string();
+    let mut plan = Plan::new("test goal".into());
+    plan.id = plan_id.clone();
+    let store = FakeStore::with_plan(vec![blocked], vec![], plan);
+
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    config.max_work_attempts = 100;
+    // iter 1: NoProgressTripped -> Conservative.
+    // iter 2: EscalationTripped (streak >= 2) -> NeedsOperator.
+    config.patterns.same_action_threshold = 100;
+    config.patterns.no_progress_threshold = 1;
+    config.patterns.escalation_threshold = 2;
+    config.patterns.window = 4;
+    // Stall on the third NeedsOperator iteration without notes.
+    config.needs_operator_grace_iters = 2;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let err = run_director(&plan_id, &deps).await.expect_err("must stall");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("NeedsOperator timeout"),
+        "expected NeedsOperator timeout in NeedHelp; got: {msg}"
+    );
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Stalled),
+        "Plan must be persisted as Stalled before exiting"
+    );
+}
+
+/// Counter does NOT trip Stalled while mode is anything other than
+/// NeedsOperator, regardless of how long the Director runs.
+#[tokio::test]
+async fn grace_counter_does_not_trip_outside_needs_operator() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Ready);
+    let mut plan = Plan::new("test goal".into());
+    plan.id = plan_id.clone();
+    let store = FakeStore::with_plan(vec![work], vec![], plan);
+
+    let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ok" }]).to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let mut config = fast_config();
+    config.needs_operator_grace_iters = 2;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    assert_ne!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Stalled),
+        "Plan must not be Stalled when mode stays out of NeedsOperator; got plan_status={:?}",
+        deps.store.plan_status()
+    );
+}

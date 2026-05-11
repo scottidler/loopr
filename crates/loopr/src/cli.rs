@@ -58,10 +58,13 @@ pub enum Command {
         force: bool,
     },
 
-    /// Submit a Plan goal to the daemon.
+    /// Plan lifecycle (create, override). Phase 10 of
+    /// `docs/design/2026-05-09-director-phase-2.md` introduced
+    /// `override` to revive Stalled Plans; `create` is the original
+    /// `loopr plan <goal>` body now nested as a subcommand.
     Plan {
-        /// One-sentence goal to plan for.
-        goal: String,
+        #[command(subcommand)]
+        cmd: PlanCmd,
     },
 
     /// List all Plans in the target's taskstore.
@@ -116,7 +119,10 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Command::Init { .. } => "init",
-            Command::Plan { .. } => "plan",
+            Command::Plan { cmd } => match cmd {
+                PlanCmd::Create { .. } => "plan-create",
+                PlanCmd::Override { .. } => "plan-override",
+            },
             Command::Plans => "plans",
             Command::Works => "works",
             Command::Bundles => "bundles",
@@ -144,6 +150,27 @@ impl Command {
             Command::Tui => "tui",
         }
     }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PlanCmd {
+    /// Submit a Plan goal to the daemon (the original `loopr plan
+    /// <goal>` body, now nested for symmetry with `override`).
+    Create {
+        /// One-sentence goal to plan for.
+        goal: String,
+    },
+    /// Operator FSM override on a Plan. The only practical use today
+    /// is `--to active` to revive a Stalled Plan; Phase 10 of
+    /// `docs/design/2026-05-09-director-phase-2.md` introduced the
+    /// `Stalled -> Active` recovery edge that this verb drives.
+    Override {
+        /// Target Plan id, e.g. `pl-abc12`.
+        plan_id: String,
+        /// Target status: `active`, `stalled`, `draft`, or `complete`.
+        #[arg(long = "to")]
+        to: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

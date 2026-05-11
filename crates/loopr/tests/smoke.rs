@@ -111,7 +111,7 @@ fn plan_on_tempdir_creates_and_prints_plan() {
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     let output = loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
@@ -133,11 +133,11 @@ fn plans_lists_created_plans_as_summary_projections() {
     // Create two plans via the binary so the test exercises the full
     // round-trip (client -> daemon -> store -> summary projection -> client).
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "first"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "first"])
         .assert()
         .success();
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "second"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "second"])
         .assert()
         .success();
 
@@ -186,7 +186,7 @@ fn show_on_created_plan_returns_full_record() {
     init_git_repo(td.path());
     // Create a plan and capture its id from the `plan` output.
     let plan_out = loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "for-show"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "for-show"])
         .assert()
         .success();
     let plan_stdout = String::from_utf8_lossy(&plan_out.get_output().stdout).to_string();
@@ -266,7 +266,7 @@ fn source_guard_blocks_target_with_sentinel() {
     let _stop = DaemonAutoStop::for_target(td.path());
     fs::write(td.path().join(".loopr-source-guard"), "").unwrap();
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("source tree"));
@@ -283,7 +283,7 @@ fn source_guard_trips_from_within_loopr_v5_checkout() {
     let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["plan", "x"])
+        .args(["plan", "create", "x"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(".loopr-source-guard"));
@@ -294,7 +294,7 @@ fn target_invalid_when_path_does_not_exist() {
     let td = TempDir::new().unwrap();
     let _stop = DaemonAutoStop::for_target(td.path());
     loopr(td.path())
-        .args(["-C", "/does/not/exist/42", "plan", "x"])
+        .args(["-C", "/does/not/exist/42", "plan", "create", "x"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("does not exist"));
@@ -307,7 +307,7 @@ fn target_is_file_hints_at_parent() {
     let file = td.path().join("a-file");
     fs::write(&file, "").unwrap();
     loopr(td.path())
-        .args(["-C", file.to_str().unwrap(), "plan", "x"])
+        .args(["-C", file.to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("is a file"))
@@ -356,7 +356,7 @@ fn run_plan(target: &std::path::Path) {
     // Stage 8 wiring requires a git-initialized target for plan.create.
     init_git_repo(target);
     loopr(target)
-        .args(["-C", target.to_str().unwrap(), "plan", "x"])
+        .args(["-C", target.to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success();
 }
@@ -519,7 +519,7 @@ fn log_level_debug_emits_debug_events() {
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "--log-level", "debug", "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "--log-level", "debug", "plan", "create", "x"])
         .assert()
         .success();
     let client_dirs = client_run_dirs(td.path());
@@ -540,7 +540,7 @@ fn log_level_via_env_var() {
     init_git_repo(td.path());
     loopr(td.path())
         .env("LOOPR_LOG_LEVEL", "debug")
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success();
     let client_dirs = client_run_dirs(td.path());
@@ -564,7 +564,7 @@ fn console_layer_gated_on_tty() {
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     let assertion = loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plan", "x"])
+        .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success();
     let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).to_string();
