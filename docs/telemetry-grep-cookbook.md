@@ -154,6 +154,36 @@ grep '"message":"director restart"' events.log \
 `context_failure`, `store_failure`, `id_failure`, `lifeguard_escalation`,
 `need_help`.
 
+**Which Plans are currently in escalation (Conservative or NeedsOperator)?**
+
+```
+grep '"message":"director.mode_change"' events.log \
+  | jq 'select(.fields.to == "Conservative" or .fields.to == "NeedsOperator")
+        | {plan_id: .fields.plan_id, from: .fields.from, to: .fields.to,
+           trigger: .fields.trigger, iteration: .fields.iteration}'
+```
+
+`trigger` is a closed enum: `same_action`, `no_progress`, `escalation`,
+`recovered`, `operator_note`. Recovery to Normal is also a `mode_change`
+event with `to == "Normal"`; grep for `to=Normal` to find Plans the
+operator pulled out of escalation via `loopr director chat`.
+
+**Which Plans were Stalled by the NeedsOperator grace timeout?**
+
+```
+grep '"message":"director: NeedsOperator grace exceeded' events.log \
+  | jq '{plan_id: .fields.plan_id, needs_operator_iters: .fields.needs_operator_iters,
+         grace: .fields.grace}'
+```
+
+**Which operator notes did the Director observe but not act on (idempotent edge)?**
+
+```
+grep '"message":"director: operator note observed; mode unchanged' events.log \
+  | jq '{plan_id: .fields.plan_id, iteration: .fields.iteration,
+         mode: .fields.mode, note_count: .fields.note_count}'
+```
+
 ## Per-record summaries
 
 **What was the terminal state and attempt count for every Work in this run?**

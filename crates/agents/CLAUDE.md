@@ -90,6 +90,14 @@ The acceptance test `tests/instrumentation.rs::agents_smoke_spans_lifeguard_esca
 - `director.accept_bundle` -> `info!` routing event per AcceptBundle action (Phase 7).
 - `director.run` records `restart_reason` (closed enum: `llm_retryable`, `parse_failure`, `context_failure`, `store_failure`, `id_failure`, `lifeguard_escalation`, `need_help`).
 
+**Director Phase 2 (2026-05-09 sweep).** `docs/design/2026-05-09-director-phase-2.md` adds three event shapes the Director loop emits at `info!`:
+
+- `director.mode_change` — per mode FSM transition. Required fields: `plan_id`, `iteration`, `from` (PascalCase mode name), `to` (PascalCase mode name), `trigger`. `trigger` is one of the closed enum: `same_action`, `no_progress`, `escalation`, `recovered`, `operator_note`. Emit ONLY on transition (current != next); idempotent observations log at `debug!` under the existing per-iteration spans.
+- `director: NeedsOperator grace exceeded; transitioning Plan -> Stalled` (`warn!`) — Phase 10 Stalled escalation. Fields: `plan_id`, `iteration`, `needs_operator_iters`, `grace`.
+- `director: operator note observed; mode unchanged (idempotent edge)` (`debug!`) — Phase 9 Normal + OperatorNoteArrived no-op. Fields: `plan_id`, `iteration`, `mode`, `note_count`.
+
+The `reconcile_director` sweep emits one `info!` per recovery action (`director: recovered stuck Triaged bundle, spawned Reviewer` / `director: recovered stuck Accepted bundle, spawned Integrator` / `director: recovered InProgress Work, transitioned to Ready`) with the relevant id and the prior `updated_at` so a reader can correlate against the grace-window threshold.
+
 Per-area contract tests in `tests/agents_visibility.rs`, `tests/reviewer_ac_visibility.rs`, `tests/bundle_manifest_visibility.rs`, `tests/director_visibility.rs` parse the production-shape `events.log` and assert presence + required fields. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
 
 ## See also

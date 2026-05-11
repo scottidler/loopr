@@ -76,6 +76,16 @@ Operator-recovery path: a `Stalled` Plan transitions back to `Active` via the Di
 
 Tests: `tests/retry_budget.rs` (Layer 1 + 3), `crates/agents/src/director/tests.rs` (Layer 2), `tests/director_reconcile.rs::convergence_retry_exhaustion_stalls_plan_and_skips_on_restart` (end-to-end).
 
+## Operator intervention (Director Phase 2)
+
+`docs/design/2026-05-09-director-phase-2.md` wires three operator-facing mechanisms:
+
+- **Per-Plan wake-up channel.** `DaemonContext::operator_notifies: Arc<RwLock<HashMap<PlanId, Arc<Notify>>>>` holds one `Notify` per live Director task. Inserted in `handle_plan_create` and `startup_reconcile_directors` (before spawn); removed by the Director task body on exit (covers terminal Plan transitions and shutdown). A `Notify` lookup miss in `handle_director_chat` is benign — the note still persists, and the next Director iteration picks it up via `list_unread_notes_for_plan`.
+- **`loopr director chat <plan-id> "<message>"` CLI verb.** `Method::DirectorChat` IPC method (wire name `director.chat`) persists an `OperatorNote` to the per-Plan `NotesStore` and calls `notify_one()` on the matching `Notify`. Messages above 4 KB are truncated with a `[truncated: original N bytes]` marker (UTF-8 char-boundary safe). The CLI prints `note: <note-id>` on success. `handle_director_chat` validates the Plan exists; missing Plans yield an IPC error.
+- **NeedsOperator -> Stalled grace.** When the Director's mode FSM reaches `NeedsOperator` and no operator note arrives within `agents.director.needs-operator-grace-iters` consecutive iterations (default 5), the Director transitions the Plan to `Stalled` (Director role) and exits with `NeedHelp`. Persist precedes NeedHelp so a daemon restart skips the Stalled Plan.
+
+Operator-recovery path is unchanged: a `Stalled` Plan transitions back to `Active` via `loopr plan override <plan-id> --to active`; `startup_reconcile_directors` then respawns a Director on the next daemon start (or on the override path if extended in a future phase).
+
 ## IPC and daemon-startup timeouts
 
 Every wait that could hang on a peer or on disk is bounded. Defaults live on `TransportSection::default()` in `crates/loopr/src/config.rs`; operators override per-target via `.loopr/config.yml`:
