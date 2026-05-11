@@ -545,6 +545,13 @@ Lifecycle:
 4. **Plan terminal.** `transition_and_persist_plan` removes the entry from `operator_notifies` when the Plan reaches a terminal status. Operator notes can still be persisted (the row exists), but the wakeup is a no-op (no live Director).
 5. **Stalled -> Active reactivation.** When the operator runs `loopr plan override <plan-id> --to active` to revive a Stalled Plan, `transition_and_persist_plan` observes the `Stalled -> Active` override and inserts a fresh `Arc<Notify>` into `operator_notifies` BEFORE the daemon's reconcile path respawns the Director. This is symmetric with the terminal-removal step above: `transition_and_persist_plan` is the single chokepoint that owns map insert/remove on Plan FSM transitions. The override path therefore needs no additional wiring.
 
+> **Implementation note (2026-05-11).** Items 4 and 5 as written above describe the design's *intent*; the shipped code uses a different mechanism with equivalent semantics that's structurally cleaner. Specifically:
+>
+> - **Removal happens at Director task exit, not at FSM terminal transition.** Each spawn site (`handle_plan_create` → `spawn_director_for_plan`, `startup_reconcile_directors`, and `handle_plan_override`'s `Stalled -> Active` respawn) wraps the spawned task body so the spawned future calls `operator_notifies.write().await.remove(plan_id)` after `run_director` returns. This is RAII cleanup — equivalent to terminal-transition cleanup under normal exit, and *strictly better* under abnormal exit: a Director task that panics or is aborted at shutdown still releases its `Arc<Notify>` entry, whereas a "remove on FSM terminal" approach would leak the entry for any Director that exited before reaching a terminal Plan transition.
+> - **Stalled -> Active respawn is inline in `handle_plan_override`, not in `transition_and_persist_plan`.** Threading `operator_notifies` (and a spawn surface) into `transition_and_persist_plan` would pollute the helper's abstraction — it's a pure FSM transition + persist helper, decoupled from `DaemonContext` and from task spawning by design. The respawn lives next to the FSM override call site in `handle_plan_override`, which already owns the post-override side effects (response construction, span instrumentation).
+>
+> Two design pressures point in opposite directions for items 4-5; the Phase 2 follow-ups doc (`docs/design/2026-05-12-director-phase-2-followups.md`, Item 1, addendum) weighed both and chose to ratify the shipped behavior rather than refactor toward the original spec. The literal spec for items 4 and 5 is therefore obsolete; the RAII / inline-respawn pair is the canonical behavior.
+
 `DirectorDeps` grows:
 
 ```rust

@@ -184,6 +184,23 @@ grep '"message":"director: operator note observed; mode unchanged' events.log \
          mode: .fields.mode, note_count: .fields.note_count}'
 ```
 
+**Which Plans have a live Director right now?**
+
+The per-iteration `DirectorStatusSnapshot` sidecar (`docs/design/2026-05-12-director-phase-2-followups.md` Item 3) is the authoritative answer for the running daemon; query it per-Plan via the CLI:
+
+```
+loopr director status pl-<plan-id>
+```
+
+For an after-the-fact reconstruction from `events.log`, grep `director iteration start` and partition by the highest-numbered iteration per `plan_id` (the highest iteration for each Plan is the freshest evidence of liveness; an old iteration with no successor means the Director task exited):
+
+```
+grep '"message":"director iteration start"' events.log \
+  | jq -r '"\(.fields.plan_id) \(.fields.iteration)"' \
+  | sort -k1,1 -k2,2n \
+  | awk '{p=$1; v=$2} END {print p, v}'  # adapt for multi-plan grouping
+```
+
 ## Per-record summaries
 
 **What was the terminal state and attempt count for every Work in this run?**
