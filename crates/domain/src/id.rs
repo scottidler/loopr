@@ -121,6 +121,7 @@ id_type!(PlanId, "pl");
 id_type!(WorkId, "wk");
 id_type!(BundleId, "bd");
 id_type!(TickId, "tk");
+id_type!(NoteId, "nt");
 
 #[cfg(test)]
 mod tests;

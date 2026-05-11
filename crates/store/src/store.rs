@@ -6,6 +6,7 @@ use tracing::instrument;
 
 use crate::bundles::BundlesStore;
 use crate::error::StoreError;
+use crate::notes::NotesStore;
 use crate::plans::PlansStore;
 use crate::ticks::TicksStore;
 use crate::works::WorksStore;
@@ -100,6 +101,14 @@ impl Store {
     /// callers of the same `Store`.
     pub fn ticks(&self) -> TicksStore<'_> {
         TicksStore::new(&self.inner, &self.tick_lock)
+    }
+
+    /// Typed accessor for OperatorNote records. Borrowed, zero-cost
+    /// handle. No write lock: notes have one writer per role (IPC
+    /// handler creates, Director task marks read), and `read_at` is a
+    /// monotonic `None -> Some` transition.
+    pub fn notes(&self) -> NotesStore<'_> {
+        NotesStore::new(&self.inner)
     }
 
     /// Install taskstore's git hooks under `.git/hooks/`. Idempotent;

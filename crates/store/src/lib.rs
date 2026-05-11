@@ -4,6 +4,7 @@
 
 mod bundles;
 mod error;
+mod notes;
 mod plans;
 mod store;
 mod ticks;
@@ -11,6 +12,7 @@ mod works;
 
 pub use bundles::{BundleUpdateError, BundleUpdateSink, BundlesStore};
 pub use error::StoreError;
+pub use notes::NotesStore;
 pub use plans::{PlanUpdateError, PlanUpdateSink, PlansStore};
 pub use store::{Store, TASKSTORE_SUBPATH};
 pub use ticks::TicksStore;
