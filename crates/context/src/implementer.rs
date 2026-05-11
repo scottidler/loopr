@@ -261,6 +261,7 @@ struct BundleLineCtx<'a> {
 #[derive(Serialize)]
 struct DirectorUserCtx<'a> {
     plan_id: &'a str,
+    mode: &'a str,
     works: Vec<WorkLineCtx<'a>>,
     bundles: Vec<BundleLineCtx<'a>>,
     blocked_reason: Option<&'a str>,
@@ -303,6 +304,7 @@ impl InlineContextBuilder {
 
         let user_ctx = DirectorUserCtx {
             plan_id: &state.plan_id,
+            mode: if state.mode.is_empty() { "Normal" } else { &state.mode },
             works: state
                 .works
                 .iter()

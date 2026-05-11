@@ -1,5 +1,7 @@
 ## Current State - Plan {{plan_id}}
 
+**Director mode:** {{mode}}
+
 ### Works
 
 {{#each works}}

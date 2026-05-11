@@ -148,6 +148,7 @@ fn context_smoke_spans_director_and_researcher() {
 
     let state = DirectorState {
         plan_id: "pl-abc".into(),
+        mode: String::new(),
         works: vec![],
         bundles: vec![],
         blocked_reason: None,

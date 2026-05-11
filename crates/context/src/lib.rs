@@ -96,6 +96,13 @@ pub struct DirectorState {
     pub works: Vec<WorkLine>,
     pub bundles: Vec<BundleLine>,
     pub blocked_reason: Option<String>,
+    /// Escalation mode label (`Normal` / `Conservative` / `NeedsOperator`).
+    /// Rendered as `**Director mode:**` near the top of the user prompt;
+    /// the LLM matches this against the system-prompt's
+    /// `## Mode-Aware Recovery` subsections. Phase 6 of
+    /// `docs/design/2026-05-09-director-phase-2.md`. Default `"Normal"`
+    /// so callers that pre-date Phase 6 still render a sensible label.
+    pub mode: String,
 }
 
 /// One Work row in a `DirectorState`.

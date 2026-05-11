@@ -365,6 +365,12 @@ pub async fn build_director_state<S: DirectorStore>(
 
     Ok(CtxDirectorState {
         plan_id: plan_id.to_string(),
+        // Phase 6: `run_director_inner` overrides `mode` after this
+        // call with the current tracker mode. Empty here means the
+        // builder renders "Normal" — the default for fresh state
+        // (build_director_state used outside the run loop is a
+        // test-only path that doesn't exercise modes).
+        mode: String::new(),
         works: work_lines,
         bundles: bundle_lines,
         blocked_reason: None,
@@ -599,6 +605,14 @@ where
 
     let grace_ms: i64 = (deps.config.reconcile_grace_secs as i64).saturating_mul(1000);
 
+    // Phase 4-6: in-memory pattern tracker + mode FSM. Both reset on
+    // Director restart (the outer `run_director` loop allocates a fresh
+    // `run_director_inner` invocation). Mode is task-local; the user
+    // prompt's mode label is the only signal the LLM sees about which
+    // `## Mode-Aware Recovery` subsection to apply.
+    let mut pattern_tracker = DirectorPatternTracker::new(deps.config.patterns.clone());
+    let mut current_mode = DirectorMode::Normal;
+
     loop {
         // 1. Reconcile sweep.
         let goal_done = reconcile_director(plan_id, &deps.store, &deps.spawner, grace_ms).await?;
@@ -611,8 +625,10 @@ where
         tracing::Span::current().record("iteration", iteration);
         info!(iteration, plan_id = %plan_id, "director iteration start");
 
-        // 2. Build state.
-        let state = build_director_state(plan_id, &deps.store).await?;
+        // 2. Build state; stamp the current mode so the user-prompt
+        //    label tells the LLM which mode-aware block to apply.
+        let mut state = build_director_state(plan_id, &deps.store).await?;
+        state.mode = current_mode.as_str().to_string();
 
         // 3. Context + LLM.
         let assembled = deps
@@ -731,7 +747,38 @@ where
             }
         }
 
-        // 6. Sleep.
+        // 6. Pattern tracker + mode FSM. Observe ONE fingerprint per
+        //    iteration (the first emitted action, or `done` when the
+        //    parse-retry sub-loop exhausted with no actions). The
+        //    state hash is computed from a fresh works+bundles snapshot
+        //    AFTER actions executed so spawner side effects (which are
+        //    fire-and-forget) are observed on the NEXT iteration —
+        //    correct for cycle detection because consecutive iterations
+        //    with the same hash mean "actions had no measurable effect."
+        let fingerprint = actions
+            .first()
+            .map(fingerprint_for_action)
+            .unwrap_or_else(ActionFingerprint::done);
+        let works_after = deps.store.list_works_for_plan(plan_id).await?;
+        let bundles_after = deps.store.list_bundles_for_plan(plan_id).await?;
+        let state_hash = compute_state_hash(&works_after, &bundles_after);
+        if let Some(observation) = pattern_tracker.observe(fingerprint, state_hash) {
+            let next = next_mode(current_mode, &observation);
+            if next != current_mode {
+                let trigger = pattern_observation_trigger(&observation);
+                info!(
+                    plan_id = %plan_id,
+                    iteration,
+                    from = current_mode.as_str(),
+                    to = next.as_str(),
+                    trigger = trigger,
+                    "director.mode_change"
+                );
+                current_mode = next;
+            }
+        }
+
+        // 7. Sleep.
         let secs = if took_action {
             deps.config.poll_interval_secs
         } else {
@@ -745,6 +792,34 @@ where
                 return Ok(());
             }
         }
+    }
+}
+
+/// Map a parsed `DirectorAction` into the pattern tracker's
+/// `ActionFingerprint`. The tracker watches for repeated mutating
+/// actions and changing FSM state; this seam is where the LLM's
+/// emitted action becomes a tracker-observable.
+fn fingerprint_for_action(action: &DirectorAction) -> ActionFingerprint {
+    match action {
+        DirectorAction::AcceptBundle { bundle_id } => ActionFingerprint::accept_bundle(bundle_id),
+        DirectorAction::OverrideWork {
+            work_id, target_status, ..
+        } => ActionFingerprint::override_work(work_id, target_status),
+        DirectorAction::AssignWork { work_id } => ActionFingerprint::assign_work(work_id),
+        DirectorAction::Done { .. } => ActionFingerprint::done(),
+        DirectorAction::NeedHelp { .. } => ActionFingerprint::need_help(),
+    }
+}
+
+/// Stable `&'static str` trigger string for the `director.mode_change`
+/// event so log readers can grep `trigger="no_progress"` without
+/// parsing the full observation payload.
+fn pattern_observation_trigger(obs: &PatternObservation) -> &'static str {
+    match obs {
+        PatternObservation::SameActionTripped { .. } => "same_action",
+        PatternObservation::NoProgressTripped { .. } => "no_progress",
+        PatternObservation::EscalationTripped { .. } => "escalation",
+        PatternObservation::Recovered => "recovered",
     }
 }
 

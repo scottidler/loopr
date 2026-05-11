@@ -206,6 +206,11 @@ struct FakeLlm {
     responses: Mutex<Vec<String>>,
     repeat_last: bool,
     call_count: Mutex<u32>,
+    /// Records the LAST message text (the current-iteration user
+    /// prompt) seen on every `complete_free` call. Phase 6 tests
+    /// assert that the user prompt's mode label changes after the
+    /// pattern tracker fires.
+    last_user_messages: Mutex<Vec<String>>,
 }
 
 impl FakeLlm {
@@ -214,6 +219,7 @@ impl FakeLlm {
             responses: Mutex::new(responses),
             repeat_last: false,
             call_count: Mutex::new(0),
+            last_user_messages: Mutex::new(Vec::new()),
         }
     }
 
@@ -222,6 +228,7 @@ impl FakeLlm {
             responses: Mutex::new(vec![response]),
             repeat_last: true,
             call_count: Mutex::new(0),
+            last_user_messages: Mutex::new(Vec::new()),
         }
     }
 
@@ -232,11 +239,16 @@ impl FakeLlm {
             responses: Mutex::new(Vec::new()),
             repeat_last: false,
             call_count: Mutex::new(0),
+            last_user_messages: Mutex::new(Vec::new()),
         }
     }
 
     fn calls(&self) -> u32 {
         *self.call_count.lock().unwrap()
+    }
+
+    fn last_user_messages(&self) -> Vec<String> {
+        self.last_user_messages.lock().unwrap().clone()
     }
 }
 
@@ -254,10 +266,20 @@ impl LlmClient for FakeLlm {
     async fn complete_free(
         &self,
         _system: &str,
-        _messages: &[Message],
+        messages: &[Message],
         _model: Option<&str>,
     ) -> Result<(String, Usage), LlmError> {
         *self.call_count.lock().unwrap() += 1;
+        if let Some(last) = messages.last() {
+            // Extract the first text block; the Director's user message
+            // is always a single Text content block by construction.
+            for block in &last.content {
+                if let llm::MessageContent::Text { text } = block {
+                    self.last_user_messages.lock().unwrap().push(text.clone());
+                    break;
+                }
+            }
+        }
         let mut q = self.responses.lock().unwrap();
         let payload = if q.len() > 1 {
             q.remove(0)
@@ -432,9 +454,15 @@ impl ContextBuilder for StubContextBuilder {
         history: &[Message],
         _token_budget: usize,
     ) -> Result<AssembledContext, ContextError> {
+        // Phase 6: surface the mode label so tests can assert the
+        // pattern tracker / mode FSM transitioned without poking
+        // run_director_inner internals. The production user.pmt
+        // renders `**Director mode:** {{mode}}`; this stub matches
+        // the label literal so a contains() check works on either.
         let user = format!(
-            "plan={} works={} bundles={}",
+            "plan={} **Director mode:** {} works={} bundles={}",
             state.plan_id,
+            if state.mode.is_empty() { "Normal" } else { &state.mode },
             state.works.len(),
             state.bundles.len()
         );
@@ -1168,5 +1196,72 @@ async fn override_to_ready_with_high_cap_below_attempt_dispatches() {
         deps.store.plan_status(),
         Some(PlanStatus::Active),
         "Plan must NOT be Stalled when below the (raised) cap"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: user-prompt mode label propagation
+//
+// The pattern tracker observes the LLM's actions and the Plan state hash
+// every iteration; once `same_action_threshold` consecutive identical
+// fingerprints arrive, `next_mode` promotes Normal -> Conservative and
+// the next iteration's user prompt carries the new label. This is the
+// end-to-end observable that the Phase 5 FSM is wired into the loop.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_director_repeated_override_promotes_mode_to_conservative() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let work_id_s = blocked.id.to_string();
+    let store = FakeStore::with(vec![blocked], vec![]);
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    // Tight pattern config so the FSM transitions within a handful of
+    // iterations. `same_action_threshold=3` means the 3rd identical
+    // override fires SameActionTripped on iteration 3; iteration 4's
+    // user prompt should carry the Conservative label.
+    let mut config = fast_config();
+    config.patterns = crate::config::DirectorConfig::default().patterns;
+    config.patterns.same_action_threshold = 3;
+    // Raise the retry budget so the Layer-2 cap doesn't preempt the
+    // pattern tracker; we want at least 4 iterations of overrides.
+    config.max_work_attempts = 100;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let prompts = deps.llm.last_user_messages();
+    assert!(
+        prompts.len() >= 4,
+        "expected at least 4 LLM calls; got {}",
+        prompts.len()
+    );
+    assert!(
+        prompts.iter().any(|p| p.contains("**Director mode:** Conservative")),
+        "after SameActionTripped, the user prompt must carry Conservative; got prompts: {prompts:?}"
+    );
+    // Earliest prompt is still Normal — the FSM only transitions AFTER
+    // the tracker observes >= same_action_threshold matching iterations.
+    assert!(
+        prompts[0].contains("**Director mode:** Normal"),
+        "first iteration must show Normal mode; got: {}",
+        prompts[0]
     );
 }

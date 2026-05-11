@@ -5,7 +5,7 @@ use std::path::Path;
 use domain::{AcceptanceCriteria, PlanId, Work};
 use tools::ToolSchema;
 
-use crate::{ContextBuilder, IterationSummary, StateSummary};
+use crate::{BundleLine, ContextBuilder, DirectorState, IterationSummary, StateSummary, WorkLine};
 
 use super::InlineContextBuilder;
 
@@ -194,6 +194,91 @@ fn iteration_summary_capped_at_4000_chars() {
         out.first_user_text().unwrap().len() < 6_000,
         "user_message grew to {} chars; cap should hold",
         out.first_user_text().unwrap().len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// build_for_director: mode-label rendering (Phase 6 of
+// docs/design/2026-05-09-director-phase-2.md)
+// ---------------------------------------------------------------------------
+
+fn sample_director_state(mode: &str) -> DirectorState {
+    DirectorState {
+        plan_id: "pl-test-1".to_string(),
+        mode: mode.to_string(),
+        works: vec![WorkLine {
+            id: "wk-1".to_string(),
+            title: "first work".to_string(),
+            status: "Pending".to_string(),
+            attempt_count: 0,
+        }],
+        bundles: vec![BundleLine {
+            id: "bd-1".to_string(),
+            work_id: "wk-1".to_string(),
+            status: "Reviewed".to_string(),
+        }],
+        blocked_reason: None,
+    }
+}
+
+#[test]
+fn director_user_prompt_renders_mode_label_conservative() {
+    let builder = InlineContextBuilder::new();
+    let state = sample_director_state("Conservative");
+    let out = builder.build_for_director(&state, &[], 100_000).unwrap();
+    let user = out.first_user_text().expect("director state user message");
+    assert!(
+        user.contains("**Director mode:** Conservative"),
+        "user prompt must surface Conservative mode label: {user}"
+    );
+}
+
+#[test]
+fn director_user_prompt_renders_mode_label_needs_operator() {
+    let builder = InlineContextBuilder::new();
+    let state = sample_director_state("NeedsOperator");
+    let out = builder.build_for_director(&state, &[], 100_000).unwrap();
+    let user = out.first_user_text().expect("director state user message");
+    assert!(
+        user.contains("**Director mode:** NeedsOperator"),
+        "user prompt must surface NeedsOperator mode label: {user}"
+    );
+}
+
+#[test]
+fn director_user_prompt_empty_mode_defaults_to_normal() {
+    let builder = InlineContextBuilder::new();
+    let state = sample_director_state("");
+    let out = builder.build_for_director(&state, &[], 100_000).unwrap();
+    let user = out.first_user_text().expect("director state user message");
+    assert!(
+        user.contains("**Director mode:** Normal"),
+        "empty mode must render as Normal: {user}"
+    );
+}
+
+#[test]
+fn director_system_prompt_byte_stable_across_modes() {
+    // Cache-locality regression guard end-to-end: rendering the
+    // Director context with different modes must produce identical
+    // system prompts. The mode label lives in the USER prompt only.
+    let builder = InlineContextBuilder::new();
+    let normal = builder
+        .build_for_director(&sample_director_state("Normal"), &[], 100_000)
+        .unwrap();
+    let conservative = builder
+        .build_for_director(&sample_director_state("Conservative"), &[], 100_000)
+        .unwrap();
+    let needs_op = builder
+        .build_for_director(&sample_director_state("NeedsOperator"), &[], 100_000)
+        .unwrap();
+    assert_eq!(
+        normal.system_prompt, conservative.system_prompt,
+        "system prompt must be byte-stable across Normal/Conservative; the Anthropic ephemeral cache invalidates on any difference"
+    );
+    assert_eq!(
+        normal.system_prompt, needs_op.system_prompt,
+        "system prompt must be byte-stable across Normal/NeedsOperator"
     );
 }
 
