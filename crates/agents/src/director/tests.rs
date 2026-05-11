@@ -153,6 +153,28 @@ fn director_config_default_values() {
     assert_eq!(cfg.token_budget, 100_000);
     assert_eq!(cfg.max_work_attempts, 3);
     assert_eq!(cfg.reconcile_grace_secs, 30);
+    assert_eq!(cfg.needs_operator_grace_iters, 5);
+}
+
+#[test]
+fn director_config_yaml_round_trip_needs_operator_grace_iters() {
+    // Phase 10 wiring: `agents.director.needs-operator-grace-iters: N`
+    // must land on the typed field; an absent field must default to 5.
+    let yaml = "needs-operator-grace-iters: 12\n";
+    let cfg: crate::config::DirectorConfig = serde_yaml::from_str(yaml).expect("deserialize");
+    assert_eq!(
+        cfg.needs_operator_grace_iters, 12,
+        "kebab-case wire form must populate the field"
+    );
+
+    let serialized = serde_yaml::to_string(&cfg).expect("serialize");
+    assert!(
+        serialized.contains("needs-operator-grace-iters: 12"),
+        "serialized output must use kebab-case: {serialized}"
+    );
+
+    let empty: crate::config::DirectorConfig = serde_yaml::from_str("{}").expect("deserialize empty");
+    assert_eq!(empty.needs_operator_grace_iters, 5, "missing field must default to 5");
 }
 
 #[test]
@@ -1463,5 +1485,109 @@ async fn unread_note_marked_read_after_render() {
         !persisted.is_unread(),
         "note should be marked read after a successful LLM round-trip; got read_at={:?}",
         persisted.read_at
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10: NeedsOperator -> Stalled grace
+// ---------------------------------------------------------------------------
+
+/// After the Director enters NeedsOperator, if no operator note arrives
+/// within `needs_operator_grace_iters` consecutive iterations the
+/// Director must transition the Plan -> Stalled (Director role) and
+/// exit with `NeedHelp`. Verified end-to-end: assemble a tracker
+/// config that hits NoProgressTripped then EscalationTripped quickly
+/// (window=4, threshold=2 on each clause), set
+/// `needs_operator_grace_iters=2`, and assert the Plan reaches
+/// `Stalled` and the error message names the timeout.
+#[tokio::test]
+async fn needs_operator_grace_exceeded_stalls_plan_and_returns_need_help() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let work_id_s = blocked.id.to_string();
+    let mut plan = Plan::new("test goal".into());
+    plan.id = plan_id.clone();
+    let store = FakeStore::with_plan(vec![blocked], vec![], plan);
+
+    // override_work mutating action every iteration; the FakeStore does
+    // not actually mutate Work.status so the state hash stays constant
+    // (single Blocked Work) — distinct=1 trips NoProgressTripped every
+    // iteration once warm-up clears.
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "override_work",
+            "work_id": work_id_s,
+            "target_status": "Ready",
+            "reason": "retry"
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+
+    let mut config = fast_config();
+    // Layer-2 budget out of the way (test depth would otherwise cap).
+    config.max_work_attempts = 100;
+    // Tracker thresholds that reach NeedsOperator in two iterations:
+    // iter 1: NoProgressTripped (streak=1) -> Normal -> Conservative.
+    // iter 2: streak=2 >= escalation_threshold=2 -> EscalationTripped
+    //         -> Conservative -> NeedsOperator.
+    config.patterns.same_action_threshold = 100;
+    config.patterns.no_progress_threshold = 1;
+    config.patterns.escalation_threshold = 2;
+    config.patterns.window = 4;
+    // Stall on the third NeedsOperator iteration without notes.
+    config.needs_operator_grace_iters = 2;
+
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let err = run_director(&plan_id, &deps).await.expect_err("must stall");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("NeedsOperator timeout"),
+        "expected NeedsOperator timeout in NeedHelp; got: {msg}"
+    );
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Stalled),
+        "Plan must be persisted as Stalled before exiting"
+    );
+}
+
+/// Counter does NOT trip Stalled while mode is anything other than
+/// NeedsOperator, regardless of how long the Director runs. With a
+/// high `needs_operator_grace_iters` and a small fingerprint variety
+/// (no_progress never sustains long enough for EscalationTripped),
+/// the Director must complete its sleep/shutdown loop without
+/// transitioning the Plan.
+#[tokio::test]
+async fn grace_counter_does_not_trip_outside_needs_operator() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Ready);
+    let mut plan = Plan::new("test goal".into());
+    plan.id = plan_id.clone();
+    let store = FakeStore::with_plan(vec![work], vec![], plan);
+
+    // Only `done` actions — non-mutating, so the action-context gate
+    // never trips NoProgressTripped, mode stays Normal forever.
+    let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ok" }]).to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let mut config = fast_config();
+    config.needs_operator_grace_iters = 2;
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    assert_ne!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Stalled),
+        "Plan must not be Stalled when mode stays out of NeedsOperator; got plan_status={:?}",
+        deps.store.plan_status()
     );
 }

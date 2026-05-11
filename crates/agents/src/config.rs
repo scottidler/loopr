@@ -135,6 +135,12 @@ pub struct DirectorConfig {
     /// user-prompt label in Phase 6) live in the Director loop.
     #[serde(default)]
     pub patterns: PatternConfig,
+    /// Phase 10 grace counter: consecutive `NeedsOperator` iterations
+    /// without an operator note before the Director transitions the
+    /// Plan to `Stalled` and exits with `NeedHelp`. Default 5.
+    /// `docs/design/2026-05-09-director-phase-2.md` Phase 10. Tunable
+    /// via `agents.director.needs-operator-grace-iters`.
+    pub needs_operator_grace_iters: u32,
 }
 
 impl Default for DirectorConfig {
@@ -150,6 +156,7 @@ impl Default for DirectorConfig {
             max_work_attempts: 3,
             reconcile_grace_secs: 30,
             patterns: PatternConfig::default(),
+            needs_operator_grace_iters: 5,
         }
     }
 }

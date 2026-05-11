@@ -655,6 +655,14 @@ where
     // `## Mode-Aware Recovery` subsection to apply.
     let mut pattern_tracker = DirectorPatternTracker::new(deps.config.patterns.clone());
     let mut current_mode = DirectorMode::Normal;
+    // Phase 10 grace counter. Counts consecutive `NeedsOperator`
+    // iterations with NO operator note arriving. Resets when:
+    // (a) an operator note arrives this iteration (the note both
+    //     demotes the mode AND zeroes the counter), or
+    // (b) mode is not NeedsOperator. The Director transitions the
+    // Plan to `Stalled` and exits with `NeedHelp` when this counter
+    // reaches `needs_operator_grace_iters`.
+    let mut needs_operator_iters: u32 = 0;
 
     loop {
         // 1. Reconcile sweep.
@@ -879,6 +887,37 @@ where
                 );
                 current_mode = next;
             }
+        }
+
+        // 6a. Phase 10: NeedsOperator -> Stalled grace counter. The note
+        //     arrival check at step 2a already demoted the mode AND reset
+        //     `no_progress_streak`, but it did NOT touch this counter —
+        //     do it here so a single point owns the reset logic. The
+        //     trip transitions the Plan to `Stalled` (Director role) and
+        //     exits with `NeedHelp`; persist BEFORE NeedHelp so a daemon
+        //     restart's `startup_reconcile_directors` skips the Stalled
+        //     Plan instead of respawning a Director that would re-trip
+        //     the same counter.
+        if current_mode == DirectorMode::NeedsOperator && unread_note_ids.is_empty() {
+            needs_operator_iters = needs_operator_iters.saturating_add(1);
+            if needs_operator_iters >= deps.config.needs_operator_grace_iters {
+                warn!(
+                    plan_id = %plan_id,
+                    iteration,
+                    needs_operator_iters,
+                    grace = deps.config.needs_operator_grace_iters,
+                    "director: NeedsOperator grace exceeded; transitioning Plan -> Stalled"
+                );
+                let mut plan = deps.store.get_plan(plan_id).await?;
+                plan.transition(PlanStatus::Stalled, Role::Director)
+                    .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
+                deps.store.update_plan(plan).await?;
+                return Err(DirectorError::NeedHelp(format!(
+                    "NeedsOperator timeout: {needs_operator_iters} iterations without operator note"
+                )));
+            }
+        } else {
+            needs_operator_iters = 0;
         }
 
         // 7. Sleep.
