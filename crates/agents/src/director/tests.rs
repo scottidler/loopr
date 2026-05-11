@@ -592,6 +592,7 @@ fn make_deps<L: LlmClient>(
         config,
         shutdown,
         operator_notify: Arc::new(Notify::new()),
+        director_statuses: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
     }
 }
 

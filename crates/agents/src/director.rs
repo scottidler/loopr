@@ -34,11 +34,13 @@
 //! sweep re-derives ground truth from the store at the top of every
 //! iteration.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
@@ -273,6 +275,61 @@ impl<S: DirectorStore + ?Sized> DirectorStore for Arc<S> {
     }
 }
 
+/// Snapshot of a live Director task's mode FSM and pattern tracker
+/// state, taken at the end of each iteration after the pattern tracker
+/// block. Written into the daemon's per-Plan sidecar
+/// (`DaemonContext::director_statuses`) and read by the `director.status`
+/// IPC verb to surface "is this Plan in Conservative? what is the
+/// no-progress streak?" without grepping `events.log`.
+///
+/// Entries are inserted on first write and removed by the Director
+/// task body on exit (terminal Plan transition or daemon shutdown).
+/// Absence from the map means the Plan has no live Director — the
+/// status verb renders that as "director: not running".
+#[derive(Debug, Clone, Serialize)]
+pub struct DirectorStatusSnapshot {
+    /// Current escalation mode. PascalCase wire form via `DirectorMode`'s
+    /// `serde(rename_all = "PascalCase")`.
+    pub mode: DirectorMode,
+    /// Pattern tracker's no-progress streak depth. Compared against
+    /// `PatternConfig::escalation_threshold` to predict when the mode
+    /// FSM will next fire `EscalationTripped`.
+    pub no_progress_streak: u32,
+    /// Length of the trailing run of identical action fingerprints in
+    /// the tracker's window. Compared against
+    /// `PatternConfig::same_action_threshold` for the SameAction trip
+    /// preview.
+    pub same_action_streak: u32,
+    /// Director iteration counter (1-based after the first reconcile).
+    pub iteration: u32,
+    /// Kind of the first action emitted this iteration:
+    /// `accept_bundle` / `override_work` / `assign_work` / `done` /
+    /// `need_help`. `None` when the parse-retry sub-loop exhausted
+    /// with no actions.
+    pub last_action_kind: Option<String>,
+    /// Bundle id / Work id targeted by the first action this
+    /// iteration. `None` for `done` / `need_help`.
+    pub last_action_target_id: Option<String>,
+    /// Millis-since-epoch timestamp captured at the end of the
+    /// iteration that emitted `last_action_kind`. `None` when
+    /// `last_action_kind` is `None`.
+    pub last_action_ts: Option<i64>,
+    /// Number of unread operator notes returned by
+    /// `list_unread_notes_for_plan` at the top of this iteration.
+    pub unread_note_count: usize,
+    /// Phase 10 grace counter: consecutive `NeedsOperator` iterations
+    /// without an operator note. Compared against
+    /// `DirectorConfig::needs_operator_grace_iters` for the Stalled
+    /// escalation preview.
+    pub needs_operator_iters: u32,
+}
+
+/// Typed alias for the daemon's per-Plan Director status sidecar.
+/// `std::sync::RwLock` so the sync IPC read path does not need to
+/// `.await` to peek; writes are a single `HashMap::insert` held for
+/// microseconds.
+pub type DirectorStatusMap = Arc<StdRwLock<HashMap<PlanId, DirectorStatusSnapshot>>>;
+
 /// Dependencies injected into `run_director`. Mirrors the Implementer's
 /// `Deps<L, T, S, C>` pattern: one generic flows through the function
 /// signature; concrete trait bounds live here.
@@ -299,6 +356,12 @@ where
     /// keeps notes routed precisely; a process-wide channel would
     /// spuriously wake every Director task on every note.
     pub operator_notify: Arc<Notify>,
+    /// Per-Plan status sidecar: the daemon's
+    /// `Arc<RwLock<HashMap<PlanId, DirectorStatusSnapshot>>>`. The
+    /// Director writes the freshly built snapshot at the end of every
+    /// iteration after the pattern tracker block; the IPC handler for
+    /// `director.status` reads it.
+    pub director_statuses: DirectorStatusMap,
 }
 
 /// Parse the LLM response into a `Vec<DirectorAction>`.
@@ -866,6 +929,8 @@ where
         //    fire-and-forget) are observed on the NEXT iteration —
         //    correct for cycle detection because consecutive iterations
         //    with the same hash mean "actions had no measurable effect."
+        let last_action_kind = actions.first().map(action_kind_str).map(str::to_string);
+        let last_action_target_id = actions.first().and_then(action_target_id);
         let fingerprint = actions
             .first()
             .map(fingerprint_for_action)
@@ -920,6 +985,33 @@ where
             needs_operator_iters = 0;
         }
 
+        // 6b. Phase 2 follow-ups (Item 3): publish the per-iteration
+        //     status snapshot to the daemon's sidecar so `loopr director
+        //     status <plan>` can render live mode + streak data without
+        //     parsing `events.log`. Written AFTER the pattern tracker
+        //     observation + Phase 10 grace counter so `mode`,
+        //     `no_progress_streak`, and `needs_operator_iters` reflect
+        //     this iteration's terminal state. `std::sync::RwLock`
+        //     write is held only for the duration of the `insert`; no
+        //     `.await` between acquire and drop. Poison degrades to a
+        //     skipped snapshot — equivalent to "no update this
+        //     iteration," which the IPC handler tolerates.
+        let last_action_ts_ms = if last_action_kind.is_some() { Some(domain::now_millis()) } else { None };
+        let snapshot = DirectorStatusSnapshot {
+            mode: current_mode,
+            no_progress_streak: pattern_tracker.no_progress_streak(),
+            same_action_streak: pattern_tracker.same_action_streak(),
+            iteration,
+            last_action_kind,
+            last_action_target_id,
+            last_action_ts: last_action_ts_ms,
+            unread_note_count: unread_note_ids.len(),
+            needs_operator_iters,
+        };
+        if let Ok(mut map) = deps.director_statuses.write() {
+            map.insert(plan_id.clone(), snapshot);
+        }
+
         // 7. Sleep.
         let secs = if took_action {
             deps.config.poll_interval_secs
@@ -937,6 +1029,31 @@ where
                 debug!(plan_id = %plan_id, iteration, "director operator-note wakeup");
             }
         }
+    }
+}
+
+/// Stable `&'static str` for a `DirectorAction` variant. Mirrors the
+/// fingerprint `kind` field; used by `DirectorStatusSnapshot` so the
+/// `loopr director status` verb labels actions by the same vocabulary
+/// log readers see.
+fn action_kind_str(action: &DirectorAction) -> &'static str {
+    match action {
+        DirectorAction::AcceptBundle { .. } => "accept_bundle",
+        DirectorAction::OverrideWork { .. } => "override_work",
+        DirectorAction::AssignWork { .. } => "assign_work",
+        DirectorAction::Done { .. } => "done",
+        DirectorAction::NeedHelp { .. } => "need_help",
+    }
+}
+
+/// Target Bundle/Work id for the mutating actions; `None` for
+/// `Done` / `NeedHelp` which carry no target.
+fn action_target_id(action: &DirectorAction) -> Option<String> {
+    match action {
+        DirectorAction::AcceptBundle { bundle_id } => Some(bundle_id.clone()),
+        DirectorAction::OverrideWork { work_id, .. } => Some(work_id.clone()),
+        DirectorAction::AssignWork { work_id } => Some(work_id.clone()),
+        DirectorAction::Done { .. } | DirectorAction::NeedHelp { .. } => None,
     }
 }
 

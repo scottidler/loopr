@@ -241,3 +241,78 @@ async fn grace_counter_does_not_trip_outside_needs_operator() {
         deps.store.plan_status()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Director Phase 2 follow-ups (Item 3): status snapshot sidecar
+// ---------------------------------------------------------------------------
+
+/// After at least one Director iteration, the per-Plan sidecar must
+/// carry a fresh `DirectorStatusSnapshot` reflecting the iteration's
+/// terminal mode + the action that was emitted. This proves the
+/// snapshot write site (step 6b in `run_director_inner`) fires every
+/// iteration and exposes the right fields to the IPC `director.status`
+/// reader.
+#[tokio::test]
+async fn director_status_snapshot_records_iteration_and_action() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Ready);
+    let work_id_s = work.id.to_string();
+    let store = FakeStore::with(vec![work], vec![]);
+
+    // Scripted `assign_work` action so the snapshot's last_action_kind
+    // is non-None and last_action_target_id matches the work id.
+    let llm = FakeLlm::repeating(
+        json!([{
+            "action": "assign_work",
+            "work_id": work_id_s,
+        }])
+        .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let shutdown = Arc::new(Notify::new());
+    let config = fast_config();
+    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+
+    let shutdown_fire = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        shutdown_fire.notify_waiters();
+    });
+
+    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+
+    let map = deps.director_statuses.read().unwrap();
+    let snap = map
+        .get(&plan_id)
+        .expect("snapshot must be present after first iteration");
+    assert!(
+        snap.iteration >= 1,
+        "iteration counter must advance; got {}",
+        snap.iteration
+    );
+    assert_eq!(
+        snap.last_action_kind.as_deref(),
+        Some("assign_work"),
+        "snapshot must record the emitted action kind"
+    );
+    assert_eq!(
+        snap.last_action_target_id.as_deref(),
+        Some(work_id_s.as_str()),
+        "snapshot must record the action's target id"
+    );
+    assert!(
+        snap.last_action_ts.is_some(),
+        "snapshot must stamp a timestamp when an action ran"
+    );
+    // Mode is whatever the pattern tracker decided after the final
+    // observed iteration; we don't pin it here because the test runs
+    // many iterations and the same-action streak may or may not have
+    // tripped depending on tokio scheduling. The point is the snapshot
+    // carries SOME mode that round-trips.
+    let _: &str = snap.mode.as_str();
+    assert_eq!(snap.unread_note_count, 0, "no notes seeded; count must be zero");
+    assert_eq!(
+        snap.needs_operator_iters, 0,
+        "grace counter is zero outside NeedsOperator mode"
+    );
+}

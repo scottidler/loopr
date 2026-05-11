@@ -86,6 +86,8 @@ Tests: `tests/retry_budget.rs` (Layer 1 + 3), `crates/agents/src/director/tests.
 
 Operator-recovery path is unchanged: a `Stalled` Plan transitions back to `Active` via `loopr plan override <plan-id> --to active`; `startup_reconcile_directors` then respawns a Director on the next daemon start (or on the override path if extended in a future phase).
 
+**Phase 2 follow-ups (Item 3): `loopr director status <plan-id>`.** `docs/design/2026-05-12-director-phase-2-followups.md` adds a fourth surface: `DaemonContext::director_statuses: Arc<std::sync::RwLock<HashMap<PlanId, agents::DirectorStatusSnapshot>>>`. The Director task writes a snapshot at the end of every iteration (mode, no-progress streak, same-action streak, last action kind/target/ts, unread-note count, `needs_operator_iters`); the IPC verb `director.status` (`Method::DirectorStatus`, wire form `director.status`) reads the entry under a brief sync `read()` and returns it. Sidecar entries are inserted on first write and removed on Director task exit — same RAII pattern as `operator_notifies`. The CLI body lives in `crates/loopr/src/commands/director.rs::status`; output rendering is parallel to the `director chat` verb. Snapshot absence (Stalled / Complete / pre-spawn) renders as `director: not running (plan is <status>)`.
+
 ## IPC and daemon-startup timeouts
 
 Every wait that could hang on a peer or on disk is bounded. Defaults live on `TransportSection::default()` in `crates/loopr/src/config.rs`; operators override per-target via `.loopr/config.yml`:

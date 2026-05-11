@@ -20,8 +20,8 @@ use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use agents::{
-    Deps, DirectorConfig, ImplementerConfig, ImplementerError, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError,
-    run_implementer, run_reviewer,
+    Deps, DirectorConfig, DirectorStatusSnapshot, ImplementerConfig, ImplementerError, RealTools, ReviewerConfig,
+    ReviewerDeps, ReviewerError, run_implementer, run_reviewer,
 };
 use context::{InlineContextBuilder, StateSummary};
 use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
@@ -252,6 +252,17 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// state. Using `tokio::sync::RwLock` so the async chat handler
     /// can `await` while reading.
     pub operator_notifies: Arc<RwLock<HashMap<PlanId, Arc<Notify>>>>,
+    /// Director Phase 2 follow-ups (Item 3): per-Plan status sidecar.
+    /// The Director task writes a `DirectorStatusSnapshot` at the end
+    /// of every iteration; the `director.status` IPC handler reads
+    /// the snapshot to surface live mode + streak data to operators.
+    /// Inserts happen at the first iteration's write; removal happens
+    /// in the Director task body on exit (terminal Plan transition or
+    /// daemon shutdown), mirroring `operator_notifies`. Sync RwLock
+    /// matches the existing `implementer_work_ids` / `reviewer_bundle_ids`
+    /// / `integrator_bundle_ids` sidecar lock discipline; held for one
+    /// `HashMap::insert` per write, never across an `.await`.
+    pub director_statuses: Arc<StdRwLock<HashMap<PlanId, DirectorStatusSnapshot>>>,
     /// Per-process counter snapshot. Held in a `std::sync::Mutex`
     /// because every emitter is short, non-async, and the value is
     /// shared with the panic hook and SIGQUIT handler (both of which
@@ -335,6 +346,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             reviewer_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             integrator_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             operator_notifies: Arc::new(RwLock::new(HashMap::new())),
+            director_statuses: Arc::new(StdRwLock::new(HashMap::new())),
             snapshot,
             server_timeouts,
         }

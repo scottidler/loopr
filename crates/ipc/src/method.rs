@@ -31,6 +31,14 @@ pub enum MethodName {
     /// same verb in the future.
     #[strum(serialize = "plan.override")]
     PlanOverride,
+    /// Read the Director's per-iteration status snapshot for a Plan.
+    /// Phase 2 follow-ups (Item 3) of
+    /// `docs/design/2026-05-12-director-phase-2-followups.md`. Returns
+    /// mode + streaks + last action + unread-note count so operators
+    /// can answer "is this Plan in Conservative? what is the
+    /// no-progress streak?" without grepping `events.log`.
+    #[strum(serialize = "director.status")]
+    DirectorStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +50,7 @@ pub enum Method {
     RecordGet(RecordGetParams),
     DirectorChat(DirectorChatParams),
     PlanOverride(PlanOverrideParams),
+    DirectorStatus(DirectorStatusParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +120,50 @@ pub struct PlanOverrideResult {
     pub plan: Plan,
 }
 
+/// `director.status` request: name the Plan whose Director snapshot
+/// the operator wants to read. Phase 2 follow-ups (Item 3) of
+/// `docs/design/2026-05-12-director-phase-2-followups.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectorStatusParams {
+    pub plan_id: String,
+}
+
+/// Wire form of `agents::DirectorStatusSnapshot`. The wire copy keeps
+/// `mode` as a String (PascalCase: `Normal` / `Conservative` /
+/// `NeedsOperator`) so `crates/ipc` does not need to depend on
+/// `crates/agents`. The IPC handler converts the agents-side snapshot
+/// into this struct at the response boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectorStatusSnapshot {
+    pub mode: String,
+    pub no_progress_streak: u32,
+    pub same_action_streak: u32,
+    pub iteration: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_action_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_action_target_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_action_ts: Option<i64>,
+    pub unread_note_count: usize,
+    pub needs_operator_iters: u32,
+}
+
+/// `director.status` response. `snapshot: None` means the Plan exists
+/// but no Director task is currently running for it (Plan is Stalled,
+/// Complete, or transient pre-spawn). The CLI renders that as
+/// "director: not running (plan is <status>)".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectorStatusResult {
+    pub plan_id: String,
+    pub plan_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<DirectorStatusSnapshot>,
+}
+
 impl TryFrom<&DaemonRequest> for Method {
     type Error = RpcError;
     fn try_from(req: &DaemonRequest) -> Result<Self, Self::Error> {
@@ -152,6 +205,11 @@ impl TryFrom<&DaemonRequest> for Method {
                 let params: PlanOverrideParams =
                     serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
                 Ok(Method::PlanOverride(params))
+            }
+            MethodName::DirectorStatus => {
+                let params: DirectorStatusParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::DirectorStatus(params))
             }
         }
     }

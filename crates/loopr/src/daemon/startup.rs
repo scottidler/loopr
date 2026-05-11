@@ -390,10 +390,12 @@ where
             config: ctx.director_config.clone(),
             shutdown: Arc::clone(&ctx.shutdown_notify),
             operator_notify,
+            director_statuses: Arc::clone(&ctx.director_statuses),
         };
         let mut directors = ctx.director_tasks.lock().await;
         let plan_id_for_log = plan_id.clone();
         let operator_notifies = Arc::clone(&ctx.operator_notifies);
+        let director_statuses = Arc::clone(&ctx.director_statuses);
         let plan_id_for_cleanup = plan_id.clone();
         directors.spawn(async move {
             match run_director(&plan_id, &deps).await {
@@ -411,6 +413,13 @@ where
             // shutdown; either way the Notify has no remaining
             // consumer.
             operator_notifies.write().await.remove(&plan_id_for_cleanup);
+            // Director Phase 2 follow-ups (Item 3): drop the per-Plan
+            // status snapshot on task exit so a subsequent
+            // `director.status` IPC call returns the "not running"
+            // wire form instead of stale data.
+            if let Ok(mut m) = director_statuses.write() {
+                m.remove(&plan_id_for_cleanup);
+            }
         });
     }
 }

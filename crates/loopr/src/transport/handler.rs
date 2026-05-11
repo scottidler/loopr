@@ -12,9 +12,10 @@ use tracing::{debug, info, instrument, warn};
 use agents::{DirectorDeps, DirectorError, run_director};
 use ipc::{
     BundleSummary, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DaemonRequest, DaemonResponse, DirectorChatParams,
-    DirectorChatResult, HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult,
-    PlanOverrideParams, PlanOverrideResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult,
-    RecordsResult, RpcError, StatusResult, TickSummary, WorkSummary,
+    DirectorChatResult, DirectorStatusParams, DirectorStatusResult, DirectorStatusSnapshot, HandshakeParams,
+    HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult, PlanOverrideParams,
+    PlanOverrideResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
+    RpcError, StatusResult, TickSummary, WorkSummary,
 };
 use llm::LlmClient;
 use store::StoreError;
@@ -81,6 +82,7 @@ where
         Method::RecordGet(params) => handle_record_get(req.id, params, ctx).await,
         Method::DirectorChat(params) => handle_director_chat(req.id, params, ctx).await,
         Method::PlanOverride(params) => handle_plan_override(req.id, params, ctx).await,
+        Method::DirectorStatus(params) => handle_director_status(req.id, params, ctx).await,
     }
 }
 
@@ -522,6 +524,77 @@ where
     }
 }
 
+/// Handle `director.status`: look up the Plan, then read the per-Plan
+/// snapshot the Director task wrote at the end of its last iteration.
+/// `snapshot: None` is the "no live Director" wire form (Plan is
+/// Stalled / Complete, or transient pre-spawn). Director Phase 2
+/// follow-ups (Item 3) of
+/// `docs/design/2026-05-12-director-phase-2-followups.md`.
+#[instrument(
+    name = "ipc.director_status",
+    level = "debug",
+    skip_all,
+    fields(
+        request_id = id,
+        plan_id = %params.plan_id,
+        plan_status = tracing::field::Empty,
+        has_snapshot = tracing::field::Empty,
+    ),
+)]
+async fn handle_director_status<L>(id: u64, params: DirectorStatusParams, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    use std::str::FromStr;
+    let plan_id = match domain::PlanId::from_str(&params.plan_id) {
+        Ok(p) => p,
+        Err(_) => {
+            return DaemonResponse::err(
+                id,
+                RpcError::InvalidParams(format!("plan_id parse failed: {}", params.plan_id)),
+            );
+        }
+    };
+
+    let plan = match ctx.store.plans().get(&plan_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(request_id = id, plan_id = %plan_id, error = %e, "director.status: plan not found");
+            return DaemonResponse::err(id, map_store_error(e));
+        }
+    };
+    tracing::Span::current().record("plan_status", plan.status.to_string().as_str());
+
+    // Read the sidecar under a brief sync lock; clone the snapshot so
+    // the lock drops before serde + response construction. Poison
+    // degrades to "no snapshot," which the wire form represents as
+    // `snapshot: None` — equivalent semantics to "no live Director."
+    let snapshot_agents = ctx.director_statuses.read().ok().and_then(|m| m.get(&plan_id).cloned());
+    tracing::Span::current().record("has_snapshot", snapshot_agents.is_some());
+
+    let snapshot = snapshot_agents.map(|s| DirectorStatusSnapshot {
+        mode: s.mode.as_str().to_string(),
+        no_progress_streak: s.no_progress_streak,
+        same_action_streak: s.same_action_streak,
+        iteration: s.iteration,
+        last_action_kind: s.last_action_kind,
+        last_action_target_id: s.last_action_target_id,
+        last_action_ts: s.last_action_ts,
+        unread_note_count: s.unread_note_count,
+        needs_operator_iters: s.needs_operator_iters,
+    });
+
+    let result = DirectorStatusResult {
+        plan_id: plan_id.to_string(),
+        plan_status: plan.status.to_string(),
+        snapshot,
+    };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize director.status: {e}"))),
+    }
+}
+
 /// Parse a lowercase Plan status string into the typed `PlanStatus`
 /// enum. Mirrors the closed set in `domain::PlanStatus`.
 fn parse_plan_status(s: &str) -> Result<domain::PlanStatus, String> {
@@ -613,10 +686,12 @@ where
         config: ctx.director_config.clone(),
         shutdown: Arc::clone(&ctx.shutdown_notify),
         operator_notify,
+        director_statuses: Arc::clone(&ctx.director_statuses),
     };
     let mut directors = ctx.director_tasks.lock().await;
     let plan_id_for_log = plan_id.clone();
     let operator_notifies = Arc::clone(&ctx.operator_notifies);
+    let director_statuses = Arc::clone(&ctx.director_statuses);
     let plan_id_for_cleanup = plan_id.clone();
     directors.spawn(async move {
         match run_director(&plan_id, &deps).await {
@@ -631,6 +706,13 @@ where
         // Phase 9: drop the per-Plan operator Notify on Director task
         // exit. See startup_reconcile_directors for the rationale.
         operator_notifies.write().await.remove(&plan_id_for_cleanup);
+        // Director Phase 2 follow-ups (Item 3): drop the per-Plan
+        // status snapshot on task exit so a subsequent
+        // `director.status` IPC call returns `snapshot: None` (the
+        // "not running" wire form) instead of stale data.
+        if let Ok(mut m) = director_statuses.write() {
+            m.remove(&plan_id_for_cleanup);
+        }
     });
 }
 

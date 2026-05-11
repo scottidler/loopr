@@ -767,6 +767,87 @@ fn plan_override_unknown_field_is_rejected() {
     );
 }
 
+// --- director.status (Phase 2 follow-ups, Item 3) ---
+
+#[test]
+fn method_name_director_status_wire_form() {
+    let name: &'static str = crate::method::MethodName::DirectorStatus.into();
+    assert_eq!(name, "director.status");
+}
+
+#[test]
+fn method_try_from_director_status() {
+    let req = DaemonRequest {
+        id: 21,
+        method: "director.status".into(),
+        params: json!({ "plan_id": "pl-abc12" }),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::DirectorStatus(crate::method::DirectorStatusParams {
+            plan_id: "pl-abc12".to_string(),
+        })
+    );
+}
+
+#[test]
+fn director_status_params_deny_unknown_fields() {
+    let req = DaemonRequest {
+        id: 22,
+        method: "director.status".into(),
+        params: json!({ "plan_id": "pl-x", "extra": "nope" }),
+    };
+    let err = Method::try_from(&req).unwrap_err();
+    assert!(
+        matches!(err, RpcError::InvalidParams(_)),
+        "deny_unknown_fields must reject extras: {err:?}"
+    );
+}
+
+#[test]
+fn director_status_result_round_trip_with_snapshot() {
+    let snapshot = crate::method::DirectorStatusSnapshot {
+        mode: "Conservative".to_string(),
+        no_progress_streak: 3,
+        same_action_streak: 2,
+        iteration: 14,
+        last_action_kind: Some("override_work".to_string()),
+        last_action_target_id: Some("wk-xyz".to_string()),
+        last_action_ts: Some(1_700_000_000_000),
+        unread_note_count: 2,
+        needs_operator_iters: 0,
+    };
+    let before = crate::method::DirectorStatusResult {
+        plan_id: "pl-abc12".to_string(),
+        plan_status: "active".to_string(),
+        snapshot: Some(snapshot),
+    };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: crate::method::DirectorStatusResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn director_status_result_round_trip_without_snapshot() {
+    let before = crate::method::DirectorStatusResult {
+        plan_id: "pl-stalled".to_string(),
+        plan_status: "stalled".to_string(),
+        snapshot: None,
+    };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: crate::method::DirectorStatusResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn director_status_snapshot_deny_unknown_fields() {
+    let bytes = br#"{"mode":"Normal","no_progress_streak":0,"same_action_streak":0,"iteration":0,"unread_note_count":0,"needs_operator_iters":0,"bonus":"evil"}"#;
+    assert!(
+        serde_json::from_slice::<crate::method::DirectorStatusSnapshot>(bytes).is_err(),
+        "deny_unknown_fields must reject extras"
+    );
+}
+
 #[test]
 fn version_advertisement_in_handshake_bytes() {
     let req = DaemonRequest {

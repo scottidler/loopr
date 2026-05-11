@@ -146,6 +146,7 @@ impl Command {
             },
             Command::Director { cmd } => match cmd {
                 DirectorCmd::Chat { .. } => "director-chat",
+                DirectorCmd::Status { .. } => "director-status",
             },
             Command::Tui => "tui",
         }
@@ -184,6 +185,15 @@ pub enum DirectorCmd {
         plan_id: String,
         /// One-shot message to route to the Director's user prompt.
         message: String,
+    },
+    /// Show the live Director task's mode, no-progress streak, last
+    /// action, and unread-note count for the given Plan. Returns
+    /// "director: not running (plan is <status>)" when no Director
+    /// task is currently supervising the Plan (Stalled, Complete, or
+    /// transient pre-spawn).
+    Status {
+        /// Target Plan id, e.g. `pl-abc12`.
+        plan_id: String,
     },
 }
 

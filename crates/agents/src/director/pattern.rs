@@ -174,6 +174,22 @@ impl DirectorPatternTracker {
         &self.config
     }
 
+    /// Current no-progress streak depth. Used by `DirectorStatusSnapshot`
+    /// so the `loopr director status` verb can surface streak progress
+    /// toward the `escalation_threshold` without parsing log fields.
+    pub fn no_progress_streak(&self) -> u32 {
+        self.no_progress_streak
+    }
+
+    /// Length of the trailing run of identical fingerprints in the
+    /// action history (i.e. the streak `SameActionTripped` watches).
+    /// `0` when the history is empty.
+    pub fn same_action_streak(&self) -> u32 {
+        consecutive_same_action(&self.action_history)
+            .map(|(_, count)| count)
+            .unwrap_or(0)
+    }
+
     /// Reset the `no_progress_streak` counter. Phase 9: the Director
     /// loop calls this when an operator note arrives AND the mode FSM
     /// is demoting Conservative or NeedsOperator back to Normal — the

@@ -520,6 +520,99 @@ async fn plan_override_rejected_fsm_edge_yields_invalid_request() {
     assert_eq!(after.status, domain::PlanStatus::Active);
 }
 
+// --- director.status (Phase 2 follow-ups, Item 3) ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn director_status_nonexistent_plan_yields_not_found() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 70,
+        method: "director.status".into(),
+        params: serde_json::json!({ "plan_id": "pl-zzzzz" }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 70);
+    match resp.error {
+        Some(RpcError::NotFound(msg)) => {
+            assert!(msg.contains("pl-zzzzz"), "expected plan id in NotFound: {msg}");
+        }
+        other => panic!("expected NotFound for missing plan; got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn director_status_plan_exists_with_no_live_snapshot_returns_none() {
+    let (_td, ctx) = stub_ctx().await;
+    // Seed a Plan via the store directly; do NOT populate
+    // `director_statuses` — simulates a Plan that's persisted but has
+    // no live Director (Stalled / Complete / pre-spawn race).
+    let plan = domain::Plan::new("status-no-snapshot-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 71,
+        method: "director.status".into(),
+        params: serde_json::json!({ "plan_id": plan_id.to_string() }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 71);
+    assert!(resp.error.is_none(), "no-snapshot path must succeed: {:?}", resp.error);
+    let result: ipc::DirectorStatusResult = serde_json::from_value(resp.result.expect("result")).unwrap();
+    assert_eq!(result.plan_id, plan_id.to_string());
+    assert!(
+        result.snapshot.is_none(),
+        "expected snapshot=None when no Director is live"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn director_status_plan_with_live_snapshot_returns_fields() {
+    let (_td, ctx) = stub_ctx().await;
+    let plan = domain::Plan::new("status-live-snapshot-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    // Inject a snapshot as if the Director had just finished an
+    // iteration. The handler's read path is the same regardless of
+    // who wrote.
+    let snapshot = agents::DirectorStatusSnapshot {
+        mode: agents::DirectorMode::Conservative,
+        no_progress_streak: 3,
+        same_action_streak: 2,
+        iteration: 14,
+        last_action_kind: Some("override_work".to_string()),
+        last_action_target_id: Some("wk-xyz".to_string()),
+        last_action_ts: Some(1_700_000_000_000),
+        unread_note_count: 2,
+        needs_operator_iters: 0,
+    };
+    ctx.director_statuses.write().unwrap().insert(plan_id.clone(), snapshot);
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 72,
+        method: "director.status".into(),
+        params: serde_json::json!({ "plan_id": plan_id.to_string() }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 72);
+    assert!(resp.error.is_none(), "happy path must succeed: {:?}", resp.error);
+    let result: ipc::DirectorStatusResult = serde_json::from_value(resp.result.expect("result")).unwrap();
+    let wire = result.snapshot.expect("snapshot present");
+    assert_eq!(wire.mode, "Conservative");
+    assert_eq!(wire.no_progress_streak, 3);
+    assert_eq!(wire.same_action_streak, 2);
+    assert_eq!(wire.iteration, 14);
+    assert_eq!(wire.last_action_kind.as_deref(), Some("override_work"));
+    assert_eq!(wire.last_action_target_id.as_deref(), Some("wk-xyz"));
+    assert_eq!(wire.last_action_ts, Some(1_700_000_000_000));
+    assert_eq!(wire.unread_note_count, 2);
+    assert_eq!(wire.needs_operator_iters, 0);
+}
+
 // RFC-8259 newline-safety: a literal `\n` inside a string field must not
 // split the NDJSON line prematurely. `serde_json::to_string` ASCII-
 // escapes `\n` to `\\n` in compact mode, so the only `0x0A` on the wire

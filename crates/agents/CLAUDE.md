@@ -100,6 +100,10 @@ The `reconcile_director` sweep emits one `info!` per recovery action (`director:
 
 Per-area contract tests in `tests/agents_visibility.rs`, `tests/reviewer_ac_visibility.rs`, `tests/bundle_manifest_visibility.rs`, `tests/director_visibility.rs` parse the production-shape `events.log` and assert presence + required fields. Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
 
+## Director status snapshot sidecar (Phase 2 follow-ups)
+
+`docs/design/2026-05-12-director-phase-2-followups.md` (Item 3) adds `DirectorStatusSnapshot` — a per-iteration snapshot of `current_mode`, the pattern tracker's `no_progress_streak` / `same_action_streak`, the iteration counter, the first action's kind/target/timestamp, the unread-note count, and the Phase 10 `needs_operator_iters` grace counter. `DirectorDeps::director_statuses` is the injected sink (typed `DirectorStatusMap = Arc<std::sync::RwLock<HashMap<PlanId, DirectorStatusSnapshot>>>`); `run_director_inner` writes one snapshot per iteration at step 6b (after the pattern tracker block + Phase 10 grace check, before the sleep). The lock is held only for a single `HashMap::insert` — no `.await` between acquire and drop. The downstream consumer is `loopr`'s `handle_director_status` IPC handler; see `loopr/CLAUDE.md`'s "Operator intervention (Director Phase 2)" section.
+
 ## See also
 
 - [../../CLAUDE.md](../../CLAUDE.md): project-wide rules and crate map
