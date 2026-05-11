@@ -15,8 +15,9 @@ pub mod scope;
 pub use action::AgentAction;
 pub use config::{AgentsConfig, DirectorConfig, ImplementerConfig, ReviewerConfig};
 pub use director::{
-    DirectorAction, DirectorDeps, DirectorError, DirectorStore, WorkSpawner, build_director_state,
-    director_accept_bundle, parse_director_actions, reconcile_director, run_director,
+    ActionFingerprint, DirectorAction, DirectorDeps, DirectorError, DirectorPatternTracker, DirectorStore,
+    PatternConfig, PatternObservation, WorkSpawner, build_director_state, compute_state_hash, director_accept_bundle,
+    parse_director_actions, reconcile_director, run_director,
 };
 pub use dispatch::{ActionResult, DispatchError, RealTools, ToolExecutor, dispatch_action};
 pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};

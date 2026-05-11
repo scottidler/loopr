@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::director::PatternConfig;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct ImplementerConfig {
@@ -126,6 +128,13 @@ pub struct DirectorConfig {
     /// hundred ms after the FSM transition persists). Phase 2 of
     /// `docs/design/2026-05-09-director-phase-2.md`.
     pub reconcile_grace_secs: u64,
+    /// Cross-iteration pattern tracker thresholds. Phase 4 of
+    /// `docs/design/2026-05-09-director-phase-2.md`. The tracker watches
+    /// for repeated actions, recurring state hashes, and sustained
+    /// no-progress streaks; the consumer wires (mode FSM in Phase 5,
+    /// user-prompt label in Phase 6) live in the Director loop.
+    #[serde(default)]
+    pub patterns: PatternConfig,
 }
 
 impl Default for DirectorConfig {
@@ -140,6 +149,7 @@ impl Default for DirectorConfig {
             token_budget: 100_000,
             max_work_attempts: 3,
             reconcile_grace_secs: 30,
+            patterns: PatternConfig::default(),
         }
     }
 }

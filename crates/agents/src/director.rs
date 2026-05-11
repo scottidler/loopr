@@ -748,5 +748,8 @@ where
     }
 }
 
+pub mod pattern;
+pub use pattern::{ActionFingerprint, DirectorPatternTracker, PatternConfig, PatternObservation, compute_state_hash};
+
 #[cfg(test)]
 mod tests;
