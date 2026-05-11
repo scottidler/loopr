@@ -113,11 +113,15 @@ fn plan_create_daemon_shutdown_drains_implementer_tasks_cleanly() {
 
     let _stop = DaemonAutoStop::for_target(target);
 
-    // One plan, then immediate shutdown. Even with zero in-flight
-    // implementer tasks, the drain_implementer_tasks step must handle
-    // the empty-JoinSet path without deadlock or timeout.
+    // Auto-fork the daemon via a fast, non-LLM client request. The
+    // earlier shape used `loopr plan create` for this, but plan.create
+    // routes through the decomposer (real LLM call without an API
+    // key takes 7-15s before the deterministic fallback), which
+    // intermittently exceeded the client's 10s `client-request-secs`
+    // cap. The drain path under test does not depend on which command
+    // forked the daemon — `loopr plans` is the cheapest auto-fork.
     loopr()
-        .args(["-C", target.to_str().unwrap(), "plan", "create", "drain-test"])
+        .args(["-C", target.to_str().unwrap(), "plans"])
         .assert()
         .success();
 

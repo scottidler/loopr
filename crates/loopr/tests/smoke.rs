@@ -519,7 +519,15 @@ fn log_level_debug_emits_debug_events() {
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "--log-level", "debug", "plan", "create", "x"])
+        .args([
+            "-C",
+            td.path().to_str().unwrap(),
+            "--log-level",
+            "debug",
+            "plan",
+            "create",
+            "x",
+        ])
         .assert()
         .success();
     let client_dirs = client_run_dirs(td.path());
