@@ -748,7 +748,9 @@ where
     }
 }
 
+pub mod mode;
 pub mod pattern;
+pub use mode::{DirectorMode, next_mode};
 pub use pattern::{ActionFingerprint, DirectorPatternTracker, PatternConfig, PatternObservation, compute_state_hash};
 
 #[cfg(test)]
