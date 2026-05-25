@@ -692,57 +692,115 @@ pub fn director_accept_bundle<P: WorkSpawner>(plan_id: &PlanId, bundle_id: &Bund
     );
 }
 
-/// One restart-attempt of the Director loop. Returns `Ok(())` on
-/// GoalComplete; surface-level errors propagate to the outer restart
-/// dispatcher.
-async fn run_director_inner<L, S, C, P>(plan_id: &PlanId, deps: &DirectorDeps<L, S, C, P>) -> Result<(), DirectorError>
-where
-    L: LlmClient,
-    S: DirectorStore,
-    C: ContextBuilder,
-    P: WorkSpawner,
-{
-    let mut history: Vec<Message> = Vec::new();
-    // `max_repeat_action` is irrelevant for Director; we never call
-    // `lifeguard.check_action`. Pass 0 so the field is initialised; only
-    // `record_parse_failure` is exercised, governed by `max_parse_failures`.
-    let mut lifeguard = Lifeguard::new(0, deps.config.max_parse_failures);
-    let mut iteration: u32 = 0;
+/// Outcome of a single Director iteration.
+///
+/// - `GoalDone` — `reconcile_director` reported all works terminal with at
+///   least one Done; the outer loop returns `Ok(())` to the restart
+///   dispatcher, which propagates it to the daemon as "Plan complete."
+/// - `Continue { took_action }` — the iteration ran to completion without
+///   tripping a terminal error; the outer loop sleeps for
+///   `poll_interval_secs` (if any action was dispatched) or
+///   `idle_interval_secs` (no action this turn) then runs another
+///   iteration.
+///
+/// Terminal errors (Lifeguard escalation, NeedHelp, retry-budget cap,
+/// NeedsOperator grace exceeded) propagate via `Result::Err` and bypass
+/// this outcome enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectorIterOutcome {
+    GoalDone,
+    Continue { took_action: bool },
+}
 
-    let grace_ms: i64 = (deps.config.reconcile_grace_secs as i64).saturating_mul(1000);
+/// Per-Plan Director state that persists across iterations of the run
+/// loop. Owns the cross-iteration cache the previous monolithic
+/// `run_director_inner` kept on the stack: iteration counter, message
+/// history, lifeguard, pattern tracker, mode FSM, NeedsOperator grace
+/// counter, and the (config-derived) reconcile grace window.
+///
+/// Production: `run_director_inner` constructs one session per restart
+/// attempt and drives it via `run_once` + a sleep/shutdown `select!`.
+///
+/// Tests: assertions about a single iteration ("did the Director route
+/// this action to the spawner?") construct a session and call
+/// `run_once(deps)` directly. There is no shutdown plumbing for those
+/// tests to forget — the previous repeated-CI-hang failure mode.
+pub struct DirectorSession {
+    plan_id: PlanId,
+    history: Vec<Message>,
+    lifeguard: Lifeguard,
+    iteration: u32,
+    pattern_tracker: DirectorPatternTracker,
+    current_mode: DirectorMode,
+    needs_operator_iters: u32,
+    grace_ms: i64,
+}
 
-    // Phase 4-6: in-memory pattern tracker + mode FSM. Both reset on
-    // Director restart (the outer `run_director` loop allocates a fresh
-    // `run_director_inner` invocation). Mode is task-local; the user
-    // prompt's mode label is the only signal the LLM sees about which
-    // `## Mode-Aware Recovery` subsection to apply.
-    let mut pattern_tracker = DirectorPatternTracker::new(deps.config.patterns.clone());
-    let mut current_mode = DirectorMode::Normal;
-    // Phase 10 grace counter. Counts consecutive `NeedsOperator`
-    // iterations with NO operator note arriving. Resets when:
-    // (a) an operator note arrives this iteration (the note both
-    //     demotes the mode AND zeroes the counter), or
-    // (b) mode is not NeedsOperator. The Director transitions the
-    // Plan to `Stalled` and exits with `NeedHelp` when this counter
-    // reaches `needs_operator_grace_iters`.
-    let mut needs_operator_iters: u32 = 0;
+impl DirectorSession {
+    /// Construct a fresh session. `config` seeds the lifeguard parse-failure
+    /// budget, the pattern tracker thresholds, and the reconcile grace
+    /// window; mode starts at `Normal` and the grace counter at 0, matching
+    /// the previous loop-on-the-stack initial state.
+    pub fn new(plan_id: PlanId, config: &DirectorConfig) -> Self {
+        // `max_repeat_action` is irrelevant for Director — `check_action`
+        // is never invoked. Pass 0 so the field is initialised; only
+        // `record_parse_failure` is exercised, governed by `max_parse_failures`.
+        let lifeguard = Lifeguard::new(0, config.max_parse_failures);
+        let grace_ms: i64 = (config.reconcile_grace_secs as i64).saturating_mul(1000);
+        let pattern_tracker = DirectorPatternTracker::new(config.patterns.clone());
+        Self {
+            plan_id,
+            history: Vec::new(),
+            lifeguard,
+            iteration: 0,
+            pattern_tracker,
+            current_mode: DirectorMode::Normal,
+            needs_operator_iters: 0,
+            grace_ms,
+        }
+    }
 
-    loop {
+    /// Iteration counter — observable for the outer loop's `debug!`
+    /// telemetry so the `tokio::select!` arm can log which iteration the
+    /// sleep/shutdown wait belongs to.
+    pub fn iteration(&self) -> u32 {
+        self.iteration
+    }
+
+    /// One iteration of the Director loop, without the sleep/shutdown
+    /// trailing `select!`. Mutates session state (iteration counter,
+    /// pattern tracker, mode, grace counter, history, lifeguard). The
+    /// outer caller is responsible for either sleeping + waiting on
+    /// shutdown (the production loop) or exiting (tests asserting on
+    /// a single iteration's side-effects).
+    pub async fn run_once<L, S, C, P>(
+        &mut self,
+        deps: &DirectorDeps<L, S, C, P>,
+    ) -> Result<DirectorIterOutcome, DirectorError>
+    where
+        L: LlmClient,
+        S: DirectorStore,
+        C: ContextBuilder,
+        P: WorkSpawner,
+    {
+        let plan_id = &self.plan_id;
+
         // 1. Reconcile sweep.
-        let goal_done = reconcile_director(plan_id, &deps.store, &deps.spawner, grace_ms).await?;
+        let goal_done = reconcile_director(plan_id, &deps.store, &deps.spawner, self.grace_ms).await?;
         if goal_done {
             info!(plan_id = %plan_id, "director: goal complete; exiting");
-            return Ok(());
+            return Ok(DirectorIterOutcome::GoalDone);
         }
 
-        iteration += 1;
+        self.iteration += 1;
+        let iteration = self.iteration;
         tracing::Span::current().record("iteration", iteration);
         info!(iteration, plan_id = %plan_id, "director iteration start");
 
         // 2. Build state; stamp the current mode so the user-prompt
         //    label tells the LLM which mode-aware block to apply.
         let mut state = build_director_state(plan_id, &deps.store).await?;
-        state.mode = current_mode.as_str().to_string();
+        state.mode = self.current_mode.as_str().to_string();
 
         // 2a. Phase 9: surface any unread operator notes. Notes are
         //     rendered into the `## Operator Notes` section of the user
@@ -759,27 +817,27 @@ where
         let unread_note_ids: Vec<NoteId> = unread_notes.iter().map(|n| n.id.clone()).collect();
         if !unread_notes.is_empty() {
             state.operator_notes = unread_notes.iter().map(|n| n.message.clone()).collect();
-            let next = next_mode(current_mode, &PatternObservation::OperatorNoteArrived);
-            if next != current_mode {
+            let next = next_mode(self.current_mode, &PatternObservation::OperatorNoteArrived);
+            if next != self.current_mode {
                 info!(
                     plan_id = %plan_id,
                     iteration,
-                    from = current_mode.as_str(),
+                    from = self.current_mode.as_str(),
                     to = next.as_str(),
                     trigger = "operator_note",
                     note_count = unread_notes.len(),
                     "director.mode_change"
                 );
-                pattern_tracker.reset_no_progress_streak();
-                current_mode = next;
+                self.pattern_tracker.reset_no_progress_streak();
+                self.current_mode = next;
                 // Re-stamp the mode label so the user prompt reflects
                 // the post-demotion state on this very iteration.
-                state.mode = current_mode.as_str().to_string();
+                state.mode = self.current_mode.as_str().to_string();
             } else {
                 debug!(
                     plan_id = %plan_id,
                     iteration,
-                    mode = current_mode.as_str(),
+                    mode = self.current_mode.as_str(),
                     note_count = unread_notes.len(),
                     "director: operator note observed; mode unchanged (idempotent edge)"
                 );
@@ -789,7 +847,7 @@ where
         // 3. Context + LLM.
         let assembled = deps
             .context
-            .build_for_director(&state, &history, deps.config.token_budget)?;
+            .build_for_director(&state, &self.history, deps.config.token_budget)?;
 
         // 4. Same-iteration parse-retry sub-loop. Only a successful turn
         //    enters cross-iteration history; failed turns stay local to the
@@ -802,13 +860,13 @@ where
                 .await?;
             match parse_director_actions(&raw) {
                 Ok(parsed) => {
-                    lifeguard.reset_parse_failures();
+                    self.lifeguard.reset_parse_failures();
                     // Append the successful turn (state user msg + assistant)
                     // to cross-iteration history before breaking.
                     if let Some(last) = assembled.messages.last() {
-                        history.push(last.clone());
+                        self.history.push(last.clone());
                     }
-                    history.push(Message::assistant(raw));
+                    self.history.push(Message::assistant(raw));
                     // Phase 9: render-then-mark. The notes have now
                     // been observed by the LLM (their bodies were in
                     // the rendered user prompt), so it is safe to
@@ -838,7 +896,7 @@ where
                     )));
                     let requeries_used = (messages.len() - 1) / 2;
                     if requeries_used as u32 >= deps.config.max_requeries {
-                        if let Decision::Escalate(reason) = lifeguard.record_parse_failure() {
+                        if let Decision::Escalate(reason) = self.lifeguard.record_parse_failure() {
                             return Err(DirectorError::Lifeguard(reason));
                         }
                         // Lifeguard counts the strike but allows the outer
@@ -938,19 +996,19 @@ where
         let works_after = deps.store.list_works_for_plan(plan_id).await?;
         let bundles_after = deps.store.list_bundles_for_plan(plan_id).await?;
         let state_hash = compute_state_hash(&works_after, &bundles_after);
-        if let Some(observation) = pattern_tracker.observe(fingerprint, state_hash) {
-            let next = next_mode(current_mode, &observation);
-            if next != current_mode {
+        if let Some(observation) = self.pattern_tracker.observe(fingerprint, state_hash) {
+            let next = next_mode(self.current_mode, &observation);
+            if next != self.current_mode {
                 let trigger = pattern_observation_trigger(&observation);
                 info!(
                     plan_id = %plan_id,
                     iteration,
-                    from = current_mode.as_str(),
+                    from = self.current_mode.as_str(),
                     to = next.as_str(),
                     trigger = trigger,
                     "director.mode_change"
                 );
-                current_mode = next;
+                self.current_mode = next;
             }
         }
 
@@ -963,13 +1021,13 @@ where
         //     restart's `startup_reconcile_directors` skips the Stalled
         //     Plan instead of respawning a Director that would re-trip
         //     the same counter.
-        if current_mode == DirectorMode::NeedsOperator && unread_note_ids.is_empty() {
-            needs_operator_iters = needs_operator_iters.saturating_add(1);
-            if needs_operator_iters >= deps.config.needs_operator_grace_iters {
+        if self.current_mode == DirectorMode::NeedsOperator && unread_note_ids.is_empty() {
+            self.needs_operator_iters = self.needs_operator_iters.saturating_add(1);
+            if self.needs_operator_iters >= deps.config.needs_operator_grace_iters {
                 warn!(
                     plan_id = %plan_id,
                     iteration,
-                    needs_operator_iters,
+                    needs_operator_iters = self.needs_operator_iters,
                     grace = deps.config.needs_operator_grace_iters,
                     "director: NeedsOperator grace exceeded; transitioning Plan -> Stalled"
                 );
@@ -978,11 +1036,12 @@ where
                     .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
                 deps.store.update_plan(plan).await?;
                 return Err(DirectorError::NeedHelp(format!(
-                    "NeedsOperator timeout: {needs_operator_iters} iterations without operator note"
+                    "NeedsOperator timeout: {} iterations without operator note",
+                    self.needs_operator_iters
                 )));
             }
         } else {
-            needs_operator_iters = 0;
+            self.needs_operator_iters = 0;
         }
 
         // 6b. Phase 2 follow-ups (Item 3): publish the per-iteration
@@ -998,35 +1057,68 @@ where
         //     iteration," which the IPC handler tolerates.
         let last_action_ts_ms = if last_action_kind.is_some() { Some(domain::now_millis()) } else { None };
         let snapshot = DirectorStatusSnapshot {
-            mode: current_mode,
-            no_progress_streak: pattern_tracker.no_progress_streak(),
-            same_action_streak: pattern_tracker.same_action_streak(),
+            mode: self.current_mode,
+            no_progress_streak: self.pattern_tracker.no_progress_streak(),
+            same_action_streak: self.pattern_tracker.same_action_streak(),
             iteration,
             last_action_kind,
             last_action_target_id,
             last_action_ts: last_action_ts_ms,
             unread_note_count: unread_note_ids.len(),
-            needs_operator_iters,
+            needs_operator_iters: self.needs_operator_iters,
         };
         if let Ok(mut map) = deps.director_statuses.write() {
             map.insert(plan_id.clone(), snapshot);
         }
 
-        // 7. Sleep.
-        let secs = if took_action {
-            deps.config.poll_interval_secs
-        } else {
-            deps.config.idle_interval_secs
-        };
-        debug!(iteration, sleep_secs = secs, took_action, "director sleeping");
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(secs)) => {}
-            _ = deps.shutdown.notified() => {
-                info!(plan_id = %plan_id, "director shutdown notified; exiting");
-                return Ok(());
-            }
-            _ = deps.operator_notify.notified() => {
-                debug!(plan_id = %plan_id, iteration, "director operator-note wakeup");
+        Ok(DirectorIterOutcome::Continue { took_action })
+    }
+}
+
+/// One restart-attempt of the Director loop. Returns `Ok(())` on
+/// GoalComplete or shutdown; surface-level errors propagate to the
+/// outer restart dispatcher. Constructs a `DirectorSession` and drives
+/// it via `run_once` + a sleep/shutdown `select!` per iteration.
+async fn run_director_inner<L, S, C, P>(plan_id: &PlanId, deps: &DirectorDeps<L, S, C, P>) -> Result<(), DirectorError>
+where
+    L: LlmClient,
+    S: DirectorStore,
+    C: ContextBuilder,
+    P: WorkSpawner,
+{
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    loop {
+        match session.run_once(deps).await? {
+            DirectorIterOutcome::GoalDone => return Ok(()),
+            DirectorIterOutcome::Continue { took_action } => {
+                let secs = if took_action {
+                    deps.config.poll_interval_secs
+                } else {
+                    deps.config.idle_interval_secs
+                };
+                debug!(
+                    iteration = session.iteration(),
+                    sleep_secs = secs,
+                    took_action,
+                    "director sleeping"
+                );
+                // `biased;` makes shutdown win deterministically when racing the
+                // sleep timer. Production: a graceful shutdown should always
+                // preempt a poll-interval sleep. Tests that exercise loop
+                // semantics still wire shutdown via `FakeLlm::with_shutdown_after`;
+                // tests asserting on a single iteration's side-effects call
+                // `DirectorSession::run_once` directly and never reach this select.
+                tokio::select! {
+                    biased;
+                    _ = deps.shutdown.notified() => {
+                        info!(plan_id = %plan_id, "director shutdown notified; exiting");
+                        return Ok(());
+                    }
+                    _ = deps.operator_notify.notified() => {
+                        debug!(plan_id = %plan_id, iteration = session.iteration(), "director operator-note wakeup");
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(secs)) => {}
+                }
             }
         }
     }

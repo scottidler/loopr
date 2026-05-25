@@ -16,7 +16,7 @@ use tokio::sync::Notify;
 use domain::{OperatorNote, Plan, PlanId, PlanStatus, WorkStatus};
 
 use super::{FakeLlm, FakeStore, RecordingSpawner, fast_config, make_deps, make_work};
-use crate::director::run_director;
+use crate::director::{DirectorSession, run_director};
 
 // ---------------------------------------------------------------------------
 // Phase 9: Operator note path
@@ -49,22 +49,19 @@ async fn operator_note_renders_demotes_conservative_and_marks_read() {
         .to_string(),
     );
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
     let mut config = fast_config();
     config.patterns = crate::config::DirectorConfig::default().patterns;
     config.max_work_attempts = 100;
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    // Two deterministic iterations: iter 1 must render the note, iter 2 must
+    // NOT (mark-read on the iter-1 LLM round-trip clears the unread flag).
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("iter 1 Ok");
+    session.run_once(&deps).await.expect("iter 2 Ok");
 
     let prompts = deps.llm.last_user_messages();
-    assert!(!prompts.is_empty(), "expected at least one LLM call");
+    assert_eq!(prompts.len(), 2, "expected exactly two LLM calls");
     assert!(
         prompts[0].contains("### Operator Notes"),
         "first iteration prompt must include the Operator Notes section; got: {}",
@@ -75,14 +72,11 @@ async fn operator_note_renders_demotes_conservative_and_marks_read() {
         "first iteration prompt must include the note body; got: {}",
         prompts[0]
     );
-    if prompts.len() >= 2 {
-        for (i, p) in prompts.iter().enumerate().skip(1) {
-            assert!(
-                !p.contains("try the failing test in verbose mode"),
-                "iteration {i} re-rendered the marked-read note body; got: {p}"
-            );
-        }
-    }
+    assert!(
+        !prompts[1].contains("try the failing test in verbose mode"),
+        "iteration 2 re-rendered the marked-read note body; got: {}",
+        prompts[1]
+    );
 }
 
 /// Render-then-mark ordering regression guard: when the LLM-loop fails
@@ -135,17 +129,13 @@ async fn unread_note_marked_read_after_render() {
 
     let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ack" }]).to_string());
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
     let config = fast_config();
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    // Single iteration: the LLM round-trip that parses successfully must
+    // mark the note read (render-then-mark ordering).
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
 
     let notes = deps.store.notes.lock().unwrap();
     let persisted = notes.iter().find(|n| n.id == note_id).expect("note persisted");
@@ -222,24 +212,26 @@ async fn grace_counter_does_not_trip_outside_needs_operator() {
 
     let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ok" }]).to_string());
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
     let mut config = fast_config();
     config.needs_operator_grace_iters = 2;
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
-    assert_ne!(
-        deps.store.plan_status(),
-        Some(PlanStatus::Stalled),
-        "Plan must not be Stalled when mode stays out of NeedsOperator; got plan_status={:?}",
-        deps.store.plan_status()
-    );
+    // Run 5 deterministic iterations. With `done` actions and identical
+    // state hashes, SameActionTripped fires from iter 3 onward — mode
+    // pins at Conservative. EscalationTripped fires only via the
+    // NoProgress path, which SameActionTripped pre-empts, so mode never
+    // reaches NeedsOperator and the grace counter stays at 0.
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    for i in 0..5 {
+        session.run_once(&deps).await.expect("run_once Ok");
+        assert_ne!(
+            deps.store.plan_status(),
+            Some(PlanStatus::Stalled),
+            "Plan must not be Stalled after iter {}; got plan_status={:?}",
+            i + 1,
+            deps.store.plan_status()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,17 +261,13 @@ async fn director_status_snapshot_records_iteration_and_action() {
         .to_string(),
     );
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
     let config = fast_config();
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    // Single iteration: the snapshot write site (step 6b) must fire
+    // every iteration and expose the action's kind + target id.
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
 
     let map = deps.director_statuses.read().unwrap();
     let snap = map

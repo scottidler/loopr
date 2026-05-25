@@ -17,8 +17,8 @@ use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, U
 use store::StoreError;
 
 use super::{
-    DirectorAction, DirectorDeps, DirectorError, DirectorStore, WorkSpawner, build_director_state,
-    parse_director_actions, reconcile_director, run_director,
+    DirectorAction, DirectorDeps, DirectorError, DirectorIterOutcome, DirectorSession, DirectorStore, WorkSpawner,
+    build_director_state, parse_director_actions, reconcile_director, run_director,
 };
 use crate::config::DirectorConfig;
 
@@ -236,6 +236,12 @@ struct FakeLlm {
     /// assert that the user prompt's mode label changes after the
     /// pattern tracker fires.
     last_user_messages: Mutex<Vec<String>>,
+    /// Optional `(notify, threshold)`: when `call_count` reaches
+    /// `threshold`, the LLM fires `notify.notify_waiters()` from
+    /// inside `complete_free` before returning. Used to drive
+    /// deterministic shutdown in tests that previously used a wall-
+    /// clock `tokio::spawn(sleep + notify)` and flaked under load.
+    shutdown_after: Option<(Arc<Notify>, u32)>,
 }
 
 impl FakeLlm {
@@ -245,6 +251,7 @@ impl FakeLlm {
             repeat_last: false,
             call_count: Mutex::new(0),
             last_user_messages: Mutex::new(Vec::new()),
+            shutdown_after: None,
         }
     }
 
@@ -254,6 +261,7 @@ impl FakeLlm {
             repeat_last: true,
             call_count: Mutex::new(0),
             last_user_messages: Mutex::new(Vec::new()),
+            shutdown_after: None,
         }
     }
 
@@ -265,7 +273,18 @@ impl FakeLlm {
             repeat_last: false,
             call_count: Mutex::new(0),
             last_user_messages: Mutex::new(Vec::new()),
+            shutdown_after: None,
         }
+    }
+
+    /// Fire `notify` after the Nth `complete_free` call. The notify
+    /// is sent BEFORE returning the Nth response, so the Director
+    /// loop's next `select!` between the LLM-returned action and the
+    /// shutdown Notify resolves deterministically without depending
+    /// on a wall-clock timer.
+    fn with_shutdown_after(mut self, notify: Arc<Notify>, calls: u32) -> Self {
+        self.shutdown_after = Some((notify, calls));
+        self
     }
 
     fn calls(&self) -> u32 {
@@ -294,7 +313,11 @@ impl LlmClient for FakeLlm {
         messages: &[Message],
         _model: Option<&str>,
     ) -> Result<(String, Usage), LlmError> {
-        *self.call_count.lock().unwrap() += 1;
+        let count = {
+            let mut c = self.call_count.lock().unwrap();
+            *c += 1;
+            *c
+        };
         if let Some(last) = messages.last() {
             // Extract the first text block; the Director's user message
             // is always a single Text content block by construction.
@@ -305,16 +328,32 @@ impl LlmClient for FakeLlm {
                 }
             }
         }
-        let mut q = self.responses.lock().unwrap();
-        let payload = if q.len() > 1 {
-            q.remove(0)
-        } else if self.repeat_last {
-            q[0].clone()
-        } else if q.is_empty() {
-            panic!("FakeLlm: response queue exhausted (no responses queued; LLM was not expected to be called)");
-        } else {
-            q.remove(0)
+        let payload = {
+            let mut q = self.responses.lock().unwrap();
+            if q.len() > 1 {
+                q.remove(0)
+            } else if self.repeat_last {
+                q[0].clone()
+            } else if q.is_empty() {
+                panic!("FakeLlm: response queue exhausted (no responses queued; LLM was not expected to be called)");
+            } else {
+                q.remove(0)
+            }
         };
+        // Fire deterministic shutdown after the configured Nth call.
+        // MUST use `notify_one`, not `notify_waiters`: the Director isn't
+        // currently parked on `shutdown.notified()` when we fire (it's
+        // mid-iteration consuming our LLM response). `notify_waiters`
+        // wakes only currently-parked waiters and drops the signal if
+        // none — the Director would never see it. `notify_one` stores a
+        // permit that the next `.notified()` call (the iteration's
+        // step-7 sleep select!) consumes immediately, exiting the loop
+        // deterministically.
+        if let Some((notify, threshold)) = &self.shutdown_after
+            && count >= *threshold
+        {
+            notify.notify_one();
+        }
         Ok((payload, Usage::default()))
     }
 }
@@ -911,29 +950,28 @@ async fn run_director_done_action_sleeps_then_observes_goal_complete() {
 }
 
 #[tokio::test]
-async fn run_director_done_action_loops_until_shutdown() {
-    // Pending Work + LLM emits {action: done}. Director sleeps idle interval
-    // (0s in fast_config) then the shutdown notify fires and the loop exits.
+async fn run_director_done_action_does_not_terminate_loop() {
+    // Pending Work + LLM emits {action: done}. The `done` action is a
+    // no-op at the iteration boundary: it must NOT invoke the spawner
+    // AND it must NOT terminate the loop. The latter is captured by
+    // asserting `run_once` returns `Continue`, not `GoalDone`. Single-
+    // iteration assertion via DirectorSession::run_once — no shutdown
+    // plumbing required.
     let plan_id = PlanId::new();
     let pending = make_work(plan_id.clone(), "wk-pending", WorkStatus::Pending);
     let store = FakeStore::with(vec![pending], vec![]);
     let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "no-op" }]).to_string());
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
+    let deps = make_deps(llm, store, spawner.clone(), fast_config(), Arc::new(Notify::new()));
 
-    let deps = make_deps(llm, store, spawner.clone(), fast_config(), shutdown.clone());
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    let outcome = session.run_once(&deps).await.expect("run_once Ok");
 
-    // Schedule a shutdown after a brief delay so the loop completes one
-    // iteration first.
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps)
-        .await
-        .expect("director exits Ok on shutdown");
+    assert_eq!(
+        outcome,
+        DirectorIterOutcome::Continue { took_action: false },
+        "done must surface as a non-terminating iteration"
+    );
     assert!(deps.llm.calls() >= 1, "LLM should have been called at least once");
     assert!(
         spawner.accept_bundle_calls.lock().unwrap().is_empty(),
@@ -943,6 +981,10 @@ async fn run_director_done_action_loops_until_shutdown() {
 
 #[tokio::test]
 async fn run_director_accept_bundle_invokes_spawner() {
+    // Single-iteration assertion: one Director iteration must route the
+    // LLM's accept_bundle action into the spawner. Uses DirectorSession::
+    // run_once directly so there is no shutdown plumbing for this test to
+    // forget — the previous repeated-CI-hang failure mode.
     let plan_id = PlanId::new();
     let work = make_work(plan_id.clone(), "wk-1", WorkStatus::InReview);
     let bundle = make_bundle(work.id.clone(), BundleStatus::Reviewed);
@@ -951,19 +993,11 @@ async fn run_director_accept_bundle_invokes_spawner() {
     let store = FakeStore::with(vec![work], vec![bundle.clone()]);
     let llm = FakeLlm::repeating(json!([{ "action": "accept_bundle", "bundle_id": bundle_id_s }]).to_string());
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
+    let deps = make_deps(llm, store, spawner.clone(), fast_config(), Arc::new(Notify::new()));
 
-    let deps = make_deps(llm, store, spawner.clone(), fast_config(), shutdown.clone());
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps)
-        .await
-        .expect("director exits Ok on shutdown");
     let calls = spawner.accept_bundle_calls.lock().unwrap();
     assert!(!calls.is_empty(), "accept_bundle should have been called");
     assert_eq!(calls[0], bundle.id);
@@ -1060,21 +1094,13 @@ async fn override_to_ready_below_cap_dispatches_through_spawner() {
         .to_string(),
     );
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
 
     let mut config = fast_config();
     config.max_work_attempts = 3;
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps)
-        .await
-        .expect("director exits Ok on shutdown");
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
 
     let calls = spawner.override_work_calls.lock().unwrap();
     assert!(!calls.is_empty(), "below-cap override must reach spawner");
@@ -1152,19 +1178,13 @@ async fn override_to_non_ready_skips_cap_check() {
         .to_string(),
     );
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
 
     let mut config = fast_config();
     config.max_work_attempts = 3;
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
 
     let calls = spawner.override_work_calls.lock().unwrap();
     assert!(!calls.is_empty(), "non-Ready override must reach spawner");
@@ -1238,19 +1258,13 @@ async fn override_to_ready_with_high_cap_below_attempt_dispatches() {
         .to_string(),
     );
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
 
     let mut config = fast_config();
     config.max_work_attempts = 5;
-    let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
+    let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        shutdown_fire.notify_waiters();
-    });
-
-    run_director(&plan_id, &deps).await.expect("Ok on shutdown");
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
 
     assert!(
         !spawner.override_work_calls.lock().unwrap().is_empty(),
@@ -1279,6 +1293,17 @@ async fn run_director_repeated_override_promotes_mode_to_conservative() {
     let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
     let work_id_s = blocked.id.to_string();
     let store = FakeStore::with(vec![blocked], vec![]);
+    let shutdown = Arc::new(Notify::new());
+
+    // Deterministic shutdown: fire after the LLM's 4th call. The Director
+    // FSM transitions Normal -> Conservative on the 3rd identical override
+    // (same_action_threshold=3); the 4th iteration's user prompt is the
+    // one this test asserts carries the Conservative label. Firing
+    // shutdown after the 4th LLM call guarantees we observe both the
+    // pre-transition prompt (iteration 1, Normal) and the post-transition
+    // prompt (iteration 4, Conservative). The earlier `tokio::spawn(sleep
+    // 150ms + notify)` version flaked under parallel test load because
+    // the timer task could be starved.
     let llm = FakeLlm::repeating(
         json!([{
             "action": "override_work",
@@ -1287,9 +1312,9 @@ async fn run_director_repeated_override_promotes_mode_to_conservative() {
             "reason": "retry"
         }])
         .to_string(),
-    );
+    )
+    .with_shutdown_after(shutdown.clone(), 4);
     let spawner = Arc::new(RecordingSpawner::default());
-    let shutdown = Arc::new(Notify::new());
 
     // Tight pattern config so the FSM transitions within a handful of
     // iterations. `same_action_threshold=3` means the 3rd identical
@@ -1302,12 +1327,6 @@ async fn run_director_repeated_override_promotes_mode_to_conservative() {
     // pattern tracker; we want at least 4 iterations of overrides.
     config.max_work_attempts = 100;
     let deps = make_deps(llm, store, spawner.clone(), config, shutdown.clone());
-
-    let shutdown_fire = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        shutdown_fire.notify_waiters();
-    });
 
     run_director(&plan_id, &deps).await.expect("Ok on shutdown");
 
