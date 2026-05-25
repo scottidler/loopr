@@ -1,22 +1,20 @@
-//! Stage 7 wiring regression guard.
+//! Stage 7 daemon-shutdown regression guard.
 //!
-//! The Stage 7 design doc's full E2E exit criterion — "on a toy target repo,
-//! a Work item produces a Bundle whose commit diff shows real file edits" —
-//! requires a live or mocked Anthropic backend to script both the decomposer
-//! and the implementer responses. That deep-E2E is deferred to Stage 9's
-//! first-gate run.
-//!
-//! What THIS test guards:
-//! - `handle_plan_create` invokes the Stage 7 spawn path without crashing
-//!   the daemon, even when the decomposer returns no Works (the expected
-//!   outcome with no API key set).
+//! What this file guards:
 //! - `drain_implementer_tasks` is reached during daemon shutdown without
 //!   deadlocking against an empty JoinSet.
-//! - The new DaemonContext fields (`context_builder`, `implementer_config`,
+//! - The DaemonContext fields (`context_builder`, `implementer_config`,
 //!   `worktree_cleanup_policy`, `implementer_tasks`) are initialized at
 //!   daemon startup without panic.
 //!
-//! If any of those regress, this test fails before any E2E has a chance to.
+//! What this file does NOT guard: the Stage 7 implementer-spawn path
+//! itself. The full E2E exit criterion — "on a toy target repo, a Work
+//! item produces a Bundle whose commit diff shows real file edits" —
+//! requires a live or mocked Anthropic backend to script both the
+//! decomposer and the implementer responses. That deep-E2E is deferred
+//! to Stage 9's first-gate run. See the deletion note below for why the
+//! earlier `plan_create_exercises_stage_7_spawn_path_without_crash`
+//! test was removed.
 
 #![allow(clippy::unwrap_used)]
 
@@ -60,50 +58,21 @@ fn init_target(target: &std::path::Path) {
 // `stop_daemon` lives in `common::stop_daemon_for` so all daemon-spawning
 // integration tests share the same panic-safe `DaemonAutoStop` guard.
 
-#[test]
-fn plan_create_exercises_stage_7_spawn_path_without_crash() {
-    let td = TempDir::new().unwrap();
-    let target = td.path();
-    init_target(target);
-
-    // Panic-safe daemon cleanup: even if the `assert().success()` below
-    // unwinds (the common failure path), Drop runs and SIGTERMs the
-    // auto-forked daemon. Without this guard the daemon is reparented
-    // to init and accumulates as an orphan across test runs.
-    let _stop = DaemonAutoStop::for_target(target);
-
-    // Run `loopr plan "..."`; this auto-forks a daemon, persists a Plan,
-    // runs the decomposer (which either yields Works or errors out with no
-    // API key), and for any yielded Work invokes the Stage 7 spawn path.
-    loopr()
-        .args(["-C", target.to_str().unwrap(), "plan", "create", "toy stage 7 goal"])
-        .assert()
-        .success();
-
-    // Shutdown the daemon; exercises drain_implementer_tasks on whatever
-    // implementer tasks are in-flight (zero or more). (The guard above
-    // would also fire on success, but ordering matters for the
-    // `taskstore` assertions below: stop_daemon_for blocks until the
-    // daemon has flushed its final writes.)
-    stop_daemon_for(target);
-
-    // Plan was persisted even if decompose failed.
-    let plans_jsonl = target.join(".loopr").join("taskstore").join("plans.jsonl");
-    assert!(plans_jsonl.is_file(), "plans.jsonl exists");
-    let plans_body = fs::read_to_string(&plans_jsonl).unwrap();
-    assert!(
-        plans_body.lines().any(|l| l.contains("toy stage 7 goal")),
-        "plans.jsonl contains the goal text: {plans_body}"
-    );
-
-    // .loopr/taskstore/ is the committed-truth directory. bundles.jsonl may
-    // or may not exist depending on whether any Work ran to completion;
-    // both states are valid Stage-7 outcomes for this degraded-test
-    // scenario (no LLM key). The test passes as long as the daemon did
-    // not crash and plans persisted.
-    let taskstore = target.join(".loopr").join("taskstore");
-    assert!(taskstore.is_dir(), "taskstore dir exists");
-}
+// `plan_create_exercises_stage_7_spawn_path_without_crash` was deleted
+// 2026-05-25 after architectural review (see
+// `docs/design/2026-05-25-stage-7-wiring-test-no-network.md`). The test
+// claimed to guard the Stage 7 implementer spawn path, but verification
+// showed the decomposer's no-API-key path returns
+// `Err(DecomposerError::LlmFailed)` (see `crates/decomposer/src/decompose.rs:199`),
+// which `handle_plan_create` catches and short-circuits at
+// `crates/loopr/src/transport/handler.rs:229-236` — the `Ok(works)`
+// branch containing the spawn loop is never reached. The test was a
+// placebo. The Err-branch coverage it actually exercised is already
+// provided by `crates/loopr/src/transport/handler/tests.rs::plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty`,
+// and the fork-daemon + drain lifecycle is covered by the sibling
+// `plan_create_daemon_shutdown_drains_implementer_tasks_cleanly` below.
+// The real Stage 7 spawn-path coverage is deferred to Stage 9's
+// first-gate run, exactly as the deleted test's own docstring admitted.
 
 #[test]
 fn plan_create_daemon_shutdown_drains_implementer_tasks_cleanly() {
