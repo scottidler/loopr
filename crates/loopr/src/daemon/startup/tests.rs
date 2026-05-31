@@ -8,9 +8,14 @@
 #![allow(clippy::unwrap_used)]
 
 use std::path::Path;
+use std::sync::Arc;
 
-use domain::{PlanId, Work, WorkStatus};
+use domain::{Bundle, BundleStatus, PlanId, Work, WorkId, WorkStatus};
+use llm::ScriptedLlm;
 use store::Store;
+use telemetry::digest::process::ProcessSnapshot;
+use telemetry::{ProcessId, SessionId};
+use tools::SandboxMode;
 
 use super::*;
 
@@ -215,4 +220,79 @@ fn check_legacy_runs_dir_file_at_runs_path_returns_false() {
     std::fs::create_dir_all(td.path().join(".loopr")).unwrap();
     std::fs::write(td.path().join(".loopr").join("runs"), b"").unwrap();
     assert!(!check_legacy_runs_dir(td.path()));
+}
+
+// ---------- sweep_bundles cold-boot re-drive (2026-05-31 seam doc, Phase 2) ----------
+
+/// Build a `DaemonContext` on a seeded git repo with a `ScriptedLlm`. Mirrors
+/// `tests/director_stuck_states.rs::build_test_context`, but in-crate so the
+/// private `sweep_bundles` is reachable via `super::*`.
+async fn build_ctx(target: &Path) -> Arc<DaemonContext<ScriptedLlm>> {
+    let llm = ScriptedLlm::new();
+    let session_id = SessionId::parse("20260531-000000").unwrap();
+    let process_id = ProcessId::parse("pc-swp001").unwrap();
+    let mut config = crate::config::Config::default();
+    config.tools.sandbox = SandboxMode::Off;
+    let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-sweep-model")));
+    crate::daemon::build_context(
+        target.to_path_buf(),
+        session_id,
+        "-test-sweep".to_string(),
+        process_id,
+        0,
+        llm,
+        config,
+        false,
+        snapshot,
+    )
+    .await
+    .unwrap()
+}
+
+fn seed_bundle(status: BundleStatus) -> Bundle {
+    let mut b = Bundle::new(WorkId::new(), "loopr/wk-x-1".to_string(), vec!["claim".to_string()]);
+    // Direct status set is a test-only shortcut: terminal statuses like
+    // Merged are not reachable from Proposed via a single FSM edge.
+    b.status = status;
+    b
+}
+
+/// Cold-boot crash recovery: `sweep_bundles` must re-drive every stranded
+/// non-terminal Bundle to its next stage (Proposed/Triaged -> reviewer,
+/// Accepted/Integrating -> integrator) and count terminal Bundles without
+/// re-driving them. A regression here silently strands the pipeline after a
+/// daemon restart. `shutting_down` is set first so the spawned reviewer/
+/// integrator task bodies short-circuit at entry (the documented defensive
+/// guard), keeping the test deterministic and free of background work while
+/// `sweep_bundles` still records its routing counters.
+#[tokio::test]
+async fn sweep_bundles_redrives_stranded_and_counts_terminal_on_cold_boot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    seed_repo(&repo);
+    let ctx = build_ctx(&repo).await;
+
+    // Make every spawned task body no-op at entry.
+    ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    for status in [
+        BundleStatus::Triaged,  // -> reviewer requeue
+        BundleStatus::Accepted, // -> integrator requeue
+        BundleStatus::Merged,   // -> terminal count
+        BundleStatus::Rejected, // -> terminal count
+    ] {
+        ctx.store.bundles().create(seed_bundle(status)).await.unwrap();
+    }
+
+    let mut report = ReconcileReport::default();
+    sweep_bundles(&ctx, &mut report).await.unwrap();
+
+    assert_eq!(report.reviewers_requeued, 1, "Triaged bundle re-driven to reviewer");
+    assert_eq!(report.integrators_requeued, 1, "Accepted bundle re-driven to integrator");
+    assert_eq!(report.bundles_terminal, 2, "Merged + Rejected counted as terminal");
+
+    // Drain the (no-op) spawned task pools so nothing leaks past the test.
+    ctx.reviewer_tasks.lock().await.shutdown().await;
+    ctx.integrator_tasks.lock().await.shutdown().await;
 }
