@@ -1,6 +1,8 @@
 # Loopr v5 Deferred Roadmap
 
-**Status:** living index of design docs that have not yet been written but are known to be needed. Companion to [roadmap.md](roadmap.md). Where roadmap.md tracks the build order from Stage 0 through First Gate, this doc tracks everything past First Gate plus the Stage 7-9 completion gaps that the existing roadmap labels as "earned features" or "deferred."
+**Status:** living index of design docs, most not yet written but known to be needed. Companion to [roadmap.md](roadmap.md). Where roadmap.md tracks the build order from Stage 0 through First Gate, this doc tracks everything past First Gate plus the Stage 7-9 completion gaps that the existing roadmap labels as "earned features" or "deferred."
+
+**Reconciled 2026-05-30:** several entries have shipped since this doc's "not yet written" framing. **Tier 1 is essentially complete:** 1.1, 1.2, 1.4 shipped with their own docs, and 1.3 shipped in substance via Director Phase 1 + the `max_work_attempts` retry budget (no dedicated doc). **Tier 2:** 2.4 shipped; 2.3 is *partial* (attempt tracking yes, wall-clock SLA no); 2.1 and 2.2 are scaffolding-only / unstarted. **Tier 3:** 3.1 (Director Phase 2) shipped; 3.2's event-bus type exists for client streaming but the poll->subscribe migration is unbuilt; 3.3 and 3.4 are unstarted. **Tier 5:** the `trait_variant` cleanup shipped. The per-entry **Status:** markers below are the source of truth.
 
 > **Naming note (ADR-0002):** the `Coordinator` Role variant has been renamed to `Reactor`, and the v3 "Coordinator agent" concept that originally lived as Tier 1.2 is reframed here as **Director — Phase 1 (routine orchestration)**. Tier 3.1 becomes **Director — Phase 2 (judgment plane)**. The same agent rolls out in two phases; there is no separate "Coordinator agent" planned. Headings, the 1.2/3.1 entries, and the dependency graph reflect the rename below; body prose in entries that mention "Coordinator" by name still uses the old term and will sweep when the entry becomes live work. See [`docs/adr/0002-rename-role-coordinator-to-reactor.md`](adr/0002-rename-role-coordinator-to-reactor.md).
 
@@ -59,7 +61,7 @@ These items are framed in the existing design docs as Stage 7+ deferrals, but th
 
 ### 1.3 Blocked-Work and Rejected-Bundle recovery
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-recovery-loop.md`
+- **Proposed filename:** `docs/design/<YYYY-MM-DD>-recovery-loop.md` **Status: Implemented** (in substance, no dedicated doc). Delivered via [`2026-05-08-director-phase-1.md`](design/2026-05-08-director-phase-1.md) (Director emits `override_work {target: Ready}` to retry rejected/Blocked Works) + the `max_work_attempts` retry budget (`crates/agents/src/config.rs`, 3-layer enforcement, bumps `Work.attempt_count` until the cap promotes the Plan to `Stalled`). The `blocked_reason` field shipped (`crates/domain/src/work.rs:131`) and reaches the retried Implementer via `context::build_for_implementer` (`crates/context/src/implementer.rs:328`), satisfying the rejection-feedback acceptance criterion below.
 - **Crates touched:** `agents`, `domain` (work, bundle), `loopr` (daemon)
 - **Depends on:** 1.2 (the recovery actions are emitted by the Coordinator)
 - **What it covers.** Two specific failure paths that today dead-end:
@@ -105,7 +107,7 @@ These items existed in v3 and are still relevant; the python-api run did not dir
 
 ### 2.1 Researcher agent
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-researcher.md`
+- **Proposed filename:** `docs/design/<YYYY-MM-DD>-researcher.md` **Status: Not shipped** (scaffolding only). `Role::Researcher`, `context::build_for_researcher` (`crates/context/src/implementer.rs:234`), and a prompt template exist, but there is no researcher agent loop, no `Learning` record, and no `spawn_researcher` surface.
 - **Crates touched:** `agents`, `context`, `tools`, `loopr` (dispatch)
 - **Depends on:** 2.4 (multi-turn LLM)
 - **What it covers.** On-demand investigation agent that runs in parallel to Implementer to gather context before or during implementation. v3 has it as `~/repos/scottidler/loopr/src/agents/researcher.rs` (40KB, Sonnet, max-iters=10). Inputs: a question and optional file/path hints. Outputs: a structured "learning record" that Coordinator or Implementer can read. Doc must define: invocation surface (Coordinator action `spawn_researcher`? Implementer "ask researcher" tool?), output record type (probably new `domain::Learning`), tool registry restrictions (read-only? full?), iteration cap, when researcher results expire.
@@ -140,7 +142,7 @@ These items existed in v3 and are still relevant; the python-api run did not dir
 
 ### 2.3 SLA, attempt tracking, and goal timeout
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-sla-tracking.md`
+- **Proposed filename:** `docs/design/<YYYY-MM-DD>-sla-tracking.md` **Status: Partial.** Attempt tracking shipped (`Work.attempt_count` + the `max_work_attempts` budget with 3-layer enforcement, `crates/agents/src/config.rs`). The wall-clock half is NOT shipped: no per-Work max-wall-clock, no `goal_timeout_secs`, no `first_assigned_at`. A dedicated doc is still needed only for the wall-clock budgets. (The IPC/transport timeouts in [`2026-05-09-ipc-timeouts.md`](design/2026-05-09-ipc-timeouts.md) are unrelated; they bound socket waits, not goal/Work SLA.)
 - **Crates touched:** `domain` (work, plan, coordinator state), `agents` (Coordinator surfaces SLA in state summary), `loopr` (config surface for SLA limits)
 - **Depends on:** 1.2 (Coordinator state lives somewhere)
 - **What it covers.** Per-Work attempt counter, first-assigned timestamp, max-attempts and max-wall-clock budgets. Goal-level wall-clock timeout. v3 has `WorkSlaConfig`, `work_attempts`, `work_first_assigned_at`, `goal_timeout_secs`. Doc must define: where the counters live (Work fields? a sidecar `coordinator_state.jsonl`?), defaults for the budgets, surfacing in state summary, what happens at breach (state summary flag for Coordinator LLM to act on; not auto-abandon).
@@ -184,7 +186,7 @@ These items existed in v4 (the `loopr-v4` repo) and represent the most-evolved s
 
 > Phase 2 of the Director agent introduced in 1.2. Phase 1 is routine orchestration; Phase 2 layers judgment, escalation, pattern tracking, and the four-mode model. Same agent.
 
-- **Proposed filename:** [`docs/design/2026-05-09-director-phase-2.md`](design/2026-05-09-director-phase-2.md) **Status: Implemented** (followups: [`2026-05-12-director-phase-2-followups.md`](design/2026-05-12-director-phase-2-followups.md)). Shipped v0.7.17–v0.7.20. The shipped vocabulary differs from the v4-derived sketch below: modes landed as Normal / Conservative / NeedsOperator (not the four v4 modes), and operator interaction is `loopr director chat` rather than a `UserIntervention` mode.
+- **Proposed filename:** [`docs/design/2026-05-09-director-phase-2.md`](design/2026-05-09-director-phase-2.md) **Status: Implemented** (followups: [`2026-05-12-director-phase-2-followups.md`](design/2026-05-12-director-phase-2-followups.md)). Shipped v0.7.17 to v0.7.20. The shipped vocabulary differs from the v4-derived sketch below: modes landed as Normal / Conservative / NeedsOperator (not the four v4 modes), and operator interaction is `loopr director chat` rather than a `UserIntervention` mode.
 - **Crates touched:** `agents`, `context`, `domain`, `ipc`, `loopr`
 - **Depends on:** 1.2 (Coordinator), 2.4 (multi-turn), 3.2 (event bus, for Monitoring mode)
 - **What it covers.** The judgment-plane Opus agent that v4 introduced and v5 has been calling "the deferred escalation agent." Four modes per v4's design doc: PlanIntake (interviews user), Monitoring (subscribes to event bus, maintains pattern tracker), Escalation (called by Coordinator when threshold breached, judges next move via Opus), UserIntervention (handles in-flight chat). Action vocabulary: `ReviseWork`, `ReDecompose`, `AbandonWork`, `SpawnResearcher`. Pattern tracker fields: `work_failure_history`, `rejection_history`, `spec_revision_count`. Lifeguard variant for Director itself. State reconciliation on `RecvError::Lagged`.
@@ -207,7 +209,7 @@ These items existed in v4 (the `loopr-v4` repo) and represent the most-evolved s
 
 ### 3.2 Typed event bus
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-event-bus.md`
+- **Proposed filename:** `docs/design/<YYYY-MM-DD>-event-bus.md` **Status: Not shipped as specified.** A `DaemonEvent` type and a *client-facing* broadcast exist (`crates/ipc/src/envelope.rs`; `crates/loopr/src/transport/server.rs` streams events to connected IPC clients with `RecvError::Lagged` handling); but the *internal agent event-bus* this entry specifies (Director/Coordinator reacting to state changes instead of polling TaskStore) is NOT built. The Director still polls, per the Phase 1 design. This entry stays open for the poll->subscribe migration; the wire-level `DaemonEvent` plumbing is a head start, not the feature.
 - **Crates touched:** `domain` (DaemonEvent variants), `loopr` (broadcast::Sender), `agents` (subscribers), `telemetry` (event emission alongside spans)
 - **Depends on:** 1.2 (Coordinator is the first non-trivial subscriber)
 - **What it covers.** A `tokio::sync::broadcast` channel carrying `DaemonEvent` enum (already partially present in vision.md: "Anthropic leaked primitive #6"). Variants: Plan/Work/Bundle/Tick state changes, agent spawns and terminations, validation results. Subscribers: Coordinator (state-change driven instead of polling), Director Monitoring mode, eventual TUI. Doc must define: variants, retention semantics (how many lagged events before reconciliation kicks in), `RecvError::Lagged` recovery, and how subscribers reconcile from store after lag.
@@ -392,7 +394,7 @@ These items are paragraph-sized. Most should fold into adjacent docs rather than
 - **Cross-process OCC and git contention.** From [docs/design/2026-04-22-reviewer.md](design/2026-04-22-reviewer.md), [docs/design/2026-04-22-integrator.md](design/2026-04-22-integrator.md). Out of scope until multi-daemon-per-target is wanted.
 - **Protocol evolution beyond v1, full method vocabulary, record-typed payloads, outer message discriminator.** From [docs/design/2026-04-19-protocol.md](design/2026-04-19-protocol.md). Earn each per use case.
 - **Streaming chunked IPC responses.** From [docs/design/2026-04-19-protocol.md](design/2026-04-19-protocol.md). Folds into 4.1 TUI or 3.2 event bus.
-- **`trait_variant` cleanup of async-fn-in-trait desugaring.** Existing draft at [docs/design/2026-05-08-trait-variant-cleanup.md](design/2026-05-08-trait-variant-cleanup.md). Replaces the manual `fn method<'a>(&'a self, ...) -> impl Future<...> + Send + 'a` pattern with `#[trait_variant::make(Send)]` plus plain `async fn` across 8 traits and 52 sites in `store`, `integrator`, `agents`, `llm`, `loopr`. Drops roughly 50 of the workspace's 133 lifetime annotations and removes every `#[allow(clippy::manual_async_fn)]`. Mechanical, no API change, no runtime cost. Ship opportunistically when a phase boundary opens; not blocking any Tier 1-4 work.
+- **`trait_variant` cleanup of async-fn-in-trait desugaring.** **Status: Implemented** ([docs/design/2026-05-08-trait-variant-cleanup.md](design/2026-05-08-trait-variant-cleanup.md)). Replaced the manual `fn method<'a>(&'a self, ...) -> impl Future<...> + Send + 'a` pattern with `#[trait_variant::make(Send)]` plus plain `async fn` across 8 traits and 52 sites in `store`, `integrator`, `agents`, `llm`, `loopr`. Dropped roughly 50 of the workspace's 133 lifetime annotations and removed every `#[allow(clippy::manual_async_fn)]`. Mechanical, no API change, no runtime cost.
 
 ---
 
