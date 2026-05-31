@@ -1048,7 +1048,7 @@ fi
 
 log "Submitting plan from ${PLAN_MD} ..."
 GOAL="$(cat "${PLAN_MD}")"
-"${LOOPR_BIN}" -C "${RUN_DIR}" plan "${GOAL}" 2>&1 | sed 's/^/  /' || warn "plan submission returned non-zero"
+"${LOOPR_BIN}" -C "${RUN_DIR}" plan create "${GOAL}" 2>&1 | sed 's/^/  /' || warn "plan submission returned non-zero"
 
 ###############################################################################
 # Print key paths

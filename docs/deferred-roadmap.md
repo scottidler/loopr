@@ -184,7 +184,7 @@ These items existed in v4 (the `loopr-v4` repo) and represent the most-evolved s
 
 > Phase 2 of the Director agent introduced in 1.2. Phase 1 is routine orchestration; Phase 2 layers judgment, escalation, pattern tracking, and the four-mode model. Same agent.
 
-- **Proposed filename:** `docs/design/<YYYY-MM-DD>-director-agent.md`
+- **Proposed filename:** [`docs/design/2026-05-09-director-phase-2.md`](design/2026-05-09-director-phase-2.md) **Status: Implemented** (followups: [`2026-05-12-director-phase-2-followups.md`](design/2026-05-12-director-phase-2-followups.md)). Shipped v0.7.17–v0.7.20. The shipped vocabulary differs from the v4-derived sketch below: modes landed as Normal / Conservative / NeedsOperator (not the four v4 modes), and operator interaction is `loopr director chat` rather than a `UserIntervention` mode.
 - **Crates touched:** `agents`, `context`, `domain`, `ipc`, `loopr`
 - **Depends on:** 1.2 (Coordinator), 2.4 (multi-turn), 3.2 (event bus, for Monitoring mode)
 - **What it covers.** The judgment-plane Opus agent that v4 introduced and v5 has been calling "the deferred escalation agent." Four modes per v4's design doc: PlanIntake (interviews user), Monitoring (subscribes to event bus, maintains pattern tracker), Escalation (called by Coordinator when threshold breached, judges next move via Opus), UserIntervention (handles in-flight chat). Action vocabulary: `ReviseWork`, `ReDecompose`, `AbandonWork`, `SpawnResearcher`. Pattern tracker fields: `work_failure_history`, `rejection_history`, `spec_revision_count`. Lifeguard variant for Director itself. State reconciliation on `RecvError::Lagged`.
