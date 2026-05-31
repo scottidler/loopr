@@ -628,3 +628,108 @@ fn serde_json_compact_escapes_embedded_newlines() {
     let back: serde_json::Value = serde_json::from_str(&compact).unwrap();
     assert_eq!(back, obj);
 }
+
+// --- record.get (dispatch routing + map_store_error arm coverage) ---
+
+#[tokio::test]
+async fn record_get_plan_returns_full_record() {
+    let (_td, ctx) = stub_ctx().await;
+    let plan = domain::Plan::new("record-get-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 80,
+        method: "record.get".into(),
+        params: serde_json::json!({ "id": plan_id.to_string() }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 80);
+    assert!(resp.error.is_none(), "record.get happy path: {resp:?}");
+    let result: ipc::RecordResult = serde_json::from_value(resp.result.expect("result")).unwrap();
+    match result {
+        ipc::RecordResult::Plan(p) => {
+            assert_eq!(p.id, plan_id);
+            assert_eq!(p.goal, "record-get-target");
+        }
+        other => panic!("expected RecordResult::Plan, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn record_get_unknown_prefix_yields_invalid_params() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 81,
+        method: "record.get".into(),
+        params: serde_json::json!({ "id": "zz-abcde" }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 81);
+    match resp.error {
+        Some(RpcError::InvalidParams(msg)) => {
+            assert!(msg.contains("zz-abcde"), "expected id in error: {msg}");
+        }
+        other => panic!("expected InvalidParams for unknown prefix, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn record_get_nonexistent_id_yields_not_found() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 82,
+        method: "record.get".into(),
+        params: serde_json::json!({ "id": "pl-zzzzz" }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 82);
+    // Routes through store_err_response -> map_store_error(RecordNotFound).
+    match resp.error {
+        Some(RpcError::NotFound(msg)) => {
+            assert!(msg.contains("plans/pl-zzzzz"), "expected collection/id in NotFound: {msg}");
+        }
+        other => panic!("expected NotFound for missing plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn map_store_error_maps_each_variant() {
+    use store::StoreError;
+
+    assert!(matches!(
+        super::map_store_error(StoreError::RecordNotFound {
+            collection: "plans",
+            id: "pl-x".into()
+        }),
+        RpcError::NotFound(_)
+    ));
+    assert!(matches!(
+        super::map_store_error(StoreError::AlreadyExists {
+            collection: "works",
+            id: "wk-x".into()
+        }),
+        RpcError::InvalidRequest(_)
+    ));
+    assert!(matches!(super::map_store_error(StoreError::Io("disk".into())), RpcError::Internal(_)));
+    assert!(matches!(
+        super::map_store_error(StoreError::Corruption("bad".into())),
+        RpcError::Internal(_)
+    ));
+    assert!(matches!(super::map_store_error(StoreError::Serde("json".into())), RpcError::Internal(_)));
+    assert!(matches!(
+        super::map_store_error(StoreError::Stale { expected: 1, actual: 2 }),
+        RpcError::InvalidRequest(_)
+    ));
+    assert!(matches!(
+        super::map_store_error(StoreError::DuplicateTick {
+            tick_id: domain::TickId::new(),
+            plan_id: domain::PlanId::new(),
+            bundles: vec![domain::BundleId::new()],
+        }),
+        RpcError::InvalidRequest(_)
+    ));
+}
