@@ -212,7 +212,7 @@ where
 /// outcome the synchronous path had, now observed in logs + on-disk
 /// rather than the (already-sent) client response.
 #[tracing::instrument(level = "info", skip_all, fields(request_id, plan_id = %plan.id))]
-async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, plan: domain::Plan, request_id: u64)
+async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, mut plan: domain::Plan, request_id: u64)
 where
     L: LlmClient + Send + Sync + 'static,
 {
@@ -259,12 +259,15 @@ where
                     drop(tasks);
                     spawn_director_for_plan(ctx, plan.id.clone()).await;
                 }
-                Err(e) => warn!(
-                    request_id,
-                    plan_id = %plan.id,
-                    error = %e,
-                    "plan.create persisted Plan but works.create_many failed; Stage 7 reconcile"
-                ),
+                Err(e) => {
+                    warn!(
+                        request_id,
+                        plan_id = %plan.id,
+                        error = %e,
+                        "plan.create persisted Plan but works.create_many failed; Plan -> Stalled"
+                    );
+                    stall_plan_after_decompose_failure(ctx, &mut plan).await;
+                }
             }
         }
         Err(e) => {
@@ -272,9 +275,35 @@ where
                 request_id,
                 plan_id = %plan.id,
                 error = %e,
-                "plan.create persisted Plan but decomposer failed; Stage 7 reconcile"
+                "plan.create persisted Plan but decomposer failed; Plan -> Stalled"
             );
+            stall_plan_after_decompose_failure(ctx, &mut plan).await;
         }
+    }
+}
+
+/// Transition a Plan to `Stalled` (Reactor role) after a decompose or
+/// Works-persist failure, so the operator sees a stuck Plan via
+/// `loopr plans` / `loopr plan show` instead of a deceptive `Active` Plan
+/// with zero Works and no Director. Best-effort: a failed transition is
+/// logged, not propagated (the client already received its ACK). Recovery
+/// is the operator's `loopr plan override <id> --to active` (re-decompose
+/// of an emptied Plan is deferred-roadmap 2.2).
+async fn stall_plan_after_decompose_failure<L>(ctx: &Arc<DaemonContext<L>>, plan: &mut domain::Plan)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    if let Err(e) = crate::daemon::context::transition_and_persist_plan(
+        &*ctx.summary_fanout,
+        plan,
+        Vec::new(),
+        domain::PlanStatus::Stalled,
+        domain::Role::Reactor,
+        crate::daemon::context::PlanSummaryExtras::default(),
+    )
+    .await
+    {
+        warn!(plan_id = %plan.id, error = %e, "failed to transition Plan -> Stalled after decompose failure");
     }
 }
 

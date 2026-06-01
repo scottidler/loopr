@@ -40,7 +40,7 @@ use crate::{FsmError, Role, Transition};
         Pending => Superseded by (Reactor, Director),
         Pending => Abandoned  by (Reactor, Director),
         Active  => Complete   by (Reactor, Decomposer),
-        Active  => Stalled    by (Director),
+        Active  => Stalled    by (Director, Reactor),
         Active  => Superseded by (Reactor, Director),
         Active  => Abandoned  by (Reactor, Director),
     ),

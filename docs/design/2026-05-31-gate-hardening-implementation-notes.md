@@ -217,3 +217,35 @@ Append-only. One section per phase, four buckets each.
 ### Open questions
 - None. (Documented the debug-level caveat in
   `docs/telemetry-grep-cookbook.md` so future e2e reviewers expect it.)
+
+## Post-audit follow-up: decompose-failure visibility
+
+The Implementation Audit (Architect, 2026-05-31) found that Phase B's async
+ACK left a silent dead-end: on decompose (or Works-persist) failure,
+`decompose_and_dispatch` logged a warning and returned, leaving the Plan
+`Active` with zero Works and no Director — the operator saw a deceptive
+`active` Plan via `loopr plans` with no signal anything failed.
+
+### Design decisions
+- On both failure arms, `decompose_and_dispatch` now transitions the Plan to
+  `PlanStatus::Stalled` (Reactor role) via `stall_plan_after_decompose_failure`
+  — `Stalled` is the only non-terminal, operator-recoverable, "needs
+  attention" state, and the operator already has `loopr plan override <id>
+  --to active` to recover it. Best-effort (a failed transition is logged, not
+  propagated; the client already has its ACK).
+- FSM change: `Active => Stalled` gains the `Reactor` role
+  (`crates/domain/src/plan.rs`) — previously `Director`-only. Stalling a Plan
+  the daemon mechanically cannot decompose is a reactive-plane decision, not a
+  judgment call, so `Reactor` is the right authority. The negative test
+  `plan_transition_active_stalled_by_reactor_rejects` was flipped to
+  `..._succeeds` to lock the new authorization.
+
+### Deviations
+- None from the audit's recommendation. (The Architect floated "spawn a
+  Director anyway"; rejected — a Director on a zero-Work Plan has murky
+  goal-complete semantics, whereas `Stalled` is an unambiguous operator
+  signal.)
+
+### Open questions
+- Re-decompose of an emptied/Stalled Plan (so override -> Active actually
+  re-runs decomposition) is deferred-roadmap 2.2, unchanged by this fix.

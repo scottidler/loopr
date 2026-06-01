@@ -256,13 +256,17 @@ fn plan_transition_active_stalled_by_director() {
 }
 
 #[test]
-fn plan_transition_active_stalled_by_reactor_rejects() {
+fn plan_transition_active_stalled_by_reactor_succeeds() {
+    // The Reactor is authorized for Active -> Stalled (gate-hardening
+    // Architect-audit follow-up): the daemon stalls a Plan it cannot
+    // decompose so the operator sees a stuck Plan rather than a deceptive
+    // Active one with zero Works. Previously Director-only.
     let mut plan = Plan::new("g".to_string());
-    let before_updated_at = plan.updated_at;
-    let err = plan.transition(PlanStatus::Stalled, Role::Reactor).unwrap_err();
-    assert_eq!(err.kind, FsmErrorKind::RoleNotAuthorized);
-    assert_eq!(plan.status, PlanStatus::Active);
-    assert_eq!(plan.updated_at, before_updated_at);
+    let before = plan.updated_at;
+    let transition = plan.transition(PlanStatus::Stalled, Role::Reactor).unwrap();
+    assert_eq!(transition, Transition::Changed);
+    assert_eq!(plan.status, PlanStatus::Stalled);
+    assert!(plan.updated_at >= before);
 }
 
 #[test]

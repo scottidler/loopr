@@ -243,6 +243,17 @@ async fn plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty
 
     let works = ctx.store.works().list().await.unwrap();
     assert!(works.is_empty(), "no Works persisted when decompose fails");
+
+    // Decompose-failure visibility (Architect audit follow-up): the Plan is
+    // transitioned to Stalled so the operator sees a stuck Plan via
+    // `loopr plans` instead of a deceptive Active Plan with zero Works.
+    let plans = ctx.store.plans().list().await.unwrap();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(
+        plans[0].status,
+        domain::PlanStatus::Stalled,
+        "decompose failure must leave the Plan visibly Stalled, not Active"
+    );
 }
 
 #[tokio::test]
