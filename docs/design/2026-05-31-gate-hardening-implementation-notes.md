@@ -33,6 +33,45 @@ Append-only. One section per phase, four buckets each.
 ### Open questions
 - None.
 
+## Phase A: Director event-driven wake-up
+
+### Design decisions
+- `DaemonContext::wake_director(&self, plan_id)` (async) reads
+  `operator_notifies` and `notify_one()`s the Plan's `Notify`; a miss is
+  benign. Fired AFTER the triggering persist (ordering invariant) at every
+  recoverable Director-actionable transition:
+  - `spawn_reviewer_for_bundle`: Accept (Bundle Reviewed — the measured
+    ~16.6s case), ChangeRequested/Reject (Work Blocked), and the
+    Escalation/reviewer-error arms (Work Blocked).
+  - `spawn_implementer_for_work`: worktree-create-fail (Work Blocked) and a
+    single post-match guard `if work.status == Blocked` covering the
+    escalation/error arms.
+  - `spawn_integrator_for_bundle`: ValidationFailed and terminal-error arms
+    (Work Blocked), inline (the Ok arm moves `work`, so no post-match guard).
+
+### Deviations
+- Work -> Ready (sibling unblock) does NOT wake the Director:
+  `promote_unblocked_siblings` dispatches the Implementer directly, so the
+  Director has nothing to do. Same for the initial Pending -> Ready.
+- `block_dependent_siblings` deliberately does NOT wake: those Blocks are
+  terminal-by-irrecoverable-dependency, not recovery candidates — waking
+  would invite a wasted Director override.
+
+### Tradeoffs
+- Wake at the ctx-method call sites rather than inside the free function
+  `transition_and_persist_work`, which has no `ctx`/notify access. Threading
+  the notify map through its ~15 call sites would be far more invasive than
+  the handful of `self.wake_director(...)` calls at the actionable sites.
+
+### Open questions
+- DAG consolidation (deferred, user decision 2026-05-31): the ready-set /
+  dependents / cycle-detect logic is hand-rolled in four places (dep-gate
+  partition, `promote_unblocked_siblings`, `block_dependent_siblings`,
+  decomposer `cycles.rs`). A future design doc should put a `petgraph`/daggy
+  -backed `WorkGraph` underneath, answering "what is runnable (in parallel
+  up to a jobs limit) vs. blocked"; loopr keeps only the FSM/retry/Director
+  policy *around* that answer. Not part of this gate-hardening pass.
+
 ## Phase B: async plan.create ACK
 
 ### Design decisions

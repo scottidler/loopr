@@ -464,6 +464,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     false,
                 )
                 .await;
+                self.wake_director(&work.parent_id).await;
                 return;
             }
             Err(e) => {
@@ -548,6 +549,13 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 )
                 .await;
             }
+        }
+
+        // Phase A: if the implementer escalated or errored the Work to
+        // Blocked, wake the Director to run recovery now instead of waiting
+        // out its idle poll (no-op for the Ok -> InReview path).
+        if work.status == WorkStatus::Blocked {
+            self.wake_director(&work.parent_id).await;
         }
 
         match self.worktree_cleanup_policy {
@@ -665,6 +673,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     true,
                 )
                 .await;
+                self.wake_director(&work.parent_id).await;
                 return;
             }
             Err(other) => {
@@ -677,6 +686,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     true,
                 )
                 .await;
+                self.wake_director(&work.parent_id).await;
                 return;
             }
         };
@@ -719,6 +729,27 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 )
                 .await;
             }
+        }
+        // Phase A: the verdict just moved the Bundle to Reviewed (Accept) or
+        // the Work to Blocked (ChangeRequested/Reject) — both
+        // Director-actionable. Wake the Director after the persists above so
+        // it acts now instead of waiting out its idle poll (the measured
+        // ~16.6s reviewer-accept gap).
+        self.wake_director(&work.parent_id).await;
+    }
+
+    /// Wake the per-Plan Director task so it reacts to a Director-actionable
+    /// state change (Bundle Reviewed/Rejected, Work Blocked/Ready)
+    /// immediately instead of waiting out its idle poll. A missing entry is
+    /// benign — the same contract `handle_director_chat` relies on; the next
+    /// poll picks the change up regardless, so this is a latency
+    /// optimization, never a correctness dependency. MUST be called AFTER the
+    /// triggering transition's persist completes so the woken Director reads
+    /// fresh on-disk state. `notify_one` collapses multiple pre-wait wakes
+    /// into one, so this never busy-loops the Director.
+    pub async fn wake_director(&self, plan_id: &domain::PlanId) {
+        if let Some(notify) = self.operator_notifies.read().await.get(plan_id) {
+            notify.notify_one();
         }
     }
 
@@ -914,6 +945,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     true,
                 )
                 .await;
+                self.wake_director(&work.parent_id).await;
             }
             Err(e) => {
                 error!(error = %e, "integrator terminal; marking Work Blocked");
@@ -926,6 +958,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     true,
                 )
                 .await;
+                self.wake_director(&work.parent_id).await;
             }
         }
     }

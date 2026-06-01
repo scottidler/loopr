@@ -751,3 +751,31 @@ fn map_store_error_maps_each_variant() {
         RpcError::InvalidRequest(_)
     ));
 }
+
+/// Phase A: `wake_director` fires `notify_one` on the matching Plan's
+/// registered `Notify` (so a Director blocked on its idle sleep wakes
+/// immediately) and is a benign no-op for an unregistered Plan.
+#[tokio::test]
+async fn wake_director_notifies_registered_plan_and_noops_for_absent() {
+    let (_td, ctx) = stub_ctx().await;
+    let plan_id = domain::PlanId::new();
+    let notify = Arc::new(tokio::sync::Notify::new());
+    ctx.operator_notifies
+        .write()
+        .await
+        .insert(plan_id.clone(), notify.clone());
+
+    // A waiter that resolves when notified. notify_one stores a permit even
+    // if the waiter has not yet polled, so there is no register/wake race.
+    let waiter = tokio::spawn(async move { notify.notified().await });
+
+    ctx.wake_director(&plan_id).await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+        .await
+        .expect("wake_director should wake the registered Notify within 2s")
+        .expect("waiter task joined");
+
+    // Absent Plan: must not panic (benign miss, same as handle_director_chat).
+    ctx.wake_director(&domain::PlanId::new()).await;
+}
