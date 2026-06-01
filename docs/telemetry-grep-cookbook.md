@@ -28,6 +28,16 @@ The `tool.<name>` span carries `tool_name`, `lane`, `path`/`pattern`/`command_ch
 carrying `elapsed_ms` and a per-tool size metric (`bytes` for
 read/write/edit/bash; `match_count` for glob/grep).
 
+> **Level note.** `tool.<name>` and `router.spawn` are **DEBUG**-level by design
+> (per-tool-call spans are high-frequency; see `2026-04-24-instrumentation-sweep.md`
+> level table). At the default `info` run level they do **not** appear in
+> `events.log` — only the `info`-level `LaneRouter initialized` line does. To see
+> per-tool/lane detail, run at `-l debug` (or read the per-Work fanout log at
+> debug). Tool **failures** still surface at the default level via the spans'
+> `err` directive, so a failed run is diagnosable without `-l debug`; only the
+> verbose success trace requires it. (This is why an `info`-level e2e shows no
+> `tool.*` spans — expected, not a gap.)
+
 **Which lane was a bash command routed to, and how long did it take?**
 
 ```

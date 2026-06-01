@@ -182,3 +182,38 @@ Append-only. One section per phase, four buckets each.
 
 ### Open questions
 - None.
+
+## Phase D: tool/lane span instrumentation (confirm-first)
+
+### Design decisions
+- **Confirm-first finding: NOT a bug, no code change.** Every builtin
+  (`tool.read`/`write`/`edit`/`glob`/`grep`/`bash`) and `router.spawn`
+  already carry `#[instrument(..., fields(lane, ...))]`; `bash.rs` records
+  `lane` at runtime; `crates/tools/tests/tool_visibility.rs` already asserts
+  all seven `tool.*` spans appear WITH the `lane` field under a `debug`
+  subscriber (7 tests, green).
+- These spans are **DEBUG**-level by explicit design: the
+  `2026-04-24-instrumentation-sweep.md` level table (line 88) lists "tool
+  `execute()` impls" as the per-stage DEBUG tier, and separates INFO
+  entry-spans from DEBUG per-stage events. Per-tool-call spans are
+  high-frequency, so DEBUG is correct (elevating to INFO would spam
+  `events.log`).
+- The e2e ran at the default `info` level, which correctly filters DEBUG
+  spans — that is why the monitor saw only the `info`-level `LaneRouter
+  initialized` line and no `tool.*` spans. Expectation mismatch, not a gap.
+  Tool **failures** still surface at the default level via each span's `err`
+  directive, so a failed run stays diagnosable without `-l debug`.
+
+### Deviations
+- The design doc's "then wire or correct" step is a **no-op for code**: the
+  investigation found the instrumentation already correct and tested. The
+  only correction is documentation.
+
+### Tradeoffs
+- Did NOT elevate tool spans to INFO (would spam `events.log` with dozens of
+  per-call spans per run); the INFO-level rollup already exists via the
+  per-record `summary.md` generators.
+
+### Open questions
+- None. (Documented the debug-level caveat in
+  `docs/telemetry-grep-cookbook.md` so future e2e reviewers expect it.)
