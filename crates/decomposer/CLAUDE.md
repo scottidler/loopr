@@ -31,12 +31,13 @@ Output of this crate is a `WorkDag` that downstream stages can consume without r
 - `collect_workspace_tree` — `target`, post-record `tree_chars`.
 - `assemble_system` — `tree_chars`.
 - `assemble_user` — `goal_len`, `retry`.
-- `detect_cycles` — `node_count`.
 - `resolve_deps` — `child_count`, `title_count`.
+
+Cycle detection moved out of this crate to `domain::WorkGraph::from_edges` (re-keyed from titles to `WorkId`); the former `cycles.rs` is now `resolve.rs`, holding only `resolve_deps` + `normalize`. The `node_count`/`err` span lives on `WorkGraph::detect_cycle` in `domain`. See `docs/design/2026-05-31-workgraph-consolidation.md`.
 
 Acceptance test: `tests/instrumentation.rs::decomposer_smoke_spans_decompose` drives one happy-path decomposition and asserts the outer span carries plan_id/goal_len/child_count/outcome and the helpers all fired.
 
-**Visibility (2026-05-09 sweep).** Inner helpers (`collect_workspace_tree`, `detect_cycles`, `resolve_deps`, `assemble_system`, `assemble_user`, `try_llm_once`) each emit a `debug!` on their success path so the span ancestry lands on a real `events.log` line (Phase 4 of `docs/design/2026-05-09-comprehensive-telemetry.md`). Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
+**Visibility (2026-05-09 sweep).** Inner helpers (`collect_workspace_tree`, `resolve_deps`, `assemble_system`, `assemble_user`, `try_llm_once`) each emit a `debug!` on their success path so the span ancestry lands on a real `events.log` line (Phase 4 of `docs/design/2026-05-09-comprehensive-telemetry.md`). Operator grep patterns: [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
 
 ## See also
 

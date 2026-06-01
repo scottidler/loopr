@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use domain::WorkId;
 
-use super::{detect_cycles, normalize, resolve_deps};
+use super::{normalize, resolve_deps};
 use crate::error::DecomposerError;
 use crate::tool::DecomposeChild;
 
-fn node(title: &str, deps: &[&str]) -> (String, Vec<String>) {
-    (title.to_string(), deps.iter().map(|s| s.to_string()).collect())
-}
+// Cycle-detection tests moved to `crates/domain/tests/graph.rs` when
+// `detect_cycles` became `domain::WorkGraph::from_edges` (re-keyed to
+// WorkId). What remains here is title resolution + `normalize`.
 
 fn child(title: &str, deps: &[&str]) -> DecomposeChild {
     DecomposeChild {
@@ -18,58 +18,6 @@ fn child(title: &str, deps: &[&str]) -> DecomposeChild {
         acceptance_criteria: Vec::new(),
         files: Vec::new(),
     }
-}
-
-#[test]
-fn detect_cycles_acyclic_three_node_dag_ok() {
-    let mut g: HashMap<String, Vec<String>> = HashMap::new();
-    g.extend([node("a", &["b"]), node("b", &["c"]), node("c", &[])]);
-    detect_cycles(&g).expect("acyclic");
-}
-
-#[test]
-fn detect_cycles_all_independent_nodes_ok() {
-    let mut g: HashMap<String, Vec<String>> = HashMap::new();
-    g.extend([node("a", &[]), node("b", &[]), node("c", &[])]);
-    detect_cycles(&g).expect("independent");
-}
-
-#[test]
-fn detect_cycles_trivial_two_cycle_errors() {
-    let mut g: HashMap<String, Vec<String>> = HashMap::new();
-    g.extend([node("a", &["b"]), node("b", &["a"])]);
-    let err = detect_cycles(&g).expect_err("cycle");
-    assert!(err.contains("a") && err.contains("b"), "got: {err}");
-}
-
-#[test]
-fn detect_cycles_self_loop_errors() {
-    let mut g: HashMap<String, Vec<String>> = HashMap::new();
-    g.extend([node("a", &["a"])]);
-    let err = detect_cycles(&g).expect_err("self-loop");
-    assert!(err.contains("a"), "got: {err}");
-}
-
-#[test]
-fn detect_cycles_diamond_ok() {
-    // a -> b, a -> c, b -> d, c -> d : DAG, no cycle
-    let mut g: HashMap<String, Vec<String>> = HashMap::new();
-    g.extend([
-        node("a", &["b", "c"]),
-        node("b", &["d"]),
-        node("c", &["d"]),
-        node("d", &[]),
-    ]);
-    detect_cycles(&g).expect("diamond is acyclic");
-}
-
-#[test]
-fn detect_cycles_ignores_deps_pointing_outside_graph() {
-    // An unresolved dep name should not affect cycle detection; that's
-    // `resolve_deps`' job. We pass known-good normalized names here.
-    let mut g: HashMap<String, Vec<String>> = HashMap::new();
-    g.extend([node("a", &["nonexistent"])]);
-    detect_cycles(&g).expect("unknown dep target is not a cycle");
 }
 
 #[test]

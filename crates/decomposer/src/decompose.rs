@@ -25,13 +25,13 @@ use std::time::Instant;
 use tracing::{info, instrument, warn};
 
 use context::PromptLoader;
-use domain::{AcceptanceCriteria, Plan, Work, WorkId};
+use domain::{AcceptanceCriteria, GraphError, Plan, Work, WorkGraph, WorkId};
 use llm::{LlmClient, ToolCall};
 use telemetry::transcript::{TranscriptIteration, append_iteration, decomposer_path};
 
-use crate::cycles::{detect_cycles, normalize, resolve_deps};
 use crate::error::DecomposerError;
 use crate::prompt::{assemble_system, assemble_user};
+use crate::resolve::{normalize, resolve_deps};
 use crate::tool::{DecomposeChild, DecomposeResponse, submit_decomposition_schema};
 use crate::tree::collect_workspace_tree;
 
@@ -293,36 +293,10 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         title_to_id.insert(title.clone(), WorkId::new());
     }
 
-    // Build dependency graph for cycle detection; both node label and
-    // dep targets use the normalized form so Kahn's sees the same
-    // strings on both sides of each edge.
-    let mut dep_graph: HashMap<String, Vec<String>> = HashMap::with_capacity(response.children.len());
-    for (child, norm_title) in response.children.iter().zip(normalized_titles.iter()) {
-        dep_graph.insert(
-            norm_title.clone(),
-            child.dependencies.iter().map(|d| normalize(d)).collect(),
-        );
-    }
-    if let Err(cycle_desc) = detect_cycles(&dep_graph) {
-        span.record("outcome", "cycle");
-        warn!(cycle = %cycle_desc, "decompose: dependency cycle detected");
-        write_decomposer_transcript(
-            target,
-            &plan_id_str,
-            iteration_used,
-            &system,
-            &user_used,
-            &raw_response,
-            render_decompose_response(&response),
-            "cycle",
-            &started_at_initial,
-            total_latency_ms,
-        );
-        return Err(DecomposerError::CycleDetected(cycle_desc));
-    }
-
-    // Resolve each child's deps to sibling WorkIds. All errors
-    // collect into a single UnresolvedDeps.
+    // Resolve each child's deps to sibling WorkIds. All errors collect
+    // into a single UnresolvedDeps. Resolution runs BEFORE cycle
+    // detection so unknown-sibling refs surface as UnresolvedDeps (the
+    // clearer message) and the graph below sees only real edges.
     let resolved_deps = match resolve_deps(&response.children, &title_to_id) {
         Ok(r) => r,
         Err(e) => {
@@ -345,6 +319,45 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
             return Err(e);
         }
     };
+
+    // Cycle detection over the resolved WorkId edges via domain::WorkGraph.
+    // On a cycle, map the offending ids back to titles (title_to_id is a
+    // strict bijection - duplicate normalized titles are rejected above)
+    // so the operator-facing message names titles, not opaque ids.
+    let edges: Vec<(WorkId, Vec<WorkId>)> = normalized_titles
+        .iter()
+        .zip(resolved_deps.iter())
+        .map(|(norm_title, deps)| (title_to_id[norm_title].clone(), deps.clone()))
+        .collect();
+    if let Err(GraphError::Cycle(cycle_ids)) = WorkGraph::from_edges(edges) {
+        let id_to_title: HashMap<&WorkId, &String> = title_to_id.iter().map(|(title, id)| (id, title)).collect();
+        let cycle_desc = cycle_ids
+            .iter()
+            .map(|id| {
+                id_to_title
+                    .get(id)
+                    .map(|t| t.as_str())
+                    .unwrap_or("<unknown>")
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        span.record("outcome", "cycle");
+        warn!(cycle = %cycle_desc, "decompose: dependency cycle detected");
+        write_decomposer_transcript(
+            target,
+            &plan_id_str,
+            iteration_used,
+            &system,
+            &user_used,
+            &raw_response,
+            render_decompose_response(&response),
+            "cycle",
+            &started_at_initial,
+            total_latency_ms,
+        );
+        return Err(DecomposerError::CycleDetected(cycle_desc));
+    }
 
     // Build Works, pairing each child with its pre-minted id and
     // resolved deps. AC falls back to markdown extraction if the LLM

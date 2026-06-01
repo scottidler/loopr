@@ -147,6 +147,7 @@ async fn decomposer_smoke_spans_decompose() {
     cap.find("collect_workspace_tree").expect("collect_workspace_tree span");
     cap.find("assemble_system").expect("assemble_system span");
     cap.find("assemble_user").expect("assemble_user span");
-    cap.find("detect_cycles").expect("detect_cycles span");
+    // Cycle detection moved to domain::WorkGraph (span `detect_cycle`); it
+    // is exercised by domain's tests, not asserted here.
     cap.find("resolve_deps").expect("resolve_deps span");
 }
