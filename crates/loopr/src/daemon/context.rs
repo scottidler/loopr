@@ -4,7 +4,7 @@
 //! the signal-watcher task. Values are set once at startup and read-only
 //! thereafter; the only mutable cell is `shutting_down`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,7 +24,9 @@ use agents::{
     ReviewerDeps, ReviewerError, run_implementer, run_reviewer,
 };
 use context::{InlineContextBuilder, StateSummary};
-use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkId, WorkStatus};
+use domain::{
+    Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkGraph, WorkId, WorkStatus,
+};
 // Stage 8 used to consume `BundleUpdateError` here; Director Phase 3
 // shifts that match into the `WorkSpawner::accept_bundle` path which
 // matches `StoreError::Stale` directly. The import is kept available for
@@ -1007,18 +1009,21 @@ pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
                 return;
             }
         };
-        let pending: Vec<Work> = siblings
+        let graph = WorkGraph::from_works(&siblings);
+        let done: HashSet<WorkId> = siblings
             .iter()
-            .filter(|w| w.status == WorkStatus::Pending)
-            .cloned()
+            .filter(|w| w.status == WorkStatus::Done)
+            .map(|w| w.id.clone())
             .collect();
-        let mut promoted = 0usize;
-        for work in pending {
-            if work.all_deps_done(&siblings) {
-                let mut tasks = ctx.implementer_tasks.lock().await;
-                tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
-                promoted += 1;
-            }
+        let ready: HashSet<WorkId> = graph.ready_set(&done).into_iter().collect();
+        let pending_ready: Vec<Work> = siblings
+            .into_iter()
+            .filter(|w| w.status == WorkStatus::Pending && ready.contains(&w.id))
+            .collect();
+        let promoted = pending_ready.len();
+        for work in pending_ready {
+            let mut tasks = ctx.implementer_tasks.lock().await;
+            tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
         }
         info!(promoted, "promote_unblocked_siblings: done");
     })
@@ -1055,9 +1060,11 @@ pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
                 return;
             }
         };
+        let graph = WorkGraph::from_works(&siblings);
+        let dependents: HashSet<&WorkId> = graph.dependents_of(&terminal_work_id).iter().collect();
         let pending_dependents: Vec<Work> = siblings
             .iter()
-            .filter(|w| w.status == WorkStatus::Pending && w.dependencies.iter().any(|d| d == &terminal_work_id))
+            .filter(|w| w.status == WorkStatus::Pending && dependents.contains(&w.id))
             .cloned()
             .collect();
         let mut blocked = 0usize;

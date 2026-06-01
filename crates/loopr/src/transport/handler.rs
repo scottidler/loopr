@@ -226,7 +226,14 @@ where
                     // unblocked Works get an Implementer spawned immediately;
                     // held Works stay Pending and are promoted reactively when
                     // their deps reach Done (see promote_unblocked_siblings).
-                    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| w.all_deps_done(&works));
+                    let graph = domain::WorkGraph::from_works(&works);
+                    let done: std::collections::HashSet<domain::WorkId> = works
+                        .iter()
+                        .filter(|w| w.status == domain::WorkStatus::Done)
+                        .map(|w| w.id.clone())
+                        .collect();
+                    let ready: std::collections::HashSet<domain::WorkId> = graph.ready_set(&done).into_iter().collect();
+                    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| ready.contains(&w.id));
                     let unblocked_count = unblocked.len();
                     let held_count = held.len();
                     // Warn on any held Work whose dep ids are not in this
