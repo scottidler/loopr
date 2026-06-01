@@ -29,6 +29,13 @@ pub struct IntegratorConfig {
     /// Wall-clock cap for each individual validation command.
     /// Default 300s (`VALIDATION_TIMEOUT_SECS_DEFAULT`).
     pub validation_timeout: Duration,
+
+    /// Phase C: when `true` (default), `integrate` targets the per-Plan
+    /// branch `loopr/plan-<id>` and the operator merges it to `main`.
+    /// When `false` (the no-branch override), `integrate` merges onto the
+    /// currently-checked-out branch and first refuses on a dirty tree.
+    /// loopr never merges to `main` itself in either mode.
+    pub integration_branch: bool,
 }
 
 const GIT_TIMEOUT_SECS_DEFAULT: u64 = 60;
@@ -41,6 +48,7 @@ impl Default for IntegratorConfig {
             allow_multi_bundle: false,
             validation_commands: vec![],
             validation_timeout: Duration::from_secs(VALIDATION_TIMEOUT_SECS_DEFAULT),
+            integration_branch: true,
         }
     }
 }

@@ -158,7 +158,12 @@ where
     let plan_snapshot = plan.clone();
     tracing::Span::current().record("plan_id", plan.id.to_string().as_str());
 
-    if let Err(e) = crate::daemon::git::ensure_integration_branch(&ctx.target, &plan.id).await {
+    // Phase C: only create the per-Plan integration branch in the default
+    // (branch) mode. Under the no-branch override the Integrator merges
+    // onto the checked-out branch, so there is nothing to create here.
+    if ctx.integrator_config.integration_branch
+        && let Err(e) = crate::daemon::git::ensure_integration_branch(&ctx.target, &plan.id).await
+    {
         warn!(request_id = id, plan_id = %plan.id, error = %e, "plan.create failed at integration-branch creation");
         return DaemonResponse::err(
             id,

@@ -39,6 +39,13 @@ pub struct IntegratorSection {
     /// Wall-clock cap in seconds for each individual validation command.
     /// Default: 300.
     pub validation_timeout_secs: u64,
+
+    /// Phase C: when `true` (default), the daemon creates the per-Plan
+    /// branch `loopr/plan-<id>`, integrates onto it, and the operator
+    /// merges to `main`. When `false`, the daemon skips branch creation
+    /// and the Integrator merges directly onto the checked-out branch
+    /// (refusing on a dirty tree). loopr never merges to `main` itself.
+    pub integration_branch: bool,
 }
 
 impl Default for IntegratorSection {
@@ -46,6 +53,7 @@ impl Default for IntegratorSection {
         Self {
             validation_commands: vec![],
             validation_timeout_secs: 300,
+            integration_branch: true,
         }
     }
 }
@@ -55,6 +63,7 @@ impl IntegratorSection {
         integrator::IntegratorConfig {
             validation_commands: self.validation_commands,
             validation_timeout: Duration::from_secs(self.validation_timeout_secs),
+            integration_branch: self.integration_branch,
             ..integrator::IntegratorConfig::default()
         }
     }

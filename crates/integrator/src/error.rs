@@ -38,6 +38,9 @@ pub enum IntegrationError {
     #[error("integration branch {branch} does not exist")]
     IntegrationBranchMissing { branch: String },
 
+    #[error("working tree is dirty; refusing to integrate onto {branch} (no-branch override)")]
+    DirtyWorkingTree { branch: String },
+
     #[error("bundle branch {branch} (bundle {bundle_id}) has no commits beyond merge base")]
     EmptyBranch { bundle_id: String, branch: String },
 

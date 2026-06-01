@@ -107,6 +107,44 @@ Append-only. One section per phase, four buckets each.
 - None. (Surfacing post-ACK work counts to the user is the existing
   `loopr works <plan-id>`; no new status verb added, per the design doc.)
 
+## Phase C: integration-branch policy + override
+
+### Design decisions
+- `integration_branch: bool` (default `true`) added to both
+  `integrator::IntegratorConfig` and loopr's `IntegratorSection` (kebab
+  `integration-branch`), threaded through `into_integrator_config`. Single
+  source of truth: the daemon's `ctx.integrator_config` gates branch
+  creation in `handle_plan_create`, and the same value reaches the
+  Integrator via `IntegratorDeps.config`, so the two sites cannot desync.
+- `integrate` selects the branch conditionally: `loopr/plan-<id>` (default)
+  vs. `git::current_branch()` (override). New git helpers `current_branch`
+  and `working_tree_dirty` (`git status --porcelain`).
+- Override safety: an explicit `working_tree_dirty` pre-flight returns the
+  new `IntegrationError::DirtyWorkingTree` — the per-Plan path's implicit
+  "checkout fails on dirty" protection does not cover the same-branch
+  override (Architect finding). Guard runs only in override mode.
+- `working_tree_dirty` refuses on ANY uncommitted state, including
+  untracked files (conservative default).
+
+### Deviations
+- Implemented as a **config-only** knob; the per-invocation `--no-branch`
+  CLI flag from the design doc is deferred (it needs a new
+  `PlanCreateParams` IPC field). Config-level is the natural fit for the
+  long-lived per-target daemon and satisfies the "options with sane
+  defaults" rule.
+
+### Tradeoffs
+- Tested the safety-critical helpers directly (`git/tests.rs`:
+  clean/untracked/tracked-modification/current-branch); the default
+  `integrate` path is proven unchanged by the existing integrator tests.
+  A full override-mode `integrate` run (merge onto current branch) is
+  deferred to avoid heavy fixture setup — the #4 e2e capstone can cover it.
+
+### Open questions
+- Should the override's dirty guard relax to refuse only on tracked-file
+  modifications (untracked files are common/benign)? Left conservative.
+- Per-invocation `--no-branch` CLI flag (IPC param) — deferred.
+
 ## Phase E: controlled failure-path tests
 
 ### Design decisions

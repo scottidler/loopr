@@ -220,10 +220,25 @@ where
     preflight_status(bundles)?;
     preflight_plan_consistency(bundles, plan, &deps.works).await?;
 
-    let integ_branch = format!("loopr/plan-{}", plan.id);
+    // Phase C: per-Plan branch is the default; the no-branch override
+    // integrates onto the currently-checked-out branch (loopr never
+    // creates loopr/plan-<id> in that mode, and never merges to main).
+    let integ_branch = if deps.config.integration_branch {
+        format!("loopr/plan-{}", plan.id)
+    } else {
+        git::current_branch(&deps.target, deps.config.git_timeout).await?
+    };
     span.record("integration_branch", integ_branch.as_str());
     if !git::verify_branch(&deps.target, &integ_branch, deps.config.git_timeout).await? {
         return Err(IntegrationError::IntegrationBranchMissing { branch: integ_branch });
+    }
+    // No-branch override safety: `git checkout <current-branch>` is a no-op
+    // that does not fail on a dirty tree, so refuse explicitly before any
+    // merge touches the operator's uncommitted work. The per-Plan-branch
+    // path is implicitly protected (checkout to a different branch fails on
+    // a dirty tree), so this guard runs only in override mode.
+    if !deps.config.integration_branch && git::working_tree_dirty(&deps.target, deps.config.git_timeout).await? {
+        return Err(IntegrationError::DirtyWorkingTree { branch: integ_branch });
     }
 
     // Phase 2: git sequence (serialize against the working tree)

@@ -59,6 +59,38 @@ pub(crate) async fn rev_parse_head(target: &Path, git_timeout: Duration) -> Resu
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Return the current branch name via `git rev-parse --abbrev-ref HEAD`.
+/// Used by the no-branch override (Phase C) to integrate onto the
+/// checked-out branch instead of a per-Plan `loopr/plan-<id>` branch.
+pub(crate) async fn current_branch(target: &Path, git_timeout: Duration) -> Result<String, IntegrationError> {
+    let out = run_git(target, &["rev-parse", "--abbrev-ref", "HEAD"], git_timeout).await?;
+    if !out.status.success() {
+        return Err(IntegrationError::Git(format!(
+            "git rev-parse --abbrev-ref HEAD failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Return `true` if the working tree has any uncommitted state (tracked
+/// modifications, staged changes, or untracked files) via
+/// `git status --porcelain`. The no-branch override uses this to refuse
+/// integrating on top of a dirty tree: `git checkout <current-branch>` is
+/// a no-op that does NOT fail on a dirty tree (unlike checking out a
+/// different per-Plan branch), so without this guard the Integrator would
+/// `git merge` on top of the operator's uncommitted work.
+pub(crate) async fn working_tree_dirty(target: &Path, git_timeout: Duration) -> Result<bool, IntegrationError> {
+    let out = run_git(target, &["status", "--porcelain"], git_timeout).await?;
+    if !out.status.success() {
+        return Err(IntegrationError::Git(format!(
+            "git status --porcelain failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+}
+
 /// Check that `bundle_branch` has commits beyond the merge base with
 /// `HEAD`. Returns `Err(EmptyBranch)` when `merge-base HEAD <branch>`
 /// equals `rev-parse <branch>` - in that case `git merge --no-ff`
@@ -263,3 +295,6 @@ async fn run_git(target: &Path, args: &[&str], git_timeout: Duration) -> Result<
         stderr: out.stderr,
     })
 }
+
+#[cfg(test)]
+mod tests;
