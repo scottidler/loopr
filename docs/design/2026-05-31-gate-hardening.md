@@ -2,8 +2,9 @@
 
 **Author:** Scott Idler
 **Date:** 2026-05-31
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5 (converged)
+**Shipped in:** Phases F/B/E/A/C/D, branch `v5` (2026-05-31)
 **Crates touched:** integrator, loopr, domain, tools, telemetry, llm, agents
 
 ## Summary
