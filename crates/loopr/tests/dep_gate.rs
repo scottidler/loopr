@@ -9,7 +9,9 @@
 //! `stage_8_plan_to_tick.rs`; these tests focus on the dep gate's own
 //! invariants.
 
-use domain::{Plan, PlanId, Work, WorkId, WorkStatus};
+use std::collections::HashSet;
+
+use domain::{Plan, PlanId, Work, WorkGraph, WorkId, WorkStatus};
 use tempfile::TempDir;
 
 async fn fresh_store() -> (TempDir, store::Store) {
@@ -30,8 +32,22 @@ fn make_done(plan_id: &PlanId, title: &str) -> Work {
     w
 }
 
+/// Seam/parity helper: reproduces the production dep-gate partition in
+/// `handler.rs` (`WorkGraph::from_works` + `ready_set(done)`), so these
+/// tests exercise the same path the daemon takes, not a re-derivation.
+fn workgraph_partition(works: &[Work]) -> (Vec<&Work>, Vec<&Work>) {
+    let graph = WorkGraph::from_works(works);
+    let done: HashSet<WorkId> = works
+        .iter()
+        .filter(|w| w.status == WorkStatus::Done)
+        .map(|w| w.id.clone())
+        .collect();
+    let ready: HashSet<WorkId> = graph.ready_set(&done).into_iter().collect();
+    works.iter().partition(|w| ready.contains(&w.id))
+}
+
 // ---------------------------------------------------------------------------
-// all_deps_done partition mirrors Phase 2 handler.rs logic
+// WorkGraph partition mirrors handler.rs dep-gate logic
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -40,7 +56,7 @@ fn partition_no_dep_works_are_all_unblocked() {
     let w1 = Work::new(plan_id.clone(), "a".to_string());
     let w2 = Work::new(plan_id.clone(), "b".to_string());
     let works = vec![w1, w2];
-    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| w.all_deps_done(&works));
+    let (unblocked, held) = workgraph_partition(&works);
     assert_eq!(unblocked.len(), 2);
     assert_eq!(held.len(), 0);
 }
@@ -52,7 +68,7 @@ fn partition_dep_works_are_held() {
     let w_b = work_with_deps(&plan_id, "b", vec![w_a.id.clone()]);
     let w_c = work_with_deps(&plan_id, "c", vec![w_b.id.clone()]);
     let works = vec![w_a.clone(), w_b.clone(), w_c.clone()];
-    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| w.all_deps_done(&works));
+    let (unblocked, held) = workgraph_partition(&works);
     // Only A has no deps - B and C are held
     assert_eq!(unblocked.len(), 1);
     assert_eq!(unblocked[0].id, w_a.id);
@@ -65,11 +81,17 @@ fn partition_done_dep_unblocks_dependent() {
     let w_a = make_done(&plan_id, "a");
     let w_b = work_with_deps(&plan_id, "b", vec![w_a.id.clone()]);
     let works = vec![w_a.clone(), w_b.clone()];
-    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| w.all_deps_done(&works));
-    // A is Done - but we're partitioning ALL works, so A is unblocked (no deps)
-    // B's dep A is Done, so B is also unblocked
-    assert_eq!(unblocked.len(), 2, "both A and B should be unblocked when A is Done");
-    assert_eq!(held.len(), 0);
+    let (unblocked, held) = workgraph_partition(&works);
+    // A's dep is Done, so B (its dependent) becomes ready -> unblocked.
+    // A itself is Done, so it is finished, not "ready": excluded from
+    // unblocked (held). ready_set never re-offers a completed Work, which
+    // is what keeps the handler from spawning an implementer for a Done
+    // Work. (In production this never arises: fresh decompose has only
+    // Pending works.)
+    assert_eq!(unblocked.len(), 1, "only B should be unblocked");
+    assert_eq!(unblocked[0].id, w_b.id);
+    assert_eq!(held.len(), 1, "the Done work A is not 'ready'");
+    assert_eq!(held[0].id, w_a.id);
 }
 
 #[test]
@@ -78,7 +100,7 @@ fn partition_unknown_dep_id_holds_work() {
     let ghost_id = Work::new(plan_id.clone(), "ghost".to_string()).id;
     let w = work_with_deps(&plan_id, "w", vec![ghost_id]);
     let works = vec![w.clone()];
-    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| w.all_deps_done(&works));
+    let (unblocked, held) = workgraph_partition(&works);
     assert_eq!(unblocked.len(), 0);
     assert_eq!(held.len(), 1, "unknown dep id must hold the Work");
 }
