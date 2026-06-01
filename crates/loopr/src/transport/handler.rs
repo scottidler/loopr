@@ -171,11 +171,47 @@ where
         return DaemonResponse::err(id, map_store_error(e));
     }
 
-    // Stage 6: decompose the Plan into Works and persist them. On
-    // decomposer error the Plan remains persisted (scope memo A+2:
-    // reconcile-on-restart is Stage 7's problem); we log and return
-    // Plan success so the user at least sees their Plan landed.
-    match decomposer::decompose(&plan_snapshot, &ctx.target, &*ctx.llm).await {
+    // Phase B (async ACK): the Plan is persisted, so the client can be
+    // told its id now. Decompose (an ~18s LLM call) + Works persist + the
+    // initial Implementer/Director spawns run on a daemon-owned task in
+    // `plan_create_tasks`, drained FIRST at shutdown (root of the spawn
+    // DAG). This restores Stage 4's ACK-and-exit intent: the client no
+    // longer blocks on decompose and never trips the request timeout on a
+    // successful Plan.
+    {
+        let task_ctx = Arc::clone(ctx);
+        let plan_for_task = plan_snapshot.clone();
+        ctx.plan_create_tasks.lock().await.spawn(async move {
+            if task_ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            decompose_and_dispatch(&task_ctx, plan_for_task, id).await;
+        });
+    }
+
+    let result = PlanCreateResult { plan: plan_snapshot };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.create: {e}"))),
+    }
+}
+
+/// Decompose a persisted Plan into Works, persist them, and spawn the
+/// initial Implementers + the per-Plan Director. Runs on a
+/// `plan_create_tasks` task (Phase B async ACK), so it carries its own
+/// span — `tokio::spawn` detaches it from the handler's span.
+///
+/// On decomposer error the Plan remains persisted (scope memo A+2:
+/// reconcile-on-restart is Stage 7's problem); we log and return, leaving
+/// an `Active` Plan with zero Works and no children — the same non-fatal
+/// outcome the synchronous path had, now observed in logs + on-disk
+/// rather than the (already-sent) client response.
+#[tracing::instrument(level = "info", skip_all, fields(request_id, plan_id = %plan.id))]
+async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, plan: domain::Plan, request_id: u64)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    match decomposer::decompose(&plan, &ctx.target, &*ctx.llm).await {
         Ok(works) => {
             let count = works.len();
             match ctx.store.works().create_many(works.clone()).await {
@@ -202,8 +238,8 @@ where
                         }
                     }
                     info!(
-                        request_id = id,
-                        plan_id = %plan_snapshot.id,
+                        request_id,
+                        plan_id = %plan.id,
                         work_count = count,
                         ids = ?ids,
                         unblocked = unblocked_count,
@@ -216,11 +252,11 @@ where
                         tasks.spawn(task_ctx.spawn_implementer_for_work(work.clone()));
                     }
                     drop(tasks);
-                    spawn_director_for_plan(ctx, plan_snapshot.id.clone()).await;
+                    spawn_director_for_plan(ctx, plan.id.clone()).await;
                 }
                 Err(e) => warn!(
-                    request_id = id,
-                    plan_id = %plan_snapshot.id,
+                    request_id,
+                    plan_id = %plan.id,
                     error = %e,
                     "plan.create persisted Plan but works.create_many failed; Stage 7 reconcile"
                 ),
@@ -228,18 +264,12 @@ where
         }
         Err(e) => {
             warn!(
-                request_id = id,
-                plan_id = %plan_snapshot.id,
+                request_id,
+                plan_id = %plan.id,
                 error = %e,
                 "plan.create persisted Plan but decomposer failed; Stage 7 reconcile"
             );
         }
-    }
-
-    let result = PlanCreateResult { plan: plan_snapshot };
-    match serde_json::to_value(&result) {
-        Ok(v) => DaemonResponse::ok(id, v),
-        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize plan.create: {e}"))),
     }
 }
 

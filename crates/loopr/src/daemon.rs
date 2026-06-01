@@ -90,6 +90,14 @@ pub const DIRECTOR_DRAIN_TIMEOUT_SECS: u64 = 30;
 /// typical. The 10s budget is a ceiling, not an expected wait.
 pub const WORK_SPAWNER_DRAIN_TIMEOUT_SECS: u64 = 10;
 
+/// Soft timeout for draining in-flight `plan.create` decompose tasks at
+/// shutdown. The task makes a decompose LLM call then persists Works and
+/// spawns the initial Implementers + Director, so it is sized like the
+/// LLM-bearing pools. Drained FIRST (root of the spawn DAG) so its
+/// children land in their pools before those pools drain. A hung
+/// decompose cannot block shutdown past this ceiling.
+pub const PLAN_CREATE_DRAIN_TIMEOUT_SECS: u64 = 30;
+
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
@@ -218,6 +226,36 @@ async fn drain_work_spawner_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Ar
             timeout_secs = WORK_SPAWNER_DRAIN_TIMEOUT_SECS,
             remaining = tasks.len(),
             "work-spawner task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Drain `ctx.plan_create_tasks` with `PLAN_CREATE_DRAIN_TIMEOUT_SECS`
+/// budget. Runs FIRST in the shutdown sequence, ahead of every other
+/// pool: a `plan.create` task is the root of the spawn DAG (it spawns
+/// Implementers and a Director), so draining it first lets those
+/// children enqueue into their own pools before those pools drain,
+/// preserving the "no pool receives a new spawn after its drain returns"
+/// invariant. On timeout (a hung decompose), abort the remainder so
+/// shutdown is never blocked.
+async fn drain_plan_create_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
+    let mut tasks = ctx.plan_create_tasks.lock().await;
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len();
+    tracing::info!(count = n, "draining plan-create tasks");
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(PLAN_CREATE_DRAIN_TIMEOUT_SECS), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_secs = PLAN_CREATE_DRAIN_TIMEOUT_SECS,
+            remaining = tasks.len(),
+            "plan-create task drain timed out; aborting remainder"
         );
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
@@ -726,6 +764,7 @@ where
     // Ordering Rationale" for why this differs from v0.7.11's
     // (defensively-correct but structurally-muddled)
     // implementer→reviewer→integrator→director order.
+    drain_plan_create_tasks(&ctx).await;
     drain_implementer_tasks(&ctx).await;
     drain_reviewer_tasks(&ctx).await;
     drain_director_tasks(&ctx).await;

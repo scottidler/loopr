@@ -289,7 +289,10 @@ async fn sweep_bundles_redrives_stranded_and_counts_terminal_on_cold_boot() {
     sweep_bundles(&ctx, &mut report).await.unwrap();
 
     assert_eq!(report.reviewers_requeued, 1, "Triaged bundle re-driven to reviewer");
-    assert_eq!(report.integrators_requeued, 1, "Accepted bundle re-driven to integrator");
+    assert_eq!(
+        report.integrators_requeued, 1,
+        "Accepted bundle re-driven to integrator"
+    );
     assert_eq!(report.bundles_terminal, 2, "Merged + Rejected counted as terminal");
 
     // Drain the (no-op) spawned task pools so nothing leaks past the test.

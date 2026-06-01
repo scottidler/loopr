@@ -32,3 +32,38 @@ Append-only. One section per phase, four buckets each.
 
 ### Open questions
 - None.
+
+## Phase B: async plan.create ACK
+
+### Design decisions
+- The decompose chain was extracted into a free function
+  `decompose_and_dispatch(ctx, plan, request_id)` in
+  `crates/loopr/src/transport/handler.rs` carrying its own
+  `#[tracing::instrument(fields(request_id, plan_id))]` — `tokio::spawn`
+  detaches the task from the handler's span, so the span must be re-opened
+  on the task or the decompose logs lose `plan_id`.
+- New task pool `DaemonContext::plan_create_tasks: Mutex<JoinSet<()>>`,
+  drained FIRST in `serve_core`'s shutdown sequence
+  (`drain_plan_create_tasks`, `PLAN_CREATE_DRAIN_TIMEOUT_SECS = 30`),
+  ahead of implementer/reviewer/director/work_spawner/integrator. It is
+  the root of the spawn DAG.
+- The spawned task guards on `shutting_down` at entry (belt-and-suspenders,
+  matching the other spawn-task bodies).
+
+### Deviations
+- None. The ACK boundary, payload (`PlanCreateResult { plan }` unchanged),
+  and decompose-failure semantics match the design doc.
+
+### Tradeoffs
+- `PLAN_CREATE_DRAIN_TIMEOUT_SECS = 30` mirrors the LLM-bearing pools
+  (implementer/director) rather than the sub-second work_spawner budget,
+  since the task's dominant cost is the decompose LLM call.
+- Updated `plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty`
+  to drain `plan_create_tasks` before the works-empty assertion, so it
+  tests "decompose ran and failed" rather than "async hasn't started."
+  `plan_create_persists_and_returns_plan` needed no change (it only
+  asserts the synchronously-persisted Plan).
+
+### Open questions
+- None. (Surfacing post-ACK work counts to the user is the existing
+  `loopr works <plan-id>`; no new status verb added, per the design doc.)

@@ -229,6 +229,13 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// pool, this pool feeds the Integrator pool. See `daemon.rs`'s
     /// drain rationale comment for the full case.
     pub work_spawner_tasks: Mutex<JoinSet<()>>,
+    /// In-flight `plan.create` decompose tasks. `handle_plan_create` ACKs
+    /// the client immediately after persisting the Plan, then runs
+    /// decompose + Works persist + initial Implementer/Director spawns on
+    /// a task in this pool. Drained FIRST at shutdown (root of the spawn
+    /// DAG) so its children reach their own pools before those drain. See
+    /// `daemon.rs::drain_plan_create_tasks`.
+    pub plan_create_tasks: Mutex<JoinSet<()>>,
     /// Phase 2 sidecar map: live Implementer tasks indexed by `WorkId`.
     /// Inserted at the top of `spawn_implementer_for_work`'s body via a
     /// `ScopedIdGuard`; removed on `Drop` (panic or success).
@@ -342,6 +349,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             integrator_tasks: Mutex::new(JoinSet::new()),
             director_tasks: Mutex::new(JoinSet::new()),
             work_spawner_tasks: Mutex::new(JoinSet::new()),
+            plan_create_tasks: Mutex::new(JoinSet::new()),
             implementer_work_ids: Arc::new(StdRwLock::new(HashMap::new())),
             reviewer_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             integrator_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),

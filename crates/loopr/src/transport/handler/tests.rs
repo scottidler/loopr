@@ -232,6 +232,15 @@ async fn plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty
 
     let plans = ctx.store.plans().list().await.unwrap();
     assert_eq!(plans.len(), 1);
+
+    // Phase B (async ACK): decompose now runs on a `plan_create_tasks`
+    // task. Drain it so we assert the post-decompose state (decompose ran
+    // and failed) rather than racing the spawn before it starts.
+    {
+        let mut tasks = ctx.plan_create_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+
     let works = ctx.store.works().list().await.unwrap();
     assert!(works.is_empty(), "no Works persisted when decompose fails");
 }
@@ -690,7 +699,10 @@ async fn record_get_nonexistent_id_yields_not_found() {
     // Routes through store_err_response -> map_store_error(RecordNotFound).
     match resp.error {
         Some(RpcError::NotFound(msg)) => {
-            assert!(msg.contains("plans/pl-zzzzz"), "expected collection/id in NotFound: {msg}");
+            assert!(
+                msg.contains("plans/pl-zzzzz"),
+                "expected collection/id in NotFound: {msg}"
+            );
         }
         other => panic!("expected NotFound for missing plan, got {other:?}"),
     }
@@ -714,12 +726,18 @@ fn map_store_error_maps_each_variant() {
         }),
         RpcError::InvalidRequest(_)
     ));
-    assert!(matches!(super::map_store_error(StoreError::Io("disk".into())), RpcError::Internal(_)));
+    assert!(matches!(
+        super::map_store_error(StoreError::Io("disk".into())),
+        RpcError::Internal(_)
+    ));
     assert!(matches!(
         super::map_store_error(StoreError::Corruption("bad".into())),
         RpcError::Internal(_)
     ));
-    assert!(matches!(super::map_store_error(StoreError::Serde("json".into())), RpcError::Internal(_)));
+    assert!(matches!(
+        super::map_store_error(StoreError::Serde("json".into())),
+        RpcError::Internal(_)
+    ));
     assert!(matches!(
         super::map_store_error(StoreError::Stale { expected: 1, actual: 2 }),
         RpcError::InvalidRequest(_)
