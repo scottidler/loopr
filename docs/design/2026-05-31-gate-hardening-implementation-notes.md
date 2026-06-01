@@ -67,3 +67,41 @@ Append-only. One section per phase, four buckets each.
 ### Open questions
 - None. (Surfacing post-ACK work counts to the user is the existing
   `loopr works <plan-id>`; no new status verb added, per the design doc.)
+
+## Phase E: controlled failure-path tests
+
+### Design decisions
+- `crates/loopr/tests/failure_paths.rs` is self-contained — it duplicates
+  the small JSONL readers (`load_works`/`load_bundles`/`load_ticks`/
+  `read_jsonl`/`HasId`) from `stage_8_plan_to_tick.rs` rather than sharing
+  them, so the green `stage_8` is not touched.
+- `FailureDirectorAwareLlm` wraps `ScriptedLlm`: Director calls
+  (model = `Some("claude-opus-4-7")`) emit `accept_bundle` for a Reviewed
+  Bundle, else `override_work {Ready}` for a Blocked Work, else `done`.
+  Implementer/Reviewer calls (model = None) forward to the inner stub.
+  Intercepting Director calls in the wrapper is what keeps the keyed free
+  entries from being consumed by the Director's own prompt (which echoes
+  Work titles / filenames).
+- `wait_for_tick` here does **not** fast-fail on `Blocked` (unlike
+  `stage_8`): `Blocked` is the transient state during recovery.
+- Keying convention: for a given filename key, the Implementer response is
+  queued before the Reviewer response; `take_keyed` is first-match-wins by
+  insertion order, and the Implementer call is causally earlier than the
+  Reviewer call, so each binds correctly. Draining protects the dependent
+  Work: by the time Work B runs, the "A.md" entries are gone, so B's
+  prompt (which references its dependency "Add A.md") falls through to the
+  "B.md" entries.
+
+### Deviations
+- None. All three scenarios from the design doc are implemented:
+  `reject_then_recover_reaches_tick` (scenario 2, FIFO),
+  `multi_work_dag_unblocks_and_completes` (scenario 1, keyed),
+  `mid_dag_failure_recovers_then_unblocks_downstream` (scenario 3, keyed).
+
+### Tradeoffs
+- JSONL-reader duplication with `stage_8` accepted (see above) over a
+  shared `common/records.rs`, to avoid editing a passing test in this
+  phase. A future cleanup could hoist them into `common/`.
+
+### Open questions
+- None.
