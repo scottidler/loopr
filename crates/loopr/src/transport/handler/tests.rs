@@ -66,6 +66,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
         AttemptCleanupPolicy::default(),
         snapshot,
         crate::transport::ServerTimeouts::default(),
+        None,
     ));
     (td, ctx)
 }

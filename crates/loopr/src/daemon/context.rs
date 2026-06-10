@@ -302,6 +302,16 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// Server-side IPC timeouts (idle + write). Built from
     /// `config.transport` at boot; read by every `handle_client` task.
     pub server_timeouts: crate::transport::ServerTimeouts,
+    /// Per-run cumulative LLM cost cap in U.S. dollars (`budgets.
+    /// per-run-cost-usd`). `None` = unlimited. Checked at the spawn gates
+    /// (`spawn_implementer_for_work`, `spawn_director_for_plan`) against
+    /// the live `ProcessSnapshot` cost; on breach the daemon stops
+    /// spawning new agents (soft pause, vision Budgets).
+    pub per_run_cost_usd: Option<f64>,
+    /// One-shot guard so the per-run budget breach emits exactly one
+    /// `budget.exceeded` event no matter how many spawn attempts the
+    /// reactor makes after the cap is hit.
+    budget_event_sent: AtomicBool,
 }
 
 impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
@@ -335,6 +345,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         worktree_cleanup_policy: AttemptCleanupPolicy,
         snapshot: Arc<StdMutex<ProcessSnapshot>>,
         server_timeouts: crate::transport::ServerTimeouts,
+        per_run_cost_usd: Option<f64>,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         let store = Arc::new(store);
@@ -381,7 +392,62 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             director_statuses: Arc::new(StdRwLock::new(HashMap::new())),
             snapshot,
             server_timeouts,
+            per_run_cost_usd,
+            budget_event_sent: AtomicBool::new(false),
         }
+    }
+
+    /// True when a per-run cost cap is configured and the live process
+    /// cost has reached it. `None` cap = always false (unlimited).
+    fn run_budget_exceeded(&self) -> bool {
+        let Some(cap_usd) = self.per_run_cost_usd else {
+            return false;
+        };
+        let cost_micros = self.snapshot.lock().map(|s| s.llm_cost_micros).unwrap_or(0);
+        let cap_micros = (cap_usd * 1_000_000.0) as u64;
+        cost_micros >= cap_micros
+    }
+
+    /// Soft-pause gate for the spawn paths. Returns `true` (caller must
+    /// NOT spawn) when the per-run budget is exhausted, emitting exactly
+    /// one `budget.exceeded` event on the first breach. `role`/`id` name
+    /// the spawn that was suppressed, for the log line.
+    pub(crate) fn budget_blocks_spawn(&self, role: &str, id: &str) -> bool {
+        if !self.run_budget_exceeded() {
+            return false;
+        }
+        let cost = self.snapshot.lock().map(|s| s.llm_cost_micros).unwrap_or(0);
+        // Emit the event once; subsequent suppressed spawns log at debug.
+        if self
+            .budget_event_sent
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            let cap = self.per_run_cost_usd.unwrap_or(0.0);
+            tracing::warn!(
+                role,
+                id,
+                cost_usd = cost as f64 / 1_000_000.0,
+                cap_usd = cap,
+                "per-run budget exceeded; soft-pausing new agent spawns"
+            );
+            let _ = self.events.send(DaemonEvent {
+                event: "budget.exceeded".to_string(),
+                data: serde_json::json!({
+                    "scope": "per-run",
+                    "cost_usd": cost as f64 / 1_000_000.0,
+                    "cap_usd": cap,
+                }),
+            });
+        } else {
+            tracing::debug!(role, id, "spawn suppressed: per-run budget already exceeded");
+        }
+        true
     }
 
     /// Build a per-invocation `ToolContext` for one tool call.
@@ -424,6 +490,14 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         // (panic or normal return), so `WorkSpawner::list_running_work_ids`
         // observes the live set even across abrupt panics.
         let _id_guard = ScopedIdGuard::new(Arc::clone(&self.implementer_work_ids), work.id.clone());
+
+        // Budget soft pause (vision Budgets): if the per-run cost cap is
+        // exhausted, do not spawn. The Work stays Pending (no FSM advance
+        // below) and is re-driven cheaply on later sweeps; in-flight work
+        // finishes. The first breach emits one `budget.exceeded` event.
+        if self.budget_blocks_spawn("implementer", work.id.as_ref()) {
+            return;
+        }
 
         // Advance Work through the pipeline-start transitions via the FSM.
         // Guarded: reconcile or a prior call may have advanced us already.

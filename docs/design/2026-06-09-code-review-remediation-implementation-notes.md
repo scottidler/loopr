@@ -1392,3 +1392,69 @@ Landing across commits (mirrors Phases 1-5):
 
 #### Open questions
 - None.
+
+### Commit D — budgets: per-run/per-work cost cap + token accumulation (finding 3)
+
+#### Design decisions
+- **Two caps, homed where each is enforced.** Top-level `budgets:
+  { per-run-cost-usd, per-work-cost-usd }`, both `Option<f64>` defaulting
+  to `None` (unlimited) per the options-with-sane-defaults rule. The
+  per-RUN cap is a daemon spawn-gate concern; the per-WORK cap is an
+  implementer-loop brake. Both knobs live in the one `budgets:` section;
+  `loopr` overlays `budgets.per-work-cost-usd` onto a `#[serde(skip)]`
+  carrier field `ImplementerConfig.per_work_cost_cap_usd` at
+  daemon-context build time, so the config surface stays single-sourced
+  while the value reaches the implementer (which only ever sees its own
+  `ImplementerConfig`).
+- **Per-run soft pause at the spawn gates.** `DaemonContext` gains
+  `per_run_cost_usd` + a one-shot `budget_event_sent` AtomicBool.
+  `budget_blocks_spawn(role, id)` returns `true` when the live
+  `ProcessSnapshot.llm_cost_micros` has reached the cap; on the FIRST
+  breach it emits exactly one `DaemonEvent { event: "budget.exceeded",
+  data: { scope, cost_usd, cap_usd } }` (the bus channel already exists;
+  Phase 7 wires the rest of its senders). Wired at all three spawn sites:
+  `spawn_implementer_for_work` (before the FSM advance, so the Work stays
+  Pending and re-drives cheaply), `spawn_director_for_plan`, and
+  `startup_reconcile_directors`. Soft pause per the vision: in-flight
+  agents finish, no kill, resume requires operator action (raising/clearing
+  the cap and restarting).
+- **Per-Work cost cap + token accumulation in the ralph loop.**
+  `run_implementer` accumulates `work_input_tokens` / `work_output_tokens`
+  / `work_cost_micros` across every `complete_free` call (both the main
+  loop and the corrected sub-loop — the two sites that previously
+  discarded `_usage`). A `debug!("implementer: per-work usage", ...)` emits
+  the running totals. `over_work_budget(cap, spent)` escalates the Work
+  (`ImplementerError::EscalationNeeded`) once the accumulated cost reaches
+  the per-Work cap — the implementer's natural "stop this Work" signal,
+  surfacing the over-budget Work to the Director.
+
+#### Deviations
+- The vision groups both caps under one "Budgets" concept and says
+  hitting EITHER cap "stops new agent spawns." The implementation splits
+  enforcement: per-run does the global spawn-gate soft pause; per-Work
+  escalates the offending Work rather than globally pausing (a per-Work
+  overrun is a property of one Work, so escalating that Work is the honest
+  signal — escalation routes it to the Director, the operator-visible
+  path). The per-run gate remains the global soft-pause mechanism.
+- Cost for the per-Work cap is computed from `last_response_model`
+  (the concrete model from Commit B) against the shared digest rate
+  table; a stub-backed run (model `None` → rate table miss → 0) never
+  trips the cap, so existing stub tests are unaffected even if a cap were
+  set.
+
+#### Tradeoffs
+- `budget_blocks_spawn` re-locks the snapshot mutex per spawn attempt.
+  Spawns are infrequent and the lock is held for a single field read; the
+  cost is negligible against an LLM call.
+- A suppressed implementer spawn leaves the Work Pending, so the reactor
+  may re-enter the gate on later sweeps — cheap (one mutex read, the
+  `budget_event_sent` flag suppresses repeat events). This is the
+  intended soft-pause shape: the daemon idles new work without busy-spam.
+
+#### Open questions
+- The spawn-gate end-to-end daemon scenario (cap set → snapshot over cap →
+  spawn suppressed → one `budget.exceeded` event) and the per-Work-cap
+  escalation E2E (a fake LLM returning non-zero usage with a known model)
+  are daemon/agent integration tests; per the doc's structure they land in
+  Phase 11 alongside the other daemon-orchestration gaps. Commit D unit-
+  tests the pure pieces (`over_work_budget`, `budgets` config parse).

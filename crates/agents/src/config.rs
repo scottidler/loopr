@@ -44,6 +44,16 @@ pub struct ImplementerConfig {
     /// so git applies its configured signing (vision Git Posture). The
     /// `Loopr-*` commit trailers are emitted regardless of this flag.
     pub gpg_sign: bool,
+
+    /// Per-Work cumulative LLM cost cap in U.S. dollars (vision Budgets).
+    /// `None` = unlimited. The implementer accumulates its calls' cost
+    /// across iterations and escalates the Work when it exceeds this cap.
+    /// NOT a YAML knob on `agents.implementer` (`#[serde(skip)]`): the
+    /// canonical surface is the top-level `budgets.per-work-cost-usd`,
+    /// which `loopr` overlays onto this field at daemon-context build time
+    /// so the budget config stays in one place.
+    #[serde(skip)]
+    pub per_work_cost_cap_usd: Option<f64>,
 }
 
 impl Default for ImplementerConfig {
@@ -56,6 +66,7 @@ impl Default for ImplementerConfig {
             max_force_propose_files: 100,
             max_force_propose_file_size_bytes: 10 * 1024 * 1024,
             gpg_sign: false,
+            per_work_cost_cap_usd: None,
         }
     }
 }

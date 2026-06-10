@@ -857,6 +857,13 @@ where
         warn!(plan_id = %plan_id, "shutdown in progress; skipping Director spawn");
         return;
     }
+    // Budget soft pause (vision Budgets): the per-run cost cap also gates
+    // Director spawns (Opus is the most expensive role). On breach, do not
+    // spawn; the Plan stays Active and a Director is reconciled later when
+    // budget is reset by an operator.
+    if ctx.budget_blocks_spawn("director", plan_id.as_ref()) {
+        return;
+    }
     let operator_notify = Arc::new(tokio::sync::Notify::new());
     ctx.operator_notifies
         .write()

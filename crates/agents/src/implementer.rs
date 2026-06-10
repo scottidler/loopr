@@ -36,6 +36,22 @@ use crate::parse::{parse_actions, parse_one};
 /// scope so the agent can decide whether to re-edit in scope or emit
 /// `need_help`. Empty `dropped` is the no-op caller's responsibility:
 /// this returns a non-empty string only when there's something to say.
+/// If a per-Work cost cap is configured and `spent_micros` has reached
+/// it, return the escalation reason; otherwise `None`. The per-Work
+/// budget brake (vision Budgets): an implementer that has spent more than
+/// its Work's cost cap across iterations escalates the Work rather than
+/// continuing to burn tokens against it.
+fn over_work_budget(cap_usd: Option<f64>, spent_micros: u64) -> Option<String> {
+    let cap = cap_usd?;
+    let cap_micros = (cap * 1_000_000.0) as u64;
+    (spent_micros >= cap_micros).then(|| {
+        format!(
+            "per-Work cost cap ${cap:.2} exceeded (spent ${:.2})",
+            spent_micros as f64 / 1_000_000.0
+        )
+    })
+}
+
 fn format_dropped_note(action_label: &str, dropped: &[String], scope: &[String]) -> String {
     if dropped.is_empty() {
         return String::new();
@@ -210,6 +226,13 @@ where
     // Phase 6 finding 1). Stays `None` for stub-backed runs.
     let mut last_response_model: Option<String> = None;
 
+    // Per-Work LLM usage accumulators (Phase 6 finding 3). Summed across
+    // every iteration's calls; `work_cost_micros` gates the per-Work cost
+    // cap, the token totals give a running per-Work usage signal.
+    let mut work_input_tokens: u64 = 0;
+    let mut work_output_tokens: u64 = 0;
+    let mut work_cost_micros: u64 = 0;
+
     for iteration in 1..=deps.config.max_iterations {
         info!(iteration, work_id = %work.id, "implementer iteration start");
 
@@ -246,6 +269,27 @@ where
                 .await?;
             if usage.model.is_some() {
                 last_response_model = usage.model.clone();
+            }
+            work_input_tokens = work_input_tokens.saturating_add(usage.input_tokens);
+            work_output_tokens = work_output_tokens.saturating_add(usage.output_tokens);
+            work_cost_micros = work_cost_micros.saturating_add(telemetry::digest::cost::cost_micros(
+                last_response_model.as_deref().unwrap_or("unknown"),
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_creation_input_tokens,
+                usage.cache_read_input_tokens,
+            ));
+            tracing::debug!(
+                work_id = %work.id,
+                iteration,
+                work_input_tokens,
+                work_output_tokens,
+                work_cost_usd = work_cost_micros as f64 / 1_000_000.0,
+                "implementer: per-work usage"
+            );
+            if let Some(reason) = over_work_budget(deps.config.per_work_cost_cap_usd, work_cost_micros) {
+                warn!(work_id = %work.id, iteration, %reason, "per-work budget exceeded; escalating");
+                return Err(ImplementerError::EscalationNeeded(reason));
             }
             last_raw = raw.clone();
             match parse_actions(&raw) {
@@ -411,6 +455,19 @@ where
                         .await?;
                     if usage.model.is_some() {
                         last_response_model = usage.model.clone();
+                    }
+                    work_input_tokens = work_input_tokens.saturating_add(usage.input_tokens);
+                    work_output_tokens = work_output_tokens.saturating_add(usage.output_tokens);
+                    work_cost_micros = work_cost_micros.saturating_add(telemetry::digest::cost::cost_micros(
+                        last_response_model.as_deref().unwrap_or("unknown"),
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cache_creation_input_tokens,
+                        usage.cache_read_input_tokens,
+                    ));
+                    if let Some(reason) = over_work_budget(deps.config.per_work_cost_cap_usd, work_cost_micros) {
+                        warn!(work_id = %work.id, iteration, %reason, "per-work budget exceeded; escalating");
+                        return Err(ImplementerError::EscalationNeeded(reason));
                     }
                     match parse_one(&corrected_raw) {
                         Ok(corrected) => {

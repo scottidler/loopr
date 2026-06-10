@@ -285,6 +285,32 @@ llm:
 }
 
 #[test]
+fn budgets_default_to_unlimited() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.budgets.per_run_cost_usd, None);
+    assert_eq!(cfg.budgets.per_work_cost_usd, None);
+}
+
+#[test]
+fn budgets_parse_from_yaml() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = r#"
+budgets:
+  per-run-cost-usd: 12.50
+  per-work-cost-usd: 1.25
+"#;
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.budgets.per_run_cost_usd, Some(12.50));
+    assert_eq!(cfg.budgets.per_work_cost_usd, Some(1.25));
+}
+
+#[test]
 fn env_invalid_value_errors_cleanly() {
     let _g = LOAD_MUTEX.lock().unwrap();
     let dir = TempDir::new().expect("tempdir");

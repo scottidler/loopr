@@ -369,3 +369,21 @@ async fn parse_failure_then_recovery_resets_counter() {
     let bundle = run_implementer(&work, &wt, &deps).await.unwrap();
     assert_eq!(bundle.claims, vec!["done".to_string()]);
 }
+
+#[test]
+fn over_work_budget_none_cap_never_trips() {
+    assert_eq!(super::over_work_budget(None, u64::MAX), None);
+}
+
+#[test]
+fn over_work_budget_under_cap_returns_none() {
+    // cap $1.00 = 1_000_000 micros; spent half.
+    assert_eq!(super::over_work_budget(Some(1.0), 500_000), None);
+}
+
+#[test]
+fn over_work_budget_at_or_over_cap_returns_reason() {
+    let reason = super::over_work_budget(Some(1.0), 1_000_000).expect("at cap trips");
+    assert!(reason.contains("per-Work cost cap"), "got: {reason}");
+    assert!(super::over_work_budget(Some(0.50), 600_000).is_some(), "over cap trips");
+}

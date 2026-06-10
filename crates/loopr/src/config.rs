@@ -109,6 +109,26 @@ impl Default for TransportSection {
     }
 }
 
+/// Cost budgets (vision "Budgets"). Both caps default to `None`
+/// (unlimited) per the options-with-sane-defaults rule — a fresh target
+/// runs uncapped until an operator opts into a ceiling. Enforcement is
+/// soft-pause only: hitting a cap stops new agent spawns and emits a
+/// `budget.exceeded` event; in-flight agents finish and are never killed.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct BudgetsSection {
+    /// Per-run (per-daemon-process) cumulative LLM cost cap in U.S.
+    /// dollars. Checked at the daemon's spawn gates against the live
+    /// `ProcessSnapshot` cost; on breach the daemon stops spawning new
+    /// implementers and Directors. `None` = unlimited.
+    pub per_run_cost_usd: Option<f64>,
+    /// Per-Work cumulative LLM cost cap in U.S. dollars. The implementer
+    /// accumulates its calls' cost across iterations; on breach it
+    /// escalates the Work (the implementer's "stop this Work" signal).
+    /// `None` = unlimited.
+    pub per_work_cost_usd: Option<f64>,
+}
+
 /// Top-level configuration composed from each stage crate's config.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
@@ -144,6 +164,9 @@ pub struct Config {
     /// and stuck-startup hangs.
     #[serde(default)]
     pub transport: TransportSection,
+    /// Cost budgets (per-run and per-Work). Both unlimited by default.
+    #[serde(default)]
+    pub budgets: BudgetsSection,
 }
 
 impl Config {

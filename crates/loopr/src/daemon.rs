@@ -629,7 +629,12 @@ where
         LooprError::DaemonStartup(format!("prompt loader construction failed for target {target:?}: {e}"))
     })?);
     let context_builder = Arc::new(::context::InlineContextBuilder::with_loader(prompt_loader));
-    let implementer_config = config.agents.implementer.clone();
+    // Overlay the canonical per-Work budget (top-level `budgets:`) onto
+    // the implementer config's programmatic carrier, so the budget config
+    // lives in one place (`budgets.per-work-cost-usd`) but reaches the
+    // implementer loop's per-Work cost brake.
+    let mut implementer_config = config.agents.implementer.clone();
+    implementer_config.per_work_cost_cap_usd = config.budgets.per_work_cost_usd;
     let reviewer_config = config.agents.reviewer.clone();
     let director_config = config.agents.director.clone();
     let decomposer_config = config.decomposer.clone();
@@ -658,6 +663,7 @@ where
         worktree_cleanup_policy,
         snapshot,
         server_timeouts,
+        config.budgets.per_run_cost_usd,
     ));
 
     tracing::info!(

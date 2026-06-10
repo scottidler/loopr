@@ -417,6 +417,11 @@ where
             });
             continue;
         }
+        // Budget soft pause (vision Budgets): a daemon that booted already
+        // over its per-run cap must not reconcile a fresh Director.
+        if ctx.budget_blocks_spawn("director", plan_id.as_ref()) {
+            continue;
+        }
         let operator_notify = Arc::new(tokio::sync::Notify::new());
         ctx.operator_notifies
             .write()
