@@ -18,7 +18,9 @@ fn unit_variants_round_trip_kebab_case() {
 
 #[test]
 fn tool_failure_carries_tool_name() {
-    let reason = FailureReason::ToolFailure { tool: "bash".to_string() };
+    let reason = FailureReason::ToolFailure {
+        tool: "bash".to_string(),
+    };
     let json = serde_json::to_string(&reason).unwrap();
     assert_eq!(json, r#"{"tool-failure":{"tool":"bash"}}"#);
     let back: FailureReason = serde_json::from_str(&json).unwrap();

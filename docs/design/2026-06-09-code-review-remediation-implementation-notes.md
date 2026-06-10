@@ -948,3 +948,20 @@ Landing across commits (mirrors Phases 1-3):
 
 #### Open questions
 - None.
+
+### Commit G — bloat fix (context.rs decomposition) + cargo fmt
+
+#### Design decisions
+- Phase 4's additions to `loopr/src/daemon/context.rs` (panic posture,
+  rejected-bundle feedback, supersede-on-Blocked arm, decomposer_config,
+  panic_message helper) pushed it to 1549 lines, over the 1500 bloat gate.
+  Extracted `spawn_integrator_for_bundle` (~220 lines) into
+  `context/integration.rs` (an inherent-impl method on `DaemonContext` in
+  a child module — same pattern as the existing `spawner.rs`), bringing
+  context.rs to 1332. Named `integration` (not `integrator`) to avoid
+  shadowing the external `integrator` crate inside the module.
+- `cargo fmt --all` normalized the phase's new code (pre-existing repo
+  convention, mirrors Phase 3's housekeeping commit).
+
+#### Deviations / Tradeoffs / Open questions
+- None.

@@ -85,11 +85,7 @@ impl Lifeguard {
         span.record("action_hash", hash);
         // Consecutive-run semantics keyed off `last_hash`: same as the
         // previous action -> extend the run; different -> reset to 1.
-        let my_count = if self.last_hash == Some(hash) {
-            self.consecutive_count + 1
-        } else {
-            1
-        };
+        let my_count = if self.last_hash == Some(hash) { self.consecutive_count + 1 } else { 1 };
         self.consecutive_count = my_count;
         self.last_hash = Some(hash);
         span.record("action_count", my_count);

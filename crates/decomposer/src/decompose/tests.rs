@@ -64,7 +64,9 @@ async fn happy_path_single_child_no_deps() {
             }
         ]
     }));
-    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect("ok");
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect("ok");
     assert_eq!(works.len(), 1);
     assert_eq!(works[0].title, "Add --version flag");
     assert_eq!(works[0].acceptance_criteria.len(), 1);
@@ -90,7 +92,9 @@ async fn happy_path_two_children_with_one_dep() {
             }
         ]
     }));
-    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect("ok");
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect("ok");
     assert_eq!(works.len(), 2);
     let titles: Vec<&str> = works.iter().map(|w| w.title.as_str()).collect();
     assert!(titles.contains(&"Build CLI"));
@@ -225,7 +229,9 @@ async fn cycle_detected_between_two_children() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect_err("cycle");
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect_err("cycle");
     assert!(matches!(err, DecomposerError::CycleDetected(_)), "got: {err:?}");
 }
 
@@ -265,7 +271,9 @@ async fn duplicate_titles_after_normalization_errors() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect_err("dupes");
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect_err("dupes");
     match err {
         DecomposerError::DuplicateTitles(titles) => {
             assert_eq!(titles, vec!["build cli".to_string()]);
@@ -353,7 +361,9 @@ async fn ac_fallback_extracts_from_markdown_when_array_empty() {
             }
         ]
     }));
-    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect("ok");
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect("ok");
     assert_eq!(works.len(), 1);
     assert_eq!(
         works[0].acceptance_criteria.len(),
@@ -375,7 +385,9 @@ async fn every_work_has_parent_id_equal_to_plan_id() {
     let llm = ScriptedLlm::new();
     llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
-    let works = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default()).await.expect("ok");
+    let works = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
+        .await
+        .expect("ok");
     for w in &works {
         assert_eq!(w.parent_id, plan.id);
         assert_eq!(w.status, domain::WorkStatus::Pending);
@@ -418,7 +430,9 @@ async fn transcript_written_on_success() {
     llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
 
-    super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default()).await.expect("ok");
+    super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
+        .await
+        .expect("ok");
 
     let path = decomposer_transcript_path(dir.path(), &plan);
     assert!(path.exists(), "transcript should exist at {}", path.display());
@@ -441,7 +455,9 @@ async fn transcript_written_with_two_iterations_on_retry() {
     llm.queue_tool(retryable_err("first call boom"));
     llm.queue_tool(ok(success));
 
-    super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default()).await.expect("ok");
+    super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
+        .await
+        .expect("ok");
 
     let path = decomposer_transcript_path(dir.path(), &plan);
     let body = std::fs::read_to_string(&path).expect("read transcript");

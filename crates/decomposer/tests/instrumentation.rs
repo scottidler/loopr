@@ -132,7 +132,9 @@ async fn decomposer_smoke_spans_decompose() {
         }),
     }));
 
-    let _works = decompose(&plan, &repo, &llm, &DecomposerConfig::default()).await.unwrap();
+    let _works = decompose(&plan, &repo, &llm, &DecomposerConfig::default())
+        .await
+        .unwrap();
 
     let outer = cap.find("decompose").expect("decompose span");
     assert_eq!(

@@ -241,7 +241,10 @@ async fn needs_operator_grace_stalls_exactly_on_nth_iteration() {
     }
     match session.run_once(&deps).await {
         Err(DirectorError::NeedHelp(msg)) => {
-            assert!(msg.contains("NeedsOperator timeout"), "expected timeout msg, got: {msg}");
+            assert!(
+                msg.contains("NeedsOperator timeout"),
+                "expected timeout msg, got: {msg}"
+            );
         }
         other => panic!("expected stall on the Nth NeedsOperator iteration, got {other:?}"),
     }

@@ -455,7 +455,13 @@ fn parse_and_validate(
         let id_to_title: HashMap<&WorkId, &String> = title_to_id.iter().map(|(title, id)| (id, title)).collect();
         let cycle_desc = cycle_ids
             .iter()
-            .map(|id| id_to_title.get(id).map(|t| t.as_str()).unwrap_or("<unknown>").to_string())
+            .map(|id| {
+                id_to_title
+                    .get(id)
+                    .map(|t| t.as_str())
+                    .unwrap_or("<unknown>")
+                    .to_string()
+            })
             .collect::<Vec<_>>()
             .join(", ");
         warn!(cycle = %cycle_desc, "decompose: dependency cycle detected");

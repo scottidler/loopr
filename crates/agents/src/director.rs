@@ -954,14 +954,10 @@ impl DirectorSession {
             let total = unread_notes.len();
             if total > OPERATOR_NOTES_RENDER_CAP {
                 let skipped = total - OPERATOR_NOTES_RENDER_CAP;
-                let mut rendered: Vec<String> =
-                    vec![format!("[{skipped} older operator note(s) omitted; showing newest {OPERATOR_NOTES_RENDER_CAP}]")];
-                rendered.extend(
-                    unread_notes
-                        .iter()
-                        .skip(skipped)
-                        .map(|n| n.message.clone()),
-                );
+                let mut rendered: Vec<String> = vec![format!(
+                    "[{skipped} older operator note(s) omitted; showing newest {OPERATOR_NOTES_RENDER_CAP}]"
+                )];
+                rendered.extend(unread_notes.iter().skip(skipped).map(|n| n.message.clone()));
                 state.operator_notes = rendered;
             } else {
                 state.operator_notes = unread_notes.iter().map(|n| n.message.clone()).collect();

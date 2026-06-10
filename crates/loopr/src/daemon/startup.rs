@@ -466,7 +466,10 @@ where
             // override may have respawned a Director with a fresh Notify.
             {
                 let mut map = operator_notifies.write().await;
-                if map.get(&plan_id_for_cleanup).is_some_and(|n| Arc::ptr_eq(n, &notify_for_cleanup)) {
+                if map
+                    .get(&plan_id_for_cleanup)
+                    .is_some_and(|n| Arc::ptr_eq(n, &notify_for_cleanup))
+                {
                     map.remove(&plan_id_for_cleanup);
                 }
             }

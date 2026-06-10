@@ -124,7 +124,11 @@ fn idle_done_run_never_trips_same_action() {
             .all(|o| !matches!(o, Some(PatternObservation::SameActionTripped { .. }))),
         "idle done must never trip SameAction: {observations:?}"
     );
-    assert_eq!(tracker.same_action_streak(), 0, "idle done must not accrue a same-action streak");
+    assert_eq!(
+        tracker.same_action_streak(),
+        0,
+        "idle done must not accrue a same-action streak"
+    );
 }
 
 // ---------------------------------------------------------------------------
