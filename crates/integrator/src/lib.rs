@@ -26,7 +26,7 @@ use store::{BundleUpdateSink, StoreError};
 pub use config::IntegratorConfig;
 pub use error::IntegrationError;
 
-use crate::classify::{ConflictKind, classify_conflict};
+use crate::classify::{ConflictKind, classify_conflict, is_merge_conflict};
 
 // ---------------------------------------------------------------------------
 // DI traits: the `IntegratorDeps` struct bundles these.
@@ -360,16 +360,32 @@ where
                 // check first, so an already-merged branch adopts
                 // cleanly instead of falsely tripping EmptyBranch
                 // (a merged branch has `merge-base HEAD branch == branch`).
+                //
+                // `is_ancestor` alone false-adopts: a trivially-ancestral
+                // head_commit (the integration base, or one absorbed by a
+                // DIFFERENT bundle's merge) reads as already-merged and the
+                // old `merge_commit_sha_for` then grabbed the wrong merge
+                // commit. `find_adopting_merge` confirms the adopted merge's
+                // SECOND parent is exactly this head_commit; on no match it
+                // returns None and we fall through to the normal merge path.
                 let already_merged =
                     git::is_ancestor(&deps.target, head_commit, "HEAD", deps.config.git_timeout).await?;
-                if already_merged {
-                    let sha = git::merge_commit_sha_for(&deps.target, head_commit, deps.config.git_timeout).await?;
+                let adopted = if already_merged {
+                    git::find_adopting_merge(&deps.target, head_commit, deps.config.git_timeout).await?
+                } else {
+                    None
+                };
+                if let Some(sha) = adopted {
                     outcomes.push((b.id.clone(), MergeOutcome::AdoptedExisting { sha }));
                     continue;
                 }
-                // Branch not merged; check for empty branch. Safe to
-                // use the merge-base check here because we just ruled
-                // out already-merged.
+                // Not actually merged by this Bundle (or false-positive
+                // trivial ancestry): fall through to the normal merge.
+                // The empty-branch check is safe here - either ancestry
+                // was false, or it was trivial and no real merge of this
+                // Bundle exists, so merge-base HEAD branch != branch tip
+                // unless the branch is genuinely empty (which EmptyBranch
+                // correctly reports).
                 if let Err(err) =
                     git::assert_nontrivial_branch(&deps.target, b.id.as_ref(), &b.branch_name, deps.config.git_timeout)
                         .await
@@ -380,29 +396,60 @@ where
             _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating bundles"),
         }
 
-        match git::merge_no_ff(&deps.target, &b.branch_name, deps.config.git_timeout).await? {
-            Ok(sha) => {
+        match git::merge_no_ff(&deps.target, &b.branch_name, deps.config.git_timeout).await {
+            Ok(Ok(sha)) => {
                 outcomes.push((b.id.clone(), MergeOutcome::NewMerge { sha }));
             }
-            Err(stderr) => {
+            Ok(Err(output)) => {
+                // The merge ran and exited non-zero. Restore the tree
+                // first (both the conflict and non-conflict paths need
+                // a clean tree before returning).
                 git::merge_abort(&deps.target, deps.config.git_timeout).await;
                 git::reset_hard(&deps.target, &pre_merge, deps.config.git_timeout).await?;
-                let kind = classify_conflict(b, &bundle_states);
-                let err = match kind {
-                    ConflictKind::Structural { files, peer_bundle_ids } => IntegrationError::ConflictStructural {
-                        bundle_id: b.id.as_ref().to_string(),
-                        files,
-                        peer_bundle_ids,
-                    },
-                    ConflictKind::Retryable => IntegrationError::ConflictRetryable {
-                        bundle_id: b.id.as_ref().to_string(),
-                        branch: b.branch_name.clone(),
-                        stderr,
-                    },
-                };
-                // After rollback: every Integrating Bundle in the
-                // slice transitions to IntegrationFailed in one batch.
-                return fail_all_without_reset(&bundle_states, deps, err).await;
+
+                if is_merge_conflict(&output) {
+                    // Genuine merge conflict: terminal. The same content
+                    // cannot merge on retry, so fail the Bundle. Classify
+                    // structural (peer path overlap) vs retryable
+                    // (textual/environmental).
+                    let kind = classify_conflict(b, &bundle_states);
+                    let err = match kind {
+                        ConflictKind::Structural { files, peer_bundle_ids } => IntegrationError::ConflictStructural {
+                            bundle_id: b.id.as_ref().to_string(),
+                            files,
+                            peer_bundle_ids,
+                        },
+                        ConflictKind::Retryable => IntegrationError::ConflictRetryable {
+                            bundle_id: b.id.as_ref().to_string(),
+                            branch: b.branch_name.clone(),
+                            stderr: output,
+                        },
+                    };
+                    // After rollback: every Integrating Bundle in the
+                    // slice transitions to IntegrationFailed in one batch.
+                    return fail_all_without_reset(&bundle_states, deps, err).await;
+                }
+
+                // Non-conflict merge failure (deleted/missing branch,
+                // "local changes would be overwritten", ENOSPC, index-lock
+                // contention): NOT a conflict and NOT a permanent Bundle
+                // failure. The tree is already restored; leave the Bundles
+                // Integrating (the driver's retry contract re-enqueues
+                // them) and surface a retryable infrastructure error
+                // WITHOUT marking the Bundles terminally IntegrationFailed.
+                return Err(IntegrationError::Git(format!(
+                    "git merge {} exited non-zero with no conflict marker (infrastructure failure): {}",
+                    b.branch_name, output
+                )));
+            }
+            Err(infra) => {
+                // The merge subprocess failed to complete (spawn error
+                // or timeout). kill_on_drop killed any orphan, but the
+                // tree may be partially advanced; route through fail_all
+                // so git is reset AND the DB records the failure -
+                // closing the git-advanced/DB-silent gap the bare `?`
+                // left open.
+                return fail_all(&bundle_states, &pre_merge, deps, infra).await;
             }
         }
     }

@@ -27,6 +27,18 @@ pub(crate) enum ConflictKind {
     Retryable,
 }
 
+/// Distinguish a genuine merge conflict from a non-conflict merge
+/// failure. `git merge` prints `CONFLICT (...)` and `Automatic merge
+/// failed` on a real content/tree conflict; a non-conflict failure
+/// (deleted/missing branch, "local changes would be overwritten",
+/// ENOSPC, index-lock contention) has neither. A genuine conflict
+/// terminally fails the Bundle (the same content cannot merge on
+/// retry); a non-conflict failure is an infrastructure error the driver
+/// can retry, so it must NOT be misclassified as a conflict.
+pub(crate) fn is_merge_conflict(output: &str) -> bool {
+    output.contains("CONFLICT") || output.contains("Automatic merge failed")
+}
+
 /// Classify a merge failure. `failing` is the Bundle whose
 /// `git merge --no-ff` exited non-zero; `peers` is the full slice
 /// passed to `integrate`, including `failing` itself (the classifier

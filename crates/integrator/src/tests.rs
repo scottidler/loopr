@@ -14,7 +14,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, Tick, Work, WorkId};
 use store::{BundleUpdateError, BundleUpdateSink, StoreError};
 
-use crate::classify::{ConflictKind, classify_conflict};
+use crate::classify::{ConflictKind, classify_conflict, is_merge_conflict};
 use crate::{IntegrationError, IntegratorConfig, IntegratorDeps, TickSink, WorkLookup};
 
 // ---------------------------------------------------------------------------
@@ -175,6 +175,28 @@ fn classify_partial_overlap_structural_with_intersection() {
         }
         other => panic!("expected Structural, got {other:?}"),
     }
+}
+
+#[test]
+fn is_merge_conflict_distinguishes_conflict_from_infra_failure() {
+    // Genuine conflicts (terminal): git emits these to stdout.
+    assert!(is_merge_conflict(
+        "Auto-merging conflict.rs\nCONFLICT (content): Merge conflict in conflict.rs\nAutomatic merge failed; fix conflicts and then commit the result.\n"
+    ));
+    assert!(is_merge_conflict("CONFLICT (add/add): Merge conflict in README.md"));
+    assert!(is_merge_conflict(
+        "Automatic merge failed; fix conflicts and then commit the result."
+    ));
+
+    // Non-conflict infrastructure failures (retryable): no marker.
+    assert!(!is_merge_conflict(
+        "merge: loopr/wk-missing - not something we can merge"
+    ));
+    assert!(!is_merge_conflict(
+        "error: Your local changes to the following files would be overwritten by merge:\n\tfeat.rs"
+    ));
+    assert!(!is_merge_conflict("fatal: Unable to write new index file"));
+    assert!(!is_merge_conflict(""));
 }
 
 #[test]

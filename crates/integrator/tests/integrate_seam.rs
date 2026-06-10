@@ -574,6 +574,64 @@ async fn crash_recovery_d_merge_never_landed_merge_fails_produces_conflict() {
     store.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn crash_recovery_trivially_ancestral_head_not_falsely_adopted() {
+    // is_ancestor alone false-adopts: an Integrating Bundle whose
+    // head_commit is trivially ancestral (here: an empty branch pointing
+    // at the integration base) reads as already-merged, and the old
+    // merge_commit_sha_for grabbed a DIFFERENT bundle's merge commit,
+    // wrongly publishing it into a Tick. The second-parent verification
+    // in find_adopting_merge rejects the false match and falls through
+    // to the normal merge path, where EmptyBranch correctly reports it.
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let integ = format!("loopr/plan-{}", plan.id);
+
+    // Prior tick: a DIFFERENT bundle (A) merged onto the integration
+    // branch, so HEAD now carries a merge commit whose second parent is
+    // A's tip (not our base).
+    let branch_a = "loopr/wk-aaaaa";
+    git(&repo, &["checkout", "-q", "-b", branch_a, &integ]);
+    std::fs::write(repo.join("a.rs"), "fn a() {}\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "bundle A work", "--no-gpg-sign"]);
+    git(&repo, &["checkout", "-q", &integ]);
+    git(
+        &repo,
+        &["merge", "--no-ff", branch_a, "-m", "Merge bundle A", "--no-gpg-sign"],
+    );
+    git(&repo, &["checkout", "-q", "main"]);
+
+    // Bundle B (re-entry): an EMPTY branch pointing at the original base,
+    // which is trivially an ancestor of the post-A integration HEAD.
+    let branch_b = format!("loopr/wk-{}", work.id);
+    git(&repo, &["branch", &branch_b, &base]);
+    let bundle = persist_accepted_bundle(&store, &work, &branch_b, &base, vec![]).await;
+    let bundle = transition_bundle_via_store(&store, &bundle, BundleStatus::Integrating, Role::Integrator).await;
+
+    let deps = deps_for(&store, &repo);
+    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
+    match result {
+        Err(IntegrationError::EmptyBranch { branch: b, .. }) => assert_eq!(b, branch_b),
+        other => panic!("expected EmptyBranch (no false-adopt), got {other:?}"),
+    }
+
+    let final_bundle = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(final_bundle.status, BundleStatus::IntegrationFailed);
+    // Critically: no Tick was written - B was not falsely adopted as Merged.
+    let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
+    assert!(
+        ticks.is_empty(),
+        "trivially-ancestral empty branch must not be falsely adopted into a Tick"
+    );
+
+    store.close().await.unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Entry-sequence guards: dirty tree + crash-recovery merge-abort
 // ---------------------------------------------------------------------------

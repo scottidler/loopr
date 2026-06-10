@@ -176,19 +176,46 @@ pub(crate) async fn is_ancestor(
     }
 }
 
-/// Resolve the chronologically **first** merge commit in the ancestry
-/// path from `bundle_head` to `HEAD`, i.e., the merge commit that
-/// actually absorbed `bundle_head`.
+/// Resolve a ref via `git rev-parse --verify --quiet <rev>`. Returns
+/// `Ok(Some(full_sha))` when the ref resolves, `Ok(None)` when it does
+/// not (e.g., `<sha>^2` on a non-merge commit), `Err` on a subprocess
+/// failure.
+async fn rev_parse_opt(target: &Path, rev: &str, git_timeout: Duration) -> Result<Option<String>, IntegrationError> {
+    let out = run_git(target, &["rev-parse", "--verify", "--quiet", rev], git_timeout).await?;
+    if out.status.success() {
+        Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Find the merge commit in `bundle_head..HEAD` that actually absorbed
+/// `bundle_head` via `git merge --no-ff`, identified by its SECOND
+/// parent (`<merge>^2`) resolving to exactly `bundle_head`. Returns
+/// `Ok(Some(sha))` for the first such merge in chronological order,
+/// `Ok(None)` when no merge's second parent matches (a false-positive
+/// ancestry: `bundle_head` is trivially ancestral - e.g., the
+/// integration base, or absorbed by a DIFFERENT bundle's merge - and
+/// must NOT be adopted), `Err` on a subprocess failure.
 ///
 /// The `--reverse` is load-bearing: git's default order is
-/// reverse-chronological, so piping that to `head -n1` would yield
-/// the newest merge (whichever Bundle was integrated most recently),
-/// not the merge that absorbed the requested `bundle_head`.
-pub(crate) async fn merge_commit_sha_for(
+/// reverse-chronological, so the first line without it would be the
+/// newest merge, not the one that absorbed `bundle_head`. The
+/// second-parent verification is the fix for the `is_ancestor`
+/// false-adopt: a trivially-ancestral `head_commit` made the old code
+/// grab some other bundle's merge commit.
+#[instrument(name = "integrator.git.find_adopting_merge", level = "debug", skip_all, fields(bundle_head = bundle_head), err)]
+pub(crate) async fn find_adopting_merge(
     target: &Path,
     bundle_head: &str,
     git_timeout: Duration,
-) -> Result<String, IntegrationError> {
+) -> Result<Option<String>, IntegrationError> {
+    // Resolve bundle_head to its canonical full SHA so the second-parent
+    // comparison is exact regardless of how the Bundle stored it.
+    let bundle_head_full = match rev_parse_opt(target, bundle_head, git_timeout).await? {
+        Some(sha) => sha,
+        None => return Ok(None),
+    };
     let range = format!("{bundle_head}..HEAD");
     let out = run_git(
         target,
@@ -203,18 +230,26 @@ pub(crate) async fn merge_commit_sha_for(
         )));
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
-    match stdout.lines().next() {
-        Some(sha) => Ok(sha.trim().to_string()),
-        None => Err(IntegrationError::Git(format!(
-            "no merge commit found in ancestry path {bundle_head}..HEAD"
-        ))),
+    for sha in stdout.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        let second_parent = rev_parse_opt(target, &format!("{sha}^2"), git_timeout).await?;
+        if second_parent.as_deref() == Some(bundle_head_full.as_str()) {
+            debug!(
+                merge_sha = sha,
+                bundle_head, "integrator.git: adopting merge confirmed by second parent"
+            );
+            return Ok(Some(sha.to_string()));
+        }
     }
+    Ok(None)
 }
 
 /// Attempt `git merge --no-ff <branch> -m "Merge bundle branch <branch>"`.
 /// On success returns the new `HEAD` SHA (via a follow-up `rev-parse HEAD`).
-/// On non-zero exit returns the stderr for the caller to classify; the
-/// caller is responsible for running `merge_abort` + `reset_hard`.
+/// On non-zero exit returns the COMBINED stdout+stderr for the caller to
+/// classify (git prints `CONFLICT` / `Automatic merge failed` to stdout,
+/// not stderr, so the caller needs both to distinguish a genuine merge
+/// conflict from a non-conflict infrastructure failure); the caller is
+/// responsible for running `merge_abort` + `reset_hard`.
 #[instrument(name = "integrator.git.merge_no_ff", level = "debug", skip_all, fields(branch = branch), err)]
 pub(crate) async fn merge_no_ff(
     target: &Path,
@@ -224,7 +259,15 @@ pub(crate) async fn merge_no_ff(
     let message = format!("Merge bundle branch {branch}");
     let out = run_git(target, &["merge", "--no-ff", branch, "-m", &message], git_timeout).await?;
     if !out.status.success() {
-        return Ok(Err(String::from_utf8_lossy(&out.stderr).to_string()));
+        let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !stderr.trim().is_empty() {
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+            combined.push_str(&stderr);
+        }
+        return Ok(Err(combined));
     }
     let sha = rev_parse_head(target, git_timeout).await?;
     debug!(branch, head_sha = %sha, "integrator.git: merge_no_ff ok");

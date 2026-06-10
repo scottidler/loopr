@@ -203,3 +203,58 @@ Landing across commits (mirrors Phase 1's Part split):
 
 #### Open questions
 - None.
+
+### Commit B — merge-loop correctness (conflict-vs-error, infra->fail_all, false-adopt)
+
+#### Design decisions
+- **Conflict-vs-infra classification (`classify::is_merge_conflict`).**
+  A non-zero `git merge` exit is now split: output containing `CONFLICT`
+  or `Automatic merge failed` is a genuine conflict (terminal - the same
+  content cannot merge on retry - kept on the `fail_all_without_reset`
+  path with the existing structural/retryable sub-classification). Any
+  other non-zero exit (deleted/missing branch, would-overwrite, ENOSPC,
+  index-lock contention) is a retryable infrastructure error: the tree
+  is reset (`merge_abort` + `reset_hard`) but the Bundles are LEFT
+  `Integrating` and a bare `IntegrationError::Git` is returned, so the
+  driver's retry contract re-enqueues them. `merge_no_ff` now returns
+  the COMBINED stdout+stderr (git prints conflict markers to stdout) so
+  the classifier sees them.
+- **Merge subprocess failure routes through `fail_all` (lib.rs).** The
+  `merge_no_ff` call changed from `.await?` to a three-arm match;
+  `Err(infra)` (spawn error / timeout) now routes through `fail_all`
+  (reset git + transition Bundles to `IntegrationFailed`) instead of the
+  bare `?`, closing the git-advanced/DB-silent gap that `kill_on_drop`
+  alone did not.
+- **`find_adopting_merge` replaces `merge_commit_sha_for`
+  (git.rs + lib.rs).** The crash-recovery adopt path now confirms the
+  adopted merge commit's SECOND parent (`<merge>^2`) resolves to exactly
+  the Bundle's `head_commit`. A trivially-ancestral `head_commit` (the
+  integration base, or one absorbed by a DIFFERENT bundle's merge) no
+  longer false-adopts that other bundle's merge SHA; `find_adopting_merge`
+  returns `None` and the loop falls through to the normal merge path
+  (where `EmptyBranch` correctly reports a genuinely empty branch).
+  `merge_commit_sha_for` was deleted (its only caller was rewritten).
+
+#### Deviations
+- The terminal conflict path keeps the name `ConflictRetryable` for a
+  no-peer-overlap textual conflict even though that Bundle goes
+  `IntegrationFailed` (terminal). "Retryable" describes the driver's
+  Work-level re-attempt, not Bundle-level re-integration. Pre-existing
+  naming; not renamed here (out of Phase 2 scope).
+
+#### Tradeoffs
+- Infra-class merge failures: subprocess-incomplete (timeout/spawn) is
+  terminal (`fail_all`, per finding 1's explicit instruction) while a
+  non-zero-but-completed non-conflict exit is retryable (finding 6).
+  Justification: a completed merge that exited non-zero leaves the tree
+  in a known state (clean after reset, safe to retry); an incomplete
+  subprocess leaves uncertain tree state, so the safe consistent choice
+  is reset + record-terminal. Both keep git and DB consistent.
+
+#### Open questions
+- The non-conflict completed-merge retryable path is covered by the pure
+  `is_merge_conflict` unit test (CONFLICT-marker vs infra-message). An
+  end-to-end seam test is not included: the reliable git triggers
+  (would-overwrite, ENOSPC) are blocked by the unconditional dirty-tree
+  guard or are not reproducible in CI. The classification is the
+  load-bearing logic and is unit-tested directly.
