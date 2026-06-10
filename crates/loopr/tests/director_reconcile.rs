@@ -45,11 +45,17 @@ async fn cold_boot_respawns_director_for_active_plan() {
     init_git_repo(tempdir.path());
     let target = tempdir.path().to_path_buf();
 
-    // Pre-seed: one Active Plan. `Plan::new` defaults to `Active`.
+    // Pre-seed: one Active Plan WITH a Work — a mid-flight Plan that was
+    // already decomposed. `Plan::new` defaults to `Active`. (A zero-Works
+    // Active Plan now re-decomposes instead of respawning a Director; see
+    // `cold_boot_redecomposes_active_plan_with_zero_works`.)
     {
         let store = Store::open(&target).await.unwrap();
         let plan = Plan::new("active-cold-boot".to_string());
+        let mut work = Work::new(plan.id.clone(), "wk-1".to_string());
+        work.acceptance_criteria = AcceptanceCriteria(vec!["assert it works".to_string()]);
         store.plans().create(plan).await.unwrap();
+        store.works().create(work).await.unwrap();
         store.close().await.unwrap();
     }
 
@@ -59,7 +65,55 @@ async fn cold_boot_respawns_director_for_active_plan() {
         assert_eq!(
             tasks.len(),
             1,
-            "Active Plan must respawn exactly one Director task on cold boot"
+            "Active Plan with Works must respawn exactly one Director task on cold boot"
+        );
+    }
+    teardown(ctx).await;
+}
+
+/// Bullet 13: an Active Plan with ZERO Works on cold boot was stalled
+/// during/before decomposition (a shutdown/drain that skipped
+/// `decompose_and_dispatch`, or a crash mid-decompose). The reconcile
+/// must re-enter `decompose_and_dispatch` (a `plan_create_tasks` task),
+/// NOT spawn a Director to supervise nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_boot_redecomposes_active_plan_with_zero_works() {
+    let tempdir = TempDir::new().unwrap();
+    init_git_repo(tempdir.path());
+    let target = tempdir.path().to_path_buf();
+
+    {
+        let store = Store::open(&target).await.unwrap();
+        let plan = Plan::new("active-zero-works".to_string());
+        store.plans().create(plan).await.unwrap();
+        store.close().await.unwrap();
+    }
+
+    // If the re-decompose task is scheduled before teardown, let decompose
+    // fail gracefully (two retryable tool errors → DecomposerError, then
+    // Plan->Stalled) rather than panic on an empty tool queue.
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(Err(llm::LlmError::Retryable {
+        reason: "test: no decompose".to_string(),
+    }));
+    llm.queue_tool(Err(llm::LlmError::Retryable {
+        reason: "test: no decompose".to_string(),
+    }));
+    let ctx = build_test_context_with_llm(&target, llm).await;
+    {
+        let dtasks = ctx.director_tasks.lock().await;
+        assert_eq!(
+            dtasks.len(),
+            0,
+            "zero-Works Active Plan must NOT spawn a Director directly"
+        );
+    }
+    {
+        let ptasks = ctx.plan_create_tasks.lock().await;
+        assert_eq!(
+            ptasks.len(),
+            1,
+            "zero-Works Active Plan must spawn exactly one re-decompose task"
         );
     }
     teardown(ctx).await;
@@ -238,6 +292,10 @@ async fn build_test_context_with_llm(target: &Path, llm: ScriptedLlm) -> Arc<Dae
 async fn teardown(ctx: Arc<DaemonContext<ScriptedLlm>>) {
     ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
+    {
+        let mut tasks = ctx.plan_create_tasks.lock().await;
+        tasks.shutdown().await;
+    }
     {
         let mut tasks = ctx.director_tasks.lock().await;
         tasks.shutdown().await;

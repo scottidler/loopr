@@ -213,7 +213,7 @@ where
 /// outcome the synchronous path had, now observed in logs + on-disk
 /// rather than the (already-sent) client response.
 #[tracing::instrument(level = "info", skip_all, fields(request_id, plan_id = %plan.id))]
-async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, mut plan: domain::Plan, request_id: u64)
+pub(crate) async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, mut plan: domain::Plan, request_id: u64)
 where
     L: LlmClient + Send + Sync + 'static,
 {
@@ -624,6 +624,9 @@ where
     // bypassed. Children are fetched for the summary render (best-effort;
     // an empty list only degrades the summary, never blocks the override).
     let children = ctx.store.works().list_by_parent_id(&plan_id).await.unwrap_or_default();
+    // Captured before `children` is moved into the transition: a
+    // Stalled->Active revival with zero Works must re-decompose (bullet 13).
+    let plan_has_works = !children.is_empty();
     if let Err(e) = crate::daemon::context::transition_and_persist_plan(
         &*ctx.summary_fanout,
         &mut plan,
@@ -656,12 +659,31 @@ where
         "plan.override: persisted"
     );
 
-    // Stalled -> Active means the operator revived an escalated Plan;
-    // respawn the Director so supervision resumes without a daemon
-    // restart. `spawn_director_for_plan` is a no-op (warn) during
-    // shutdown, which is the only state where the respawn could race.
+    // Stalled -> Active means the operator revived an escalated Plan.
     if prior_status == domain::PlanStatus::Stalled && target_status == domain::PlanStatus::Active {
-        spawn_director_for_plan(ctx, plan_id.clone()).await;
+        if plan_has_works {
+            // Normal revival: respawn the Director so supervision resumes
+            // without a daemon restart. No-op (warn) during shutdown.
+            spawn_director_for_plan(ctx, plan_id.clone()).await;
+        } else {
+            // Bullet 13: a zero-Works Plan stalled during/before
+            // decomposition (decompose failure, or a shutdown/drain that
+            // skipped `decompose_and_dispatch`). Re-enter
+            // `decompose_and_dispatch`, which re-decomposes, persists
+            // Works, spawns Implementers, AND spawns the Director —
+            // closing the dead-end where `plan override --to active`
+            // neither re-decomposed nor revisited. Runs on the
+            // `plan_create_tasks` pool (the decompose LLM call is ~18s).
+            info!(request_id = id, plan_id = %plan_id, "plan.override: zero-Works revival; re-decomposing");
+            let task_ctx = Arc::clone(ctx);
+            let plan_for_task = plan.clone();
+            ctx.plan_create_tasks.lock().await.spawn(async move {
+                if task_ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                decompose_and_dispatch(&task_ctx, plan_for_task, id).await;
+            });
+        }
     }
 
     let result = PlanOverrideResult { plan };

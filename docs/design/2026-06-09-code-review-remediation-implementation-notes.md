@@ -903,3 +903,48 @@ Landing across commits (mirrors Phases 1-3):
 
 #### Open questions
 - None.
+
+### Commit F — Stalled->Active re-decompose + supersede-Triaged-on-Blocked
+
+#### Design decisions
+- **Zero-Works revival (bullet 13).** `handle_plan_override`'s
+  Stalled->Active branch now checks whether the Plan has Works (captured
+  before `children` is moved into the transition). With Works -> respawn
+  the Director (unchanged). With ZERO Works -> spawn
+  `decompose_and_dispatch` on `plan_create_tasks`, which re-decomposes,
+  persists Works, spawns Implementers, AND spawns the Director — closing
+  the documented dead-end where `plan override --to active` neither
+  re-decomposed nor revisited a Plan that stalled during decomposition.
+- **Boot-time zero-Works reconcile (bullet 13, shutdown/drain gap).**
+  `startup_reconcile_directors` now re-decomposes an Active Plan with zero
+  Works (the same `decompose_and_dispatch` path, made `pub(crate)`)
+  instead of spawning a Director over nothing. This covers the
+  `plan_create_tasks` `shutting_down` early-return and the drain-timeout
+  abort, both of which can leave an Active-zero-Works Plan. A store error
+  during the work-count check falls through to the normal Director spawn
+  (safe default: don't re-decompose on uncertainty).
+- **Supersede Triaged Bundle when Work is Blocked (bullet 15).**
+  `spawn_reviewer_for_bundle`'s Step-3 Work-status repair gained an
+  explicit `WorkStatus::Blocked` arm: the (already-Triaged) Bundle is
+  transitioned to `Superseded` (Reactor) and stamped
+  `FailureReason::Other`. Pre-fix a Triaged Bundle whose Work went Blocked
+  was re-driven by every recovery sweep forever (the reviewer exits at
+  entry; the Bundle never reached a terminal state).
+
+#### Deviations
+- `cold_boot_respawns_director_for_active_plan` was updated to seed a Work
+  alongside the Plan — a zero-Works Active Plan now re-decomposes rather
+  than respawning a Director, so the test's original premise (director
+  respawn) is expressed with a realistic mid-flight Plan. New test
+  `cold_boot_redecomposes_active_plan_with_zero_works` pins the zero-Works
+  re-decompose path (asserts one `plan_create_tasks` task, zero Director
+  tasks). Same inversion pattern as Phase 1/2's behavior-change tests.
+
+#### Tradeoffs
+- The boot reconcile and the override both run `decompose_and_dispatch`
+  for the zero-Works case; the reconcile passes `request_id = 0` (boot has
+  no IPC request id). The shared helper keeps the two revival paths
+  identical.
+
+#### Open questions
+- None.

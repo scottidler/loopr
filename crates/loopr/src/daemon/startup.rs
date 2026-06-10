@@ -397,6 +397,26 @@ where
     );
     for plan in active {
         let plan_id = plan.id.clone();
+        // Bullet 13: an Active Plan with zero Works was stalled during or
+        // before decomposition — a shutdown/drain that skipped
+        // `decompose_and_dispatch`, or a crash mid-decompose. Re-enter
+        // `decompose_and_dispatch` (which re-decomposes, persists Works,
+        // spawns Implementers, AND spawns the Director) instead of
+        // spawning a Director to supervise nothing. A store error here
+        // falls through to the normal Director spawn (safe default: don't
+        // re-decompose on uncertainty).
+        let zero_works = matches!(ctx.store.works().list_by_parent_id(&plan_id).await, Ok(w) if w.is_empty());
+        if zero_works {
+            tracing::info!(plan_id = %plan_id, "startup_reconcile_directors: Active Plan with zero Works; re-decomposing");
+            let task_ctx = Arc::clone(ctx);
+            ctx.plan_create_tasks.lock().await.spawn(async move {
+                if task_ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                crate::transport::handler::decompose_and_dispatch(&task_ctx, plan, 0).await;
+            });
+            continue;
+        }
         let operator_notify = Arc::new(tokio::sync::Notify::new());
         ctx.operator_notifies
             .write()

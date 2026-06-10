@@ -717,6 +717,25 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     return;
                 }
             }
+            WorkStatus::Blocked => {
+                // Bullet 15: the Work went Blocked (a prior bundle's
+                // rejection, or a dep terminalized it). A Triaged Bundle
+                // whose Work is Blocked would be re-driven by every
+                // recovery sweep forever — the reviewer exits here, so the
+                // Bundle never reaches a terminal state. Supersede it
+                // (Triaged -> Superseded by Reactor) so the sweep stops.
+                warn!("Work is Blocked at reviewer entry; superseding Bundle to stop recovery re-drive");
+                let expected = bundle.updated_at;
+                bundle.failure_reason = Some(FailureReason::Other("work blocked; bundle superseded".to_string()));
+                if let Err(e) = bundle.transition(BundleStatus::Superseded, Role::Reactor) {
+                    error!(error = %e, "Bundle -> Superseded rejected by FSM; skipping");
+                    return;
+                }
+                if let Err(e) = self.store.bundles().update(bundle.clone(), expected).await {
+                    warn!(error = %e, "Bundle supersede OCC update failed (another task beat us?); skipping");
+                }
+                return;
+            }
             other => {
                 warn!(?other, "unexpected Work status at reviewer entry; skipping");
                 return;
