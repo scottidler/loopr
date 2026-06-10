@@ -349,10 +349,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         let store = Arc::new(store);
-        let summary_fanout = Arc::new(crate::daemon::summary_fanout::SummaryFanout::new(
+        let summary_fanout = Arc::new(crate::daemon::summary_fanout::SummaryFanout::with_events(
             Arc::clone(&store),
             target.clone(),
             Arc::clone(&store),
+            events.clone(),
         ));
         Self {
             target,

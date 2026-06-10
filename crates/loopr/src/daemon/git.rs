@@ -55,5 +55,36 @@ pub async fn ensure_integration_branch(target: &Path, plan_id: &PlanId) -> Resul
     Ok(())
 }
 
+/// Best-effort delete of `loopr/plan-<plan-id>`. Called when a Plan persist
+/// FAILS after `ensure_integration_branch` already created the branch, so a
+/// failed `plan.create` does not leave an orphan `loopr/plan-<id>` ref
+/// behind. `git branch -D` is used (the branch is unmerged at this point).
+/// Failures are logged at `warn!` and swallowed — cleanup must never mask
+/// the original persist error.
+pub async fn delete_integration_branch(target: &Path, plan_id: &PlanId) {
+    let branch = format!("loopr/plan-{plan_id}");
+    match Command::new("git")
+        .arg("-C")
+        .arg(target)
+        .args(["branch", "-D", &branch])
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            tracing::debug!(%branch, "cleaned up orphan integration branch after failed plan persist");
+        }
+        Ok(out) => {
+            tracing::warn!(
+                %branch,
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                "failed to delete orphan integration branch"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(%branch, error = %e, "failed to spawn git branch -D for orphan cleanup");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

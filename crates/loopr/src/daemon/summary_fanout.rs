@@ -25,10 +25,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use domain::{Bundle, Plan, Work};
+use domain::{Bundle, Plan, PlanStatus, Work, WorkStatus};
+use ipc::DaemonEvent;
 use store::{
     BundleUpdateError, BundleUpdateSink, PlanUpdateError, PlanUpdateSink, Store, WorkUpdateError, WorkUpdateSink,
 };
+use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use crate::summary;
@@ -46,11 +48,85 @@ pub struct SummaryFanout<S> {
     inner: S,
     target: PathBuf,
     store: Arc<Store>,
+    /// Broadcast bus for `DaemonEvent`s. `None` in tests (the `new`
+    /// constructor); production wires the daemon's `events` sender via
+    /// `with_events` so terminal/Blocked Work transitions and
+    /// terminal/Stalled Plan transitions reach connected clients. The bus
+    /// previously had a single sender (`budget.exceeded`); this is the
+    /// other documented sender the vision promised.
+    events: Option<broadcast::Sender<DaemonEvent>>,
 }
 
 impl<S> SummaryFanout<S> {
+    /// Test/standalone constructor: no event bus wired.
     pub fn new(inner: S, target: PathBuf, store: Arc<Store>) -> Self {
-        Self { inner, target, store }
+        Self {
+            inner,
+            target,
+            store,
+            events: None,
+        }
+    }
+
+    /// Production constructor: wires the daemon's `DaemonEvent` broadcast
+    /// sender so lifecycle transitions emit on the bus.
+    pub fn with_events(inner: S, target: PathBuf, store: Arc<Store>, events: broadcast::Sender<DaemonEvent>) -> Self {
+        Self {
+            inner,
+            target,
+            store,
+            events: Some(events),
+        }
+    }
+
+    /// Emit a `DaemonEvent` on the bus if one is wired. Best-effort: a send
+    /// error (no subscribers) is swallowed — events are advisory.
+    fn emit(&self, event: &str, data: serde_json::Value) {
+        if let Some(tx) = &self.events {
+            let _ = tx.send(DaemonEvent {
+                event: event.to_string(),
+                data,
+            });
+        }
+    }
+
+    /// Emit a Work lifecycle event on a terminal or Blocked transition.
+    fn emit_work_event(&self, work: &Work) {
+        let event = if work.status == WorkStatus::Blocked {
+            "work.blocked"
+        } else if work.status.is_terminal() {
+            "work.terminal"
+        } else {
+            return;
+        };
+        self.emit(
+            event,
+            serde_json::json!({
+                "work_id": work.id.to_string(),
+                "plan_id": work.parent_id.to_string(),
+                "status": format!("{:?}", work.status),
+                "blocked_reason": work.blocked_reason,
+                "failure_reason": work.failure_reason.as_ref().map(|r| format!("{r:?}")),
+            }),
+        );
+    }
+
+    /// Emit a Plan lifecycle event on a terminal or Stalled transition.
+    fn emit_plan_event(&self, plan: &Plan) {
+        let event = if plan.status == PlanStatus::Stalled {
+            "plan.stalled"
+        } else if plan.status.is_terminal() {
+            "plan.terminal"
+        } else {
+            return;
+        };
+        self.emit(
+            event,
+            serde_json::json!({
+                "plan_id": plan.id.to_string(),
+                "status": format!("{:?}", plan.status),
+            }),
+        );
     }
 }
 
@@ -78,6 +154,8 @@ where
         // Spec/Phase (Tier-2 multi-tier shape, not built); the
         // Plan-resolve is itself best-effort.
         self.refresh_parent_plan(&work_for_summary).await;
+        // Surface terminal/Blocked transitions on the DaemonEvent bus.
+        self.emit_work_event(&work_for_summary);
         Ok(persisted)
     }
 }
@@ -162,6 +240,8 @@ where
                 "summary::write_plan failed (non-fatal)"
             );
         }
+        // Surface terminal/Stalled transitions on the DaemonEvent bus.
+        self.emit_plan_event(&plan_for_summary);
         Ok(persisted)
     }
 }

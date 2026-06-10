@@ -77,7 +77,7 @@ where
     // error here. Stage 5+ adds arms alongside the ipc::Method additions.
     match method {
         Method::Handshake(params) => handle_handshake(req.id, params, state),
-        Method::Status => handle_status(req.id, ctx),
+        Method::Status => handle_status(req.id, ctx).await,
         Method::PlanCreate(params) => handle_plan_create(req.id, params, ctx).await,
         Method::RecordList(params) => handle_record_list(req.id, params, ctx).await,
         Method::RecordGet(params) => handle_record_get(req.id, params, ctx).await,
@@ -125,14 +125,34 @@ fn handle_handshake(id: u64, params: HandshakeParams, state: &mut HandshakeState
 }
 
 #[instrument(name = "ipc.status", level = "debug", skip_all, fields(request_id = id))]
-fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse {
-    // Stage 4 has no records to count; active_plans / active_works are
-    // hardcoded zeros. Stage 5+ reads from taskstore via a new dep.
+async fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse {
+    // Count active plans (status == Active) and active works (any
+    // non-terminal Work). The store is right here, so the Stage 4
+    // placeholder zeros are no longer warranted. A store-read failure
+    // degrades to 0 (with a warn!) rather than failing the whole status
+    // request.
+    let active_plans = match ctx.store.plans().list().await {
+        Ok(plans) => plans
+            .iter()
+            .filter(|p| p.status == domain::PlanStatus::Active)
+            .count() as u32,
+        Err(e) => {
+            warn!(request_id = id, error = %e, "system.status: plans().list() failed; reporting 0 active plans");
+            0
+        }
+    };
+    let active_works = match ctx.store.works().list().await {
+        Ok(works) => works.iter().filter(|w| !w.status.is_terminal()).count() as u32,
+        Err(e) => {
+            warn!(request_id = id, error = %e, "system.status: works().list() failed; reporting 0 active works");
+            0
+        }
+    };
     let result = StatusResult {
         started_at: ctx.started_at.to_rfc3339(),
         pid: ctx.pid,
-        active_plans: 0,
-        active_works: 0,
+        active_plans,
+        active_works,
     };
     match serde_json::to_value(&result) {
         Ok(v) => DaemonResponse::ok(id, v),
@@ -174,6 +194,12 @@ where
 
     if let Err(e) = ctx.store.plans().create(plan.clone()).await {
         warn!(request_id = id, error = %e, "plan.create failed at store");
+        // We may have just created the per-Plan integration branch above;
+        // a Plan-persist failure would otherwise orphan it. Best-effort
+        // delete so a failed plan.create leaves no `loopr/plan-<id>` ref.
+        if ctx.integrator_config.integration_branch {
+            crate::daemon::git::delete_integration_branch(&ctx.target, &plan.id).await;
+        }
         return DaemonResponse::err(id, map_store_error(e));
     }
 

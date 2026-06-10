@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use domain::{Bundle, Plan, Work};
+use domain::{Bundle, Plan, PlanStatus, Work, WorkStatus};
 use store::Store;
 use store::{BundleUpdateSink, PlanUpdateSink, WorkUpdateSink};
 
@@ -152,4 +152,56 @@ async fn plan_update_writes_plan_summary_and_passes_children_through() {
     let body = std::fs::read_to_string(&plan_summary).unwrap();
     assert!(body.contains("child a"));
     assert!(body.contains("child b"));
+}
+
+#[tokio::test]
+async fn blocked_work_emits_daemon_event_but_non_terminal_does_not() {
+    let (dir, store) = fresh_store().await;
+    let target = dir.path().to_path_buf();
+    let plan = Plan::new("p".to_string());
+    store.plans().create(plan.clone()).await.unwrap();
+    let mut work = Work::new(plan.id.clone(), "w".to_string());
+    store.works().create(work.clone()).await.unwrap();
+
+    let (events, mut rx) = tokio::sync::broadcast::channel(8);
+    let fanout = SummaryFanout::with_events(Arc::clone(&store), target.clone(), Arc::clone(&store), events);
+
+    // A non-terminal transition (Ready) must NOT emit an event.
+    work.status = WorkStatus::Ready;
+    let persisted = WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
+        .await
+        .unwrap();
+    work.updated_at = persisted;
+    assert!(rx.try_recv().is_err(), "Ready transition must not emit a lifecycle event");
+
+    // A Blocked transition emits `work.blocked` carrying the ids.
+    work.status = WorkStatus::Blocked;
+    work.blocked_reason = Some("dep failed".to_string());
+    WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
+        .await
+        .unwrap();
+    let event = rx.try_recv().expect("work.blocked event emitted");
+    assert_eq!(event.event, "work.blocked");
+    assert_eq!(event.data["work_id"], work.id.to_string());
+    assert_eq!(event.data["plan_id"], plan.id.to_string());
+    assert_eq!(event.data["blocked_reason"], "dep failed");
+}
+
+#[tokio::test]
+async fn stalled_plan_emits_daemon_event() {
+    let (dir, store) = fresh_store().await;
+    let target = dir.path().to_path_buf();
+    let mut plan = Plan::new("p".to_string());
+    store.plans().create(plan.clone()).await.unwrap();
+
+    let (events, mut rx) = tokio::sync::broadcast::channel(8);
+    let fanout = SummaryFanout::with_events(Arc::clone(&store), target.clone(), Arc::clone(&store), events);
+
+    plan.status = PlanStatus::Stalled;
+    PlanUpdateSink::update(&fanout, plan.clone(), vec![], plan.updated_at)
+        .await
+        .unwrap();
+    let event = rx.try_recv().expect("plan.stalled event emitted");
+    assert_eq!(event.event, "plan.stalled");
+    assert_eq!(event.data["plan_id"], plan.id.to_string());
 }

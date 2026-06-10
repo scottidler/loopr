@@ -104,10 +104,15 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
         | Command::Bundles
         | Command::Ticks
         | Command::Show { .. }
-        | Command::Director { .. }
-        | Command::Daemon { cmd: DaemonCmd::Status } => {
+        | Command::Director { .. } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
+            //
+            // `daemon status` is deliberately NOT in this arm: a read-only
+            // status query must not auto-fork a daemon (a read becoming a
+            // mutate, making "no daemon running" nearly unreachable). It
+            // falls through to dispatch -> daemon_status, which handles the
+            // no-daemon case by printing "no daemon running".
             daemon::ensure_daemon_if_needed(&effective)?;
         }
         _ => {}

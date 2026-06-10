@@ -169,8 +169,32 @@ async fn status_after_handshake_returns_status_result() {
     assert!(resp.error.is_none());
     let result: StatusResult = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(result.pid, ctx.pid);
+    // Empty store: nothing active yet.
     assert_eq!(result.active_plans, 0);
     assert_eq!(result.active_works, 0);
+}
+
+#[tokio::test]
+async fn status_counts_active_plans_and_works() {
+    let (_td, ctx) = stub_ctx().await;
+    // One Active Plan (Plan::new births Active) with two non-terminal Works
+    // and one Done Work — active_works counts only the non-terminal pair.
+    let plan = domain::Plan::new("count me".to_string());
+    ctx.store.plans().create(plan.clone()).await.unwrap();
+    let w1 = domain::Work::new(plan.id.clone(), "w1".to_string());
+    let w2 = domain::Work::new(plan.id.clone(), "w2".to_string());
+    let mut w3 = domain::Work::new(plan.id.clone(), "w3".to_string());
+    w3.status = domain::WorkStatus::Done;
+    ctx.store.works().create(w1).await.unwrap();
+    ctx.store.works().create(w2).await.unwrap();
+    ctx.store.works().create(w3).await.unwrap();
+
+    let mut state = HandshakeState::Pending;
+    dispatch(&handshake_req(6, PROTOCOL_VERSION), &mut state, &ctx).await;
+    let resp = dispatch(&status_req(7), &mut state, &ctx).await;
+    let result: StatusResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(result.active_plans, 1, "one Active plan");
+    assert_eq!(result.active_works, 2, "two non-terminal works (Done excluded)");
 }
 
 #[tokio::test]
