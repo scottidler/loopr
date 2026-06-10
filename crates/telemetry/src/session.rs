@@ -48,7 +48,19 @@ impl SessionId {
     /// Validates the `YYYYMMDD-HHMMSS` skeleton and optional `-N` suffix;
     /// rejects anything else.
     pub fn parse(s: &str) -> Result<Self, SessionIdParseError> {
-        let (base, suffix) = if s.len() > 15 { (&s[..15], Some(&s[15..])) } else { (s, None) };
+        // Byte-slice (`&s[..15]`) panics when byte 15 is not a UTF-8 char
+        // boundary; `query.rs` feeds raw directory names here, so a
+        // multibyte dir name must yield `Malformed`, not a panic. `get`
+        // returns `None` on a non-boundary split, falling through to
+        // `(s, None)` which then fails `is_valid_base`.
+        let (base, suffix) = if s.len() > 15 {
+            match (s.get(..15), s.get(15..)) {
+                (Some(b), Some(rest)) => (b, Some(rest)),
+                _ => (s, None),
+            }
+        } else {
+            (s, None)
+        };
         if !is_valid_base(base) {
             return Err(SessionIdParseError::Malformed(s.to_string()));
         }

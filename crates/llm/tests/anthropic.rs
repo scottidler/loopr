@@ -269,10 +269,12 @@ async fn stop_reason_max_tokens_maps_to_context_exhausted() {
         .unwrap_err();
     match err {
         LlmError::Fatal {
-            reason: FatalReason::ContextExhausted { used, limit },
+            reason: FatalReason::ContextExhausted { used, limit, usage },
         } => {
             assert_eq!(used, 8192);
             assert_eq!(limit, 8192);
+            // Phase 1 remediation: billed usage rides on the error.
+            assert_eq!(usage.output_tokens, 8192);
         }
         other => panic!("expected ContextExhausted, got: {other:?}"),
     }
@@ -305,7 +307,7 @@ async fn missing_tool_use_block_maps_to_schema_validation() {
         matches!(
             err,
             LlmError::Fatal {
-                reason: FatalReason::SchemaValidation(_)
+                reason: FatalReason::SchemaValidation { .. }
             }
         ),
         "got: {err:?}"
@@ -344,7 +346,7 @@ async fn malformed_tool_input_maps_to_schema_validation() {
         matches!(
             err,
             LlmError::Fatal {
-                reason: FatalReason::SchemaValidation(_)
+                reason: FatalReason::SchemaValidation { .. }
             }
         ),
         "got: {err:?}"

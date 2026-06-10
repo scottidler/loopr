@@ -8,6 +8,8 @@
 //! `RetryStrategy`); the taxonomy here just surfaces the
 //! what-retrying-achieves signal in a form callers can `match` on.
 
+use crate::usage::Usage;
+
 /// Errors returned by `LlmClient::complete_with_tool`.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
@@ -22,6 +24,26 @@ pub enum LlmError {
     /// (larger `max_tokens`, different schema) or abort.
     #[error("fatal LLM call failure: {reason:?}")]
     Fatal { reason: FatalReason },
+}
+
+impl LlmError {
+    /// Token usage the provider billed on an error-classified 200
+    /// response. `max_tokens` truncation (`ContextExhausted`) and a
+    /// tool-contract refusal / malformed-content body
+    /// (`SchemaValidation`) are HTTP 200s that cost tokens but
+    /// short-circuit before the success path's metering. The metered
+    /// client records this on the error path so the cost counters see
+    /// the expensive failures (Phase 1 of the code-review remediation).
+    pub fn billed_usage(&self) -> Option<&Usage> {
+        match self {
+            LlmError::Fatal { reason } => match reason {
+                FatalReason::ContextExhausted { usage, .. } => Some(usage),
+                FatalReason::SchemaValidation { usage, .. } => Some(usage),
+                _ => None,
+            },
+            LlmError::Retryable { .. } => None,
+        }
+    }
 }
 
 /// Typed causes for `LlmError::Fatal`. Each variant names a class of
@@ -54,7 +76,7 @@ pub enum FatalReason {
     /// temperature 0.3 warrant a blind retry, split this into
     /// `SchemaValidation` (Fatal, no tool_use block) and
     /// `SchemaMalformed` (Retryable, unparseable JSON) then.
-    SchemaValidation(String),
+    SchemaValidation { message: String, usage: Usage },
 
     /// The model's response was truncated at `max_tokens` before
     /// producing a complete tool-input payload. `used` is
@@ -63,7 +85,7 @@ pub enum FatalReason {
     /// Retryable) because retrying with the SAME config will fail
     /// identically. A caller that chooses to retry with a LARGER
     /// `max_tokens` can do so explicitly.
-    ContextExhausted { used: u32, limit: u32 },
+    ContextExhausted { used: u32, limit: u32, usage: Usage },
 
     /// Config was missing the API key, or the key env var was unset,
     /// or the base URL was malformed.

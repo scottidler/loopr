@@ -1,0 +1,75 @@
+# Implementation Notes: Code Review Remediation
+
+Running, append-only record of how the implementation interprets or
+diverges from `2026-06-09-code-review-remediation.md`. One section per
+phase; four buckets each ("None." where empty).
+
+## Pre-phase: CI unblock
+
+### Design decisions
+- Pulled the telemetry `unnecessary_sort_by` clippy fix
+  (`crates/telemetry/src/query.rs:57`) forward from Phase 9 into its own
+  commit — the Testing Strategy says CI (`-D warnings`) must be green for
+  `otto ci` to gate each phase, and telemetry's scoped CI was red. Fixed
+  the descending sort as `sort_by_key(|c| std::cmp::Reverse(c.0))`.
+
+### Deviations
+- None.
+
+### Tradeoffs
+- None.
+
+### Open questions
+- None.
+
+## Phase 1: Agent-pipeline correctness
+
+Split into two commits for size/durability (the phase touches 7 crates
+and threads a new `CommitContext` through ~20 call sites):
+- **Part 1** — the three independent panics/drops (llm metered usage,
+  tools truncate, telemetry SessionId::parse).
+- **Part 2** — the git/commit/bundle pipeline cluster (findings 1-6).
+
+### Design decisions
+- **Finding 9 (`llm` metered usage on error path).** Added
+  `LlmError::billed_usage(&self) -> Option<&Usage>` rather than having
+  the metered client re-classify error variants. `Usage` now rides on
+  `FatalReason::ContextExhausted { .., usage }` and
+  `FatalReason::SchemaValidation { message, usage }` (the latter
+  converted from a tuple variant to a struct variant). `MeteredLlmClient`
+  records `billed_usage()` on its error path so max_tokens-truncated and
+  tool-refusal 200s reach the cost counters.
+- **`LlmClient::model()` accessor.** Added to support the `Loopr-Model`
+  commit trailer (Phase 1 finding 6, Part 2). Given a documented default
+  body (`"unknown-model"`) so the ~6 workspace test fakes that model no
+  particular ID don't need touching — keeping the blast radius inside
+  `llm`. Every production backend (`AnthropicClient`, `MeteredLlmClient`,
+  the `Arc<L>` forward) overrides it; the default is never reached on a
+  real call path.
+- **Finding 7 (`tools` truncate panic).** Floor the cut index to the
+  nearest UTF-8 char boundary at or below `MAX_INLINE_OUTPUT` before
+  `String::truncate`.
+- **Finding 8 (`telemetry` SessionId::parse).** Replaced the `&s[..15]`
+  byte-slice with `s.get(..15)`/`s.get(15..)`; a non-boundary split now
+  falls through to `(s, None)` and fails `is_valid_base` → `Malformed`,
+  never a panic.
+
+### Deviations
+- The metered-client Finding 9 regression tests were added to the
+  existing inline `#[cfg(test)] mod tests` block in `metered.rs` rather
+  than a sibling file. The design doc schedules extracting all inline
+  test blocks (incl. llm metered/usage/stub) in Phase 9; adding a sibling
+  now would be a half-migration. Extraction stays a Phase 9 task.
+
+### Tradeoffs
+- `model()` default body vs. explicit impls on all fakes: chose the
+  default to keep the change inside `llm` (the "crate is the unit of
+  blast radius" rule). The cost is a sentinel default value, mitigated by
+  the fact that production never reaches it and it is documented.
+- Kept the redundant `used`/`limit` fields on `ContextExhausted`
+  alongside the new `usage` (rather than deriving them from
+  `usage.output_tokens`) to avoid churning the existing error Display and
+  the decomposer's match expectations.
+
+### Open questions
+- None for Part 1.

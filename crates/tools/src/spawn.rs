@@ -274,7 +274,16 @@ fn truncate_inline(s: &mut String, persist_path: Option<&Path>) {
     if s.len() <= MAX_INLINE_OUTPUT {
         return;
     }
-    s.truncate(MAX_INLINE_OUTPUT);
+    // `String::truncate` panics when the cut index is not a UTF-8 char
+    // boundary. `MAX_INLINE_OUTPUT` is a round number, so a subprocess
+    // emitting >32 KB of multibyte output (cargo/test spew with unicode)
+    // would otherwise panic the spawn future. Floor to the nearest char
+    // boundary at or below the cap before truncating.
+    let mut cut = MAX_INLINE_OUTPUT;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
     if let Some(pos) = s.rfind('\n') {
         s.truncate(pos);
     }

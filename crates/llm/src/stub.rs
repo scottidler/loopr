@@ -224,6 +224,10 @@ impl LlmClient for ScriptedLlm {
             }
         }
     }
+
+    fn model(&self) -> &str {
+        "scripted-stub-model"
+    }
 }
 
 #[cfg(test)]
@@ -285,7 +289,10 @@ mod tests {
             reason: "transient".to_string(),
         }));
         stub.queue_tool(Err(LlmError::Fatal {
-            reason: FatalReason::SchemaValidation("bad".to_string()),
+            reason: FatalReason::SchemaValidation {
+                message: "bad".to_string(),
+                usage: Usage::default(),
+            },
         }));
 
         let free_err = stub.complete_free("", &[], None).await.unwrap_err();

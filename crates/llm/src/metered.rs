@@ -38,9 +38,22 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
         tool: ToolSchema,
         model: Option<&str>,
     ) -> Result<(ToolCall, Usage), LlmError> {
-        let (tc, usage) = self.inner.complete_with_tool(system, user, tool, model).await?;
-        record(&self.snapshot, &usage);
-        Ok((tc, usage))
+        match self.inner.complete_with_tool(system, user, tool, model).await {
+            Ok((tc, usage)) => {
+                record(&self.snapshot, &usage);
+                Ok((tc, usage))
+            }
+            Err(e) => {
+                // Error-classified 200s (max_tokens truncation, tool-
+                // contract refusal) bill tokens but short-circuit the
+                // success path; record their usage so the expensive
+                // failures reach the cost counters (Phase 1 remediation).
+                if let Some(usage) = e.billed_usage() {
+                    record(&self.snapshot, usage);
+                }
+                Err(e)
+            }
+        }
     }
 
     async fn complete_free(
@@ -49,9 +62,22 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
         messages: &[Message],
         model: Option<&str>,
     ) -> Result<(String, Usage), LlmError> {
-        let (raw, usage) = self.inner.complete_free(system, messages, model).await?;
-        record(&self.snapshot, &usage);
-        Ok((raw, usage))
+        match self.inner.complete_free(system, messages, model).await {
+            Ok((raw, usage)) => {
+                record(&self.snapshot, &usage);
+                Ok((raw, usage))
+            }
+            Err(e) => {
+                if let Some(usage) = e.billed_usage() {
+                    record(&self.snapshot, usage);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn model(&self) -> &str {
+        self.inner.model()
     }
 }
 
@@ -93,6 +119,53 @@ mod tests {
         assert_eq!(out, "ok");
         let snap = snapshot.lock().unwrap();
         assert_eq!(snap.llm_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn error_path_records_billed_usage() {
+        // Phase 1 remediation: an error-classified 200 (max_tokens
+        // truncation) bills tokens but returns Err. The metered client
+        // must still record the usage so the expensive failure reaches
+        // the cost counters.
+        use crate::error::{FatalReason, LlmError};
+        use crate::usage::Usage;
+
+        let snapshot = fresh_snapshot();
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Err(LlmError::Fatal {
+            reason: FatalReason::ContextExhausted {
+                used: 8192,
+                limit: 8192,
+                usage: Usage {
+                    input_tokens: 100,
+                    output_tokens: 8192,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                },
+            },
+        }));
+        let metered = MeteredLlmClient::new(stub, Arc::clone(&snapshot));
+        let err = metered.complete_free("s", &[], None).await.unwrap_err();
+        assert!(matches!(err, LlmError::Fatal { .. }));
+        let snap = snapshot.lock().unwrap();
+        assert_eq!(snap.llm_calls, 1, "the failed-but-billed call must be counted");
+    }
+
+    #[tokio::test]
+    async fn retryable_error_records_no_usage() {
+        // A genuine transient failure (no billed body) must NOT be
+        // counted — billed_usage returns None for Retryable.
+        use crate::error::LlmError;
+
+        let snapshot = fresh_snapshot();
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Err(LlmError::Retryable {
+            reason: "transient".to_string(),
+        }));
+        let metered = MeteredLlmClient::new(stub, Arc::clone(&snapshot));
+        let _ = metered.complete_free("s", &[], None).await.unwrap_err();
+        let snap = snapshot.lock().unwrap();
+        assert_eq!(snap.llm_calls, 0, "a retryable error bills nothing");
     }
 
     #[tokio::test]

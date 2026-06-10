@@ -162,3 +162,17 @@ fn truncate_inline_below_cap_is_noop() {
     truncate_inline(&mut s, None);
     assert_eq!(s, "short\n");
 }
+
+#[test]
+fn truncate_inline_multibyte_overflow_does_not_panic() {
+    // Phase 1 remediation: a >32 KB string of multibyte chars whose
+    // byte at MAX_INLINE_OUTPUT lands mid-codepoint must not panic
+    // `String::truncate`. '€' is 3 bytes; 32_000 % 3 != 0 guarantees
+    // the cap falls mid-char.
+    let mut s = "€".repeat(MAX_INLINE_OUTPUT); // 3 * 32_000 bytes
+    truncate_inline(&mut s, None);
+    assert!(s.len() <= MAX_INLINE_OUTPUT + 100);
+    assert!(s.ends_with("[truncated]"));
+    // The truncated prefix must remain valid UTF-8 (no broken codepoint).
+    assert!(std::str::from_utf8(s.as_bytes()).is_ok());
+}

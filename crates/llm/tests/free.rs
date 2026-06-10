@@ -149,7 +149,7 @@ async fn free_no_text_block_maps_to_schema_validation() {
         .unwrap_err();
     match err {
         LlmError::Fatal {
-            reason: FatalReason::SchemaValidation(msg),
+            reason: FatalReason::SchemaValidation { message: msg, .. },
         } => assert!(msg.contains("no text content block"), "got: {msg}"),
         other => panic!("expected SchemaValidation, got {other:?}"),
     }
@@ -180,10 +180,14 @@ async fn free_max_tokens_maps_to_context_exhausted() {
         .unwrap_err();
     match err {
         LlmError::Fatal {
-            reason: FatalReason::ContextExhausted { used, limit },
+            reason: FatalReason::ContextExhausted { used, limit, usage },
         } => {
             assert_eq!(used, 8192);
             assert_eq!(limit, 8192);
+            // Phase 1 remediation: the billed usage rides on the error so
+            // the metered client can charge this max_tokens failure.
+            assert_eq!(usage.output_tokens, 8192);
+            assert_eq!(usage.input_tokens, 100);
         }
         other => panic!("expected ContextExhausted, got {other:?}"),
     }

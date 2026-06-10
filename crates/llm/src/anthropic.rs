@@ -310,6 +310,10 @@ impl LlmClient for AnthropicClient {
         }
         result
     }
+
+    fn model(&self) -> &str {
+        &self.config.model
+    }
 }
 
 impl AnthropicClient {
@@ -607,15 +611,16 @@ fn extract_usage(response: &Value) -> Usage {
 /// that content to the Implementer.
 fn extract_text_block(response: &Value, max_tokens: u32) -> Result<(String, Usage), LlmError> {
     if response.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
-        let used = response
-            .get("usage")
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32;
+        // The provider billed the full truncated response; carry the
+        // usage on the error so the metered client records the cost of
+        // this expensive failure on its error path (Phase 1 remediation).
+        let usage = extract_usage(response);
+        let used = usage.output_tokens as u32;
         return Err(LlmError::Fatal {
             reason: FatalReason::ContextExhausted {
                 used,
                 limit: max_tokens,
+                usage,
             },
         });
     }
@@ -626,7 +631,10 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<(String, Usag
         .get("content")
         .and_then(Value::as_array)
         .ok_or_else(|| LlmError::Fatal {
-            reason: FatalReason::SchemaValidation("response missing `content` array".into()),
+            reason: FatalReason::SchemaValidation {
+                message: "response missing `content` array".into(),
+                usage: usage.clone(),
+            },
         })?;
 
     for block in content {
@@ -637,7 +645,10 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<(String, Usag
                     .get("text")
                     .and_then(Value::as_str)
                     .ok_or_else(|| LlmError::Fatal {
-                        reason: FatalReason::SchemaValidation("text block missing `text` field".into()),
+                        reason: FatalReason::SchemaValidation {
+                            message: "text block missing `text` field".into(),
+                            usage: usage.clone(),
+                        },
                     })?;
                 return Ok((text.to_string(), usage));
             }
@@ -650,7 +661,10 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<(String, Usag
     }
 
     Err(LlmError::Fatal {
-        reason: FatalReason::SchemaValidation("no text content block in response".into()),
+        reason: FatalReason::SchemaValidation {
+            message: "no text content block in response".into(),
+            usage: usage.clone(),
+        },
     })
 }
 
@@ -660,15 +674,16 @@ fn extract_tool_call(
     max_tokens: u32,
 ) -> Result<(ToolCall, Usage), LlmError> {
     if response.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
-        let used = response
-            .get("usage")
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32;
+        // The provider billed the full truncated response; carry the
+        // usage on the error so the metered client records the cost of
+        // this expensive failure on its error path (Phase 1 remediation).
+        let usage = extract_usage(response);
+        let used = usage.output_tokens as u32;
         return Err(LlmError::Fatal {
             reason: FatalReason::ContextExhausted {
                 used,
                 limit: max_tokens,
+                usage,
             },
         });
     }
@@ -679,7 +694,10 @@ fn extract_tool_call(
         .get("content")
         .and_then(Value::as_array)
         .ok_or_else(|| LlmError::Fatal {
-            reason: FatalReason::SchemaValidation("response missing `content` array".into()),
+            reason: FatalReason::SchemaValidation {
+                message: "response missing `content` array".into(),
+                usage: usage.clone(),
+            },
         })?;
 
     for block in content {
@@ -696,13 +714,17 @@ fn extract_tool_call(
             continue;
         }
         let input = block.get("input").ok_or_else(|| LlmError::Fatal {
-            reason: FatalReason::SchemaValidation("tool_use block missing `input` field".into()),
+            reason: FatalReason::SchemaValidation {
+                message: "tool_use block missing `input` field".into(),
+                usage: usage.clone(),
+            },
         })?;
         if !input.is_object() && !input.is_array() {
             return Err(LlmError::Fatal {
-                reason: FatalReason::SchemaValidation(format!(
-                    "tool_use input unparseable: expected object or array, got {input}"
-                )),
+                reason: FatalReason::SchemaValidation {
+                    message: format!("tool_use input unparseable: expected object or array, got {input}"),
+                    usage: usage.clone(),
+                },
             });
         }
         return Ok((
@@ -715,6 +737,9 @@ fn extract_tool_call(
     }
 
     Err(LlmError::Fatal {
-        reason: FatalReason::SchemaValidation("no tool-use content block".into()),
+        reason: FatalReason::SchemaValidation {
+            message: "no tool-use content block".into(),
+            usage: usage.clone(),
+        },
     })
 }

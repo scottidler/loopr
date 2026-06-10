@@ -147,6 +147,18 @@ fn sessionid_parse_rejects_malformed() {
 }
 
 #[test]
+fn sessionid_parse_multibyte_does_not_panic() {
+    // Phase 1 remediation: `query.rs` feeds raw directory names to
+    // `parse`; a multibyte name whose byte 15 is mid-codepoint must
+    // yield `Malformed`, not panic the byte-slice. '€' is 3 bytes, so
+    // a 6-char string is 18 bytes with byte 15 mid-char.
+    assert!(SessionId::parse("€€€€€€").is_err());
+    assert!(SessionId::parse("2026041€-143012").is_err());
+    // A 16+ byte name that is otherwise non-numeric must also be Err.
+    assert!(SessionId::parse("日本語日本語日本語").is_err());
+}
+
+#[test]
 fn sessionid_started_at_strips_suffix() {
     let id = SessionId::parse("20260419-143012-7").unwrap();
     let ts = id.started_at().unwrap();

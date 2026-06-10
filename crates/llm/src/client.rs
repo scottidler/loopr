@@ -71,6 +71,22 @@ pub trait LlmClient {
         messages: &[Message],
         model: Option<&str>,
     ) -> Result<(String, Usage), LlmError>;
+
+    /// The client's configured default model ID (the value used when a
+    /// call passes `model: None`). Surfaced so callers that record the
+    /// model in side channels - e.g. the implementer's `Loopr-Model`
+    /// commit trailer - don't have to thread the config string
+    /// separately. Returns the literal configured ID, not the
+    /// per-response model the provider echoes back (that is the Phase 6
+    /// model-pinning detector's concern).
+    ///
+    /// Defaults to `"unknown-model"` for the benefit of test fakes that
+    /// model no particular ID. Every production backend
+    /// (`AnthropicClient`, `MeteredLlmClient`, the `Arc<L>` forward)
+    /// overrides this; the default is never reached on a real call path.
+    fn model(&self) -> &str {
+        "unknown-model"
+    }
 }
 
 /// Forwarding impl for `Arc<L>` so daemon code can build
@@ -94,5 +110,9 @@ impl<L: LlmClient + Send + Sync + ?Sized> LlmClient for std::sync::Arc<L> {
         model: Option<&str>,
     ) -> Result<(String, Usage), LlmError> {
         (**self).complete_free(system, messages, model).await
+    }
+
+    fn model(&self) -> &str {
+        (**self).model()
     }
 }
