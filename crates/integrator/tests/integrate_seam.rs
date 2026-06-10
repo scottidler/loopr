@@ -1,8 +1,11 @@
 //! Seam tests for `integrate` against real git tempdirs. Covers the
-//! happy path, double-integration rejection, EmptyBranch, the four
-//! crash-recovery paths, and ConflictRetryable. Structural conflict
-//! lives in its own test file because it requires `allow_multi_bundle
-//! = true`.
+//! happy path, idempotent double-integration, EmptyBranch, the
+//! crash-recovery paths (including the stale-merge-abort heal, the
+//! trivially-ancestral false-adopt guard, and the multi-bundle
+//! partial-crash re-entry), ConflictRetryable, the dirty-tree guard,
+//! merge-commit determinism, and bundle-branch cleanup. Structural
+//! conflict lives in its own test file because it requires
+//! `allow_multi_bundle = true`.
 
 #![allow(clippy::unwrap_used)]
 
@@ -191,7 +194,13 @@ async fn happy_path_merges_bundle_and_writes_tick() {
 }
 
 #[tokio::test]
-async fn double_integration_rejected_with_bundle_not_accepted_merged() {
+async fn double_integration_is_idempotent_returns_existing_tick() {
+    // A re-submitted Merged Bundle is no longer rejected with
+    // BundleNotAccepted (finding 9: preflight tolerates Merged so a
+    // partial-crash re-entry can pass the full slice). Re-integrating a
+    // fully-Merged Bundle is now idempotent: the merge is adopted, the
+    // Tick's bundle-set matches, DuplicateTick resolves the existing
+    // Tick, and the SAME Tick is returned with the Bundle still Merged.
     let plan = Plan::new("ship".to_string());
     let (_dir, store, repo, _base) = setup(&plan).await;
     store.plans().create(plan.clone()).await.unwrap();
@@ -203,21 +212,21 @@ async fn double_integration_rejected_with_bundle_not_accepted_merged() {
     let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
 
     let deps = deps_for(&store, &repo);
-    let _tick = integrate(std::slice::from_ref(&bundle), &plan, &deps).await.unwrap();
+    let first = integrate(std::slice::from_ref(&bundle), &plan, &deps).await.unwrap();
 
     // Re-fetch: Bundle is now Merged.
     let merged = store.bundles().get(&bundle.id).await.unwrap();
     assert_eq!(merged.status, BundleStatus::Merged);
 
-    // Second call with the (now Merged) Bundle.
-    let result = integrate(&[merged], &plan, &deps).await;
-    match result {
-        Err(IntegrationError::BundleNotAccepted {
-            current: BundleStatus::Merged,
-            ..
-        }) => {}
-        other => panic!("expected BundleNotAccepted(Merged), got {other:?}"),
-    }
+    // Second call with the (now Merged) Bundle: idempotent.
+    let second = integrate(&[merged], &plan, &deps).await.unwrap();
+    assert_eq!(second.id, first.id, "re-integration must return the existing Tick");
+
+    // Still exactly one Tick on disk; Bundle still Merged.
+    let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
+    assert_eq!(ticks.len(), 1, "no second Tick must be written");
+    let final_bundle = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(final_bundle.status, BundleStatus::Merged);
 
     store.close().await.unwrap();
 }
@@ -824,6 +833,209 @@ async fn validation_failure_after_adopt_is_non_terminal_and_preserves_merge() {
         final_bundle.status,
         BundleStatus::Integrating,
         "adopted-then-validation-failed Bundle must stay Integrating, not IntegrationFailed"
+    );
+
+    store.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Determinism, branch cleanup, multi-bundle partial-crash re-entry
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn merge_commit_dates_and_identity_are_pinned_for_determinism() {
+    // The merge commit's author/committer identity and dates are pinned
+    // (identity -> a fixed loopr identity; dates -> the bundle head's
+    // committer date) so "same bundles + same base = same Tick SHA".
+    // Verifying the pinned inputs is the mechanism; SHA-equality across
+    // runs is its consequence.
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
+
+    let deps = deps_for(&store, &repo);
+    let tick = integrate(std::slice::from_ref(&bundle), &plan, &deps).await.unwrap();
+
+    // Identity is the fixed loopr identity, not the ambient git config.
+    assert_eq!(
+        git_capture(&repo, &["log", "-1", "--format=%cn", &tick.sha]),
+        "loopr-integrator"
+    );
+    assert_eq!(
+        git_capture(&repo, &["log", "-1", "--format=%ce", &tick.sha]),
+        "integrator@loopr"
+    );
+    assert_eq!(
+        git_capture(&repo, &["log", "-1", "--format=%an", &tick.sha]),
+        "loopr-integrator"
+    );
+    assert_eq!(
+        git_capture(&repo, &["log", "-1", "--format=%ae", &tick.sha]),
+        "integrator@loopr"
+    );
+
+    // Dates are pinned to the bundle head's committer date.
+    let bundle_date = git_capture(&repo, &["log", "-1", "--format=%cI", &head]);
+    assert_eq!(
+        git_capture(&repo, &["log", "-1", "--format=%cI", &tick.sha]),
+        bundle_date,
+        "merge committer date pinned to bundle head"
+    );
+    assert_eq!(
+        git_capture(&repo, &["log", "-1", "--format=%aI", &tick.sha]),
+        bundle_date,
+        "merge author date pinned to bundle head"
+    );
+
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn merged_bundle_branch_is_deleted_after_tick() {
+    // The integrator deletes the per-attempt bundle branch after the
+    // Tick publishes (the commits live on the integration branch now).
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
+    // Branch exists before integration.
+    let before = StdCommand::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["rev-parse", "--verify", "--quiet", &branch])
+        .output()
+        .unwrap();
+    assert!(before.status.success(), "bundle branch should exist before integrate");
+
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
+    let deps = deps_for(&store, &repo);
+    integrate(std::slice::from_ref(&bundle), &plan, &deps).await.unwrap();
+
+    // Branch is gone after the Tick.
+    let after = StdCommand::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["rev-parse", "--verify", "--quiet", &branch])
+        .output()
+        .unwrap();
+    assert!(!after.status.success(), "bundle branch must be deleted after the Tick");
+
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn multi_bundle_partial_crash_reentry_finishes_remaining_merged() {
+    // A prior multi-Bundle integrate merged BOTH bundles and wrote the
+    // Tick, then crashed PART-way through the Phase-4 Merged loop: bundle1
+    // got Merged, bundle2 is still Integrating. The full-slice re-entry
+    // must tolerate the Merged bundle1, adopt both merges, resolve the
+    // existing Tick via DuplicateTick, and finish bundle2 -> Merged.
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work1 = sample_work(&plan);
+    let work2 = sample_work(&plan);
+    store.works().create(work1.clone()).await.unwrap();
+    store.works().create(work2.clone()).await.unwrap();
+
+    let branch1 = format!("loopr/wk-{}", work1.id);
+    let branch2 = format!("loopr/wk-{}", work2.id);
+    let head1 = create_bundle_branch(&repo, &plan, &branch1, "feat1.rs", "fn one() {}\n");
+    let head2 = create_bundle_branch(&repo, &plan, &branch2, "feat2.rs", "fn two() {}\n");
+
+    // Simulate the prior call: both merges already landed on integ.
+    let integ = format!("loopr/plan-{}", plan.id);
+    git(&repo, &["checkout", "-q", &integ]);
+    git(
+        &repo,
+        &[
+            "merge",
+            "--no-ff",
+            &branch1,
+            "-m",
+            &format!("Merge bundle branch {branch1}"),
+            "--no-gpg-sign",
+        ],
+    );
+    let merge1 = git_capture(&repo, &["rev-parse", "HEAD"]);
+    git(
+        &repo,
+        &[
+            "merge",
+            "--no-ff",
+            &branch2,
+            "-m",
+            &format!("Merge bundle branch {branch2}"),
+            "--no-gpg-sign",
+        ],
+    );
+    let merge2 = git_capture(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["checkout", "-q", "main"]);
+
+    // Persist both bundles; bundle1 fully Merged (prior Phase-4 wrote it),
+    // bundle2 left Integrating (crash before it was written).
+    let bundle1 = persist_accepted_bundle(&store, &work1, &branch1, &head1, vec!["feat1.rs".to_string()]).await;
+    let bundle1 = transition_bundle_via_store(&store, &bundle1, BundleStatus::Integrating, Role::Integrator).await;
+    let bundle1 = transition_bundle_via_store(&store, &bundle1, BundleStatus::Merged, Role::Integrator).await;
+    assert_eq!(bundle1.status, BundleStatus::Merged);
+
+    let bundle2 = persist_accepted_bundle(&store, &work2, &branch2, &head2, vec!["feat2.rs".to_string()]).await;
+    let bundle2 = transition_bundle_via_store(&store, &bundle2, BundleStatus::Integrating, Role::Integrator).await;
+    assert_eq!(bundle2.status, BundleStatus::Integrating);
+
+    // Prior call's Tick covering BOTH bundles (the set key the re-entry
+    // must reproduce to hit DuplicateTick).
+    let prior_tick = domain::Tick::new(
+        plan.id.clone(),
+        vec![bundle1.id.clone(), bundle2.id.clone()],
+        integ.clone(),
+        merge2.clone(),
+        vec![merge1.clone(), merge2.clone()],
+    );
+    let _ = store.ticks().create(prior_tick.clone()).await.unwrap();
+
+    // Re-enter with the FULL slice and allow_multi_bundle = true.
+    let deps = IntegratorDeps {
+        bundle_sink: &store,
+        works: &store,
+        ticks: &store,
+        config: IntegratorConfig {
+            allow_multi_bundle: true,
+            ..IntegratorConfig::default()
+        },
+        target: repo.clone(),
+        git_lock: Arc::new(AsyncMutex::new(())),
+    };
+    let tick = integrate(&[bundle1.clone(), bundle2.clone()], &plan, &deps)
+        .await
+        .unwrap();
+
+    // Adopted the existing Tick (no second Tick written).
+    assert_eq!(
+        tick.id, prior_tick.id,
+        "must resolve the existing Tick via DuplicateTick"
+    );
+    let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
+    assert_eq!(ticks.len(), 1, "no second Tick must be written");
+
+    // Both bundles end Merged.
+    assert_eq!(
+        store.bundles().get(&bundle1.id).await.unwrap().status,
+        BundleStatus::Merged
+    );
+    assert_eq!(
+        store.bundles().get(&bundle2.id).await.unwrap().status,
+        BundleStatus::Merged
     );
 
     store.close().await.unwrap();

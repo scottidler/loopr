@@ -139,8 +139,9 @@ and threads a new `CommitContext` through ~20 call sites):
 
 ## Phase 2: Integrator git-state integrity
 
-In progress. This phase is the system's riskiest code (git crash
-recovery); findings land incrementally so each is durable.
+Complete (all 12 findings). This phase is the system's riskiest code
+(git crash recovery); findings landed incrementally across five commits
+so each is durable.
 
 Landing across commits (mirrors Phase 1's Part split):
 - **Commit 1 (shipped)** — `run_git` kill_on_drop.
@@ -304,3 +305,57 @@ Landing across commits (mirrors Phase 1's Part split):
 
 #### Open questions
 - None.
+
+### Commit D — determinism, branch deletion, multi-bundle re-entry
+
+#### Design decisions
+- **Pinned merge identity + dates (git.rs, finding 7).** `merge_no_ff`
+  now stamps the merge commit with a fixed identity
+  (`loopr-integrator <integrator@loopr>`, via `-c user.name/.email`) and
+  pins `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` to the bundle branch head's
+  committer date (a fixed fact across runs). `run_git` was split into a
+  thin delegate plus `run_git_with_env` (instrumented worker) so the
+  merge can set env vars. Result: same bundles + same base = same merge
+  SHA = same Tick SHA.
+- **Bundle-branch deletion (lib.rs, finding 8).** After the Tick + all
+  Merged writes are durable, each merged Bundle branch is deleted via
+  `worktree::delete_branch` inside `spawn_blocking` (the worktree crate's
+  sync git, kept off the tokio executor). Best-effort: a failed delete
+  warns and does not fail an otherwise-successful Tick. Wires the
+  previously-declared-but-unused `worktree` dep.
+- **Multi-bundle partial-crash re-entry (lib.rs, finding 9).**
+  `preflight_status` now tolerates `Merged` Bundles in the input slice;
+  the prologue carries them as-is; the merge loop routes `Merged` through
+  the same adopt-or-merge re-entry arm as `Integrating`
+  (`Integrating | Merged`); the Phase-4 loop skips re-transitioning
+  already-`Merged` Bundles. A driver re-entering with the FULL original
+  slice reproduces the Tick's bundle-set key, so `DuplicateTick` resolves
+  the existing Tick instead of double-writing.
+
+#### Deviations
+- **Behavior change: double-integration is now idempotent, not an
+  error.** Tolerating `Merged` in `preflight_status` (finding 9) means a
+  re-submitted fully-Merged Bundle is adopted and returns the existing
+  Tick rather than `BundleNotAccepted{Merged}`. The seam test
+  `double_integration_rejected_with_bundle_not_accepted_merged` was
+  rewritten to `double_integration_is_idempotent_returns_existing_tick`
+  (the old test pinned the now-incorrect reject behavior - same pattern
+  as Phase 1 inverting `propose_bundle_with_no_changes`). Idempotent
+  re-entry is the more correct semantics and consistent with the
+  crash-recovery philosophy.
+
+#### Tradeoffs
+- Finding 9's re-entry correctness relies on the driver passing the FULL
+  original slice (the documented retry contract). SUBSET re-entry (only
+  the still-`Integrating` Bundles) would produce a different Tick
+  bundle-set key and double-write; that remains unsupported and is noted
+  here rather than guarded, since multi-bundle is gated behind
+  `allow_multi_bundle = false` and this is preparatory work for that flip.
+
+#### Open questions
+- The determinism test verifies the pinned INPUTS (identity + dates on
+  the merge commit) rather than cross-run SHA equality, because two
+  independent test repos would also need identical plan/work ids (the
+  branch name is in the merge message). Pinning the inputs is the
+  mechanism finding 7 specifies; full cross-run SHA equality follows from
+  it once the bundle commits themselves are identical.

@@ -243,6 +243,27 @@ pub(crate) async fn find_adopting_merge(
     Ok(None)
 }
 
+/// Deterministic identity stamped on every integration merge commit.
+/// Pinning the identity (and dates, below) is what makes the merge SHA
+/// reproducible across runs - ambient `user.name`/`user.email` vary by
+/// machine and would otherwise change the commit hash.
+const MERGE_IDENTITY_NAME: &str = "loopr-integrator";
+const MERGE_IDENTITY_EMAIL: &str = "integrator@loopr";
+
+/// Return a ref's committer date in strict ISO-8601 (`%cI`) via
+/// `git log -1`. Used to pin the merge commit's author/committer dates
+/// to the bundle head's date (a fixed fact across runs).
+async fn commit_date(target: &Path, rev: &str, git_timeout: Duration) -> Result<String, IntegrationError> {
+    let out = run_git(target, &["log", "-1", "--format=%cI", rev], git_timeout).await?;
+    if !out.status.success() {
+        return Err(IntegrationError::Git(format!(
+            "git log -1 --format=%cI {rev} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// Attempt `git merge --no-ff <branch> -m "Merge bundle branch <branch>"`.
 /// On success returns the new `HEAD` SHA (via a follow-up `rev-parse HEAD`).
 /// On non-zero exit returns the COMBINED stdout+stderr for the caller to
@@ -250,14 +271,30 @@ pub(crate) async fn find_adopting_merge(
 /// not stderr, so the caller needs both to distinguish a genuine merge
 /// conflict from a non-conflict infrastructure failure); the caller is
 /// responsible for running `merge_abort` + `reset_hard`.
+///
+/// Determinism: the merge commit's author+committer dates are pinned to
+/// the bundle branch head's committer date and its identity to a fixed
+/// loopr identity, so "same bundles + same base = same Tick SHA" holds.
+/// Wall-clock dates and ambient git identity otherwise made every run a
+/// different merge SHA.
 #[instrument(name = "integrator.git.merge_no_ff", level = "debug", skip_all, fields(branch = branch), err)]
 pub(crate) async fn merge_no_ff(
     target: &Path,
     branch: &str,
     git_timeout: Duration,
 ) -> Result<Result<String, String>, IntegrationError> {
+    let date = commit_date(target, branch, git_timeout).await?;
     let message = format!("Merge bundle branch {branch}");
-    let out = run_git(target, &["merge", "--no-ff", branch, "-m", &message], git_timeout).await?;
+    let name_cfg = format!("user.name={MERGE_IDENTITY_NAME}");
+    let email_cfg = format!("user.email={MERGE_IDENTITY_EMAIL}");
+    let args = [
+        "-c", &name_cfg, "-c", &email_cfg, "merge", "--no-ff", branch, "-m", &message,
+    ];
+    let envs = [
+        ("GIT_AUTHOR_DATE", date.as_str()),
+        ("GIT_COMMITTER_DATE", date.as_str()),
+    ];
+    let out = run_git_with_env(target, &args, &envs, git_timeout).await?;
     if !out.status.success() {
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -333,12 +370,24 @@ struct CapturedOutput {
     stderr: Vec<u8>,
 }
 
-#[instrument(level = "trace", skip_all, fields(target = %target.display(), git_args = ?args, timeout_ms = git_timeout.as_millis() as u64), err)]
 async fn run_git(target: &Path, args: &[&str], git_timeout: Duration) -> Result<CapturedOutput, IntegrationError> {
+    run_git_with_env(target, args, &[], git_timeout).await
+}
+
+#[instrument(level = "trace", skip_all, fields(target = %target.display(), git_args = ?args, git_envs = ?envs, timeout_ms = git_timeout.as_millis() as u64), err)]
+async fn run_git_with_env(
+    target: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    git_timeout: Duration,
+) -> Result<CapturedOutput, IntegrationError> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(target);
     for arg in args {
         cmd.arg(arg);
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
     }
     // kill_on_drop is load-bearing here (contrast validation.rs): without
     // it, a timed-out `git merge`/`checkout` keeps running after the

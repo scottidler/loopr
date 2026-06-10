@@ -304,7 +304,14 @@ where
                 // Crash-recovery: already Integrating on disk.
                 bundle_states.push(b.clone());
             }
-            _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating bundles"),
+            BundleStatus::Merged => {
+                // Partial-crash re-entry: a prior call already finished
+                // this Bundle (Merged + its merge on the integration
+                // branch). Carry it as-is; the merge loop adopts its
+                // existing merge and the Phase-4 loop skips re-writing it.
+                bundle_states.push(b.clone());
+            }
+            _ => unreachable!("pre-flight rejects non-Accepted/non-Integrating/non-Merged bundles"),
         }
     }
 
@@ -354,12 +361,15 @@ where
                 // No ancestry check: if Accepted, the branch has never
                 // been merged, so is_ancestor is guaranteed false.
             }
-            BundleStatus::Integrating => {
+            BundleStatus::Integrating | BundleStatus::Merged => {
                 // Crash-recovery re-entry: a prior call may have
-                // already merged this Bundle's head_commit. Ancestry
-                // check first, so an already-merged branch adopts
-                // cleanly instead of falsely tripping EmptyBranch
-                // (a merged branch has `merge-base HEAD branch == branch`).
+                // already merged this Bundle's head_commit (Integrating:
+                // crashed mid-merge or before Tick; Merged: a prior
+                // multi-Bundle Phase-4 finished THIS Bundle before
+                // crashing). Ancestry check first, so an already-merged
+                // branch adopts cleanly instead of falsely tripping
+                // EmptyBranch (a merged branch has
+                // `merge-base HEAD branch == branch`).
                 //
                 // `is_ancestor` alone false-adopts: a trivially-ancestral
                 // head_commit (the integration base, or one absorbed by a
@@ -562,15 +572,44 @@ where
     };
 
     // Transition every successfully-merged Bundle to Merged.
-    // Sources from `bundle_states` (the post-prologue Integrating
-    // Bundles), not the input slice, so OCC expected_updated_at
-    // matches the on-disk state.
+    // Sources from `bundle_states` (the post-prologue Bundles), not the
+    // input slice, so OCC expected_updated_at matches the on-disk state.
+    // Bundles already Merged (a partial-crash re-entry finished them in
+    // a prior call) are skipped - re-transitioning Merged->Merged is a
+    // redundant write.
     for (bundle_id, _) in &outcomes {
         let bundle = bundle_states
             .iter()
             .find(|b| &b.id == bundle_id)
             .expect("outcome refers to a Bundle from the input slice");
+        if bundle.status == BundleStatus::Merged {
+            continue;
+        }
         transition_bundle(&deps.bundle_sink, bundle, BundleStatus::Merged).await?;
+    }
+
+    // Branch cleanup (strictly after the Tick + Merged writes are
+    // durable): delete each merged Bundle branch. The commits live on
+    // the integration branch now, so the per-attempt `loopr/wk-*` branch
+    // is dead clutter (vision.md: the integrator deletes them post-Tick).
+    // Best-effort - a failed delete (e.g. branch still checked out in a
+    // lingering worktree) must not fail an otherwise-successful Tick.
+    for (bundle_id, _) in &outcomes {
+        let branch = match bundle_states.iter().find(|b| &b.id == bundle_id) {
+            Some(b) => b.branch_name.clone(),
+            None => continue,
+        };
+        let repo = deps.target.clone();
+        let branch_for_log = branch.clone();
+        match tokio::task::spawn_blocking(move || worktree::delete_branch(&repo, &branch)).await {
+            Ok(Ok(())) => debug!(branch = %branch_for_log, "integrator: deleted merged bundle branch"),
+            Ok(Err(e)) => {
+                warn!(branch = %branch_for_log, error = %e, "integrator: bundle branch delete failed (best-effort)")
+            }
+            Err(join) => {
+                warn!(branch = %branch_for_log, error = %join, "integrator: branch-delete task panicked (best-effort)")
+            }
+        }
     }
 
     Ok(tick)
@@ -593,7 +632,14 @@ fn preflight_shape(bundles: &[Bundle], allow_multi_bundle: bool) -> Result<(), I
 fn preflight_status(bundles: &[Bundle]) -> Result<(), IntegrationError> {
     for b in bundles {
         match b.status {
-            BundleStatus::Accepted | BundleStatus::Integrating => {}
+            // Accepted: fresh integration. Integrating: crash-recovery
+            // re-entry. Merged: a prior multi-Bundle integrate crashed
+            // PART-way through the Phase-4 Merged loop, leaving a mixed
+            // slice; tolerating Merged here lets the driver re-enter with
+            // the FULL original slice (required so the Tick's bundle-set
+            // key still matches the prior Tick and DuplicateTick adopts
+            // it rather than double-writing).
+            BundleStatus::Accepted | BundleStatus::Integrating | BundleStatus::Merged => {}
             other => {
                 return Err(IntegrationError::BundleNotAccepted {
                     bundle_id: b.id.as_ref().to_string(),
