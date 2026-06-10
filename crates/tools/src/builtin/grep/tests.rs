@@ -78,6 +78,29 @@ async fn glob_filter_scopes_search() {
 }
 
 #[tokio::test]
+async fn excludes_git_and_loopr_dirs() {
+    // Finding 6: grep must not descend into .git / .loopr.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("real.txt"), "needle\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/packed.txt"), "needle\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".loopr/records")).unwrap();
+    std::fs::write(dir.path().join(".loopr/records/r.txt"), "needle\n").unwrap();
+    let out = execute(
+        Input {
+            pattern: "needle".into(),
+            path: None,
+            glob: None,
+        },
+        &ctx(dir.path()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.matches.len(), 1, "should only match real.txt: {:?}", out.matches);
+    assert!(out.matches[0].contains("real.txt"));
+}
+
+#[tokio::test]
 async fn path_outside_working_dir_rejected_when_sandboxed() {
     let dir = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();

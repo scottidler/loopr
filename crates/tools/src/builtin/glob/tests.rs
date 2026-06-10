@@ -51,6 +51,41 @@ async fn recursive_doublestar() {
 }
 
 #[tokio::test]
+async fn doublestar_does_not_descend_dotdirs() {
+    // Finding 6: `**/*.rs` must not match files inside `.git` / `.loopr`.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/objects")).unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/real.rs"), "").unwrap();
+    std::fs::write(dir.path().join(".git/objects/leaked.rs"), "").unwrap();
+    let out = execute(
+        Input {
+            pattern: "**/*.rs".into(),
+        },
+        &ctx(dir.path()),
+    )
+    .await
+    .unwrap();
+    let names: Vec<String> = out.paths.iter().map(|p| p.display().to_string()).collect();
+    assert_eq!(names.len(), 1, "should not descend .git: {names:?}");
+    assert!(names[0].ends_with("real.rs"));
+}
+
+#[tokio::test]
+async fn literal_dotfile_pattern_still_matches() {
+    // Finding 6: `require_literal_leading_dot` stops `*` wildcards from
+    // descending dotdirs, but an explicitly-named dotfile is still reachable
+    // (an agent that genuinely wants `.env` spells the dot).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".env"), "").unwrap();
+    let out = execute(Input { pattern: ".env".into() }, &ctx(dir.path()))
+        .await
+        .unwrap();
+    let names: Vec<String> = out.paths.iter().map(|p| p.display().to_string()).collect();
+    assert!(names.iter().any(|n| n.ends_with(".env")), "names: {names:?}");
+}
+
+#[tokio::test]
 async fn invalid_pattern_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let err = execute(

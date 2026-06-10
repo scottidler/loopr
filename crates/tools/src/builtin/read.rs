@@ -4,6 +4,7 @@ use std::time::Instant;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use tokio::io::AsyncReadExt;
 use tracing::{debug, instrument};
 
 use crate::builtin::path::{PathError, resolve};
@@ -14,6 +15,11 @@ pub const DESCRIPTION: &str = "Read a file with line numbers. Defaults to the fi
 use offset and limit to paginate through larger files.";
 
 const DEFAULT_LIMIT: usize = 500;
+
+/// Maximum bytes read into memory before pagination (Phase-5 finding 8). An
+/// unbounded `fs::read` of a multi-GB file (a stray log, a vendored binary)
+/// would OOM the daemon; cap it and flag truncation.
+const MAX_READ_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -75,10 +81,25 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
         PathError::Denied(s) => Error::PathDenied(s),
     })?;
 
-    let bytes = tokio::fs::read(&resolved).await.map_err(|source| Error::Io {
+    // Finding 8: read at most MAX_READ_BYTES into memory. `take(cap + 1)`
+    // lets us detect that the file was larger than the cap (and flag
+    // truncation) without reading the overflow.
+    let file = tokio::fs::File::open(&resolved).await.map_err(|source| Error::Io {
         path: resolved.clone(),
         source,
     })?;
+    let mut bytes = Vec::new();
+    file.take(MAX_READ_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|source| Error::Io {
+            path: resolved.clone(),
+            source,
+        })?;
+    let byte_capped = bytes.len() as u64 > MAX_READ_BYTES;
+    if byte_capped {
+        bytes.truncate(MAX_READ_BYTES as usize);
+    }
     let bytes_read = bytes.len();
     let content_full = String::from_utf8_lossy(&bytes).into_owned();
     let lines_total = content_full.lines().count();
@@ -89,7 +110,7 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
     let selected: Vec<(usize, &str)> = content_full.lines().enumerate().skip(offset).take(limit).collect();
 
     let lines_shown = selected.len();
-    let truncated = offset + lines_shown < lines_total;
+    let truncated = byte_capped || offset + lines_shown < lines_total;
 
     let mut numbered = String::new();
     for (idx, line) in selected {

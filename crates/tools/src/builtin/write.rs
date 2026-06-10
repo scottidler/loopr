@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use tracing::{debug, instrument};
 
-use crate::builtin::path::{PathError, resolve};
+use crate::builtin::path::{PathError, atomic_write, resolve};
 use crate::error::ToolError;
 use crate::tool::ToolContext;
 
@@ -77,7 +77,9 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
     }
 
     let bytes = input.content.as_bytes();
-    tokio::fs::write(&resolved, bytes).await.map_err(|source| Error::Io {
+    // Finding 5: temp-then-rename so a crash mid-write never leaves a
+    // partially-written file at the target.
+    atomic_write(&resolved, bytes).await.map_err(|source| Error::Io {
         path: resolved.clone(),
         source,
     })?;

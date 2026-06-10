@@ -1060,3 +1060,48 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+### Commit C — builtin hardening (findings 5-8)
+
+#### Design decisions
+- **`atomic_write` (finding 5) in `builtin/path.rs`.** Both Edit and Write
+  now write a sibling `.{name}.loopr-tmp-<uuid>` file then `rename` over the
+  target (atomic on POSIX within one fs); the temp is best-effort removed on
+  rename failure. Uses `Uuid::now_v7()` (the feature enabled on the `tools`
+  `uuid` dep; `v4` is not).
+- **Edit rejects non-UTF8 (finding 5).** `String::from_utf8(bytes)` →
+  `Error::NonUtf8(path)` (mapped to `ToolError::ExecutionFailed`) instead of
+  `from_utf8_lossy`, which would U+FFFD-corrupt a binary file on write-back.
+  Write's input is a `String`, so only the atomicity half applies there.
+- **grep excludes `.git`/`.loopr` (finding 6).** `--exclude-dir=.git
+  --exclude-dir=.loopr` on the `grep -rn` argv.
+- **glob `require_literal_leading_dot: true` (finding 6).** A `*` wildcard
+  no longer matches a leading dot, so `**/*.rs` does not descend `.git`/
+  `.loopr`. Note: glob 0.3's `.*` does NOT then match arbitrary dotfiles
+  (verified empirically — it returns only `.`/`..`); an explicitly-named
+  dotfile pattern (`.env`) still matches, which is the intended escape.
+- **Bounded spawn drain (finding 7).** After the foreground child exits,
+  the reader-task drain is wrapped in a `DRAIN_TIMEOUT_SECS` (5s) timeout. On
+  expiry — a backgrounded grandchild holding the pipe write end — a new
+  `force_kill_group` SIGKILLs the process group (Pgid) to close the pipes,
+  then a 1s grace lets the readers observe EOF. `BwrapChild` needs no extra
+  kill (the PID namespace + `--die-with-parent` already cascade).
+- **read byte cap (finding 8).** `File::open` + `take(MAX_READ_BYTES + 1)`
+  (16 MiB) replaces the unbounded `fs::read`; reading one byte past the cap
+  detects oversize, truncates to the cap, and flags `truncated`.
+
+#### Deviations
+- The glob "literal dotfile still matches" test asserts an exact-name
+  pattern (`.env`) rather than `.*`, because glob 0.3 + leading-dot does not
+  match `.env` via `.*`. This is glob library behavior, not a divergence
+  from the finding (which only requires that wildcards stop descending
+  dotdirs).
+
+#### Tradeoffs
+- `force_kill_group` on the drain-timeout path is a hard SIGKILL (no
+  SIGTERM grace) because the foreground child has already exited and the
+  only remaining group members are leaked pipe-holders we explicitly want
+  gone; a graceful term would just add latency.
+
+#### Open questions
+- None.

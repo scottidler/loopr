@@ -90,6 +90,27 @@ async fn default_caps_at_500_lines() {
 }
 
 #[tokio::test]
+async fn caps_bytes_read_and_flags_truncation() {
+    // Finding 8: a file larger than MAX_READ_BYTES is read only up to the
+    // cap and flagged truncated, never slurped whole into memory.
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("huge.bin");
+    let oversized = vec![b'a'; MAX_READ_BYTES as usize + 4096];
+    std::fs::write(&p, &oversized).unwrap();
+    let out = execute(
+        Input {
+            path: p,
+            offset: None,
+            limit: Some(1),
+        },
+        &ctx(dir.path()),
+    )
+    .await
+    .unwrap();
+    assert!(out.truncated, "oversized file must flag truncation");
+}
+
+#[tokio::test]
 async fn rejects_path_matching_deny_pattern() {
     let dir = tempfile::tempdir().unwrap();
     let secret = dir.path().join(".env");

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use tracing::{debug, instrument};
 
-use crate::builtin::path::{PathError, resolve};
+use crate::builtin::path::{PathError, atomic_write, resolve};
 use crate::error::ToolError;
 use crate::tool::ToolContext;
 
@@ -39,6 +39,8 @@ pub enum Error {
     ReadIo { path: PathBuf, source: std::io::Error },
     #[error("failed to write {path}: {source}")]
     WriteIo { path: PathBuf, source: std::io::Error },
+    #[error("file is not valid UTF-8: {0}")]
+    NonUtf8(PathBuf),
     #[error("old_string did not match any occurrence in {0}")]
     NoMatch(PathBuf),
     #[error("old_string matched {count} occurrences in {path}; agent must disambiguate")]
@@ -61,6 +63,7 @@ impl From<Error> for ToolError {
                 "old_string matched {count} occurrences in {}; agent must disambiguate",
                 path.display()
             )),
+            Error::NonUtf8(p) => Self::ExecutionFailed(format!("file is not valid UTF-8: {}", p.display())),
         }
     }
 }
@@ -90,7 +93,10 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
         path: resolved.clone(),
         source,
     })?;
-    let before = String::from_utf8_lossy(&bytes).into_owned();
+    // Finding 5: reject non-UTF8 files instead of round-tripping through
+    // `from_utf8_lossy`, which silently replaces invalid bytes with U+FFFD
+    // and would destroy the file's binary content on write-back.
+    let before = String::from_utf8(bytes).map_err(|_| Error::NonUtf8(resolved.clone()))?;
 
     let count = before.matches(&input.old_string).count();
     match count {
@@ -106,7 +112,9 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
 
     let after = before.replacen(&input.old_string, &input.new_string, 1);
     let after_bytes = after.as_bytes();
-    tokio::fs::write(&resolved, after_bytes)
+    // Finding 5: temp-then-rename so a crash mid-write never truncates the
+    // existing file.
+    atomic_write(&resolved, after_bytes)
         .await
         .map_err(|source| Error::WriteIo {
             path: resolved.clone(),

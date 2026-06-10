@@ -67,7 +67,13 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, ToolErro
     // survives to exec() verbatim, closing v3/v4's string-concatenation
     // shell-injection vector.
     let mut cmd = tokio::process::Command::new("grep");
-    cmd.arg("-rn").arg(&input.pattern);
+    // Finding 6: never descend into `.git` (binary pack garbage) or `.loopr`
+    // (records, transcripts, daemon state) - both pollute agent context with
+    // irrelevant matches.
+    cmd.arg("-rn")
+        .arg("--exclude-dir=.git")
+        .arg("--exclude-dir=.loopr")
+        .arg(&input.pattern);
     if let Some(g) = input.glob.as_ref() {
         cmd.arg(format!("--include={g}"));
     }

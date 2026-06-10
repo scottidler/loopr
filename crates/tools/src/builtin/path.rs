@@ -1,7 +1,29 @@
 use std::path::{Path, PathBuf};
 
+use uuid::Uuid;
+
 use crate::sandbox::SandboxMode;
 use crate::tool::ToolContext;
+
+/// Write `bytes` to `target` atomically: write a sibling temp file then
+/// `rename` over the target. POSIX `rename(2)` within one filesystem is
+/// atomic, so a crash mid-write never leaves a partially-written file at
+/// `target` (Phase-5 finding 5). On rename failure the temp is best-effort
+/// removed so a failed write doesn't litter the worktree.
+pub(crate) async fn atomic_write(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let tmp_name = match target.file_name().and_then(|n| n.to_str()) {
+        Some(n) => format!(".{n}.loopr-tmp-{}", Uuid::now_v7()),
+        None => format!(".loopr-tmp-{}", Uuid::now_v7()),
+    };
+    let tmp = parent.join(tmp_name);
+    tokio::fs::write(&tmp, bytes).await?;
+    if let Err(e) = tokio::fs::rename(&tmp, target).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    Ok(())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PathError {

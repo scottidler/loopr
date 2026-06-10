@@ -77,6 +77,49 @@ async fn errors_on_multiple_matches() {
 }
 
 #[tokio::test]
+async fn rejects_non_utf8_file() {
+    // Finding 5: a non-UTF8 file must be rejected, not lossily round-tripped.
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("blob.bin");
+    std::fs::write(&p, [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let err = execute(
+        Input {
+            path: p,
+            old_string: "x".into(),
+            new_string: "y".into(),
+        },
+        &ctx(dir.path()),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, Error::NonUtf8(_)), "err: {err:?}");
+}
+
+#[tokio::test]
+async fn no_temp_files_left_after_edit() {
+    // Finding 5: temp-then-rename must clean up after itself.
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("f.rs");
+    std::fs::write(&p, "fn one() {}\n").unwrap();
+    execute(
+        Input {
+            path: p.clone(),
+            old_string: "one".into(),
+            new_string: "uno".into(),
+        },
+        &ctx(dir.path()),
+    )
+    .await
+    .unwrap();
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, vec!["f.rs".to_string()], "stray temp file: {entries:?}");
+    assert!(std::fs::read_to_string(&p).unwrap().contains("fn uno()"));
+}
+
+#[tokio::test]
 async fn rejects_escape_when_sandboxed() {
     let dir = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();

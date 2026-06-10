@@ -71,7 +71,10 @@ pub async fn execute(input: Input, ctx: &ToolContext) -> Result<Output, Error> {
     let opts = MatchOptions {
         case_sensitive: true,
         require_literal_separator: false,
-        require_literal_leading_dot: false,
+        // Finding 6: a `*` wildcard must NOT match a leading dot, so
+        // `src/**/*.rs` no longer descends into `.git` / `.loopr` dotdirs.
+        // An agent that genuinely wants dotfiles spells the dot literally.
+        require_literal_leading_dot: true,
     };
 
     let entries = glob_with(&rooted, opts).map_err(|e| Error::InvalidPattern(e.to_string()))?;
