@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use agents::AgentsConfig;
-use llm::LlmConfig;
+use llm::{LlmConfig, ModelTiers};
 use tools::ToolsConfig;
 use worktree::WorktreeConfig;
 
@@ -114,6 +114,14 @@ impl Default for TransportSection {
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct Config {
     pub llm: LlmConfig,
+    /// Named model tiers (`models.primary` / `lightweight` / `advisor`).
+    /// Roles reference a tier by name or supply a literal model ID;
+    /// `resolve_model_tiers` rewrites every role's model reference to a
+    /// concrete model ID after load, so downstream consumers never see a
+    /// tier name. Swapping every role's model version is a one-line edit
+    /// here (vision "Role-to-model mapping").
+    #[serde(default)]
+    pub models: ModelTiers,
     #[serde(default, skip_serializing)]
     pub tools: ToolsConfig,
     #[serde(default)]
@@ -167,7 +175,19 @@ impl Config {
             config.worktree.cleanup_policy = parsed;
         }
 
+        config.resolve_model_tiers();
         Ok(config)
+    }
+
+    /// Rewrite every role's model reference to a concrete model ID by
+    /// resolving it against the `models:` tier table. A tier name
+    /// (`primary` / `lightweight` / `advisor`) becomes that tier's model;
+    /// a literal model ID is left unchanged. Run once after load so the
+    /// `AnthropicClient`, the `ProcessSnapshot`, and the per-role agent
+    /// configs all see concrete model IDs, never tier names.
+    fn resolve_model_tiers(&mut self) {
+        self.llm.model = self.models.resolve(&self.llm.model);
+        self.agents.director.model = self.models.resolve(&self.agents.director.model);
     }
 }
 

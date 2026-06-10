@@ -13,6 +13,7 @@ mod config;
 mod error;
 mod message;
 mod metered;
+mod tier;
 mod tool;
 mod usage;
 
@@ -25,6 +26,7 @@ pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
 pub use message::{Message, MessageContent, MessageRole};
 pub use metered::MeteredLlmClient;
+pub use tier::ModelTiers;
 pub use tool::{ToolCall, ToolSchema};
 pub use usage::Usage;
 

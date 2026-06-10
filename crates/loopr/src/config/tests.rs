@@ -227,6 +227,64 @@ transport:
 }
 
 #[test]
+fn model_tiers_default_resolves_role_models_to_concrete_ids() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    // Defaults are already concrete; resolution is a no-op identity.
+    assert_eq!(cfg.llm.model, "claude-sonnet-4-6");
+    assert_eq!(cfg.agents.director.model, "claude-opus-4-7");
+}
+
+#[test]
+fn model_tiers_resolve_role_references_after_load() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    // The llm model and the director model both reference tiers by name;
+    // after load they must be rewritten to the table's concrete ids.
+    let yml = r#"
+models:
+  primary: claude-sonnet-4-6
+  lightweight: claude-haiku-4-5
+  advisor: claude-opus-4-7
+llm:
+  model: primary
+  max-tokens: 8192
+  api-key-env: ANTHROPIC_API_KEY
+  api-base-url: https://api.anthropic.com
+agents:
+  director:
+    model: advisor
+"#;
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.llm.model, "claude-sonnet-4-6", "primary tier -> concrete");
+    assert_eq!(cfg.agents.director.model, "claude-opus-4-7", "advisor tier -> concrete");
+}
+
+#[test]
+fn model_tiers_literal_model_id_survives_resolution() {
+    let _g = LOAD_MUTEX.lock().unwrap();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = r#"
+llm:
+  model: claude-opus-4-7
+  max-tokens: 8192
+  api-key-env: ANTHROPIC_API_KEY
+  api-base-url: https://api.anthropic.com
+"#;
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.llm.model, "claude-opus-4-7", "literal id passes through");
+}
+
+#[test]
 fn env_invalid_value_errors_cleanly() {
     let _g = LOAD_MUTEX.lock().unwrap();
     let dir = TempDir::new().expect("tempdir");

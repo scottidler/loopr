@@ -1243,3 +1243,49 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+## Phase 6: Cost accounting, budgets, llm hardening
+
+Landing across commits (mirrors Phases 1-5):
+- **Commit A** — `models:` tier table + resolution (finding 4).
+- **Commit B** — model pinning + cost span fields (finding 1).
+- **Commit C** — `.loopr/costs.jsonl` writer in `MeteredLlmClient` (finding 2).
+- **Commit D** — budgets: per-run/per-work cost cap + token accumulation (finding 3).
+- **Commit E** — `RetryableReason` enum + timeout scaling (findings 5, 6).
+- **Commit F** — llm minors batch (finding 7).
+
+### Commit A — models tier table + resolution (finding 4)
+
+#### Design decisions
+- **`ModelTiers` lives in `llm/src/tier.rs`** (single-word filename) with
+  `primary`/`lightweight`/`advisor` (kebab serde, `default`). `resolve`
+  maps a tier name to its model and passes any other string through as a
+  literal model id — the vision's "deserializer tries the table first,
+  falls back to literal," expressed at resolution time (deserialization
+  has no table in scope). Defaults match the workspace's current
+  concrete ids (sonnet-4-6 / haiku-4-5 / opus-4-7) so an absent
+  `models:` block resolves every reference to a working model and the
+  digest rate table (`telemetry::digest::cost`) keeps finding rates.
+- **`loopr` owns the wiring.** Top-level `Config` gains
+  `#[serde(default)] models: ModelTiers`; `Config::load` calls a new
+  `resolve_model_tiers` after deserialize that rewrites `llm.model` and
+  `agents.director.model` to concrete ids. Resolving post-load (rather
+  than at the call site) means `AnthropicClient`, the `ProcessSnapshot`
+  model field, and the per-role agent configs all see concrete ids and
+  never a tier name — no call-site changes in `agents`.
+
+#### Deviations
+- The vision example uses `claude-sonnet-4-7` for `primary`; the
+  codebase standard is `claude-sonnet-4-6` (the rate table + existing
+  `LlmConfig::default`), so the default table uses `4-6`. The `4-7` in
+  the vision is illustrative, not a pin.
+
+#### Tradeoffs
+- Only `llm.model` and `agents.director.model` are resolved — the
+  implementer/reviewer/decomposer call `complete_*` with `model: None`
+  (use the configured default), so their tier reference IS `llm.model`.
+  No separate per-role `model` field exists on `ImplementerConfig` /
+  `ReviewerConfig` today; if one is added later it resolves the same way.
+
+#### Open questions
+- None.
