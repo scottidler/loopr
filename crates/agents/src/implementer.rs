@@ -227,6 +227,12 @@ where
         // Self-correction sub-loop: parse failures append to this
         // vec and re-prompt; reset_parse_failures ONLY on Ok.
         let mut messages = assembled.messages.clone();
+        // Explicit per-iteration requery counter. Deriving the budget
+        // from `messages.len()` is fragile (it conflates the assembled
+        // base length, which can include rendered context turns, with
+        // this iteration's retries). A dedicated counter, reset each
+        // outer iteration, counts exactly THIS iteration's parse retries.
+        let mut requeries_used: u32 = 0;
         let actions = loop {
             let (raw, _usage) = deps
                 .llm
@@ -244,8 +250,8 @@ where
                     messages.push(Message::user(format!(
                         "parse failed: {e}. Return one JSON array of actions."
                     )));
-                    let requeries_used = (messages.len() - 1) / 2;
-                    if requeries_used as u32 >= deps.config.max_requeries {
+                    requeries_used += 1;
+                    if requeries_used >= deps.config.max_requeries {
                         if let Decision::Escalate(reason) = lifeguard.record_parse_failure() {
                             write_implementer_transcript(
                                 worktree.repo_path(),

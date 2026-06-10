@@ -113,6 +113,12 @@ pub struct DirectorState {
     /// (after a successful LLM round-trip) marks the notes read so the
     /// next iteration's vector is empty unless a new note arrived.
     pub operator_notes: Vec<String>,
+    /// Operator-tunable retry budget (`agents.director.max-work-attempts`,
+    /// default 3) rendered into the user prompt's retry guidance. The
+    /// Director loop sets this from `deps.config.max_work_attempts` each
+    /// iteration; `Default` (0) is only the test-only `build_director_state`
+    /// baseline, where the caller overrides it.
+    pub max_work_attempts: u32,
 }
 
 /// One Work row in a `DirectorState`.

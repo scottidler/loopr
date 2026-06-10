@@ -148,6 +148,22 @@ pub struct DirectorConfig {
     /// `docs/design/2026-05-09-director-phase-2.md` Phase 10. Tunable
     /// via `agents.director.needs-operator-grace-iters`.
     pub needs_operator_grace_iters: u32,
+    /// Absolute backstop on Director iterations per supervision session.
+    /// The pattern tracker + NeedsOperator grace are the primary brakes;
+    /// this is the hard cap so a stuck Plan cannot poll the LLM forever
+    /// (the comment on the old `DirectorConfig` claimed a cap existed
+    /// where none did). On exhaustion the Director transitions the Plan
+    /// to `Stalled` and exits with `NeedHelp`. Counts per-session
+    /// (resets on restart); the wall-clock budget is the time-based peer.
+    /// Default 10_000 — generous enough for legitimately long Plans.
+    pub max_iterations: u32,
+    /// Absolute wall-clock backstop (seconds) on a Director supervision
+    /// session, measured from session start. The time-based peer of
+    /// `max_iterations` (which a `poll_interval_secs = 0` test config or
+    /// a fast-idling Plan could blow through quickly). On exhaustion the
+    /// Director transitions the Plan to `Stalled` and exits with
+    /// `NeedHelp`. Default 86_400 (24h).
+    pub max_wall_clock_secs: u64,
 }
 
 impl Default for DirectorConfig {
@@ -164,6 +180,8 @@ impl Default for DirectorConfig {
             reconcile_grace_secs: 30,
             patterns: PatternConfig::default(),
             needs_operator_grace_iters: 5,
+            max_iterations: 10_000,
+            max_wall_clock_secs: 86_400,
         }
     }
 }

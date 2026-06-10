@@ -1048,7 +1048,9 @@ async fn run_director_three_parse_failures_escalates_lifeguard() {
 async fn run_director_need_help_exits_immediately() {
     let plan_id = PlanId::new();
     let pending = make_work(plan_id.clone(), "wk-pending", WorkStatus::Pending);
-    let store = FakeStore::with(vec![pending], vec![]);
+    let mut plan = Plan::new("need-help-test".to_string());
+    plan.id = plan_id.clone();
+    let store = FakeStore::with_plan(vec![pending], vec![], plan);
     let llm = FakeLlm::new(vec![
         json!([{ "action": "need_help", "reason": "stuck plan" }]).to_string(),
     ]);
@@ -1067,6 +1069,13 @@ async fn run_director_need_help_exits_immediately() {
     }
     // Exactly one LLM call: no restart, no retry on NeedHelp.
     assert_eq!(deps.llm.calls(), 1, "NeedHelp must not retry");
+    // Bullet 6: an LLM-emitted need_help persists Plan -> Stalled before
+    // returning, so the daemon doesn't show "not running (plan is Active)".
+    assert_eq!(
+        deps.store.plan_status(),
+        Some(PlanStatus::Stalled),
+        "need_help must stall the Plan before exiting"
+    );
 }
 
 // ---------------------------------------------------------------------------

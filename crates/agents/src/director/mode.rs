@@ -71,10 +71,13 @@ impl DirectorMode {
 ///   my watch" signal: it demotes Conservative and NeedsOperator back
 ///   to Normal so the Director's prompt reverts to the standard block
 ///   on the very next iteration. `Normal + OperatorNoteArrived` is the
-///   idempotent edge — the Director loop (Phase 9) still resets the
-///   tracker's `no_progress_streak` on this observation regardless of
-///   mode, so a repeat note while already Normal does not silently
-///   accumulate state.
+///   idempotent edge: the Director loop resets the tracker's
+///   `no_progress_streak` ONLY on the demotion (when the mode actually
+///   changes to Normal), not on the already-Normal no-op. This matches
+///   the run loop's `if next != current { reset; }` guard — and is
+///   harmless, because `no_progress_streak` is only ever non-zero in
+///   Conservative/NeedsOperator (a trip that raises the streak also
+///   leaves Normal), so there is nothing to accumulate while in Normal.
 /// - All other (mode, observation) pairs are sticky.
 pub fn next_mode(current: DirectorMode, obs: &PatternObservation) -> DirectorMode {
     use DirectorMode::*;

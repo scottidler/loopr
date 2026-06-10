@@ -266,6 +266,11 @@ struct DirectorUserCtx<'a> {
     bundles: Vec<BundleLineCtx<'a>>,
     blocked_reason: Option<&'a str>,
     operator_notes: &'a [String],
+    /// Operator-tunable retry budget (`max_work_attempts`). Rendered into
+    /// the user message so the prompt's retry guidance tracks config
+    /// instead of a hardcoded "3" baked into the cache-stable system
+    /// prompt.
+    max_work_attempts: u32,
 }
 
 #[derive(Serialize)]
@@ -327,6 +332,7 @@ impl InlineContextBuilder {
                 .collect(),
             blocked_reason: state.blocked_reason.as_deref(),
             operator_notes: &state.operator_notes,
+            max_work_attempts: state.max_work_attempts,
         };
         let state_message = self.loader.render("agents/director/user.pmt", &user_ctx)?;
         let state_msg = Message::user(state_message);
@@ -347,6 +353,21 @@ impl InlineContextBuilder {
         trimmed.push(state_msg);
 
         let token_estimate = system_tokens + trimmed.iter().map(estimate_message_tokens).sum::<usize>();
+        // Post-assembly budget check (bullet 11): history trimming above
+        // only bounds the history turns. If the system prompt + state
+        // message ALONE exceed the budget (e.g. a Plan with many
+        // works/bundles or large operator notes), the assembled context
+        // overshoots and nothing warned. Warn so an operator sees the
+        // over-budget assembly rather than discovering it via a provider
+        // error.
+        if token_estimate > token_budget {
+            warn!(
+                token_estimate,
+                token_budget,
+                system_tokens,
+                "build_for_director: assembled context exceeds token_budget (system + state message alone over budget)"
+            );
+        }
         let span = tracing::Span::current();
         span.record("system_chars", system_prompt.len());
         span.record("token_estimate", token_estimate);
@@ -402,6 +423,14 @@ impl InlineContextBuilder {
         trimmed.push(query_msg);
 
         let token_estimate = system_tokens + trimmed.iter().map(estimate_message_tokens).sum::<usize>();
+        if token_estimate > token_budget {
+            warn!(
+                token_estimate,
+                token_budget,
+                system_tokens,
+                "build_for_researcher: assembled context exceeds token_budget (system + query alone over budget)"
+            );
+        }
         let span = tracing::Span::current();
         span.record("system_chars", system_prompt.len());
         span.record("token_estimate", token_estimate);

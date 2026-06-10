@@ -153,6 +153,7 @@ fn context_smoke_spans_director_and_researcher() {
         bundles: vec![],
         blocked_reason: None,
         operator_notes: Vec::new(),
+        max_work_attempts: 3,
     };
     builder.build_for_director(&state, &[], large_budget).unwrap();
 

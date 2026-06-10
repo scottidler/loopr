@@ -16,7 +16,7 @@ use tokio::sync::Notify;
 use domain::{OperatorNote, Plan, PlanId, PlanStatus, WorkStatus};
 
 use super::{FakeLlm, FakeStore, RecordingSpawner, fast_config, make_deps, make_work};
-use crate::director::{DirectorSession, run_director};
+use crate::director::{DirectorError, DirectorSession, run_director};
 
 // ---------------------------------------------------------------------------
 // Phase 9: Operator note path
@@ -200,6 +200,53 @@ async fn needs_operator_grace_exceeded_stalls_plan_and_returns_need_help() {
     );
 }
 
+/// Off-by-one pin (bullet 16): with `needs_operator_grace_iters = N`,
+/// the Director stalls on EXACTLY the Nth consecutive NeedsOperator
+/// iteration — not the (N-1)th, not the (N+1)th. Drives `run_once`
+/// directly so the boundary iteration is unambiguous.
+#[tokio::test]
+async fn needs_operator_grace_stalls_exactly_on_nth_iteration() {
+    let plan_id = PlanId::new();
+    let blocked = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let work_id_s = blocked.id.to_string();
+    let mut plan = Plan::new("grace-off-by-one".into());
+    plan.id = plan_id.clone();
+    let store = FakeStore::with_plan(vec![blocked], vec![], plan);
+
+    let llm = FakeLlm::repeating(
+        json!([{ "action": "override_work", "work_id": work_id_s, "target_status": "Ready", "reason": "retry" }])
+            .to_string(),
+    );
+    let spawner = Arc::new(RecordingSpawner::default());
+    let mut config = fast_config();
+    config.max_work_attempts = 100;
+    // Deterministic escalation: iter 1 NoProgress -> Conservative,
+    // iter 2 Escalation -> NeedsOperator. Static store state keeps the
+    // hash constant so every override trips NoProgress.
+    config.patterns.same_action_threshold = 100; // disable SameAction
+    config.patterns.no_progress_threshold = 1;
+    config.patterns.escalation_threshold = 2;
+    config.patterns.window = 4;
+    config.needs_operator_grace_iters = 3;
+    let deps = make_deps(llm, store, spawner, config, Arc::new(Notify::new()));
+
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    // iter 1: Conservative (grace counter stays 0).
+    // iter 2: NeedsOperator #1 (grace counter -> 1).
+    // iter 3: NeedsOperator #2 (grace counter -> 2).
+    // iter 4: NeedsOperator #3 == grace(3) -> STALL.
+    for i in 1..=3 {
+        let r = session.run_once(&deps).await;
+        assert!(r.is_ok(), "iteration {i} must not stall yet: {r:?}");
+    }
+    match session.run_once(&deps).await {
+        Err(DirectorError::NeedHelp(msg)) => {
+            assert!(msg.contains("NeedsOperator timeout"), "expected timeout msg, got: {msg}");
+        }
+        other => panic!("expected stall on the Nth NeedsOperator iteration, got {other:?}"),
+    }
+}
+
 /// Counter does NOT trip Stalled while mode is anything other than
 /// NeedsOperator, regardless of how long the Director runs.
 #[tokio::test]
@@ -216,11 +263,14 @@ async fn grace_counter_does_not_trip_outside_needs_operator() {
     config.needs_operator_grace_iters = 2;
     let deps = make_deps(llm, store, spawner.clone(), config, Arc::new(Notify::new()));
 
-    // Run 5 deterministic iterations. With `done` actions and identical
-    // state hashes, SameActionTripped fires from iter 3 onward — mode
-    // pins at Conservative. EscalationTripped fires only via the
-    // NoProgress path, which SameActionTripped pre-empts, so mode never
-    // reaches NeedsOperator and the grace counter stays at 0.
+    // Run 5 deterministic iterations. `done` is a NON-mutating action,
+    // so (post-Phase-4 fix) it never trips SameActionTripped — a run of
+    // idle `done` is healthy waiting, not a doom loop, and the mode stays
+    // Normal. NoProgress is also gated on a mutating action in the window,
+    // which `done` is not. Mode therefore never reaches NeedsOperator and
+    // the grace counter stays at 0, so the Plan is never Stalled. (This
+    // previously codified the hole where idle `done` tripped SameAction
+    // and pinned Conservative; the is_mutating gate closed it.)
     let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
     for i in 0..5 {
         session.run_once(&deps).await.expect("run_once Ok");

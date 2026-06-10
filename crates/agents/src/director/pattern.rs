@@ -136,8 +136,11 @@ pub enum PatternObservation {
         max_recurrence: usize,
         streak: u32,
     },
-    /// `NoProgressTripped` has held `escalation_threshold` consecutive
+    /// The escalation streak has held `escalation_threshold` consecutive
     /// iterations; mode advances from Conservative to NeedsOperator.
+    /// `reason` is `no_progress_sustained` (the NoProgress path) or
+    /// `same_action_sustained` (a repeated mutating action) — both feed
+    /// the one shared `no_progress_streak`.
     EscalationTripped { reason: &'static str, streak: u32 },
     /// Hash moved AND the action history shows variety; mode reverts to
     /// Normal. Streak resets.
@@ -208,9 +211,13 @@ impl DirectorPatternTracker {
     ///
     /// Evaluation order (matters):
     /// 1. Append to bounded histories.
-    /// 2. **SameActionTripped** — last N actions identical and
-    ///    N >= `same_action_threshold`. Independent of NoProgress
-    ///    state.
+    /// 2. **SameActionTripped** — last N *mutating* actions identical and
+    ///    N >= `same_action_threshold` (idle `done` runs are gated out).
+    ///    A trip increments the shared `no_progress_streak` and escalates
+    ///    to `EscalationTripped` once the streak reaches
+    ///    `escalation_threshold` — a repeated mutating action against
+    ///    static state is a doom loop, so sustained SameAction must reach
+    ///    NeedsOperator rather than pinning Conservative forever.
     /// 3. **Warm-up gate** — fewer than `no_progress_threshold` samples
     ///    means the window is not yet populated enough to evaluate
     ///    no-progress; return None without touching the streak.
@@ -236,10 +243,28 @@ impl DirectorPatternTracker {
         push_bounded(&mut self.action_history, action.clone(), self.config.window);
         push_bounded(&mut self.state_hash_history, state_hash, self.config.window);
 
-        // 2. SameActionTripped — last N actions identical.
+        // 2. SameActionTripped — last N identical *mutating* actions.
+        //    `consecutive_same_action` is gated on `is_mutating`, so a run
+        //    of idle `done` (healthy waiting on a long Implementer) never
+        //    reaches here (the "45s of waiting -> Conservative" trap).
+        //    A repeated mutating action against static state IS a
+        //    no-progress signal, so it feeds the SAME escalation streak as
+        //    the NoProgress path: sustained same-action escalates to
+        //    NeedsOperator instead of pinning Conservative forever (the
+        //    SameActionTripped-starves-escalation bug). Incrementing the
+        //    streak here also makes the `Recovered` demotion (step 5,
+        //    gated on `streak > 0`) reachable from a Conservative reached
+        //    via SameAction — closing the one-way Conservative trap.
         if let Some((kind, count)) = consecutive_same_action(&self.action_history)
             && count >= self.config.same_action_threshold
         {
+            self.no_progress_streak = self.no_progress_streak.saturating_add(1);
+            if self.no_progress_streak >= self.config.escalation_threshold {
+                return Some(PatternObservation::EscalationTripped {
+                    reason: "same_action_sustained",
+                    streak: self.no_progress_streak,
+                });
+            }
             return Some(PatternObservation::SameActionTripped { kind, count });
         }
 
@@ -324,6 +349,12 @@ fn action_variety(history: &VecDeque<ActionFingerprint>) -> usize {
 
 fn consecutive_same_action(history: &VecDeque<ActionFingerprint>) -> Option<(&'static str, u32)> {
     let last = history.back()?;
+    // Only *mutating* repeated actions count toward SameActionTripped /
+    // `same_action_streak`. A trailing run of idle `done` (or `need_help`)
+    // is healthy waiting, not a doom loop, and must not trip the mode FSM.
+    if !last.is_mutating() {
+        return None;
+    }
     let mut count: u32 = 0;
     for a in history.iter().rev() {
         if a == last {

@@ -727,3 +727,97 @@ Landing across commits (mirrors Phases 1-3):
   catches the resulting panic instead of letting the JoinSet swallow it,
   but the EXTRA call itself is what the later Phase 4 brakes + Phase 7
   target. Re-checked at phase end.
+
+### Commit C — Director brakes (config caps, pattern/mode, parse-requery, stalls, restart, notes cap, minors)
+
+#### Design decisions
+- **Iteration + wall-clock caps (bullet 2).** `DirectorConfig` gains
+  `max_iterations` (default 10_000) and `max_wall_clock_secs` (default
+  86_400). Enforced in `run_director_inner`'s loop after each iteration;
+  exhaustion routes through the shared stall helper. Per-session (reset on
+  restart). The pattern tracker + NeedsOperator grace remain the primary
+  brakes; these are the absolute backstop the old "comment claims a cap"
+  referenced but never had.
+- **`stall_plan_and_need_help` helper (bullets 2/6 + DRY of existing
+  sites).** One owner for the "persist Plan -> Stalled, then return
+  NeedHelp" exit, shared by retry-budget exhaustion, NeedsOperator-grace
+  timeout, the new iteration/wall-clock caps, and the LLM-emitted
+  need_help. **Best-effort**: a get/transition/persist failure logs a
+  `warn!` and STILL returns NeedHelp — a budget/need_help exit must
+  TERMINATE the Director, never restart-loop on a failed write (the old
+  inline sites used `?`, which would re-enter the restart dispatcher). The
+  Plan-Active-then-reconcile fallback covers a failed stall.
+- **need_help stalls the Plan (bullet 6).** An LLM `need_help` now routes
+  through the helper instead of returning NeedHelp with the Plan still
+  Active (the invisible-stall bug). Test updated to assert Stalled.
+- **SameAction feeds escalation + is_mutating gate (bullets 3, 4).**
+  `consecutive_same_action` returns `None` for a non-mutating trailing run
+  (idle `done` no longer trips SameAction -> Conservative). A SameAction
+  trip now increments the shared `no_progress_streak` and escalates to
+  `EscalationTripped { reason: "same_action_sustained" }` once the streak
+  reaches `escalation_threshold` — so a repeated mutating action against
+  static state reaches NeedsOperator instead of pinning Conservative
+  forever. This also makes the `Recovered` demotion (gated on
+  `streak > 0`) reachable from a Conservative entered via SameAction,
+  closing the one-way trap WITHOUT mutating the mode FSM (which already
+  demotes on Recovered). New pattern tests + the rewritten
+  `grace_counter_does_not_trip_outside_needs_operator` comment.
+- **Per-iteration parse-requery counters (bullet 5).** Both
+  `director.rs` and `implementer.rs` replaced the
+  `(messages.len() - 1) / 2` derivation (which folds in cross-iteration
+  history, starving requeries from iteration 3 on) with an explicit
+  per-iteration `requeries_used` counter.
+- **Restart backoff + budget reset + in-iteration Id (bullet 7).**
+  `run_director` sleeps `restart_backoff(n)` (250ms x 2^(n-1), cap 10s,
+  shutdown-interruptible) before each restart; resets the restart counter
+  when the failed session completed >= `HEALTHY_ITERS_BEFORE_RESTART_RESET`
+  (10) iterations (a long-lived Plan must not die on its Nth-ever
+  transient blip). `run_director_inner` reports `iterations_completed` via
+  an out-param. Hallucinated/invalid ids (bundle_id/work_id/target_status)
+  are now skipped in-iteration with a `warn!` (`continue`) instead of
+  returning `DirectorError::Id` and burning a restart.
+- **Operator-notes render cap (bullet 11a).** Notes rendered into the user
+  prompt are capped at `OPERATOR_NOTES_RENDER_CAP` (8) newest + an
+  "[N older omitted]" marker. ALL unread notes are still marked read (the
+  cap is render-only).
+- **Post-assembly token_budget check (bullet 11b).** `build_for_director`
+  and `build_for_researcher` warn when the assembled context exceeds
+  `token_budget` (history trimming only bounds history turns; a large
+  system+state could still overshoot).
+- **Config-driven retry budget in prompt (bullet 16).** `system.pmt`
+  de-hardcoded from "3" to "the retry budget shown in the user message"
+  (keeping it byte-stable for the prompt cache); `user.pmt` renders the
+  actual `max_work_attempts`. Threaded via `DirectorState.max_work_attempts`
+  (set from config in `run_once`, like `mode`).
+- **Other minors (bullet 16).** In-memory Director `history` truncated to
+  `DIRECTOR_HISTORY_MAX_MESSAGES` (40); Notify exit-cleanup is
+  compare-before-remove (`Arc::ptr_eq`) in both spawn sites so a respawned
+  Director's fresh Notify is not deleted; triple-parse in
+  `parse_director_actions` reduced to capturing the first (array-shape)
+  error; `#[instrument]` added to `parse_director_actions` and
+  `build_director_state`; mode.rs operator-note comment aligned to the
+  actual "reset only on demotion" behavior; off-by-one grace pinned with
+  `needs_operator_grace_stalls_exactly_on_nth_iteration`.
+
+#### Deviations
+- **`DirectorError::Id` is now constructed nowhere** (the three id-parse
+  sites skip in-iteration). The variant + its `restart_reason_for` arm are
+  retained (pub enum; harmless) rather than removed, to keep the error
+  taxonomy stable and avoid a churny removal.
+- **Director panic posture (Commit B) does not stall the Plan**; a
+  panicked Director leaves the Plan Active for restart-reconcile. The
+  stall helper added here is only reached on the graceful terminal exits.
+
+#### Tradeoffs
+- The SameAction escalation reuses the single `no_progress_streak` rather
+  than a separate same-action streak: simpler, and both pathologies are
+  "no measurable progress," so one shared counter toward NeedsOperator is
+  the right granularity. `same_action_streak()` (status snapshot) still
+  reports the derived trailing-run length independently.
+
+#### Open questions
+- `DirectorStatusSnapshot.unread_note_count` is set AFTER mark-read, so it
+  counts notes-observed-this-iteration rather than currently-unread. The
+  rename suggested by bullet 16 ripples across `ipc` + the loopr handler +
+  tests for a wire-serialized field; deferred as disproportionate to a
+  cosmetic nit. The field's meaning is unchanged.

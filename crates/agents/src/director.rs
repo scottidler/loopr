@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -368,22 +368,25 @@ where
 }
 
 /// Parse the LLM response into a `Vec<DirectorAction>`.
+#[instrument(level = "debug", skip_all, fields(response_len = response.len()), err)]
 pub fn parse_director_actions(response: &str) -> Result<Vec<DirectorAction>, DirectorError> {
     let trimmed = response.trim();
     if trimmed.is_empty() {
         return Err(DirectorError::Parse("empty response".to_string()));
     }
-    if let Ok(actions) = serde_json::from_str::<Vec<DirectorAction>>(trimmed) {
-        return Ok(actions);
-    }
+    // Capture the FIRST (array-shape) parse error instead of re-parsing a
+    // third time to recover it (bullet 16): the array shape is the
+    // canonical contract, so its error is the most informative to feed
+    // back to the LLM. The single-object fallback is a tolerance, not the
+    // primary shape.
+    let array_err = match serde_json::from_str::<Vec<DirectorAction>>(trimmed) {
+        Ok(actions) => return Ok(actions),
+        Err(e) => e,
+    };
     if let Ok(action) = serde_json::from_str::<DirectorAction>(trimmed) {
         return Ok(vec![action]);
     }
-    let err = serde_json::from_str::<Vec<DirectorAction>>(trimmed)
-        .err()
-        .map(|e| e.to_string())
-        .unwrap_or_else(|| "unknown parse failure".to_string());
-    Err(DirectorError::Parse(err))
+    Err(DirectorError::Parse(array_err.to_string()))
 }
 
 /// PascalCase string for a `WorkStatus`. Mirrors the explicit-match style
@@ -443,12 +446,21 @@ fn parse_work_status(s: &str) -> Result<WorkStatus, DirectorError> {
 /// Build the display-oriented `context::DirectorState` from store snapshots.
 /// All `WorkStatus` and `BundleStatus` values are stringified at this seam
 /// so `context` does not import `domain` FSM enums.
+#[instrument(
+    level = "debug",
+    skip_all,
+    fields(plan_id = %plan_id, work_count = tracing::field::Empty, bundle_count = tracing::field::Empty),
+    err,
+)]
 pub async fn build_director_state<S: DirectorStore>(
     plan_id: &PlanId,
     store: &S,
 ) -> Result<CtxDirectorState, DirectorError> {
     let works = store.list_works_for_plan(plan_id).await?;
     let bundles = store.list_bundles_for_plan(plan_id).await?;
+    let span = tracing::Span::current();
+    span.record("work_count", works.len());
+    span.record("bundle_count", bundles.len());
 
     let work_lines = works
         .iter()
@@ -483,6 +495,10 @@ pub async fn build_director_state<S: DirectorStore>(
         // before calling the context builder. Empty here is the
         // test-only path's no-notes baseline.
         operator_notes: Vec::new(),
+        // `run_once` overrides this from `deps.config.max_work_attempts`
+        // before the context builder runs (mirrors `mode`). The 3 here is
+        // the test-only baseline matching the config default.
+        max_work_attempts: 3,
     })
 }
 
@@ -615,6 +631,42 @@ pub async fn reconcile_director<S: DirectorStore, P: WorkSpawner>(
     Ok(goal_complete)
 }
 
+/// Hard cap on the Director's in-memory `history` Vec. The prompt
+/// assembler re-trims by token budget every iteration; this only bounds
+/// the retained Vec so a multi-day Plan's history can't grow without
+/// limit. 40 messages ≈ 20 turns — well beyond any token-budget trim.
+const DIRECTOR_HISTORY_MAX_MESSAGES: usize = 40;
+
+/// Maximum operator notes rendered into a single Director user prompt.
+/// The Phase-2 design promised a "top 8 + N more" cap that was never
+/// implemented, so a Plan accumulating notes could blow the prompt
+/// budget. The newest 8 are rendered; older unread notes are summarized
+/// by a trailing marker line.
+const OPERATOR_NOTES_RENDER_CAP: usize = 8;
+
+/// Iterations a Director session must complete before a subsequent
+/// transient failure resets the restart budget. Without this, the
+/// restart counter only ever climbs, so a multi-day Plan dies on its
+/// `max_restarts + 1`-th transient blip EVER (bullet 7). A session that
+/// ran healthily for this many iterations has proven the LLM/store path
+/// works; a later blip is a fresh transient and gets a fresh budget.
+const HEALTHY_ITERS_BEFORE_RESTART_RESET: u32 = 10;
+
+/// Base unit for the exponential restart backoff. `restart` 1 sleeps
+/// 1x, 2 sleeps 2x, 3 sleeps 4x, capped at `RESTART_BACKOFF_CAP`. A
+/// store/LLM outage used to burn all restarts in milliseconds; the
+/// backoff spaces them so a transient outage can clear.
+const RESTART_BACKOFF_BASE: Duration = Duration::from_millis(250);
+/// Ceiling on a single restart backoff sleep.
+const RESTART_BACKOFF_CAP: Duration = Duration::from_secs(10);
+
+/// Exponential backoff for restart attempt `restart` (1-based), capped.
+fn restart_backoff(restart: u32) -> Duration {
+    let shift = restart.saturating_sub(1).min(16);
+    let scaled = RESTART_BACKOFF_BASE.saturating_mul(1u32 << shift);
+    scaled.min(RESTART_BACKOFF_CAP)
+}
+
 /// Long-running per-Plan supervisor task.
 #[instrument(
     name = "director.run",
@@ -639,16 +691,37 @@ where
     let mut restart: u32 = 0;
 
     'restart: loop {
-        let result: Result<(), DirectorError> = run_director_inner(plan_id, deps).await;
+        let mut iterations_completed: u32 = 0;
+        let result: Result<(), DirectorError> = run_director_inner(plan_id, deps, &mut iterations_completed).await;
         match result {
             Ok(()) => return Ok(()),
             Err(DirectorError::NeedHelp(reason)) => return Err(DirectorError::NeedHelp(reason)),
             Err(e) if restart < max_restarts => {
+                // Bullet 7: reset the restart budget when the failed
+                // session ran healthily for a while — a long-lived Plan
+                // must not accumulate restarts across unrelated transient
+                // blips and die on the Nth-ever one.
+                if iterations_completed >= HEALTHY_ITERS_BEFORE_RESTART_RESET {
+                    debug!(plan_id = %plan_id, iterations_completed, "director: healthy run; resetting restart budget");
+                    restart = 0;
+                }
                 restart += 1;
                 let reason = restart_reason_for(&e);
+                let backoff = restart_backoff(restart);
                 tracing::Span::current().record("restart", restart);
                 tracing::Span::current().record("restart_reason", reason);
-                warn!(error = %e, restart, restart_reason = reason, max_restarts, "director restart");
+                warn!(error = %e, restart, restart_reason = reason, max_restarts, backoff_ms = backoff.as_millis() as u64, "director restart");
+                // Bullet 7: exponential backoff before the restart, so a
+                // store/LLM outage doesn't burn the whole budget in
+                // milliseconds. Interruptible by shutdown.
+                tokio::select! {
+                    biased;
+                    _ = deps.shutdown.notified() => {
+                        info!(plan_id = %plan_id, "director shutdown during restart backoff; exiting");
+                        return Ok(());
+                    }
+                    _ = tokio::time::sleep(backoff) => {}
+                }
                 continue 'restart;
             }
             Err(e) => return Err(e),
@@ -672,6 +745,55 @@ fn restart_reason_for(err: &DirectorError) -> &'static str {
         DirectorError::NeedHelp(_) => "need_help",
         DirectorError::Fsm(_) => "fsm_failure",
     }
+}
+
+/// Persist the Plan to `Stalled` (Director role, OCC), then return the
+/// `NeedHelp` error carrying `reason`. The single owner of the
+/// "stall-then-NeedHelp" exit shared by every terminal Director path:
+/// retry-budget exhaustion, NeedsOperator-grace timeout, the
+/// iteration/wall-clock caps, and an LLM-emitted `need_help`. Persisting
+/// `Stalled` BEFORE returning is load-bearing: a daemon restart's
+/// `startup_reconcile_directors` skips a Stalled Plan instead of
+/// respawning a Director that would immediately re-trip the same exit
+/// (the invisible-Active-stall bug for `need_help`). A re-fetch +
+/// `Stalled -> Stalled` no-op is benign (idempotent if already Stalled).
+/// The stall is BEST-EFFORT: a budget/need_help exit must TERMINATE the
+/// Director, never restart-loop on a failed write. A get/transition/persist
+/// failure is logged (`warn!`) and `NeedHelp` is returned regardless, so
+/// the Director task exits cleanly; the Plan then stays Active and a
+/// daemon-restart reconcile re-attempts. Returning the store error
+/// instead would re-enter the restart dispatcher and re-exhaust the same
+/// budget immediately.
+async fn stall_plan_and_need_help<L, S, C, P>(
+    deps: &DirectorDeps<L, S, C, P>,
+    plan_id: &PlanId,
+    reason: String,
+) -> DirectorError
+where
+    L: LlmClient,
+    S: DirectorStore,
+    C: ContextBuilder,
+    P: WorkSpawner,
+{
+    match deps.store.get_plan(plan_id).await {
+        Ok(mut plan) => {
+            let expected_updated_at = plan.updated_at;
+            match plan.transition(PlanStatus::Stalled, Role::Director) {
+                Ok(_) => {
+                    if let Err(e) = deps.store.update_plan(plan, expected_updated_at).await {
+                        warn!(plan_id = %plan_id, error = %e, "director: stall persist failed; exiting NeedHelp with Plan still Active");
+                    }
+                }
+                Err(e) => {
+                    warn!(plan_id = %plan_id, error = %e, "director: stall FSM transition rejected; exiting NeedHelp");
+                }
+            }
+        }
+        Err(e) => {
+            warn!(plan_id = %plan_id, error = %e, "director: stall get_plan failed; exiting NeedHelp");
+        }
+    }
+    DirectorError::NeedHelp(reason)
 }
 
 /// Phase 7: routing event emitted when the Director's LLM-emitted
@@ -804,6 +926,10 @@ impl DirectorSession {
         //    label tells the LLM which mode-aware block to apply.
         let mut state = build_director_state(plan_id, &deps.store).await?;
         state.mode = self.current_mode.as_str().to_string();
+        // Render the operator-tunable retry budget into the user prompt
+        // (bullet 16) so the LLM's retry guidance tracks config instead of
+        // a hardcoded "3" in the cache-stable system prompt.
+        state.max_work_attempts = deps.config.max_work_attempts;
 
         // 2a. Phase 9: surface any unread operator notes. Notes are
         //     rendered into the `## Operator Notes` section of the user
@@ -819,7 +945,27 @@ impl DirectorSession {
         let unread_notes = deps.store.list_unread_notes_for_plan(plan_id).await?;
         let unread_note_ids: Vec<NoteId> = unread_notes.iter().map(|n| n.id.clone()).collect();
         if !unread_notes.is_empty() {
-            state.operator_notes = unread_notes.iter().map(|n| n.message.clone()).collect();
+            // Cap rendered notes at OPERATOR_NOTES_RENDER_CAP (bullet 11):
+            // render the newest N (the tail of the oldest-first list) plus
+            // a marker for the remainder, so a Plan that accumulated many
+            // notes cannot blow the prompt budget. ALL unread notes are
+            // still marked read after the round-trip (unread_note_ids
+            // above is the full set) — the cap is render-only.
+            let total = unread_notes.len();
+            if total > OPERATOR_NOTES_RENDER_CAP {
+                let skipped = total - OPERATOR_NOTES_RENDER_CAP;
+                let mut rendered: Vec<String> =
+                    vec![format!("[{skipped} older operator note(s) omitted; showing newest {OPERATOR_NOTES_RENDER_CAP}]")];
+                rendered.extend(
+                    unread_notes
+                        .iter()
+                        .skip(skipped)
+                        .map(|n| n.message.clone()),
+                );
+                state.operator_notes = rendered;
+            } else {
+                state.operator_notes = unread_notes.iter().map(|n| n.message.clone()).collect();
+            }
             let next = next_mode(self.current_mode, &PatternObservation::OperatorNoteArrived);
             if next != self.current_mode {
                 info!(
@@ -856,6 +1002,14 @@ impl DirectorSession {
         //    enters cross-iteration history; failed turns stay local to the
         //    sub-loop, preventing user/user adjacency on the next iteration.
         let mut messages = assembled.messages.clone();
+        // Explicit per-iteration requery counter. The old
+        // `(messages.len() - 1) / 2` derivation was wrong:
+        // `assembled.messages` already contains the cross-iteration
+        // history, so from iteration 3 on `messages.len()` was large and
+        // a single parse failure tripped the budget immediately (zero
+        // requeries). This counter resets every iteration (it is a local
+        // binding) and counts only THIS iteration's parse-retry turns.
+        let mut requeries_used: u32 = 0;
         let actions: Vec<DirectorAction> = loop {
             let (raw, _usage) = deps
                 .llm
@@ -870,6 +1024,16 @@ impl DirectorSession {
                         self.history.push(last.clone());
                     }
                     self.history.push(Message::assistant(raw));
+                    // Bound in-memory history (bullet 16): build_for_director
+                    // trims by token budget for the PROMPT, but self.history
+                    // itself grew unbounded across a long-lived Plan. Keep
+                    // only the most recent DIRECTOR_HISTORY_MAX_MESSAGES;
+                    // older turns are re-derived from store ground truth each
+                    // iteration anyway.
+                    if self.history.len() > DIRECTOR_HISTORY_MAX_MESSAGES {
+                        let excess = self.history.len() - DIRECTOR_HISTORY_MAX_MESSAGES;
+                        self.history.drain(0..excess);
+                    }
                     // Phase 9: render-then-mark. The notes have now
                     // been observed by the LLM (their bodies were in
                     // the rendered user prompt), so it is safe to
@@ -897,8 +1061,8 @@ impl DirectorSession {
                         "ERROR: Could not parse response as a JSON array of action objects. {e}\n\
                          Respond with ONLY a valid JSON array of action objects."
                     )));
-                    let requeries_used = (messages.len() - 1) / 2;
-                    if requeries_used as u32 >= deps.config.max_requeries {
+                    requeries_used += 1;
+                    if requeries_used >= deps.config.max_requeries {
                         if let Decision::Escalate(reason) = self.lifeguard.record_parse_failure() {
                             return Err(DirectorError::Lifeguard(reason));
                         }
@@ -915,9 +1079,18 @@ impl DirectorSession {
         for action in &actions {
             match action {
                 DirectorAction::AcceptBundle { bundle_id } => {
-                    let id = bundle_id
-                        .parse::<BundleId>()
-                        .map_err(|e| DirectorError::Id(format!("bundle_id={bundle_id}: {e}")))?;
+                    // A hallucinated / malformed id is an LLM slip, not a
+                    // daemon fault: skip the action in-iteration (no restart
+                    // burn — the next iteration re-derives state and
+                    // re-prompts). Pre-fix this returned DirectorError::Id
+                    // and burned a precious restart.
+                    let id = match bundle_id.parse::<BundleId>() {
+                        Ok(id) => id,
+                        Err(e) => {
+                            warn!(plan_id = %plan_id, iteration, bundle_id, error = %e, "director: invalid bundle_id; skipping action (no restart)");
+                            continue;
+                        }
+                    };
                     director_accept_bundle(plan_id, &id, &deps.spawner);
                     took_action = true;
                 }
@@ -926,10 +1099,20 @@ impl DirectorSession {
                     target_status,
                     reason,
                 } => {
-                    let wid = work_id
-                        .parse::<WorkId>()
-                        .map_err(|e| DirectorError::Id(format!("work_id={work_id}: {e}")))?;
-                    let target = parse_work_status(target_status)?;
+                    let wid = match work_id.parse::<WorkId>() {
+                        Ok(wid) => wid,
+                        Err(e) => {
+                            warn!(plan_id = %plan_id, iteration, work_id, error = %e, "director: invalid work_id; skipping action (no restart)");
+                            continue;
+                        }
+                    };
+                    let target = match parse_work_status(target_status) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            warn!(plan_id = %plan_id, iteration, target_status, error = %e, "director: invalid target_status; skipping action (no restart)");
+                            continue;
+                        }
+                    };
                     // Layer 2 retry-budget cap. Only fires when the
                     // Director is asking to push a Work back to Ready
                     // (the recovery path); other override targets are
@@ -953,24 +1136,28 @@ impl DirectorSession {
                                 max_work_attempts = deps.config.max_work_attempts,
                                 "director: retry budget exhausted; transitioning Plan -> Stalled"
                             );
-                            let mut plan = deps.store.get_plan(plan_id).await?;
-                            let expected_updated_at = plan.updated_at;
-                            plan.transition(PlanStatus::Stalled, Role::Director)
-                                .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
-                            deps.store.update_plan(plan, expected_updated_at).await?;
-                            return Err(DirectorError::NeedHelp(format!(
-                                "retry budget exhausted on work {wid} (attempt_count={} >= max_work_attempts={})",
-                                work.attempt_count, deps.config.max_work_attempts
-                            )));
+                            return Err(stall_plan_and_need_help(
+                                deps,
+                                plan_id,
+                                format!(
+                                    "retry budget exhausted on work {wid} (attempt_count={} >= max_work_attempts={})",
+                                    work.attempt_count, deps.config.max_work_attempts
+                                ),
+                            )
+                            .await);
                         }
                     }
                     deps.spawner.override_work(wid, target, reason.clone());
                     took_action = true;
                 }
                 DirectorAction::AssignWork { work_id } => {
-                    let wid = work_id
-                        .parse::<WorkId>()
-                        .map_err(|e| DirectorError::Id(format!("work_id={work_id}: {e}")))?;
+                    let wid = match work_id.parse::<WorkId>() {
+                        Ok(wid) => wid,
+                        Err(e) => {
+                            warn!(plan_id = %plan_id, iteration, work_id, error = %e, "director: invalid work_id; skipping action (no restart)");
+                            continue;
+                        }
+                    };
                     deps.spawner.assign_work(wid);
                     took_action = true;
                 }
@@ -978,7 +1165,13 @@ impl DirectorSession {
                     debug!(iteration, summary = %summary, "director done iteration");
                 }
                 DirectorAction::NeedHelp { reason } => {
-                    return Err(DirectorError::NeedHelp(reason.clone()));
+                    // An LLM-emitted need_help used to exit with the Plan
+                    // still Active — an invisible stall: the daemon shows
+                    // "not running (plan is Active)" while Reviewed bundles
+                    // rot until restart. Persist Plan -> Stalled before
+                    // returning, same as the retry-budget / grace exits.
+                    warn!(plan_id = %plan_id, reason = %reason, "director emitted need_help; transitioning Plan -> Stalled");
+                    return Err(stall_plan_and_need_help(deps, plan_id, reason.clone()).await);
                 }
             }
         }
@@ -1035,15 +1228,15 @@ impl DirectorSession {
                     grace = deps.config.needs_operator_grace_iters,
                     "director: NeedsOperator grace exceeded; transitioning Plan -> Stalled"
                 );
-                let mut plan = deps.store.get_plan(plan_id).await?;
-                let expected_updated_at = plan.updated_at;
-                plan.transition(PlanStatus::Stalled, Role::Director)
-                    .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
-                deps.store.update_plan(plan, expected_updated_at).await?;
-                return Err(DirectorError::NeedHelp(format!(
-                    "NeedsOperator timeout: {} iterations without operator note",
-                    self.needs_operator_iters
-                )));
+                return Err(stall_plan_and_need_help(
+                    deps,
+                    plan_id,
+                    format!(
+                        "NeedsOperator timeout: {} iterations without operator note",
+                        self.needs_operator_iters
+                    ),
+                )
+                .await);
             }
         } else {
             self.needs_operator_iters = 0;
@@ -1084,7 +1277,11 @@ impl DirectorSession {
 /// GoalComplete or shutdown; surface-level errors propagate to the
 /// outer restart dispatcher. Constructs a `DirectorSession` and drives
 /// it via `run_once` + a sleep/shutdown `select!` per iteration.
-async fn run_director_inner<L, S, C, P>(plan_id: &PlanId, deps: &DirectorDeps<L, S, C, P>) -> Result<(), DirectorError>
+async fn run_director_inner<L, S, C, P>(
+    plan_id: &PlanId,
+    deps: &DirectorDeps<L, S, C, P>,
+    iterations_completed: &mut u32,
+) -> Result<(), DirectorError>
 where
     L: LlmClient,
     S: DirectorStore,
@@ -1092,10 +1289,50 @@ where
     P: WorkSpawner,
 {
     let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    let session_start = Instant::now();
     loop {
         match session.run_once(deps).await? {
             DirectorIterOutcome::GoalDone => return Ok(()),
             DirectorIterOutcome::Continue { took_action } => {
+                // Record progress for the outer restart-budget reset
+                // (bullet 7): this is the count of iterations that
+                // completed without erroring.
+                *iterations_completed = session.iteration();
+                // Absolute backstops (bullet 2): a stuck Plan must not poll
+                // the LLM forever. The pattern tracker + NeedsOperator grace
+                // are the primary brakes; these are the hard caps. On
+                // exhaustion stall the Plan and exit with NeedHelp (same
+                // posture as the other terminal Director exits).
+                let elapsed_secs = session_start.elapsed().as_secs();
+                if session.iteration() >= deps.config.max_iterations {
+                    warn!(
+                        plan_id = %plan_id,
+                        iteration = session.iteration(),
+                        max_iterations = deps.config.max_iterations,
+                        "director: max_iterations reached; transitioning Plan -> Stalled"
+                    );
+                    return Err(stall_plan_and_need_help(
+                        deps,
+                        plan_id,
+                        format!("max_iterations reached ({} iterations)", session.iteration()),
+                    )
+                    .await);
+                }
+                if elapsed_secs >= deps.config.max_wall_clock_secs {
+                    warn!(
+                        plan_id = %plan_id,
+                        iteration = session.iteration(),
+                        elapsed_secs,
+                        max_wall_clock_secs = deps.config.max_wall_clock_secs,
+                        "director: wall-clock budget exceeded; transitioning Plan -> Stalled"
+                    );
+                    return Err(stall_plan_and_need_help(
+                        deps,
+                        plan_id,
+                        format!("wall-clock budget exceeded ({elapsed_secs}s)"),
+                    )
+                    .await);
+                }
                 let secs = if took_action {
                     deps.config.poll_interval_secs
                 } else {

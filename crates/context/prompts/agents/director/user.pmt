@@ -2,6 +2,8 @@
 
 **Director mode:** {{mode}}
 
+**Retry budget:** {{max_work_attempts}} attempts (retry a Blocked Work via `override_work` only while its `attempt_count` is below this; at or above it, emit `need_help`).
+
 ### Works
 
 {{#each works}}

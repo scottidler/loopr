@@ -843,6 +843,11 @@ where
     let operator_notifies = Arc::clone(&ctx.operator_notifies);
     let director_statuses = Arc::clone(&ctx.director_statuses);
     let plan_id_for_cleanup = plan_id.clone();
+    // Capture the exact Notify this task inserted so the exit cleanup can
+    // compare-before-remove: a Stalled -> Active override may respawn a
+    // fresh Director (inserting a NEW Notify) before this task's cleanup
+    // runs; an unconditional remove would delete the respawn's Notify.
+    let notify_for_cleanup = Arc::clone(&deps.operator_notify);
     directors.spawn(async move {
         // Panic posture: `catch_unwind` so a panic inside `run_director`
         // is logged and the per-Plan Notify + status-snapshot cleanup
@@ -865,8 +870,15 @@ where
             }
         }
         // Phase 9: drop the per-Plan operator Notify on Director task
-        // exit. See startup_reconcile_directors for the rationale.
-        operator_notifies.write().await.remove(&plan_id_for_cleanup);
+        // exit, but ONLY if the map still holds the Notify THIS task
+        // inserted (compare-before-remove) — a respawned Director may have
+        // replaced it. See startup_reconcile_directors for the rationale.
+        {
+            let mut map = operator_notifies.write().await;
+            if map.get(&plan_id_for_cleanup).is_some_and(|n| Arc::ptr_eq(n, &notify_for_cleanup)) {
+                map.remove(&plan_id_for_cleanup);
+            }
+        }
         // Director Phase 2 follow-ups (Item 3): drop the per-Plan
         // status snapshot on task exit so a subsequent
         // `director.status` IPC call returns `snapshot: None` (the

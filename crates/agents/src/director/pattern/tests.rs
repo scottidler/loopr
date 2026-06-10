@@ -72,6 +72,61 @@ fn same_action_interrupted_by_done_resets_counter() {
     );
 }
 
+#[test]
+fn sustained_same_action_escalates_instead_of_pinning_conservative() {
+    // Regression for the SameActionTripped-starves-escalation bug: a
+    // mutating action repeated against static state used to return
+    // SameActionTripped forever (mode pinned Conservative, never reaching
+    // NeedsOperator). Now the streak feeds escalation.
+    let cfg = PatternConfig {
+        same_action_threshold: 3,
+        escalation_threshold: 5,
+        ..PatternConfig::default()
+    };
+    let mut tracker = DirectorPatternTracker::new(cfg);
+    let mut observations = Vec::new();
+    for _ in 0..12 {
+        observations.push(tracker.observe(override_ready("wk-x"), 100));
+    }
+    // First trip (obs 3) is SameActionTripped (Normal -> Conservative).
+    assert!(
+        observations
+            .iter()
+            .any(|o| matches!(o, Some(PatternObservation::SameActionTripped { .. }))),
+        "expected an initial SameActionTripped: {observations:?}"
+    );
+    // Sustained repetition must eventually escalate.
+    assert!(
+        observations.iter().any(|o| matches!(
+            o,
+            Some(PatternObservation::EscalationTripped {
+                reason: "same_action_sustained",
+                ..
+            })
+        )),
+        "sustained same-action must escalate to EscalationTripped: {observations:?}"
+    );
+}
+
+#[test]
+fn idle_done_run_never_trips_same_action() {
+    // Healthy waiting (a long Implementer in flight) emits `done` every
+    // idle iteration. A run of `done` is non-mutating and must NOT trip
+    // SameActionTripped (the "45s of waiting -> Conservative" trap).
+    let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
+    let mut observations = Vec::new();
+    for _ in 0..10 {
+        observations.push(tracker.observe(done(), 100));
+    }
+    assert!(
+        observations
+            .iter()
+            .all(|o| !matches!(o, Some(PatternObservation::SameActionTripped { .. }))),
+        "idle done must never trip SameAction: {observations:?}"
+    );
+    assert_eq!(tracker.same_action_streak(), 0, "idle done must not accrue a same-action streak");
+}
+
 // ---------------------------------------------------------------------------
 // State hash determinism
 // ---------------------------------------------------------------------------

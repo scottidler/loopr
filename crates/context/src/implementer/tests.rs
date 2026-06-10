@@ -219,6 +219,7 @@ fn sample_director_state(mode: &str) -> DirectorState {
         }],
         blocked_reason: None,
         operator_notes: Vec::new(),
+        max_work_attempts: 3,
     }
 }
 
