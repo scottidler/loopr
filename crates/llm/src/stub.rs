@@ -44,6 +44,10 @@ pub struct ScriptedLlm {
     free_responses: Arc<Mutex<FreeMap>>,
     tool_keyed: Arc<Mutex<ToolKeyed>>,
     free_keyed: Arc<Mutex<FreeKeyed>>,
+    /// `Usage` returned with every response. Defaults to all-zero /
+    /// model-`None`; metering tests call `set_usage` to script real token
+    /// counts + a model id (finding 7).
+    usage: Arc<Mutex<Usage>>,
 }
 
 /// Build the substring-match haystack from a system prompt plus all
@@ -128,6 +132,18 @@ impl ScriptedLlm {
             .push((needle.to_string(), result));
     }
 
+    /// Script the `Usage` returned with every subsequent response.
+    /// Lets a metering test assert that token counts + the response model
+    /// flow through `MeteredLlmClient` / costs.jsonl. Default is
+    /// `Usage::default()` (all zero, `model = None`).
+    pub fn set_usage(&self, usage: Usage) {
+        *self.usage.lock().expect("usage lock") = usage;
+    }
+
+    fn usage(&self) -> Usage {
+        self.usage.lock().expect("usage lock").clone()
+    }
+
     pub fn is_empty(&self) -> bool {
         let (t, f) = self.remaining();
         t == 0 && f == 0
@@ -177,7 +193,8 @@ impl LlmClient for ScriptedLlm {
         // the system + user prompt before falling back to model-FIFO.
         let haystack = format!("{system}\n{user}");
         if let Some(result) = take_keyed(&self.tool_keyed, &haystack) {
-            return result.map(|tc| (tc, Usage::default()));
+            let usage = self.usage();
+            return result.map(|tc| (tc, usage));
         }
         let key: ModelKey = model.map(|m| m.to_string());
         let popped = {
@@ -185,7 +202,7 @@ impl LlmClient for ScriptedLlm {
             map.get_mut(&key).and_then(|q| q.pop_front())
         };
         match popped {
-            Some(Ok(tc)) => Ok((tc, Usage::default())),
+            Some(Ok(tc)) => Ok((tc, self.usage())),
             Some(Err(e)) => Err(e),
             None => {
                 let (t, f) = self.remaining();
@@ -206,7 +223,8 @@ impl LlmClient for ScriptedLlm {
         // the system prompt + all message text before model-FIFO fallback.
         let haystack = messages_haystack(system, messages);
         if let Some(result) = take_keyed(&self.free_keyed, &haystack) {
-            return result.map(|s| (s, Usage::default()));
+            let usage = self.usage();
+            return result.map(|s| (s, usage));
         }
         let key: ModelKey = model.map(|m| m.to_string());
         let popped = {
@@ -214,7 +232,7 @@ impl LlmClient for ScriptedLlm {
             map.get_mut(&key).and_then(|q| q.pop_front())
         };
         match popped {
-            Some(Ok(s)) => Ok((s, Usage::default())),
+            Some(Ok(s)) => Ok((s, self.usage())),
             Some(Err(e)) => Err(e),
             None => {
                 let (t, f) = self.remaining();
@@ -307,6 +325,23 @@ mod tests {
         };
         let tool_err = stub.complete_with_tool("", "", schema, None).await.unwrap_err();
         assert!(matches!(tool_err, LlmError::Fatal { .. }));
+    }
+
+    #[tokio::test]
+    async fn set_usage_is_returned_with_responses() {
+        let stub = ScriptedLlm::new();
+        stub.set_usage(Usage {
+            input_tokens: 123,
+            output_tokens: 45,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            model: Some("claude-sonnet-4-6-20260115".to_string()),
+        });
+        stub.queue_free(Ok("ok".to_string()));
+        let (_out, usage) = stub.complete_free("s", &[], None).await.unwrap();
+        assert_eq!(usage.input_tokens, 123);
+        assert_eq!(usage.output_tokens, 45);
+        assert_eq!(usage.model.as_deref(), Some("claude-sonnet-4-6-20260115"));
     }
 
     #[tokio::test]

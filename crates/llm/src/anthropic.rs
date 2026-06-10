@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, info_span, instrument, warn};
+use tracing::{Instrument, debug, info_span, instrument, warn};
 
 use crate::client::LlmClient;
 use crate::config::LlmConfig;
@@ -97,6 +97,17 @@ impl AnthropicClient {
 
         validate_api_base_url(&config.api_base_url)?;
 
+        // Anthropic accepts temperature in [0, 1]; reject an out-of-range
+        // value at construction rather than letting the API 400 every call
+        // (finding 7).
+        if let Some(t) = config.temperature
+            && !(0.0..=1.0).contains(&t)
+        {
+            return Err(LlmError::Fatal {
+                reason: FatalReason::ConfigInvalid(format!("temperature {t} out of range [0, 1]")),
+            });
+        }
+
         let mut headers = HeaderMap::new();
         let mut key_val = HeaderValue::from_str(&api_key).map_err(|e| LlmError::Fatal {
             reason: FatalReason::ConfigInvalid(format!("invalid API key header: {e}")),
@@ -131,6 +142,7 @@ struct AnthropicRequest<'a> {
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Value::is_null")]
     system: Value,
     messages: [AnthropicMessage<'a>; 1],
     tools: [ToolSchemaWire<'a>; 1],
@@ -172,6 +184,7 @@ struct AnthropicFreeRequest {
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Value::is_null")]
     system: Value,
     messages: Vec<AnthropicFreeMessage>,
 }
@@ -190,7 +203,15 @@ struct AnthropicFreeMessage {
 /// `usage.cache_creation_input_tokens` / `usage.cache_read_input_tokens`.
 /// Below the threshold, the cache silently no-ops; the wire shape is
 /// the same either way.
+///
+/// An EMPTY system prompt returns `Value::Null`, which the request
+/// struct's `skip_serializing_if = "Value::is_null"` omits entirely —
+/// an empty `{"type":"text","text":""}` block is an invalid request body
+/// (finding 7).
 fn build_system_block(system: &str) -> Value {
+    if system.is_empty() {
+        return Value::Null;
+    }
     serde_json::json!([{
         "type": "text",
         "text": system,
@@ -230,12 +251,19 @@ impl LlmClient for AnthropicClient {
             cache_read_input_tokens = tracing::field::Empty,
             cache_hit_ratio = tracing::field::Empty,
         );
-        let _enter = span.enter();
         let started = Instant::now();
 
-        let result = self.send_request(system, user, &tool, effective_model).await;
+        // Instrument the awaited send with the span rather than holding a
+        // `span.enter()` guard across the await (finding 7: an entered
+        // guard held across `.await` mis-attributes the span when the task
+        // yields). Re-enter only for the synchronous recording below.
+        let result = self
+            .send_request(system, user, &tool, effective_model)
+            .instrument(span.clone())
+            .await;
 
         let elapsed = started.elapsed().as_millis() as u64;
+        let _enter = span.enter();
         span.record("duration_ms", elapsed);
         // Record token + cost fields on BOTH success and billed-error
         // (max_tokens truncation / schema refusal): those 200s cost
@@ -302,12 +330,15 @@ impl LlmClient for AnthropicClient {
             cache_read_input_tokens = tracing::field::Empty,
             cache_hit_ratio = tracing::field::Empty,
         );
-        let _enter = span.enter();
         let started = Instant::now();
 
-        let result = self.send_free_request(system, messages, effective_model).await;
+        let result = self
+            .send_free_request(system, messages, effective_model)
+            .instrument(span.clone())
+            .await;
 
         let elapsed = started.elapsed().as_millis() as u64;
+        let _enter = span.enter();
         span.record("duration_ms", elapsed);
         if let Some(usage) = usage_to_record(&result) {
             record_usage_span(&span, effective_model, usage);
@@ -610,6 +641,9 @@ fn reqwest_err_to_llm_error(e: reqwest::Error) -> LlmError {
 /// carries `retry_after`); 529 → Overloaded; 408/5xx → ServerError;
 /// 400/other → BadRequest (fatal).
 fn classify_status(code: u16, body_text: String, retry_after: Option<u64>) -> LlmError {
+    // Cap the body before it lands in an error string that gets logged
+    // (finding 7: a multi-KB error body should not flood events.log).
+    let body_text = truncate_preview(&body_text);
     match code {
         401 | 403 => LlmError::Fatal {
             reason: FatalReason::Auth(body_text),
@@ -693,10 +727,19 @@ fn classify_free_response(
 /// `model` is the model-pinning carrier (the concrete id the provider
 /// actually ran, which may differ from the floating tag we requested).
 fn extract_usage(response: &Value) -> Usage {
-    let mut usage = response
-        .get("usage")
-        .and_then(|v| serde_json::from_value::<Usage>(v.clone()).ok())
-        .unwrap_or_default();
+    let raw = response.get("usage");
+    let mut usage = match raw {
+        Some(v) => match serde_json::from_value::<Usage>(v.clone()) {
+            Ok(u) => u,
+            Err(e) => {
+                // A present-but-unparseable usage object means we silently
+                // under-count cost; surface it instead of zeroing quietly.
+                warn!(error = %e, "anthropic response has a malformed `usage` object; counting zero");
+                Usage::default()
+            }
+        },
+        None => Usage::default(),
+    };
     usage.model = response.get("model").and_then(Value::as_str).map(str::to_string);
     usage
 }
@@ -712,7 +755,7 @@ fn extract_text_block(response: &Value, max_tokens: u32) -> Result<(String, Usag
         // usage on the error so the metered client records the cost of
         // this expensive failure on its error path (Phase 1 remediation).
         let usage = extract_usage(response);
-        let used = usage.output_tokens as u32;
+        let used = usage.output_tokens.min(u32::MAX as u64) as u32;
         return Err(LlmError::Fatal {
             reason: FatalReason::ContextExhausted {
                 used,
@@ -775,7 +818,7 @@ fn extract_tool_call(
         // usage on the error so the metered client records the cost of
         // this expensive failure on its error path (Phase 1 remediation).
         let usage = extract_usage(response);
-        let used = usage.output_tokens as u32;
+        let used = usage.output_tokens.min(u32::MAX as u64) as u32;
         return Err(LlmError::Fatal {
             reason: FatalReason::ContextExhausted {
                 used,

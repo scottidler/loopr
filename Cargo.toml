@@ -48,5 +48,4 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 # with a breaking API change (see the v0.5.13 install regression that
 # motivated the switch).
 taskstore-traits = { git = "ssh://git@github.com/scottidler/taskstore", tag = "v0.6.1" }
-taskstore        = { git = "ssh://git@github.com/scottidler/taskstore", tag = "v0.6.1" }
 taskstore-async  = { git = "ssh://git@github.com/scottidler/taskstore", tag = "v0.6.1" }

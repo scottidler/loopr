@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{Instrument, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use agents::{
@@ -1009,9 +1009,8 @@ pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
     ctx: Arc<DaemonContext<L>>,
     plan_id: PlanId,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+    let span = tracing::info_span!("daemon.promote_unblocked_siblings", plan_id = %plan_id);
     Box::pin(async move {
-        let span = tracing::info_span!("daemon.promote_unblocked_siblings", plan_id = %plan_id);
-        let _enter = span.enter();
         let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
             Ok(s) => s,
             Err(e) => {
@@ -1036,7 +1035,7 @@ pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
             tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
         }
         info!(promoted, "promote_unblocked_siblings: done");
-    })
+    }.instrument(span))
 }
 
 /// Mark any Pending Works whose `dependencies` contains `terminal_work_id`
@@ -1055,14 +1054,13 @@ pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
     terminal_work_id: WorkId,
     terminal_status: WorkStatus,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+    let span = tracing::warn_span!(
+        "daemon.block_dependent_siblings",
+        plan_id = %plan_id,
+        terminal_work_id = %terminal_work_id,
+        terminal_status = ?terminal_status,
+    );
     Box::pin(async move {
-        let span = tracing::warn_span!(
-            "daemon.block_dependent_siblings",
-            plan_id = %plan_id,
-            terminal_work_id = %terminal_work_id,
-            terminal_status = ?terminal_status,
-        );
-        let _enter = span.enter();
         let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
             Ok(s) => s,
             Err(e) => {
@@ -1110,7 +1108,7 @@ pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
             }
         }
         warn!(blocked, "block_dependent_siblings: done");
-    })
+    }.instrument(span))
 }
 
 /// Resolve the current HEAD commit of the target repo. Async via

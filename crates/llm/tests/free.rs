@@ -287,6 +287,43 @@ async fn free_request_body_uses_config_model_when_none() {
 }
 
 #[tokio::test]
+async fn free_empty_system_omits_system_field() {
+    // Phase 6 finding 7: an empty system prompt must NOT serialize an
+    // empty `{"type":"text","text":""}` block (an invalid request body) —
+    // the whole `system` field is omitted.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(text_response("ok")))
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    client.complete_free("", &[Message::user("q")], None).await.unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    assert!(body.get("system").is_none(), "empty system must be omitted, got: {body}");
+}
+
+#[tokio::test]
+async fn new_rejects_out_of_range_temperature() {
+    // Phase 6 finding 7: a temperature outside [0, 1] is rejected at
+    // construction instead of 400ing every call.
+    let cfg = LlmConfig {
+        temperature: Some(1.5),
+        ..test_config("https://api.anthropic.com".to_string())
+    };
+    match AnthropicClient::new(cfg, "k".into()) {
+        Ok(_) => panic!("expected ConfigInvalid for out-of-range temperature"),
+        Err(LlmError::Fatal {
+            reason: FatalReason::ConfigInvalid(m),
+        }) => assert!(m.contains("temperature"), "got: {m}"),
+        Err(other) => panic!("expected ConfigInvalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn free_http_429_maps_to_rate_limited_with_retry_after() {
     // Phase 6 finding 5: 429 becomes a typed RateLimited carrying the
     // parsed retry-after header (seconds).

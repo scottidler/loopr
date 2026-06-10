@@ -1510,3 +1510,55 @@ Landing across commits (mirrors Phases 1-5):
 
 #### Open questions
 - None.
+
+### Commit F — llm minors batch (finding 7)
+
+Several items in the finding were already resolved in Commit E:
+- **Duplicated status-classification arms** (the two near-identical match
+  blocks) — folded into one shared `classify_status`.
+- **`reqwest_err_to_llm_error` dead-branch distinction** — the
+  `network`/`reqwest` split collapsed into one `RetryableReason::Network`.
+
+#### Design decisions (remaining items)
+- **Dead `domain` dep removed** from `llm/Cargo.toml` (`cargo remove`;
+  no `domain::` usage anywhere in `llm/src`).
+- **Empty `system` omits the field.** `build_system_block("")` returns
+  `Value::Null`; both request structs mark `system` with
+  `skip_serializing_if = "Value::is_null"`, so an empty system prompt no
+  longer ships an invalid empty text block.
+- **Error body capped before logging.** `classify_status` runs
+  `truncate_preview` on the body text before embedding it in
+  `Auth`/`BadRequest`, so a multi-KB error body can't flood `events.log`.
+- **`extract_usage` warns on a malformed usage object.** A present-but-
+  unparseable `usage` now logs `warn!` instead of silently zeroing (which
+  under-counts cost without a trace).
+- **`u32` truncation made saturating.** `usage.output_tokens.min(u32::MAX
+  as u64) as u32` at the two `ContextExhausted.used` sites.
+- **Temperature range validation** in `AnthropicClient::new`: a
+  `temperature` outside `[0, 1]` returns `Fatal(ConfigInvalid)` at
+  construction instead of 400ing every call.
+- **Span guard no longer held across `.await`.** `complete_with_tool` /
+  `complete_free` now `.instrument(span.clone())` the awaited send and
+  re-enter the span only for the synchronous post-await recording; the
+  same fix applied to `promote_unblocked_siblings` /
+  `block_dependent_siblings` in `loopr` (the `Box::pin(async {...})`
+  bodies now `.instrument(span)` instead of `let _enter` across awaits).
+  The `dispatch.rs` site the finding named is already `#[instrument]`
+  (fixed in an earlier phase).
+- **`ScriptedLlm` usage scripting.** New `set_usage(Usage)` + an internal
+  `usage()` accessor; the stub returns the scripted usage with every
+  response (default still all-zero / `model: None`), enabling Phase 11
+  metering tests to assert token + model flow through `MeteredLlmClient`
+  and costs.jsonl.
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- The error-body cap reuses `truncate_preview` (4096-byte ceiling, the
+  same bound used for prompt previews) rather than a dedicated smaller
+  error-body cap — one ceiling constant is simpler and 4 KB of error body
+  is already plenty for diagnosis.
+
+#### Open questions
+- None.
