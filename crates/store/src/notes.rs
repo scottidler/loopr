@@ -41,7 +41,7 @@ impl<'a> NotesStore<'a> {
         let id_str = note.id.as_ref().to_string();
         if self.inner.get::<OperatorNote>(&id_str).await?.is_some() {
             return Err(StoreError::AlreadyExists {
-                collection: "operator_notes",
+                collection: "operatornotes",
                 id: id_str,
             });
         }
@@ -61,7 +61,7 @@ impl<'a> NotesStore<'a> {
         match self.inner.get::<OperatorNote>(id.as_ref()).await? {
             Some(note) => Ok(note),
             None => Err(StoreError::RecordNotFound {
-                collection: "operator_notes",
+                collection: "operatornotes",
                 id: id.to_string(),
             }),
         }
@@ -111,8 +111,8 @@ impl<'a> NotesStore<'a> {
     }
 
     /// Mark each note in `ids` as read at `ts_ms`. Append-only: writes
-    /// a fresh JSONL line per id with `read_at = Some(ts_ms)` and
-    /// `updated_at = ts_ms`. Last-write-wins on replay.
+    /// a fresh JSONL line per id with `read_at = Some(ts_ms)` and a
+    /// monotonically-floored `updated_at`. Last-write-wins on replay.
     ///
     /// No OCC version-check: notes have one writer (the IPC handler
     /// for `create`, the Director task for `mark_read`), and `read_at`
@@ -130,7 +130,17 @@ impl<'a> NotesStore<'a> {
         for id in ids {
             let mut note = self.get(id).await?;
             if note.is_unread() {
+                let prior = note.updated_at;
                 note.mark_read(ts_ms);
+                // Monotonic `updated_at` floor. `mark_read` stamps
+                // `updated_at` from the caller-supplied `ts_ms`, which can
+                // tie (or, under clock skew, regress) against the value
+                // already on disk — a hazard for the taskstore merge
+                // driver's latest-`updated_at`-wins tie-break on replay.
+                // Clamp strictly above the prior value. `read_at` keeps
+                // the semantic `ts_ms`; only the bookkeeping field is
+                // floored.
+                note.updated_at = std::cmp::max(domain::now_millis(), prior + 1);
                 self.inner.update(note).await?;
             }
         }

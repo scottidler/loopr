@@ -58,9 +58,12 @@ impl<S> WorkUpdateSink for SummaryFanout<S>
 where
     S: WorkUpdateSink,
 {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
-        let work_for_summary = work.clone();
-        self.inner.update(work, expected_updated_at).await?;
+    async fn update(&self, mut work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
+        let persisted = self.inner.update(work.clone(), expected_updated_at).await?;
+        // Reflect the persisted (floored) `updated_at` in the summary so
+        // the on-disk record and its summary agree.
+        work.updated_at = persisted;
+        let work_for_summary = work;
         // Best-effort: write the Work summary first.
         if let Err(e) = summary::write_work(&self.target, &work_for_summary) {
             warn!(
@@ -75,7 +78,7 @@ where
         // Spec/Phase (Tier-2 multi-tier shape, not built); the
         // Plan-resolve is itself best-effort.
         self.refresh_parent_plan(&work_for_summary).await;
-        Ok(())
+        Ok(persisted)
     }
 }
 
@@ -123,9 +126,10 @@ impl<S> BundleUpdateSink for SummaryFanout<S>
 where
     S: BundleUpdateSink,
 {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
-        let bundle_for_summary = bundle.clone();
-        self.inner.update(bundle, expected_updated_at).await?;
+    async fn update(&self, mut bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
+        let persisted = self.inner.update(bundle.clone(), expected_updated_at).await?;
+        bundle.updated_at = persisted;
+        let bundle_for_summary = bundle;
         if let Err(e) = summary::write_bundle(&self.target, &bundle_for_summary) {
             warn!(
                 bundle_id = %bundle_for_summary.id,
@@ -133,7 +137,7 @@ where
                 "summary::write_bundle failed (non-fatal)"
             );
         }
-        Ok(())
+        Ok(persisted)
     }
 }
 

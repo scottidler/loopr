@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
-use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, TickId, Work};
+use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, TickId, Work, WorkId};
 use store::{BundleUpdateSink, StoreError};
 
 pub use config::IntegratorConfig;
@@ -38,7 +38,7 @@ use crate::classify::{ConflictKind, classify_conflict, is_merge_conflict};
 /// (that's the daemon's job after an `Ok(Tick)` return).
 #[trait_variant::make(Send)]
 pub trait WorkLookup: Send + Sync {
-    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError>;
+    async fn get(&self, work_id: &WorkId) -> Result<Option<Work>, StoreError>;
 }
 
 /// Append-only `Tick` persistence plus read-back. The Integrator
@@ -57,15 +57,12 @@ pub trait TickSink: Send + Sync {
 // Real impls backed by `store::Store`.
 
 impl WorkLookup for store::Store {
-    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError> {
+    async fn get(&self, work_id: &WorkId) -> Result<Option<Work>, StoreError> {
         // `WorksStore::get` returns `Err(RecordNotFound)` for missing;
         // the WorkLookup contract is `Option` so the Integrator can
         // distinguish "wiring bug (bundle references a non-existent
         // work)" from other store failures.
-        use domain::WorkId;
-        use std::str::FromStr;
-        let wid = WorkId::from_str(work_id).expect("WorkId::from_str is Infallible");
-        match self.works().get(&wid).await {
+        match self.works().get(work_id).await {
             Ok(w) => Ok(Some(w)),
             Err(StoreError::RecordNotFound { .. }) => Ok(None),
             Err(other) => Err(other),
@@ -74,7 +71,7 @@ impl WorkLookup for store::Store {
 }
 
 impl<T: WorkLookup + ?Sized> WorkLookup for &T {
-    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError> {
+    async fn get(&self, work_id: &WorkId) -> Result<Option<Work>, StoreError> {
         (*self).get(work_id).await
     }
 }
@@ -665,7 +662,7 @@ async fn preflight_plan_consistency<W: WorkLookup>(
 ) -> Result<(), IntegrationError> {
     for b in bundles {
         let work = works
-            .get(b.work_id.as_ref())
+            .get(&b.work_id)
             .await?
             .ok_or_else(|| IntegrationError::WorkNotFound {
                 bundle_id: b.id.as_ref().to_string(),
@@ -722,7 +719,13 @@ async fn transition_bundle_returning<U: BundleUpdateSink>(
     clone
         .transition(target, Role::Integrator)
         .map_err(|e| IntegrationError::Transition(e.to_string()))?;
-    sink.update(clone.clone(), expected).await?;
+    // Sync the in-memory clone to the persisted (monotonically-floored)
+    // `updated_at` so a chained next transition (prologue Accepted ->
+    // Integrating, then Phase-3 Integrating -> Merged) carries the
+    // correct OCC expected-version even when both writes land in the
+    // same millisecond.
+    let persisted = sink.update(clone.clone(), expected).await?;
+    clone.updated_at = persisted;
     debug!(
         bundle_id = %clone.id,
         from = ?bundle.status,

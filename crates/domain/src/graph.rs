@@ -32,6 +32,13 @@ pub enum GraphError {
     /// set) so callers can map them programmatically (e.g. id -> title)
     /// without re-parsing a string. `Display` renders the comma-joined
     /// ids for log / wire use.
+    ///
+    /// Over-approximation note: the carried set is every node Kahn's
+    /// could not drain, which includes nodes that merely depend
+    /// (transitively) on a real cycle, not only the nodes on the cycle
+    /// itself. It is a superset of the true cycle, never a subset — safe
+    /// for "these works can never run" reporting, not precise for "this
+    /// is the exact cycle."
     Cycle(Vec<WorkId>),
 }
 
@@ -84,10 +91,26 @@ impl WorkGraph {
         let mut deps: HashMap<WorkId, Vec<WorkId>> = HashMap::new();
         let mut dependents: HashMap<WorkId, Vec<WorkId>> = HashMap::new();
         for (node, node_deps) in edges {
-            for dep in &node_deps {
+            // Dedup duplicate dependency edges before recording them. A
+            // node listing the same sibling twice (an LLM slip, or a
+            // caller that did not pre-dedup) would otherwise plant a
+            // duplicate reverse edge — so `dependents_of` returns the
+            // same dependent twice and `block_dependent_siblings`
+            // processes it twice — and inflate Kahn's in-degree
+            // bookkeeping. Dedup here makes the invariant the graph's
+            // own rather than every caller's. First-seen order is kept
+            // for determinism.
+            let mut seen: HashSet<WorkId> = HashSet::new();
+            let mut deduped: Vec<WorkId> = Vec::with_capacity(node_deps.len());
+            for dep in node_deps {
+                if seen.insert(dep.clone()) {
+                    deduped.push(dep);
+                }
+            }
+            for dep in &deduped {
                 dependents.entry(dep.clone()).or_default().push(node.clone());
             }
-            deps.insert(node, node_deps);
+            deps.insert(node, deduped);
         }
         Self { deps, dependents }
     }

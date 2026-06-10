@@ -97,6 +97,21 @@ fn tick_new_supports_multiple_bundles_and_commits() {
     assert_eq!(tick.merge_commits.len(), 2);
 }
 
+#[test]
+#[should_panic(expected = "bundles/merge_commits length mismatch")]
+fn tick_new_debug_asserts_length_parity() {
+    // Phase 3 F12: the 1:1 bundles<->merge_commits contract is checked
+    // by a debug_assert_eq in Tick::new. Tests run in debug, so a
+    // mismatched-length construction must panic.
+    let _ = Tick::new(
+        PlanId::new(),
+        vec![BundleId::new(), BundleId::new()],
+        "loopr/plan-x".to_string(),
+        "sha".to_string(),
+        vec!["only-one-commit".to_string()],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tick serde
 // ---------------------------------------------------------------------------

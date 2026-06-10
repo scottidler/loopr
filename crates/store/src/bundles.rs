@@ -170,7 +170,7 @@ impl<'a> BundlesStore<'a> {
         ret,
         err,
     )]
-    pub async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), StoreError> {
+    pub async fn update(&self, mut bundle: Bundle, expected_updated_at: i64) -> Result<i64, StoreError> {
         let _guard = self.update_lock.lock().await;
         let id_str = bundle.id.as_ref().to_string();
         let current = self
@@ -187,8 +187,15 @@ impl<'a> BundlesStore<'a> {
                 actual: current.updated_at,
             });
         }
+        // Monotonic `updated_at` floor under the lock; see
+        // `WorksStore::update` for the same-millisecond OCC/merge-driver
+        // tie-break rationale and why the floored value is returned (the
+        // Integrator chains transitions on one in-memory Bundle). Floor
+        // only ever moves the timestamp forward.
+        let floored = std::cmp::max(domain::now_millis(), current.updated_at + 1);
+        bundle.updated_at = floored;
         self.inner.update(bundle).await?;
-        Ok(())
+        Ok(floored)
     }
 }
 
@@ -205,10 +212,13 @@ impl<'a> BundlesStore<'a> {
 
 /// Minimal Bundle-update interface. Single-method trait so per-role
 /// test fakes stay tiny. Passes the OCC `expected_updated_at` snapshot
-/// the caller took before mutating its clone.
+/// the caller took before mutating its clone. On success returns the
+/// persisted (monotonically-floored) `updated_at` so the Integrator,
+/// which chains transitions on one in-memory Bundle, can refresh its
+/// expected version between writes (see `BundlesStore::update`).
 #[trait_variant::make(Send)]
 pub trait BundleUpdateSink: Send + Sync {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError>;
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -227,9 +237,9 @@ pub enum BundleUpdateError {
 /// `StoreError::Stale` is specifically preserved as
 /// `BundleUpdateError::Stale` so downstream matching works.
 impl BundleUpdateSink for crate::Store {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
         match self.bundles().update(bundle, expected_updated_at).await {
-            Ok(()) => Ok(()),
+            Ok(ts) => Ok(ts),
             Err(StoreError::Stale { expected, actual }) => Err(BundleUpdateError::Stale { expected, actual }),
             Err(other) => Err(BundleUpdateError::Update(other.to_string())),
         }
@@ -239,14 +249,14 @@ impl BundleUpdateSink for crate::Store {
 /// Forwarding impl for any reference to a `BundleUpdateSink`. Lets
 /// callers build deps with a borrowed `Store` without cloning.
 impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for &B {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
         (*self).update(bundle, expected_updated_at).await
     }
 }
 
 /// Forwarding impl for `Arc<B>`.
 impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for std::sync::Arc<B> {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
         (**self).update(bundle, expected_updated_at).await
     }
 }

@@ -715,7 +715,10 @@ fn map_store_error(err: StoreError) -> RpcError {
             RpcError::InvalidRequest(format!("already exists: {collection}/{id}"))
         }
         StoreError::Io(msg) => RpcError::Internal(format!("store io: {msg}")),
-        StoreError::Corruption(msg) => RpcError::Internal(format!("store corruption: {msg}")),
+        StoreError::Closed => RpcError::Internal("store closed (shutting down)".to_string()),
+        StoreError::VersionMismatch { found, expected } => {
+            RpcError::Internal(format!("store version mismatch: on-disk={found}, expected={expected}"))
+        }
         StoreError::Serde(msg) => RpcError::Internal(format!("store serde: {msg}")),
         StoreError::Stale { expected, actual } => {
             RpcError::InvalidRequest(format!("stale record: expected updated_at={expected}, actual={actual}"))

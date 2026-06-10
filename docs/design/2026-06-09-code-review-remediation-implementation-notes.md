@@ -359,3 +359,79 @@ Landing across commits (mirrors Phase 1's Part split):
   branch name is in the merge message). Pinning the inputs is the
   mechanism finding 7 specifies; full cross-run SHA equality follows from
   it once the bundle commits themselves are identical.
+
+## Phase 3: State integrity - OCC and FSM divergence
+
+Landing across commits (mirrors Phase 1/2):
+- **Commit A** — domain + store + integrator + decomposer local fixes
+  with no Plan-OCC signature ripple (F2, F9, F10, F11, F12, F13).
+- **Commit B** — Plan OCC + monotonic floor on Plans + routing (F1, F3,
+  F8).
+- **Commit C** — loopr daemon concurrency (F5, F6, F7).
+- **Commit D** — `create_many` collision + handler re-mint (F4).
+
+### Commit A — domain/store/integrator/decomposer local fixes
+
+#### Design decisions
+- **F2 (works/bundles monotonic floor) returns the floored
+  `updated_at`.** The naive floor (`record.updated_at = max(now,
+  current + 1)` applied only to the stored clone) introduced a
+  regression: a caller chaining a second transition on the same
+  in-memory record within one millisecond (the Integrator's
+  Accepted->Integrating then Integrating->Merged, daemon's
+  Integrated->Done) would capture the pre-floor `expected_updated_at`
+  and hit a spurious `Stale`. Fix: `WorksStore::update` /
+  `BundlesStore::update` (and the `WorkUpdateSink` / `BundleUpdateSink`
+  traits + all impls) now RETURN the persisted floored `updated_at`;
+  the chaining call sites (`integrator::transition_bundle_returning`,
+  daemon `transition_and_persist_work`, `SummaryFanout`) write it back
+  into their in-memory record. Non-chaining call sites ignore the
+  `Ok(i64)`. This is the principled OCC discipline (the store owns the
+  version; the caller refreshes from the store's answer).
+- **F13 (store errors).** Added `StoreError::Closed` (maps
+  `taskstore_async::Error::StoreClosed`, previously folded into `Io`) so
+  shutdown paths can special-case the benign writer-channel-closed race.
+  Added `StoreError::VersionMismatch { found, expected }` and
+  `store::STORE_VERSION = 1`; `Store::open` reads `.version` (which
+  taskstore writes write-if-absent) and rejects a mismatch or
+  unparseable value.
+- **F13 (notes collection label).** `NotesStore` error labels were
+  `"operator_notes"` but the on-disk collection is `operatornotes`
+  (struct ident lowercased+pluralized). Fixed both `create`/`get`
+  labels; pinned the spelling with `notes_collection_name_is_operatornotes`.
+
+#### Deviations
+- **F12 `Corruption` variant: DELETED, not wired.** The doc offered
+  "wire from list_tolerant totals or delete." There is no natural
+  production construction site — corruption surfaces via the
+  `CorruptionEntry` sidecar from `list_tolerant`, never as a
+  `StoreError` — so the variant was genuinely never constructed (hence
+  the `#[allow(dead_code)]`). Deleted it, its `map_store_error` arm, and
+  its test; the operator-facing corruption gate (`LooprError::CorruptionGate`)
+  is separate and untouched.
+- **F12 `base_tick_id` removal is a breaking JSONL change.** `Bundle`
+  is `#[serde(deny_unknown_fields)]`, so a `bundles.jsonl` row written
+  before this change (carrying `"base_tick_id": null`) will fail to
+  deserialize and surface as a `CorruptionEntry`. Acceptable on the v5
+  pre-release branch where stores are recreated per E2E run; noted so a
+  future reader doesn't mistake it for a regression.
+- **F12 "false comment" (lib.rs:634-638 claiming an `Accepted =>
+  IntegrationFailed` edge):** not found in the current code. The
+  doc's line numbers predate Phase 2's full `lib.rs` rewrite, which
+  already corrected the merge-loop comments. Treated as
+  resolved-by-Phase-2.
+
+#### Tradeoffs
+- Returning `updated_at` from `update` (vs. re-fetching between chained
+  transitions) keeps the existing in-memory-chaining call pattern intact
+  and adds no extra store round-trip; the cost is a wider sink-trait
+  return type, absorbed by the ~50 non-chaining call sites that simply
+  ignore the `Ok(i64)`.
+- `fresh_tick` test helper (store ticks tests) now generates one
+  merge_commit per bundle to satisfy F12's new `Tick::new`
+  `debug_assert_eq!` parity check; the affected tests assert on the
+  bundle-set dedup key, not merge-commit content, so the change is
+  semantics-preserving.
+
+#### Open questions
+- None for Commit A.

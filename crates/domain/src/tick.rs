@@ -54,6 +54,18 @@ impl Tick {
         sha: String,
         merge_commits: Vec<String>,
     ) -> Self {
+        // The 1:1 index relationship between `bundles` and
+        // `merge_commits` is the Integrator's documented contract
+        // (`bundles[i]` was merged at `merge_commits[i]`). Assert it in
+        // debug builds so a wiring bug surfaces at construction rather
+        // than as a silent off-by-one in audit queries.
+        debug_assert_eq!(
+            bundles.len(),
+            merge_commits.len(),
+            "Tick::new: bundles/merge_commits length mismatch ({} != {})",
+            bundles.len(),
+            merge_commits.len(),
+        );
         let now = now_millis();
         Self {
             id: TickId::new(),

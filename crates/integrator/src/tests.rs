@@ -226,9 +226,10 @@ struct FakeBundleSink {
 }
 
 impl BundleUpdateSink for FakeBundleSink {
-    async fn update(&self, bundle: Bundle, _expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+    async fn update(&self, bundle: Bundle, _expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
+        let ts = bundle.updated_at;
         self.writes.lock().unwrap().push(bundle);
-        Ok(())
+        Ok(ts)
     }
 }
 
@@ -249,8 +250,8 @@ impl FakeWorks {
 }
 
 impl WorkLookup for FakeWorks {
-    async fn get(&self, work_id: &str) -> Result<Option<Work>, StoreError> {
-        Ok(self.by_id.get(work_id).cloned())
+    async fn get(&self, work_id: &domain::WorkId) -> Result<Option<Work>, StoreError> {
+        Ok(self.by_id.get(work_id.as_ref()).cloned())
     }
 }
 

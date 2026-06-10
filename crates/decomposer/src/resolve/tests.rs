@@ -80,6 +80,24 @@ fn resolve_deps_case_insensitive_match_resolves() {
 }
 
 #[test]
+fn resolve_deps_dedups_repeated_sibling() {
+    // Phase 3 F11: the LLM can name the same sibling twice (verbatim, or
+    // under two spellings that normalize to one id). The resolved DAG
+    // must carry the dep once, per the produce-time "clean DAG" rule.
+    let children = vec![child("A", &["B", "b", " B "]), child("B", &[])];
+    let mut title_to_id: HashMap<String, WorkId> = HashMap::new();
+    let a_id = WorkId::new();
+    let b_id = WorkId::new();
+    title_to_id.insert("a".to_string(), a_id);
+    title_to_id.insert("b".to_string(), b_id.clone());
+
+    let resolved = resolve_deps(&children, &title_to_id).expect("resolve");
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(resolved[0], vec![b_id], "three spellings of B collapse to one id");
+    assert!(resolved[1].is_empty());
+}
+
+#[test]
 fn resolve_deps_unresolved_title_errors() {
     let children = vec![child("A", &["NotThere"])];
     let mut title_to_id: HashMap<String, WorkId> = HashMap::new();

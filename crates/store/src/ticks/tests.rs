@@ -19,12 +19,16 @@ async fn open_store() -> (TempDir, Store) {
 }
 
 fn fresh_tick(plan_id: PlanId, bundles: Vec<BundleId>) -> Tick {
+    // One merge_commit per bundle to honor Tick::new's 1:1 parity
+    // contract (debug_assert_eq); these tests assert on the bundle-set
+    // dedup key, not on merge-commit content.
+    let merge_commits = (0..bundles.len()).map(|i| format!("def456-{i}")).collect();
     Tick::new(
         plan_id,
         bundles,
         "loopr/plan-xxx".to_string(),
         "abc123".to_string(),
-        vec!["def456".to_string()],
+        merge_commits,
     )
 }
 

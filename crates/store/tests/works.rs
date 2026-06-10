@@ -169,6 +169,31 @@ async fn update_round_trips_status_change() {
 }
 
 #[tokio::test]
+async fn update_floors_updated_at_strictly_above_prior() {
+    // Phase 3 F2: the monotonic floor must push `updated_at` strictly
+    // above the prior value even when the prior is in the future relative
+    // to the wall clock (the deterministic stand-in for a same-millisecond
+    // write). Without the floor, a same-ms write leaves `updated_at`
+    // equal — defeating the next OCC check and the merge driver's
+    // latest-wins tie-break.
+    let (_dir, store, plan) = fresh_store_with_plan().await;
+    let mut work = sample_work(&plan, "future-ts");
+    // Stamp updated_at far in the future so now_millis() loses to
+    // current.updated_at + 1, forcing the `current + 1` branch.
+    let future = domain::now_millis() + 1_000_000;
+    work.updated_at = future;
+    work.created_at = future;
+    let id = work.id.clone();
+    store.works().create(work.clone()).await.expect("create");
+
+    work.status = WorkStatus::Blocked;
+    store.works().update(work, future).await.expect("update");
+
+    let got = store.works().get(&id).await.expect("get after update");
+    assert_eq!(got.updated_at, future + 1, "floor lands exactly at prior + 1");
+}
+
+#[tokio::test]
 async fn list_by_parent_id_filters_correctly() {
     let dir = TempDir::new().expect("tempdir");
     let store = Store::open(dir.path()).await.expect("open");

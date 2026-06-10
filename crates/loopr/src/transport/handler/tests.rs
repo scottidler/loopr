@@ -742,7 +742,11 @@ fn map_store_error_maps_each_variant() {
         RpcError::Internal(_)
     ));
     assert!(matches!(
-        super::map_store_error(StoreError::Corruption("bad".into())),
+        super::map_store_error(StoreError::Closed),
+        RpcError::Internal(_)
+    ));
+    assert!(matches!(
+        super::map_store_error(StoreError::VersionMismatch { found: 2, expected: 1 }),
         RpcError::Internal(_)
     ));
     assert!(matches!(

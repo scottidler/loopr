@@ -80,7 +80,7 @@ struct CollectingSink {
 }
 
 impl BundleUpdateSink for CollectingSink {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<(), BundleUpdateError> {
+    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
         let mut stale = self.stale_once.lock().unwrap();
         if *stale {
             *stale = false;
@@ -90,8 +90,9 @@ impl BundleUpdateSink for CollectingSink {
             });
         }
         drop(stale);
+        let ts = bundle.updated_at;
         self.persisted.lock().unwrap().push((bundle, expected_updated_at));
-        Ok(())
+        Ok(ts)
     }
 }
 

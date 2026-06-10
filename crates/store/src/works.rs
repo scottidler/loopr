@@ -178,7 +178,7 @@ impl<'a> WorksStore<'a> {
         ret,
         err,
     )]
-    pub async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), StoreError> {
+    pub async fn update(&self, mut work: Work, expected_updated_at: i64) -> Result<i64, StoreError> {
         let _guard = self.update_lock.lock().await;
         let id_str = work.id.as_ref().to_string();
         let current = self
@@ -195,8 +195,24 @@ impl<'a> WorksStore<'a> {
                 actual: current.updated_at,
             });
         }
+        // Monotonic `updated_at` floor. `Work::transition` stamps
+        // `now_millis()`, but two writes in the same millisecond (this
+        // one and the racing winner that just committed) produce equal
+        // timestamps — which both defeats the next OCC check (a stale
+        // reader's `expected` would still match) and the taskstore merge
+        // driver's latest-`updated_at`-wins tie-break. Forcing strictly
+        // monotonic growth under the lock closes both. Floor only ever
+        // moves the timestamp forward.
+        //
+        // The floored value is RETURNED so a caller chaining a second
+        // transition on the same in-memory record (e.g. Integrated ->
+        // Done) can refresh its `expected_updated_at`; without that, a
+        // same-millisecond chain would capture the pre-floor value and
+        // hit a spurious `Stale` on the next update.
+        let floored = std::cmp::max(domain::now_millis(), current.updated_at + 1);
+        work.updated_at = floored;
         self.inner.update(work).await?;
-        Ok(())
+        Ok(floored)
     }
 }
 
@@ -212,10 +228,13 @@ impl<'a> WorksStore<'a> {
 
 /// Minimal Work-update interface for sink-generic transition helpers.
 /// Passes the OCC `expected_updated_at` snapshot the caller took
-/// before mutating its clone.
+/// before mutating its clone. On success returns the persisted
+/// (monotonically-floored) `updated_at` so a caller chaining a second
+/// transition on the same in-memory record can refresh its expected
+/// version (see `WorksStore::update`).
 #[trait_variant::make(Send)]
 pub trait WorkUpdateSink: Send + Sync {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError>;
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -234,9 +253,9 @@ pub enum WorkUpdateError {
 /// `StoreError::Stale` is preserved as `WorkUpdateError::Stale` so
 /// downstream matching works.
 impl WorkUpdateSink for crate::Store {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
         match self.works().update(work, expected_updated_at).await {
-            Ok(()) => Ok(()),
+            Ok(ts) => Ok(ts),
             Err(StoreError::Stale { expected, actual }) => Err(WorkUpdateError::Stale { expected, actual }),
             Err(other) => Err(WorkUpdateError::Update(other.to_string())),
         }
@@ -246,7 +265,7 @@ impl WorkUpdateSink for crate::Store {
 /// Forwarding impl for any reference to a `WorkUpdateSink`. Mirrors
 /// `BundleUpdateSink`'s borrowed-store helper.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
         (*self).update(work, expected_updated_at).await
     }
 }
@@ -254,7 +273,7 @@ impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
 /// Forwarding impl for `Arc<W>`. Lets the daemon construct
 /// `SummaryFanout::new(Arc::clone(&store), ...)` without unwrapping.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for std::sync::Arc<W> {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<(), WorkUpdateError> {
+    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
         (**self).update(work, expected_updated_at).await
     }
 }

@@ -12,9 +12,20 @@ pub enum StoreError {
     #[error("record already exists: {collection}/{id}")]
     AlreadyExists { collection: &'static str, id: String },
 
-    #[allow(dead_code)]
-    #[error("corrupt record in taskstore: {0}")]
-    Corruption(String),
+    /// The underlying store's writer-thread channel is closed — the
+    /// benign graceful-shutdown race where a write loses to `close()`.
+    /// Kept distinct from `Io` so shutdown paths can special-case it
+    /// (a write that lost the shutdown race is not a hard I/O failure).
+    #[error("store closed (shutting down)")]
+    Closed,
+
+    /// On-disk `.version` does not match the schema version this build
+    /// expects (`store::STORE_VERSION`). Raised by `Store::open` after
+    /// the taskstore write-if-absent step, so an incompatible store
+    /// surfaces as an explicit open-time error rather than mismatched
+    /// reads.
+    #[error("store version mismatch: on-disk={found}, expected={expected}")]
+    VersionMismatch { found: u32, expected: u32 },
 
     #[error("serde failure at store boundary: {0}")]
     Serde(String),
@@ -52,6 +63,9 @@ impl From<taskstore_async::Error> for StoreError {
     fn from(e: taskstore_async::Error) -> Self {
         match e {
             taskstore_async::Error::Serde(inner) => StoreError::Serde(inner.to_string()),
+            // Benign shutdown race: the writer channel closed. Special-cased
+            // so daemon shutdown paths don't treat it as a hard I/O failure.
+            taskstore_async::Error::StoreClosed => StoreError::Closed,
             other => StoreError::Io(other.to_string()),
         }
     }

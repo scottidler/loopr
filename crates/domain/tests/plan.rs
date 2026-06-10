@@ -222,6 +222,36 @@ fn plan_override_nonexistent_edge_rejects() {
     assert_eq!(plan.status, PlanStatus::Active);
 }
 
+#[test]
+fn plan_override_stalled_abandoned_by_director_kills_in_one_step() {
+    // Phase 3 F10: a Stalled Plan must be directly killable without the
+    // resurrect-then-kill dance (which respawns a Director on the
+    // intermediate Active hop).
+    let mut plan = Plan::new("g".to_string());
+    plan.transition(PlanStatus::Stalled, Role::Director)
+        .expect("Active -> Stalled");
+    let result = plan
+        .override_status(PlanStatus::Abandoned, Role::Director)
+        .expect("Stalled -> Abandoned by Director");
+    assert_eq!(result, Transition::Override);
+    assert_eq!(plan.status, PlanStatus::Abandoned);
+    assert!(plan.status.is_terminal());
+}
+
+#[test]
+fn plan_override_stalled_abandoned_by_reactor_rejects() {
+    // The kill edge is Director-only; Reactor must not be able to abandon
+    // a Stalled Plan.
+    let mut plan = Plan::new("g".to_string());
+    plan.transition(PlanStatus::Stalled, Role::Director)
+        .expect("Active -> Stalled");
+    let err = plan
+        .override_status(PlanStatus::Abandoned, Role::Reactor)
+        .expect_err("Reactor abandon must reject");
+    assert!(err.kind == FsmErrorKind::NoTransition || err.kind == FsmErrorKind::RoleNotAuthorized);
+    assert_eq!(plan.status, PlanStatus::Stalled);
+}
+
 // ---------------------------------------------------------------------------
 // Terminal state detection
 // ---------------------------------------------------------------------------

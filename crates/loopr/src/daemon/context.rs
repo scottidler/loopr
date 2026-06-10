@@ -1182,9 +1182,16 @@ where
         work.attempt_count = work.attempt_count.saturating_add(1);
     }
 
-    sink.update(work.clone(), expected_updated_at)
+    // Sync the in-memory Work to the persisted (monotonically-floored)
+    // `updated_at` so a chained next transition on the same record (e.g.
+    // Integrated -> Done in `spawn_integrator_for_bundle`) carries the
+    // correct OCC expected-version even when both writes land in the same
+    // millisecond.
+    let persisted = sink
+        .update(work.clone(), expected_updated_at)
         .await
         .map_err(|e| format!("works().update: {e}"))?;
+    work.updated_at = persisted;
 
     // Phase 8: per-Work terminal summary. The richer metrics
     // (total_iterations, lifeguard_fires, director_override_count) are

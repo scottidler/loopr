@@ -131,6 +131,24 @@ fn dependents_of_no_dependents_is_empty() {
 }
 
 #[test]
+fn duplicate_dep_edge_is_deduped() {
+    // Phase 3 F11: a node listing the same dependency twice must not
+    // plant a duplicate reverse edge (which would make
+    // block_dependent_siblings process the dependent twice) nor wedge
+    // cycle detection on a non-cycle.
+    let (a, b) = (WorkId::new(), WorkId::new());
+    // b depends on a twice.
+    let graph = WorkGraph::from_works(&[
+        work(&a, vec![], WorkStatus::Done),
+        work(&b, vec![a.clone(), a.clone()], WorkStatus::Pending),
+    ]);
+    assert_eq!(graph.dependents_of(&a), std::slice::from_ref(&b), "reverse edge deduped");
+    // The duplicate edge must not be mistaken for a cycle.
+    WorkGraph::from_edges([(a.clone(), vec![]), (b.clone(), vec![a.clone(), a.clone()])])
+        .expect("duplicate dep edge is not a cycle");
+}
+
+#[test]
 fn dependents_of_phantom_node_tracked() {
     let (a, phantom) = (WorkId::new(), WorkId::new());
     // a depends on a phantom (absent) node; the reverse edge is still

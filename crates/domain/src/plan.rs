@@ -25,11 +25,12 @@ use crate::{FsmError, Role, Transition};
 #[strum(serialize_all = "lowercase")]
 #[fsm(
     role = crate::Role,
-    // `Stalled` is intentionally absent: the FSM derive forbids terminal
-    // states from having outgoing edges, and `Stalled => Active` is a
-    // legitimate operator-recovery override. `Stalled.is_terminal()`
-    // therefore returns `false` — Stalled is a quiescent, non-terminal
-    // state that the daemon's reconcile loop must skip.
+    // `Stalled` is intentionally absent from `terminal`: the FSM derive
+    // forbids terminal states from having outgoing edges, and Stalled has
+    // two legitimate operator-recovery overrides (`=> Active` to revive,
+    // `=> Abandoned` to kill outright). `Stalled.is_terminal()` therefore
+    // returns `false` — Stalled is a quiescent, non-terminal state that
+    // the daemon's reconcile loop must skip.
     terminal = [Complete, Superseded, Abandoned],
     transitions(
         Draft   => Pending    by (Reactor),
@@ -45,9 +46,16 @@ use crate::{FsmError, Role, Transition};
         Active  => Abandoned  by (Reactor, Director),
     ),
     overrides(
-        Active  => Draft  by (Director),
-        Pending => Draft  by (Director),
-        Stalled => Active by (Director),
+        Active  => Draft     by (Director),
+        Pending => Draft     by (Director),
+        Stalled => Active    by (Director),
+        // A `Stalled` Plan must be directly killable. Without this edge
+        // the only exit is `Stalled => Active`, forcing a
+        // resurrect-then-kill dance that respawns a Director on the
+        // intermediate `Active` hop. Director-role so the operator's
+        // `plan override --to abandoned` (and the Director's own
+        // give-up path) can terminate an escalated Plan in one step.
+        Stalled => Abandoned by (Director),
     ),
 )]
 pub enum PlanStatus {

@@ -18,6 +18,15 @@ use crate::works::WorksStore;
 /// via `AsyncStore::open_at`.
 pub const TASKSTORE_SUBPATH: &str = ".loopr/taskstore";
 
+/// Schema version this build expects in the store's `.version` file.
+/// taskstore writes `.version` write-if-absent on `open_at` (its
+/// internal `CURRENT_VERSION`); it does NOT re-validate on subsequent
+/// opens. `Store::open` reads it back and compares against this const so
+/// a store written by an incompatible taskstore (or hand-edited) fails
+/// open explicitly rather than being read with mismatched assumptions.
+/// Bump in lockstep with taskstore's `CURRENT_VERSION`.
+pub const STORE_VERSION: u32 = 1;
+
 pub struct Store {
     inner: AsyncStore,
     /// Intra-daemon OCC serializer for `BundlesStore::update`. The
@@ -65,7 +74,35 @@ impl Store {
     #[instrument(name = "store.open", level = "info", skip_all, fields(target = %target.as_ref().display()), err)]
     pub async fn open(target: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = target.as_ref().join(TASKSTORE_SUBPATH);
-        let inner = AsyncStore::open_at(path, OpenOptions::default()).await?;
+        let inner = AsyncStore::open_at(&path, OpenOptions::default()).await?;
+        // Validate the on-disk schema version. `open_at` has already
+        // written `.version` write-if-absent, so on a fresh store the
+        // file now holds taskstore's `CURRENT_VERSION`; on a pre-existing
+        // store it holds whatever wrote it. A mismatch (or an
+        // unparseable file) is an explicit open-time error.
+        // One-shot read at open; `std::fs` (not `tokio::fs`, which this
+        // crate doesn't enable) is fine for a tiny file read once per
+        // process lifetime.
+        let version_path = path.join(".version");
+        match std::fs::read_to_string(&version_path) {
+            Ok(raw) => {
+                let found: u32 = raw.trim().parse().map_err(|_| StoreError::VersionMismatch {
+                    found: 0,
+                    expected: STORE_VERSION,
+                })?;
+                if found != STORE_VERSION {
+                    return Err(StoreError::VersionMismatch {
+                        found,
+                        expected: STORE_VERSION,
+                    });
+                }
+            }
+            // `open_at` guarantees the file exists post-open; a missing
+            // file here is unexpected but not corrupting — taskstore owns
+            // write-if-absent, so treat absence as "fresh, trust the open."
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(StoreError::Io(format!("reading {}: {e}", version_path.display()))),
+        }
         Ok(Self {
             inner,
             bundle_update_lock: Mutex::new(()),

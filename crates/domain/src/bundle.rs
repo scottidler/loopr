@@ -90,8 +90,6 @@ pub struct Bundle {
     pub created_at: i64,
     pub branch_name: String,
     #[serde(default)]
-    pub base_tick_id: Option<String>,
-    #[serde(default)]
     pub paths: Vec<String>,
     #[serde(default)]
     pub claims: Vec<String>,
@@ -130,7 +128,6 @@ impl Bundle {
             updated_at: now,
             created_at: now,
             branch_name,
-            base_tick_id: None,
             paths: Vec::new(),
             claims,
             verification: String::new(),

@@ -8,7 +8,7 @@
 //! decomposer-specific title handling: resolving each child's dependency
 //! titles to the pre-minted sibling `WorkId`s.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use domain::WorkId;
 
@@ -41,10 +41,19 @@ pub(crate) fn resolve_deps(
 
     for child in children {
         let mut resolved = Vec::with_capacity(child.dependencies.len());
+        let mut seen: HashSet<WorkId> = HashSet::new();
         for dep_title in &child.dependencies {
             let key = normalize(dep_title);
             match title_to_id.get(&key) {
-                Some(id) => resolved.push(id.clone()),
+                // Dedup resolved dep ids per child: the LLM can name the
+                // same sibling under two title spellings that normalize
+                // to one id (or list it twice verbatim). Persisting the
+                // duplicate edge would push a redundant reverse edge into
+                // `WorkGraph` (which dedups defensively too, but the
+                // resolved DAG should be clean at produce time per the
+                // crate's "validate at produce-time" rule).
+                Some(id) if seen.insert(id.clone()) => resolved.push(id.clone()),
+                Some(_) => {}
                 None => errors.push(format!("'{}' depends on unknown sibling '{}'", child.title, dep_title)),
             }
         }

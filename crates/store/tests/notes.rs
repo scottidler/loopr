@@ -131,6 +131,62 @@ async fn mark_read_is_idempotent_for_already_read_notes() {
 }
 
 #[tokio::test]
+async fn mark_read_floors_updated_at_strictly_above_prior() {
+    // Phase 3 F9: mark_read stamps updated_at from the caller-supplied
+    // clock; the store must floor it strictly above the prior on-disk
+    // value so a same-ms (or skewed) write can't tie the merge driver's
+    // latest-wins tie-break. Stamp the note's updated_at into the future
+    // so now_millis() loses to prior + 1, forcing the floor branch.
+    let (_dir, store, plan) = fresh_store_with_plan().await;
+    let mut note = sample_note(plan.id.clone(), "alice", "msg");
+    let future = now_millis() + 1_000_000;
+    note.updated_at = future;
+    note.created_at = future;
+    let id = note.id.clone();
+    store.notes().create(note).await.unwrap();
+
+    // Pass a stale ts_ms (in the past); read_at takes it, but updated_at
+    // must still floor to prior + 1.
+    store.notes().mark_read(std::slice::from_ref(&id), 1).await.unwrap();
+    let got = store.notes().get(&id).await.unwrap();
+    assert_eq!(got.read_at, Some(1), "read_at keeps the semantic ts_ms");
+    assert_eq!(got.updated_at, future + 1, "updated_at floors to prior + 1");
+}
+
+#[tokio::test]
+async fn notes_collection_name_is_operatornotes() {
+    // Phase 3 F13: the on-disk collection is `operatornotes` (struct
+    // ident lowercased + pluralized, no snake_case transform). Pin both
+    // the JSONL filename and the error-label spelling so the two never
+    // drift apart again.
+    let dir = TempDir::new().expect("tempdir");
+    let target = dir.path();
+    let store = Store::open(target).await.expect("open");
+    let plan = Plan::new("p".to_string());
+    store.plans().create(plan.clone()).await.unwrap();
+    store
+        .notes()
+        .create(sample_note(plan.id.clone(), "alice", "m"))
+        .await
+        .unwrap();
+    store.close().await.expect("close");
+
+    let jsonl = target.join(".loopr").join("taskstore").join("operatornotes.jsonl");
+    assert!(jsonl.is_file(), "operatornotes.jsonl exists at {}", jsonl.display());
+
+    // The error label must use the same spelling as the on-disk file.
+    let store = Store::open(target).await.expect("reopen");
+    let bogus = NoteId::new();
+    let err = store.notes().get(&bogus).await.expect_err("missing note");
+    match err {
+        store::StoreError::RecordNotFound { collection, .. } => {
+            assert_eq!(collection, "operatornotes");
+        }
+        other => panic!("expected RecordNotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn mark_read_missing_id_errors() {
     let (_dir, store, _plan) = fresh_store_with_plan().await;
     let bogus = NoteId::new();

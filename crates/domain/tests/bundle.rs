@@ -53,7 +53,6 @@ fn bundle_new_created_at_equals_updated_at() {
 #[test]
 fn bundle_new_optional_fields_default() {
     let bundle = Bundle::new(WorkId::new(), "b".to_string(), vec![]);
-    assert_eq!(bundle.base_tick_id, None);
     assert!(bundle.paths.is_empty());
     assert_eq!(bundle.verification, "");
     assert_eq!(bundle.loc_changed, None);
