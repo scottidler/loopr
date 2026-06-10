@@ -25,6 +25,16 @@ pub struct Usage {
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
     pub cache_read_input_tokens: u64,
+    /// Concrete model ID the API echoed on this response (the response's
+    /// top-level `model` field, NOT a member of the `usage` object — set
+    /// manually after deserializing the token counts). `Some` on a real
+    /// Anthropic call; `None` for stub/fake responses. This is the
+    /// model-pinning carrier: callers surface it onto the produced
+    /// `Bundle` so records show the model that actually ran, detecting a
+    /// silent provider-side model swap mid-run (vision "Pinning
+    /// discipline").
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Usage {
@@ -58,6 +68,7 @@ mod tests {
             output_tokens: 0,
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 100,
+            model: None,
         };
         assert_eq!(u.cache_hit_ratio(), 1.0);
     }
@@ -69,6 +80,7 @@ mod tests {
             output_tokens: 20,
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 100,
+            model: None,
         };
         assert!((u.cache_hit_ratio() - 0.5).abs() < f64::EPSILON);
     }

@@ -209,6 +209,10 @@ impl LlmClient for AnthropicClient {
             temperature_present = self.config.temperature.is_some(),
             duration_ms = tracing::field::Empty,
             outcome = tracing::field::Empty,
+            input_tokens = tracing::field::Empty,
+            output_tokens = tracing::field::Empty,
+            cost_micros = tracing::field::Empty,
+            model_returned = tracing::field::Empty,
             cache_creation_input_tokens = tracing::field::Empty,
             cache_read_input_tokens = tracing::field::Empty,
             cache_hit_ratio = tracing::field::Empty,
@@ -220,12 +224,15 @@ impl LlmClient for AnthropicClient {
 
         let elapsed = started.elapsed().as_millis() as u64;
         span.record("duration_ms", elapsed);
+        // Record token + cost fields on BOTH success and billed-error
+        // (max_tokens truncation / schema refusal): those 200s cost
+        // tokens that must show on the cost span too (vision cost audit).
+        if let Some(usage) = usage_to_record(&result) {
+            record_usage_span(&span, effective_model, usage);
+        }
         match &result {
             Ok((_, usage)) => {
                 span.record("outcome", "ok");
-                span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
-                span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
-                span.record("cache_hit_ratio", usage.cache_hit_ratio());
                 debug!(
                     target: "llm.anthropic.cache",
                     created = usage.cache_creation_input_tokens,
@@ -274,6 +281,10 @@ impl LlmClient for AnthropicClient {
             temperature_present = self.config.temperature.is_some(),
             duration_ms = tracing::field::Empty,
             outcome = tracing::field::Empty,
+            input_tokens = tracing::field::Empty,
+            output_tokens = tracing::field::Empty,
+            cost_micros = tracing::field::Empty,
+            model_returned = tracing::field::Empty,
             cache_creation_input_tokens = tracing::field::Empty,
             cache_read_input_tokens = tracing::field::Empty,
             cache_hit_ratio = tracing::field::Empty,
@@ -285,12 +296,12 @@ impl LlmClient for AnthropicClient {
 
         let elapsed = started.elapsed().as_millis() as u64;
         span.record("duration_ms", elapsed);
+        if let Some(usage) = usage_to_record(&result) {
+            record_usage_span(&span, effective_model, usage);
+        }
         match &result {
             Ok((_, usage)) => {
                 span.record("outcome", "ok");
-                span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
-                span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
-                span.record("cache_hit_ratio", usage.cache_hit_ratio());
                 debug!(
                     target: "llm.anthropic.cache",
                     created = usage.cache_creation_input_tokens,
@@ -495,6 +506,41 @@ fn truncate_preview(s: &str) -> String {
     format!("{}… [truncated; original {} bytes]", &s[..cut], s.len())
 }
 
+/// The `Usage` whose token/cost fields belong on the call span: the
+/// success payload's usage, or the billed usage carried on an
+/// error-classified 200 (`max_tokens` truncation / schema refusal).
+/// `None` for genuine transient/fatal errors that billed nothing.
+fn usage_to_record<T>(result: &Result<(T, Usage), LlmError>) -> Option<&Usage> {
+    match result {
+        Ok((_, usage)) => Some(usage),
+        Err(e) => e.billed_usage(),
+    }
+}
+
+/// Record the per-call token + cost fields on the active span. The
+/// `cost_micros` figure uses the model the API actually ran
+/// (`usage.model`, falling back to the configured `effective_model`)
+/// against the shared digest rate table, so the span and the per-process
+/// digest agree on cost. Cache fields are recorded here too (the single
+/// place usage lands on the span).
+fn record_usage_span(span: &tracing::Span, effective_model: &str, usage: &Usage) {
+    let model = usage.model.as_deref().unwrap_or(effective_model);
+    let cost = telemetry::digest::cost::cost_micros(
+        model,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_read_input_tokens,
+    );
+    span.record("input_tokens", usage.input_tokens);
+    span.record("output_tokens", usage.output_tokens);
+    span.record("cost_micros", cost);
+    span.record("model_returned", model);
+    span.record("cache_creation_input_tokens", usage.cache_creation_input_tokens);
+    span.record("cache_read_input_tokens", usage.cache_read_input_tokens);
+    span.record("cache_hit_ratio", usage.cache_hit_ratio());
+}
+
 fn reqwest_err_to_llm_error(e: reqwest::Error) -> LlmError {
     // `is_builder()` covers URL parsing and other client-construction
     // failures that happen when the `reqwest::RequestBuilder` is built
@@ -594,14 +640,20 @@ fn classify_free_response(
     }
 }
 
-/// Pull the `usage` object out of a Messages-API response.
-/// `serde_json` deserialization defaults missing cache fields to
-/// zero (see `Usage` field annotations).
+/// Pull the `usage` object out of a Messages-API response and stamp it
+/// with the response's top-level `model` field. `serde_json`
+/// deserialization defaults missing cache fields to zero (see `Usage`
+/// field annotations); `model` is set manually here because the API
+/// reports it at the response root, not inside `usage`. The captured
+/// `model` is the model-pinning carrier (the concrete id the provider
+/// actually ran, which may differ from the floating tag we requested).
 fn extract_usage(response: &Value) -> Usage {
-    response
+    let mut usage = response
         .get("usage")
         .and_then(|v| serde_json::from_value::<Usage>(v.clone()).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    usage.model = response.get("model").and_then(Value::as_str).map(str::to_string);
+    usage
 }
 
 /// Extract the first `{"type": "text"}` content block from a

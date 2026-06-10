@@ -204,6 +204,12 @@ where
         gpg_sign: deps.config.gpg_sign,
     };
 
+    // Concrete model the provider echoed on the most recent LLM call.
+    // Stamped onto the produced Bundle at propose/done time so records
+    // carry the model that actually ran (the model-pinning detector,
+    // Phase 6 finding 1). Stays `None` for stub-backed runs.
+    let mut last_response_model: Option<String> = None;
+
     for iteration in 1..=deps.config.max_iterations {
         info!(iteration, work_id = %work.id, "implementer iteration start");
 
@@ -234,10 +240,13 @@ where
         // outer iteration, counts exactly THIS iteration's parse retries.
         let mut requeries_used: u32 = 0;
         let actions = loop {
-            let (raw, _usage) = deps
+            let (raw, usage) = deps
                 .llm
                 .complete_free(&assembled.system_prompt, &messages, None)
                 .await?;
+            if usage.model.is_some() {
+                last_response_model = usage.model.clone();
+            }
             last_raw = raw.clone();
             match parse_actions(&raw) {
                 Ok(actions) => {
@@ -314,6 +323,7 @@ where
             let result = dispatch_action(action.clone(), work, worktree, &deps.tools, &commit_ctx).await?;
             match result {
                 ActionResult::BundleCreated { mut bundle, dropped } => {
+                    bundle.model = last_response_model.clone();
                     summaries.push("propose_bundle (id pending persistence)".to_string());
                     let note = format_dropped_note("propose_bundle", &dropped, &work.files);
                     if !note.is_empty() {
@@ -335,6 +345,7 @@ where
                     return Ok(bundle);
                 }
                 ActionResult::Done(mut bundle) => {
+                    bundle.model = last_response_model.clone();
                     summaries.push("done".to_string());
                     write_implementer_transcript(
                         worktree.repo_path(),
@@ -394,16 +405,20 @@ where
                     messages.push(Message::user(format!(
                         "action failed: {err_msg}. Return one corrected JSON action (single object, not array)."
                     )));
-                    let (corrected_raw, _usage) = deps
+                    let (corrected_raw, usage) = deps
                         .llm
                         .complete_free(&assembled.system_prompt, &messages, None)
                         .await?;
+                    if usage.model.is_some() {
+                        last_response_model = usage.model.clone();
+                    }
                     match parse_one(&corrected_raw) {
                         Ok(corrected) => {
                             let corrected_result =
                                 dispatch_action(corrected, work, worktree, &deps.tools, &commit_ctx).await?;
                             match corrected_result {
                                 ActionResult::BundleCreated { mut bundle, dropped } => {
+                                    bundle.model = last_response_model.clone();
                                     summaries.push("corrected -> propose_bundle".to_string());
                                     let note = format_dropped_note("propose_bundle", &dropped, &work.files);
                                     if !note.is_empty() {
@@ -425,6 +440,7 @@ where
                                     return Ok(bundle);
                                 }
                                 ActionResult::Done(mut bundle) => {
+                                    bundle.model = last_response_model.clone();
                                     summaries.push("corrected -> done".to_string());
                                     write_implementer_transcript(
                                         worktree.repo_path(),

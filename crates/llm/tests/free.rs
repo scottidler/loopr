@@ -214,6 +214,30 @@ async fn free_http_500_maps_to_retryable() {
 }
 
 #[tokio::test]
+async fn free_usage_carries_concrete_response_model() {
+    // Phase 6 finding 1 (model pinning): the response's top-level `model`
+    // (the concrete dated id the provider actually ran) must land on
+    // `Usage.model`, even when the request asked for the floating tag.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(text_response("hi")))
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    let (_out, usage) = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap();
+    assert_eq!(
+        usage.model.as_deref(),
+        Some("claude-sonnet-4-6-20260115"),
+        "the concrete dated model id must ride on Usage.model"
+    );
+}
+
+#[tokio::test]
 async fn free_request_body_carries_model_override_when_some() {
     // Phase 0 of director-phase-1: complete_free's `model: Option<&str>`
     // parameter must override the configured default model when `Some`.

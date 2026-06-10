@@ -1289,3 +1289,53 @@ Landing across commits (mirrors Phases 1-5):
 
 #### Open questions
 - None.
+
+### Commit B — model pinning + cost span fields (finding 1)
+
+#### Design decisions
+- **`Usage.model: Option<String>` is the model-pinning carrier.** The
+  response's top-level `model` (concrete dated id the provider actually
+  ran) is captured in `extract_usage` (set manually — it lives at the
+  response root, not inside the `usage` object) and rides on `Usage`,
+  which already flows to every call site and up to the Bundle producer.
+  Lighter than widening every return tuple to `(payload, Usage, String)`.
+  `#[serde(default)]` so it deserializes clean and stays `None` for
+  stub/fake responses.
+- **Cost + token span fields on every call span.** Both
+  `complete_with_tool` and `complete_free` now record `input_tokens`,
+  `output_tokens`, `cost_micros`, and `model_returned` via a shared
+  `record_usage_span` helper. `cost_micros` reuses the digest rate table
+  (`telemetry::digest::cost::cost_micros`) against the model the API
+  actually ran (`usage.model`, falling back to the configured effective
+  model) — span and per-process digest agree on cost. A `usage_to_record`
+  helper records on BOTH success and the billed-error path (max_tokens
+  truncation / schema refusal): those 200s cost tokens and must show on
+  the cost span. Cache fields moved into the same helper (one place usage
+  lands on the span).
+- **`Bundle.model: Option<String>`.** Additive `#[serde(default)]`. The
+  implementer tracks the last concrete `usage.model` across its LLM calls
+  (`last_response_model`) and stamps it onto the Bundle at every
+  propose/done arm (4 sites: main + corrected sub-loop). A Bundle whose
+  model differs from the configured tier flags a silent provider-side
+  model swap (vision pinning discipline).
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- `Usage` now carries a non-token field (`model`). The struct's doc
+  comment still reads "token usage"; the semantic stretch is acceptable
+  because `Usage` is the value that already travels with every call to
+  every caller, so it is the natural pin carrier and avoids a tuple-shape
+  ripple through ~every call site and fake.
+- The implementer keeps only the LAST response model, not a per-call
+  list. One Work runs one role on one configured model, so a single
+  pin is the right granularity; a mid-run swap still surfaces because the
+  last call's concrete id is recorded.
+
+#### Open questions
+- The `Loopr-Model` commit trailer (Phase 1) still records the
+  *configured* model (`deps.llm.model()`), while `Bundle.model` now
+  records the *concrete returned* model. Reconciling the trailer to the
+  concrete model is possible but not required by finding 1 (which asks
+  for the Bundle); left as-is to keep the trailer byte-stable.

@@ -118,6 +118,16 @@ pub struct Bundle {
     /// (`Panic`) and the reviewer/integrator failure routing.
     #[serde(default)]
     pub failure_reason: Option<crate::FailureReason>,
+    /// Concrete model ID the implementer's LLM calls actually ran (the
+    /// model the provider echoed on its responses, not the floating tag
+    /// configured). `None` for noop bundles, fake/stub-produced bundles,
+    /// and pre-existing rows. This is the model-pinning record: a Bundle
+    /// whose `model` differs from the configured tier flags a silent
+    /// provider-side model swap mid-run (vision "Pinning discipline").
+    /// Additive `#[serde(default)]` — old JSONL rows deserialize as
+    /// `None`.
+    #[serde(default)]
+    pub model: Option<String>,
     #[record(indexed)]
     pub status: BundleStatus,
 }
@@ -145,6 +155,7 @@ impl Bundle {
             base_commit: None,
             force_proposed: false,
             failure_reason: None,
+            model: None,
             status: BundleStatus::Proposed,
         }
     }
@@ -196,3 +207,6 @@ impl Bundle {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests;
