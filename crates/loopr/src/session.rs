@@ -59,11 +59,7 @@ pub struct SessionManifest {
 ///      loss, re-read the pointer (the winner wrote it).
 pub fn resolve_session_id(target: &Path, flag: Option<&str>) -> Result<SessionId, LooprError> {
     if let Some(s) = flag {
-        let id =
-            SessionId::parse(s).map_err(|e| LooprError::SessionResolve(format!("bad --session value `{s}`: {e}")))?;
-        if session_ended(&id)? {
-            return Err(LooprError::SessionResolve(format!("session {id} is ended")));
-        }
+        let id = validate_existing_session(s)?;
         attach_pointer(target, &id)?;
         return Ok(id);
     }
@@ -71,11 +67,13 @@ pub fn resolve_session_id(target: &Path, flag: Option<&str>) -> Result<SessionId
     for _ in 0..MAX_RESOLVE_RETRIES {
         match read_pointer_state(&pointer)? {
             PointerState::Live(id) => return Ok(id),
-            PointerState::Stale => {
-                // Stale pointer (corrupt or ended). Best-effort remove so
-                // the next iteration's O_CREAT|O_EXCL can succeed. If
-                // another process already removed it, ignore.
-                let _ = fs::remove_file(&pointer);
+            PointerState::Stale { raw } => {
+                // Stale pointer (corrupt or ended). Compare-and-delete so a
+                // concurrent process that just claimed a NEW session via the
+                // pointer (between our read and this remove) doesn't lose its
+                // claim. If the content changed or someone else removed it,
+                // remove_pointer_if_matches is a no-op.
+                let _ = remove_pointer_if_matches(&pointer, &raw);
             }
             PointerState::Absent => {}
         }
@@ -96,6 +94,72 @@ pub fn resolve_session_id(target: &Path, flag: Option<&str>) -> Result<SessionId
     )))
 }
 
+/// Resolve a `SessionId` for TELEMETRY only, WITHOUT the implicit
+/// allocate-and-claim that `resolve_session_id` performs. Used for
+/// `Command::Sessions`, whose verbs manage the pointer explicitly: implicit
+/// allocation here would make `sessions new` create two sessions (orphaning
+/// one) and `sessions end` allocate-then-end on a pointer-less target.
+///
+///   1. `--session <id>` -> validate (manifest exists + not ended) and
+///      return it WITHOUT attaching the pointer.
+///   2. Live pointer -> return its session.
+///   3. Otherwise -> an ephemeral, manifest-less, unclaimed session that
+///      only homes this process's own logs.
+pub fn resolve_session_id_readonly(target: &Path, flag: Option<&str>) -> Result<SessionId, LooprError> {
+    if let Some(s) = flag {
+        return validate_existing_session(s);
+    }
+    let pointer = pointer_path(target);
+    if let PointerState::Live(id) = read_pointer_state(&pointer)? {
+        return Ok(id);
+    }
+    allocate_ephemeral_session()
+}
+
+/// Validate that `s` names an existing, not-ended session. Requires the
+/// manifest to EXIST: a `--session`/`resume` pointing at a never-allocated
+/// id is an error, not a silent attach to a phantom whose log dir was never
+/// provisioned. Shared by `resolve_session_id` (which then attaches the
+/// pointer) and `resolve_session_id_readonly` (which does not).
+fn validate_existing_session(s: &str) -> Result<SessionId, LooprError> {
+    let id = SessionId::parse(s).map_err(|e| LooprError::SessionResolve(format!("bad --session value `{s}`: {e}")))?;
+    if !session_manifest_exists(&id)? {
+        return Err(LooprError::SessionResolve(format!(
+            "session {id} has no manifest under XDG (never allocated); use `loopr sessions new`"
+        )));
+    }
+    if session_ended(&id)? {
+        return Err(LooprError::SessionResolve(format!("session {id} is ended")));
+    }
+    Ok(id)
+}
+
+/// Returns `true` if the session's `manifest.yml` exists. Distinct from
+/// `session_ended` (which treats a MISSING manifest as not-ended): here a
+/// missing manifest means the id was never allocated.
+fn session_manifest_exists(session_id: &SessionId) -> Result<bool, LooprError> {
+    let dir =
+        telemetry::session_dir(session_id).map_err(|e| LooprError::SessionResolve(format!("xdg session_dir: {e}")))?;
+    dir.join("manifest.yml")
+        .try_exists()
+        .map_err(|e| LooprError::SessionResolve(format!("stat manifest for {session_id}: {e}")))
+}
+
+/// Allocate a telemetry-only session: claim a fresh `SessionId` directory
+/// under XDG `sessions/` for THIS process's logs, but write NO manifest and
+/// claim NO pointer. The manifest-less dir is invisible to `list_all`
+/// (which skips dirs without a manifest), so it never surfaces as a phantom
+/// session. Used by `resolve_session_id_readonly`.
+fn allocate_ephemeral_session() -> Result<SessionId, LooprError> {
+    let sessions_root = telemetry::xdg_root()
+        .map_err(|e| LooprError::SessionResolve(format!("xdg_root: {e}")))?
+        .join("sessions");
+    fs::create_dir_all(&sessions_root)
+        .map_err(|e| LooprError::SessionResolve(format!("mkdir {}: {e}", sessions_root.display())))?;
+    SessionId::allocate(&sessions_root)
+        .map_err(|e| LooprError::SessionResolve(format!("ephemeral session id alloc: {e}")))
+}
+
 /// Path to `<target>/.loopr/active-session`.
 pub fn pointer_path(target: &Path) -> PathBuf {
     target.join(".loopr").join(POINTER_FILENAME)
@@ -108,8 +172,10 @@ enum PointerState {
     /// File does not exist.
     Absent,
     /// File exists but doesn't name a live session (corrupt id, or manifest
-    /// marks `ended_at`). Caller should `remove_file` and retry.
-    Stale,
+    /// marks `ended_at`). Carries the raw file content so the caller can
+    /// compare-and-delete (only remove the pointer if it STILL holds this
+    /// content — a concurrent process may have claimed a new session since).
+    Stale { raw: String },
     /// File exists and names a session whose manifest has `ended_at: null`.
     Live(SessionId),
 }
@@ -119,18 +185,37 @@ fn read_pointer_state(pointer: &Path) -> Result<PointerState, LooprError> {
         Ok(s) => match SessionId::parse(s.trim()) {
             Ok(id) => {
                 if session_ended(&id)? {
-                    Ok(PointerState::Stale)
+                    Ok(PointerState::Stale { raw: s })
                 } else {
                     Ok(PointerState::Live(id))
                 }
             }
             Err(e) => {
                 tracing::warn!(error = %e, path = %pointer.display(), "active-session pointer corrupt; treating as stale");
-                Ok(PointerState::Stale)
+                Ok(PointerState::Stale { raw: s })
             }
         },
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(PointerState::Absent),
         Err(e) => Err(LooprError::SessionResolve(format!("read {}: {e}", pointer.display()))),
+    }
+}
+
+/// Remove the pointer only if its current content still equals `expected`
+/// (trimmed). Narrows the TOCTOU window where a concurrent process has
+/// already claimed a NEW session via the pointer between our read and our
+/// remove: deleting their claim would corrupt the active-session state.
+/// A content mismatch (someone else won) or `NotFound` (someone else
+/// removed it) both leave us with nothing to do.
+fn remove_pointer_if_matches(pointer: &Path, expected: &str) -> std::io::Result<()> {
+    match fs::read_to_string(pointer) {
+        Ok(s) if s.trim() == expected.trim() => match fs::remove_file(pointer) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        },
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -314,17 +399,13 @@ pub fn end_active(target: &Path) -> Result<Option<SessionId>, LooprError> {
             LooprError::SessionResolve(format!("rename {} -> {}: {e}", tmp.display(), manifest_path.display()))
         })?;
     }
+    // Compare-and-delete: only clear the pointer if it STILL names the
+    // session we just ended. A concurrent `sessions new` may have already
+    // claimed a fresh session via the pointer between our `read_active`
+    // above and here; blindly removing would delete that new claim.
     let pointer = pointer_path(target);
-    match fs::remove_file(&pointer) {
-        Ok(()) => {}
-        Err(e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => {
-            return Err(LooprError::SessionResolve(format!(
-                "clear pointer {}: {e}",
-                pointer.display()
-            )));
-        }
-    }
+    remove_pointer_if_matches(&pointer, id.as_str())
+        .map_err(|e| LooprError::SessionResolve(format!("clear pointer {}: {e}", pointer.display())))?;
     Ok(Some(id))
 }
 

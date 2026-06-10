@@ -1973,3 +1973,56 @@ Landing across commits (mirrors Phases 1-7):
 
 #### Open questions
 - None.
+
+### Commit C — sessions correctness
+
+#### Design decisions
+- **Skip implicit allocation for `Command::Sessions`.** New
+  `session::resolve_session_id_readonly(target, flag)` used by `lib::run`
+  ONLY for the sessions verbs. It (1) validates an explicit `--session`
+  without attaching the pointer, (2) reuses a live pointer, or (3) allocates
+  an EPHEMERAL session — a dir-only `SessionId` under XDG `sessions/` with
+  NO manifest and NO pointer claim — purely to home this process's logs.
+  This kills both bugs: `sessions new` no longer creates two sessions
+  (one orphaned), and `sessions end` on a pointer-less target no longer
+  allocates-then-ends. The ephemeral dir is manifest-less so `list_all`
+  (which skips manifest-less dirs) never shows it as a phantom session.
+- **`--session`/resume requires the manifest to exist (finding 3).** New
+  shared `validate_existing_session(s)` requires `manifest.yml` to exist
+  (a never-allocated id is an error: "no manifest ... use `loopr sessions
+  new`") in addition to the not-ended check. Used by BOTH
+  `resolve_session_id` (then attaches) and `resolve_session_id_readonly`
+  (does not), so `resume` (which calls `resolve_session_id`) is covered.
+  New `session_manifest_exists` is distinct from `session_ended` (which
+  treats a missing manifest as not-ended, the right call for its own
+  racing-allocation case).
+- **Compare-and-delete at both pointer-removal sites (finding 2).** New
+  `remove_pointer_if_matches(pointer, expected)` re-reads the pointer and
+  removes it only if the content still equals `expected` (trimmed); a
+  content mismatch (a concurrent `sessions new` claimed a fresh session) or
+  `NotFound` is a no-op. `PointerState::Stale` now carries the raw content
+  so `resolve_session_id`'s stale-cleanup compares against what it read;
+  `end_active` compares against the id it just ended. Narrows the TOCTOU
+  window where a blind `remove_file` would delete a concurrent claim.
+
+#### Deviations
+- The `lib::run` selection of readonly-vs-claiming resolver is the wiring
+  the finding asks for; its end-to-end test ("sessions end/new through
+  `lib::run`") is a Phase 11 item (lib::run drives telemetry/fork and isn't
+  unit-testable). The readonly resolver, manifest-exists rejection, and
+  compare-and-delete helper are unit-tested directly here.
+
+#### Tradeoffs
+- The ephemeral telemetry session leaves a manifest-less dir under XDG
+  `sessions/<id>/` for the duration of a sessions-verb invocation's logs.
+  Acceptable: it is invisible to `list_all`, and the alternative (a fixed
+  sentinel id) would collide across concurrent invocations. Logs for
+  `loopr sessions <verb>` are diagnostic noise that needs *some* home.
+- `remove_pointer_if_matches` is compare-and-delete, not a true atomic CAS
+  (a residual read→remove window remains). It is the mitigation the finding
+  specifies and shrinks the window from "always racy" to "racy only inside
+  a few syscalls"; a hard-link/rename CAS would be heavier than the hazard
+  warrants for a best-effort pointer cleanup.
+
+#### Open questions
+- None.

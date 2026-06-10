@@ -148,7 +148,16 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     // `rules/rust.md` forbids the leading-underscore crutch for used locals;
     // these locals ARE used - their Drop timing is the whole point.
     let directive = resolve_log_directive(cli.log_level.as_deref());
-    let session_id = session::resolve_session_id(&effective, cli.session.as_deref())?;
+    // `Command::Sessions` verbs manage the active-session pointer EXPLICITLY
+    // (new/resume/end). Routing them through the implicit allocate-and-claim
+    // resolver makes `sessions new` create two sessions (orphaning one) and
+    // `sessions end` allocate-then-end on a pointer-less target. They take a
+    // read-only resolution that never claims the pointer.
+    let session_id = if matches!(command, Command::Sessions { .. }) {
+        session::resolve_session_id_readonly(&effective, cli.session.as_deref())?
+    } else {
+        session::resolve_session_id(&effective, cli.session.as_deref())?
+    };
     let target_slug =
         telemetry::target_slug(&effective).map_err(|e| LooprError::TelemetryInit(format!("target_slug: {e}")))?;
     let process_runs_dir = telemetry::session_target_dir(&session_id, &target_slug)

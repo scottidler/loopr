@@ -132,6 +132,73 @@ fn resolve_explicit_flag_rejects_ended_session() {
 }
 
 #[test]
+fn resolve_explicit_flag_rejects_session_without_manifest() {
+    // Phase 8: --session pointing at a never-allocated (manifest-less) id
+    // is an error, not a silent attach to a phantom.
+    let _g = env_guard();
+    with_xdg_home(|_| {
+        let target = TempDir::new().unwrap();
+        std::fs::create_dir_all(target.path().join(".loopr")).unwrap();
+        // Syntactically valid SessionId, but never allocated -> no manifest.
+        let err = resolve_session_id(target.path(), Some("20200101-000000")).unwrap_err();
+        match err {
+            LooprError::SessionResolve(msg) => assert!(msg.contains("no manifest"), "msg: {msg}"),
+            other => panic!("expected SessionResolve no-manifest, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn readonly_returns_ephemeral_without_claiming_pointer() {
+    // Phase 8: the sessions-verb resolver must NOT claim the pointer when
+    // none exists (otherwise `sessions new` would create two sessions).
+    let _g = env_guard();
+    with_xdg_home(|_| {
+        let target = TempDir::new().unwrap();
+        std::fs::create_dir_all(target.path().join(".loopr")).unwrap();
+        let id = resolve_session_id_readonly(target.path(), None).unwrap();
+        assert!(!pointer_path(target.path()).exists(), "readonly must not claim the pointer");
+        // The ephemeral session has no manifest, so it is invisible to list_all.
+        assert!(!session_manifest_exists(&id).unwrap(), "ephemeral session must have no manifest");
+    });
+}
+
+#[test]
+fn readonly_reuses_live_pointer() {
+    let _g = env_guard();
+    with_xdg_home(|_| {
+        let target = TempDir::new().unwrap();
+        std::fs::create_dir_all(target.path().join(".loopr")).unwrap();
+        let claimed = resolve_session_id(target.path(), None).unwrap();
+        let before = std::fs::read_to_string(pointer_path(target.path())).unwrap();
+        let seen = resolve_session_id_readonly(target.path(), None).unwrap();
+        let after = std::fs::read_to_string(pointer_path(target.path())).unwrap();
+        assert_eq!(seen.as_str(), claimed.as_str(), "readonly reuses the live pointer");
+        assert_eq!(before, after, "readonly must not rewrite the pointer");
+    });
+}
+
+#[test]
+fn remove_pointer_if_matches_respects_concurrent_claim() {
+    let _g = env_guard();
+    with_xdg_home(|_| {
+        let target = TempDir::new().unwrap();
+        std::fs::create_dir_all(target.path().join(".loopr")).unwrap();
+        let pointer = pointer_path(target.path());
+        std::fs::write(&pointer, "20200101-000000\n").unwrap();
+        // A non-matching expected (a concurrent process claimed a new id)
+        // must leave the pointer intact.
+        remove_pointer_if_matches(&pointer, "20990101-000000").unwrap();
+        assert!(pointer.exists(), "non-matching content must not be removed");
+        // A matching expected removes it.
+        remove_pointer_if_matches(&pointer, "20200101-000000").unwrap();
+        assert!(!pointer.exists(), "matching content must be removed");
+        // NotFound is a no-op success.
+        remove_pointer_if_matches(&pointer, "20200101-000000").unwrap();
+    });
+}
+
+#[test]
 fn stress_50_concurrent_converge_on_single_session() {
     let _g = env_guard();
     with_xdg_home(|_| {
