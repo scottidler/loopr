@@ -217,7 +217,19 @@ pub(crate) async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, mut p
 where
     L: LlmClient + Send + Sync + 'static,
 {
-    match decomposer::decompose(&plan, &ctx.target, &*ctx.llm, &ctx.decomposer_config).await {
+    // Cost attribution: the decomposer has a Plan but no Work; tag the
+    // costs.jsonl lines with the Plan id and the `decomposer` role.
+    let call_ctx = llm::CallContext {
+        plan_id: Some(plan.id.to_string()),
+        work_id: None,
+        role: Some("decomposer".to_string()),
+    };
+    match llm::CallContext::scope(
+        call_ctx,
+        decomposer::decompose(&plan, &ctx.target, &*ctx.llm, &ctx.decomposer_config),
+    )
+    .await
+    {
         Ok(works) => {
             let count = works.len();
             // F4: persist with collision re-minting. `create_many` now
@@ -875,9 +887,15 @@ where
         // is logged and the per-Plan Notify + status-snapshot cleanup
         // below still runs (the JoinSet would otherwise swallow the
         // panic and leak both sidecar entries).
-        let result = std::panic::AssertUnwindSafe(run_director(&plan_id, &deps))
-            .catch_unwind()
-            .await;
+        let call_ctx = llm::CallContext {
+            plan_id: Some(plan_id.to_string()),
+            work_id: None,
+            role: Some("director".to_string()),
+        };
+        let result =
+            std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_director(&plan_id, &deps)))
+                .catch_unwind()
+                .await;
         match result {
             Ok(Ok(())) => info!(plan_id = %plan_id_for_log, "director task exited Ok"),
             Ok(Err(DirectorError::NeedHelp(reason))) => warn!(

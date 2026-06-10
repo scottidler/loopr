@@ -500,7 +500,12 @@ async fn run_active_daemon(
     let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
         config.llm.model.clone(),
     )));
-    let metered = llm::MeteredLlmClient::new(anthropic, Arc::clone(&snapshot));
+    // Phase 6: append one line per LLM call to `<target>/.loopr/costs.jsonl`
+    // (vision cost audit). The CostSink carries the run-id (this PID's
+    // process id); each call's Plan/Work/role come from the CallContext
+    // task-local the spawn task bodies install.
+    let cost_sink = Arc::new(llm::CostSink::new(&target.join(".loopr"), process_id.as_str()));
+    let metered = llm::MeteredLlmClient::with_costs(anthropic, Arc::clone(&snapshot), cost_sink);
 
     // Phase B startup watchdog: bound `build_context` (Store::open +
     // worktree::ensure_loopr_excludes + startup::reconcile) so a hung

@@ -7,26 +7,122 @@
 //! `Mutex`, then forwards the payload. The wrapper is the sole
 //! counter — call sites continue to use `let (x, _usage) = ...`.
 
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use telemetry::digest::cost::cost_micros;
 use telemetry::digest::process::ProcessSnapshot;
 
+use crate::call::CallContext;
 use crate::client::LlmClient;
 use crate::error::LlmError;
 use crate::message::Message;
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
+/// Filename of the append-only per-call cost ledger under `.loopr/`.
+const COSTS_FILENAME: &str = "costs.jsonl";
+
+/// Append-only `.loopr/costs.jsonl` writer: one JSON line per LLM call
+/// (the vision's "Cost audit" shape). Shared across the daemon's tasks;
+/// each call's Plan/Work/role come from the [`CallContext`] task-local.
+/// `loopr costs` is a trivial `jq` consumer of this file (no Rust CLI).
+pub struct CostSink {
+    path: PathBuf,
+    run_id: String,
+}
+
+impl CostSink {
+    /// Build a sink writing `<loopr_dir>/costs.jsonl`. `run_id` is the
+    /// daemon's process id (the `Loopr-Run` correlation key).
+    pub fn new(loopr_dir: &Path, run_id: impl Into<String>) -> Self {
+        Self {
+            path: loopr_dir.join(COSTS_FILENAME),
+            run_id: run_id.into(),
+        }
+    }
+
+    /// Append one cost line for a completed (or billed-but-failed) call.
+    /// Best-effort: a write failure logs `warn!` and is swallowed — cost
+    /// audit must never break the call path.
+    fn append(&self, usage: &Usage) {
+        let cc = CallContext::current();
+        let model = usage.model.as_deref().unwrap_or("unknown");
+        let micros = cost_micros(
+            model,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_creation_input_tokens,
+            usage.cache_read_input_tokens,
+        );
+        let cost_usd = micros as f64 / 1_000_000.0;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let line = serde_json::json!({
+            "ts": ts,
+            "run_id": self.run_id,
+            "plan_id": cc.plan_id,
+            "work_id": cc.work_id,
+            "role": cc.role,
+            "model": model,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cost_usd": cost_usd,
+        });
+        match OpenOptions::new().create(true).append(true).open(&self.path) {
+            Ok(mut f) => {
+                if let Err(e) = writeln!(f, "{line}") {
+                    tracing::warn!(path = %self.path.display(), error = %e, "costs.jsonl append failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(path = %self.path.display(), error = %e, "costs.jsonl open failed");
+            }
+        }
+    }
+}
+
 /// Wraps an inner `LlmClient` and records every call's `Usage` into a
-/// shared `ProcessSnapshot`. Cheap to clone via `Arc<Mutex<_>>`.
+/// shared `ProcessSnapshot`, and (when a `CostSink` is present) appends a
+/// per-call line to `.loopr/costs.jsonl`. Cheap to clone via `Arc<_>`.
 pub struct MeteredLlmClient<L> {
     inner: L,
     snapshot: Arc<Mutex<ProcessSnapshot>>,
+    costs: Option<Arc<CostSink>>,
 }
 
 impl<L> MeteredLlmClient<L> {
+    /// Metering into the snapshot only (no cost ledger). Used by tests
+    /// and any caller without a `.loopr/` directory.
     pub fn new(inner: L, snapshot: Arc<Mutex<ProcessSnapshot>>) -> Self {
-        Self { inner, snapshot }
+        Self {
+            inner,
+            snapshot,
+            costs: None,
+        }
+    }
+
+    /// Metering into the snapshot AND the `.loopr/costs.jsonl` ledger.
+    /// The production daemon path.
+    pub fn with_costs(inner: L, snapshot: Arc<Mutex<ProcessSnapshot>>, costs: Arc<CostSink>) -> Self {
+        Self {
+            inner,
+            snapshot,
+            costs: Some(costs),
+        }
+    }
+
+    /// Record one call's usage into the snapshot and the cost ledger.
+    fn meter(&self, usage: &Usage) {
+        record(&self.snapshot, usage);
+        if let Some(sink) = &self.costs {
+            sink.append(usage);
+        }
     }
 }
 
@@ -40,7 +136,7 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
     ) -> Result<(ToolCall, Usage), LlmError> {
         match self.inner.complete_with_tool(system, user, tool, model).await {
             Ok((tc, usage)) => {
-                record(&self.snapshot, &usage);
+                self.meter(&usage);
                 Ok((tc, usage))
             }
             Err(e) => {
@@ -49,7 +145,7 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
                 // success path; record their usage so the expensive
                 // failures reach the cost counters (Phase 1 remediation).
                 if let Some(usage) = e.billed_usage() {
-                    record(&self.snapshot, usage);
+                    self.meter(usage);
                 }
                 Err(e)
             }
@@ -64,12 +160,12 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
     ) -> Result<(String, Usage), LlmError> {
         match self.inner.complete_free(system, messages, model).await {
             Ok((raw, usage)) => {
-                record(&self.snapshot, &usage);
+                self.meter(&usage);
                 Ok((raw, usage))
             }
             Err(e) => {
                 if let Some(usage) = e.billed_usage() {
-                    record(&self.snapshot, usage);
+                    self.meter(usage);
                 }
                 Err(e)
             }
@@ -167,6 +263,60 @@ mod tests {
         let _ = metered.complete_free("s", &[], None).await.unwrap_err();
         let snap = snapshot.lock().unwrap();
         assert_eq!(snap.llm_calls, 0, "a retryable error bills nothing");
+    }
+
+    #[tokio::test]
+    async fn cost_sink_appends_line_with_call_context() {
+        use crate::call::CallContext;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let sink = Arc::new(CostSink::new(dir.path(), "pc-test01"));
+        let snapshot = fresh_snapshot();
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Ok("ok".to_string()));
+        let metered = MeteredLlmClient::with_costs(stub, snapshot, Arc::clone(&sink));
+
+        let ctx = CallContext {
+            plan_id: Some("p-42".to_string()),
+            work_id: Some("wk-7".to_string()),
+            role: Some("implementer".to_string()),
+        };
+        let _ = CallContext::scope(ctx, metered.complete_free("s", &[], None))
+            .await
+            .unwrap();
+
+        let body = std::fs::read_to_string(dir.path().join("costs.jsonl")).unwrap();
+        let line = body.lines().next().expect("one cost line");
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(v["run_id"], "pc-test01");
+        assert_eq!(v["plan_id"], "p-42");
+        assert_eq!(v["work_id"], "wk-7");
+        assert_eq!(v["role"], "implementer");
+        // Stub usage is all-zero with no model: the line still records
+        // the shape (model "unknown", zero cost), proving attribution
+        // works independently of the provider's token counts.
+        assert!(v.get("input_tokens").is_some());
+        assert!(v.get("cost_usd").is_some());
+    }
+
+    #[tokio::test]
+    async fn cost_sink_absent_context_writes_null_attribution() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sink = Arc::new(CostSink::new(dir.path(), "pc-noctx"));
+        let snapshot = fresh_snapshot();
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Ok("ok".to_string()));
+        let metered = MeteredLlmClient::with_costs(stub, snapshot, sink);
+
+        // No CallContext::scope: plan/work/role record as null, the line
+        // still lands (a CLI one-shot or test path).
+        let _ = metered.complete_free("s", &[], None).await.unwrap();
+
+        let body = std::fs::read_to_string(dir.path().join("costs.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
+        assert_eq!(v["run_id"], "pc-noctx");
+        assert!(v["plan_id"].is_null());
+        assert!(v["role"].is_null());
     }
 
     #[tokio::test]

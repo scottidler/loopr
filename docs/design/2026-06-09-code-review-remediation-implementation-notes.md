@@ -1339,3 +1339,56 @@ Landing across commits (mirrors Phases 1-5):
   records the *concrete returned* model. Reconciling the trailer to the
   concrete model is possible but not required by finding 1 (which asks
   for the Bundle); left as-is to keep the trailer byte-stable.
+
+### Commit C — costs.jsonl writer in MeteredLlmClient (finding 2)
+
+#### Design decisions
+- **Per-call context via a tokio task-local (`llm::CallContext`).** The
+  metered client is process-wide, so it cannot know a call's Plan/Work/
+  role from its own state. `CallContext { plan_id, work_id, role }` is a
+  task-local (new `llm/src/call.rs`); the daemon's five spawn task bodies
+  wrap their agent future in `CallContext::scope(ctx, fut)`
+  (`spawn_implementer_for_work` → implementer, `spawn_reviewer_for_bundle`
+  → reviewer, both director spawn sites → director, `decompose_and_dispatch`
+  → decomposer). `CostSink::append` reads `CallContext::current()`. Chosen
+  over a trait-signature context param (would ripple to every call site +
+  every fake) and over span-field read-back (tracing fields are write-only
+  at runtime). Added `tokio` (feature `rt`) as an llm production dep — the
+  crate is the async network boundary and the CLAUDE.md already lists
+  tokio among its expected deps.
+- **`CostSink` in `metered.rs`.** `MeteredLlmClient::with_costs(inner,
+  snapshot, Arc<CostSink>)` is the new production constructor; `new`
+  (snapshot-only) is unchanged so the existing tests and any
+  `.loopr`-less caller don't churn. One JSON line per call (success AND
+  billed-error), the vision's exact shape (`ts`, `run_id`, `plan_id`,
+  `work_id`, `role`, `model`, `input_tokens`, `output_tokens`,
+  `cost_usd`). `cost_usd` derives from the shared digest rate table
+  (`cost_micros / 1e6`). Best-effort: an open/write failure logs `warn!`
+  and is swallowed — the cost ledger must never break the call path.
+- **`run_id` is the daemon's process id**, the same `Loopr-Run`
+  correlation key the Phase 1 commit trailer uses. The sink writes
+  `<target>/.loopr/costs.jsonl`; `loopr costs` stays a `jq` consumer (no
+  Rust CLI, per the finding).
+- **`.loopr/costs.jsonl` added to the git-exclude list** (`worktree::
+  excludes`). Phase 6 introduces the file, so excluding it is this
+  phase's responsibility (Phase 8's exclude-list finding can't list a
+  file that didn't exist when it was written).
+
+#### Deviations
+- `ts` is emitted as unix-epoch milliseconds (a number), not an RFC3339
+  string. The vision shows `"ts": "..."` (a placeholder); a numeric ms
+  timestamp is jq-friendlier and avoids pulling `chrono` into `llm`.
+
+#### Tradeoffs
+- `CostSink::append` opens the file per call (`OpenOptions::append`)
+  rather than holding a long-lived `Mutex<File>`. LLM calls are
+  seconds-apart and the line is small (well under `PIPE_BUF`, so the
+  `O_APPEND` write is atomic across concurrent tasks); per-call open is
+  simpler and avoids a shared file handle across the daemon's tasks.
+- The stub's `Usage` has no model, so stub-backed cost lines record
+  `model: "unknown"` and `cost_usd: 0.0`. That is correct (the rate
+  table has no "unknown" entry) and the attribution fields still prove
+  the wiring; real calls carry `usage.model` from Commit B.
+
+#### Open questions
+- None.

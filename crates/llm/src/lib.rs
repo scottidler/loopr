@@ -8,6 +8,7 @@
 //! tracked in the design doc.
 
 mod anthropic;
+mod call;
 mod client;
 mod config;
 mod error;
@@ -21,11 +22,12 @@ mod usage;
 mod stub;
 
 pub use anthropic::AnthropicClient;
+pub use call::CallContext;
 pub use client::LlmClient;
 pub use config::LlmConfig;
 pub use error::{FatalReason, LlmError};
 pub use message::{Message, MessageContent, MessageRole};
-pub use metered::MeteredLlmClient;
+pub use metered::{CostSink, MeteredLlmClient};
 pub use tier::ModelTiers;
 pub use tool::{ToolCall, ToolSchema};
 pub use usage::Usage;

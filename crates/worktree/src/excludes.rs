@@ -30,6 +30,9 @@ const LOOPR_EXCLUDES: &[&str] = &[
     // multiple MB and may capture redacted-but-still-debug-grade prompt
     // text; never commit.
     ".loopr/records/",
+    // `.loopr/costs.jsonl` is the per-run append-only LLM cost ledger
+    // (Phase 6 cost audit). Run-local telemetry; never commit.
+    ".loopr/costs.jsonl",
 ];
 
 #[instrument(name = "worktree.ensure_loopr_excludes", level = "debug", skip_all, fields(repo_path = %repo_path.display()), err)]

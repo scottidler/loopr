@@ -444,9 +444,15 @@ where
             // Panic posture: `catch_unwind` so a panic inside
             // `run_director` is logged and the per-Plan Notify +
             // status-snapshot cleanup below still runs.
-            let result = std::panic::AssertUnwindSafe(run_director(&plan_id, &deps))
-                .catch_unwind()
-                .await;
+            let call_ctx = llm::CallContext {
+                plan_id: Some(plan_id.to_string()),
+                work_id: None,
+                role: Some("director".to_string()),
+            };
+            let result =
+                std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_director(&plan_id, &deps)))
+                    .catch_unwind()
+                    .await;
             match result {
                 Ok(Ok(())) => tracing::info!(plan_id = %plan_id_for_log, "director task exited Ok"),
                 Ok(Err(DirectorError::NeedHelp(reason))) => tracing::warn!(

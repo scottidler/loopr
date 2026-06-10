@@ -542,9 +542,17 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         // leak its worktree (the JoinSet swallowed the panic). On panic
         // we record `FailureReason::Panic`, mark the Work Blocked, and
         // fall through to the same cleanup tail as every other arm.
-        let result = std::panic::AssertUnwindSafe(run_implementer(&work, &worktree, &deps))
-            .catch_unwind()
-            .await;
+        // Cost attribution: install the per-call context so the metered
+        // client's costs.jsonl lines carry this Plan/Work/role.
+        let call_ctx = llm::CallContext {
+            plan_id: Some(work.parent_id.to_string()),
+            work_id: Some(work.id.to_string()),
+            role: Some("implementer".to_string()),
+        };
+        let result =
+            std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_implementer(&work, &worktree, &deps)))
+                .catch_unwind()
+                .await;
         match result {
             Err(panic) => {
                 let msg = panic_message(&*panic);
@@ -763,9 +771,15 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         // JoinSet would otherwise swallow it). The Bundle stays Triaged
         // and is superseded by the next recovery sweep's Work-Blocked
         // entry guard.
-        let reviewer_result = std::panic::AssertUnwindSafe(run_reviewer(&bundle, &work, &deps))
-            .catch_unwind()
-            .await;
+        let call_ctx = llm::CallContext {
+            plan_id: Some(work.parent_id.to_string()),
+            work_id: Some(work.id.to_string()),
+            role: Some("reviewer".to_string()),
+        };
+        let reviewer_result =
+            std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_reviewer(&bundle, &work, &deps)))
+                .catch_unwind()
+                .await;
         let verdict = match reviewer_result {
             Err(panic) => {
                 let msg = panic_message(&*panic);
