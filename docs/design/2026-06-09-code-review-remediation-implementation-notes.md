@@ -435,3 +435,69 @@ Landing across commits (mirrors Phase 1/2):
 
 #### Open questions
 - None for Commit A.
+
+### Commit B — Plan OCC + monotonic floor + routing
+
+#### Design decisions
+- **F1 (Plan OCC).** `PlansStore::update` now takes `expected_updated_at`,
+  acquires a new `Store::plan_update_lock`, pre-`get`s the record (which
+  doubles as F3's missing-id guard — a missing id is `RecordNotFound`
+  instead of taskstore's silent upsert-create), checks the OCC token,
+  floors `updated_at` (F2-plans), and returns the floored value. The
+  `PlanUpdateSink` trait gained `expected_updated_at` + a `Stale` variant
+  and returns `i64`, exactly mirroring `BundleUpdateSink`/`WorkUpdateSink`.
+  This is the signature-ripple tranche the design doc's Rollout note 2
+  calls out: `SummaryFanout`, `transition_and_persist_plan`, the agents
+  `DirectorStore::update_plan` (+ its two Stalled-persist call sites), and
+  the override handler all compile against the new shape in this one
+  commit (no coexistence).
+- **F1 (re-fetch).** `transition_and_persist_plan` captures
+  `expected_updated_at` from `plan.updated_at` immediately before the FSM
+  call and writes the persisted floored value back. The integrator
+  completion path (`spawn_integrator_for_bundle`) now RE-FETCHES the Plan
+  fresh right before the `Active -> Complete` transition instead of
+  reusing the snapshot loaded minutes earlier at method entry — so a
+  concurrent Director/IPC write since then doesn't make the OCC
+  `expected` stale and reject the Complete spuriously.
+- **F8 (override routing).** `handle_plan_override` now routes through
+  `transition_and_persist_plan` (gaining OCC + summary fanout + the
+  terminal-state event it previously bypassed via raw
+  `store.plans().update`). To support the operator override edges
+  (`Stalled => Active|Abandoned`), `transition_and_persist_plan` gained an
+  `override_: bool` that selects `override_status` vs `transition` —
+  mirroring `transition_and_persist_work`'s existing `override_` flag.
+  Same-class fix: the reviewer Step-3 InProgress->InReview repair now
+  routes through `&*self.summary_fanout` instead of `&self.store`.
+
+#### Deviations
+- The override handler's error mapping collapses FSM-reject and OCC-Stale
+  to `RpcError::InvalidRequest` (both client-actionable) by matching the
+  helper's `String` error. A genuine IO persist failure would also map to
+  InvalidRequest rather than Internal — a minor RPC-code imprecision
+  accepted because `transition_and_persist_plan` returns `String`, not a
+  typed error (a typed-result refactor for the plan helper is not a Phase
+  3 finding; the work helper's typed result is F5/Commit C). The error
+  message carries the detail regardless.
+- The override handler passes `PlanSummaryExtras::default()` (0 ticks /
+  bundles) rather than computing them — `compute_plan_summary_extras` is
+  private to `context.rs`. The terminal-state event on an operator-driven
+  abandon therefore shows 0 for those counts; the per-Work counts (from
+  the fetched children) are accurate. F8's goal is the routing, not
+  extras precision.
+
+#### Tradeoffs
+- Pre-existing test flake surfaced and fixed: `tests/work_plan_summary_visibility.rs`'s
+  two `current_thread` tests both install a thread-local `init_for_test`
+  subscriber and read their own tempdir `events.log`; run concurrently in
+  one binary they raced on subscriber capture (~20-33% flake, present on
+  the Commit A tree too — NOT a Commit B regression). Serialized them
+  behind a `static tokio::sync::Mutex` (async lock to avoid the std-Mutex
+  `await_holding_lock` clippy lint). Verified 12/12 green after.
+- `plan_override_rejected_fsm_edge_yields_invalid_request` asserted the
+  error message contained `"FSM"`; the routed-through-helper message is
+  now lowercase `"...fsm override rejected..."`, so the assertion is
+  case-insensitive. Behavior (InvalidRequest + plan unmutated) is
+  unchanged.
+
+#### Open questions
+- None for Commit B.

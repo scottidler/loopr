@@ -47,6 +47,13 @@ pub struct Store {
     /// `promote_unblocked_siblings` calls find the same Pending Work
     /// eligible, preventing double Implementer spawning.
     work_update_lock: Mutex<()>,
+    /// Intra-daemon OCC serializer for `PlansStore::update`. Mirrors
+    /// `work_update_lock` / `bundle_update_lock`. Plans have three live
+    /// concurrent writers (the Reactor's `transition_and_persist_plan`,
+    /// the Director's `Stalled` persist, the IPC override handler); without
+    /// the lock + `expected_updated_at` check they race into FSM-invalid
+    /// history (a terminal `Complete` clobbered by a late `Stalled`).
+    plan_update_lock: Mutex<()>,
     /// Intra-daemon serializer for `TicksStore::create`'s duplicate-
     /// detection read-check-write. Without it, two concurrent
     /// `integrate` calls in the crash-recovery path could both see
@@ -107,13 +114,17 @@ impl Store {
             inner,
             bundle_update_lock: Mutex::new(()),
             work_update_lock: Mutex::new(()),
+            plan_update_lock: Mutex::new(()),
             tick_lock: Mutex::new(()),
         })
     }
 
     /// Typed accessor for Plan records. Borrowed, zero-cost handle.
+    /// The handle borrows the parent `Store`'s OCC mutex so
+    /// `update(plan, expected_updated_at)` calls serialize across all
+    /// callers of the same `Store`, not just within one handle.
     pub fn plans(&self) -> PlansStore<'_> {
-        PlansStore::new(&self.inner)
+        PlansStore::new(&self.inner, &self.plan_update_lock)
     }
 
     /// Typed accessor for Work records. Borrowed, zero-cost handle.

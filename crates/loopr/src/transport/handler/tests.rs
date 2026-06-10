@@ -531,7 +531,12 @@ async fn plan_override_rejected_fsm_edge_yields_invalid_request() {
     assert_eq!(resp.id, 63);
     match resp.error {
         Some(RpcError::InvalidRequest(msg)) => {
-            assert!(msg.contains("FSM"), "expected FSM rejection in error: {msg}");
+            // F8: the override now routes through transition_and_persist_plan,
+            // whose rejection message is "...fsm override rejected...".
+            assert!(
+                msg.to_lowercase().contains("fsm"),
+                "expected FSM rejection in error: {msg}"
+            );
         }
         other => panic!("expected InvalidRequest for FSM rejection; got {other:?}"),
     }

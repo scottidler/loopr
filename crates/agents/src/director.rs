@@ -186,7 +186,10 @@ pub trait DirectorStore: Send + Sync + 'static {
     async fn list_bundles_for_plan(&self, plan_id: &PlanId) -> Result<Vec<Bundle>, StoreError>;
     async fn get_work(&self, work_id: &WorkId) -> Result<Work, StoreError>;
     async fn get_plan(&self, plan_id: &PlanId) -> Result<Plan, StoreError>;
-    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError>;
+    /// Persist a Plan change under OCC. `expected_updated_at` is the
+    /// snapshot the caller took BEFORE transitioning (Plans have three
+    /// concurrent writers; a mismatch returns `StoreError::Stale`).
+    async fn update_plan(&self, plan: Plan, expected_updated_at: i64) -> Result<(), StoreError>;
     /// Phase 9: list the unread operator notes for a Plan, oldest-first.
     /// `run_director_inner` calls this at the top of every iteration;
     /// non-empty returns synthesize a `PatternObservation::OperatorNoteArrived`
@@ -228,8 +231,8 @@ impl DirectorStore for store::Store {
         self.plans().get(plan_id).await
     }
 
-    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
-        self.plans().update(plan).await
+    async fn update_plan(&self, plan: Plan, expected_updated_at: i64) -> Result<(), StoreError> {
+        self.plans().update(plan, expected_updated_at).await.map(|_| ())
     }
 
     async fn list_unread_notes_for_plan(&self, plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError> {
@@ -262,8 +265,8 @@ impl<S: DirectorStore + ?Sized> DirectorStore for Arc<S> {
         (**self).get_plan(plan_id).await
     }
 
-    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
-        (**self).update_plan(plan).await
+    async fn update_plan(&self, plan: Plan, expected_updated_at: i64) -> Result<(), StoreError> {
+        (**self).update_plan(plan, expected_updated_at).await
     }
 
     async fn list_unread_notes_for_plan(&self, plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError> {
@@ -951,9 +954,10 @@ impl DirectorSession {
                                 "director: retry budget exhausted; transitioning Plan -> Stalled"
                             );
                             let mut plan = deps.store.get_plan(plan_id).await?;
+                            let expected_updated_at = plan.updated_at;
                             plan.transition(PlanStatus::Stalled, Role::Director)
                                 .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
-                            deps.store.update_plan(plan).await?;
+                            deps.store.update_plan(plan, expected_updated_at).await?;
                             return Err(DirectorError::NeedHelp(format!(
                                 "retry budget exhausted on work {wid} (attempt_count={} >= max_work_attempts={})",
                                 work.attempt_count, deps.config.max_work_attempts
@@ -1032,9 +1036,10 @@ impl DirectorSession {
                     "director: NeedsOperator grace exceeded; transitioning Plan -> Stalled"
                 );
                 let mut plan = deps.store.get_plan(plan_id).await?;
+                let expected_updated_at = plan.updated_at;
                 plan.transition(PlanStatus::Stalled, Role::Director)
                     .map_err(|e| DirectorError::Fsm(format!("plan -> Stalled rejected: {e}")))?;
-                deps.store.update_plan(plan).await?;
+                deps.store.update_plan(plan, expected_updated_at).await?;
                 return Err(DirectorError::NeedHelp(format!(
                     "NeedsOperator timeout: {} iterations without operator note",
                     self.needs_operator_iters

@@ -262,3 +262,93 @@ async fn serde_roundtrip_survives_jsonl() {
     let listed = store.plans().list().await.expect("list");
     assert_eq!(listed.len(), cases.len());
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 F1/F2/F3: Plan OCC, monotonic floor, missing-id guard
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn update_floors_updated_at_strictly_above_prior() {
+    // Phase 3 F2 (plans): the floor lands exactly at prior + 1 when the
+    // on-disk value is in the future relative to the wall clock — the
+    // deterministic stand-in for a same-millisecond write.
+    let (_dir, store) = fresh_store().await;
+    let mut plan = Plan::new("p".to_string());
+    let id = plan.id.clone();
+    let future = domain::now_millis() + 1_000_000;
+    plan.updated_at = future;
+    plan.created_at = future;
+    store.plans().create(plan.clone()).await.expect("create");
+
+    plan.status = PlanStatus::Complete;
+    let new_ts = store.plans().update(plan, future).await.expect("update");
+    assert_eq!(new_ts, future + 1, "floor lands exactly at prior + 1");
+    let got = store.plans().get(&id).await.expect("get");
+    assert_eq!(got.updated_at, future + 1);
+    assert_eq!(got.status, PlanStatus::Complete);
+}
+
+#[tokio::test]
+async fn update_stale_expected_is_rejected() {
+    // Phase 3 F1: a writer holding a stale `expected_updated_at` (a
+    // concurrent winner already advanced the Plan) must be rejected with
+    // Stale rather than silently clobbering.
+    let (_dir, store) = fresh_store().await;
+    let plan = Plan::new("p".to_string());
+    let id = plan.id.clone();
+    let snapshot = plan.updated_at;
+    store.plans().create(plan).await.expect("create");
+
+    // Winner advances the Plan.
+    let mut winner = store.plans().get(&id).await.expect("get");
+    winner.status = PlanStatus::Complete;
+    store.plans().update(winner, snapshot).await.expect("winner update");
+
+    // Loser still holds the original snapshot -> Stale.
+    let mut loser = Plan::new("p".to_string());
+    loser.id = id.clone();
+    loser.status = PlanStatus::Stalled;
+    let err = store
+        .plans()
+        .update(loser, snapshot)
+        .await
+        .expect_err("stale must reject");
+    match err {
+        StoreError::Stale { expected, actual } => {
+            assert_eq!(expected, snapshot);
+            assert!(actual > expected);
+        }
+        other => panic!("expected Stale, got {other:?}"),
+    }
+    // The winner's Complete must survive.
+    let after = store.plans().get(&id).await.expect("get after");
+    assert_eq!(
+        after.status,
+        PlanStatus::Complete,
+        "stale loser must not clobber winner"
+    );
+}
+
+#[tokio::test]
+async fn update_missing_id_returns_record_not_found() {
+    // Phase 3 F3: taskstore `update` is an upsert and would silently
+    // CREATE a missing id; the OCC pre-`get` converts that into an
+    // explicit RecordNotFound (matching Works/Bundles).
+    let (_dir, store) = fresh_store().await;
+    let mut ghost = Plan::new("never persisted".to_string());
+    let expected = ghost.updated_at;
+    ghost.status = PlanStatus::Complete;
+    let err = store
+        .plans()
+        .update(ghost, expected)
+        .await
+        .expect_err("missing id must reject");
+    match err {
+        StoreError::RecordNotFound { collection, .. } => assert_eq!(collection, "plans"),
+        other => panic!("expected RecordNotFound, got {other:?}"),
+    }
+    assert!(
+        store.plans().list().await.expect("list").is_empty(),
+        "no phantom create"
+    );
+}

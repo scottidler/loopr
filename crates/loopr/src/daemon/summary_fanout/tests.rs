@@ -143,7 +143,7 @@ async fn plan_update_writes_plan_summary_and_passes_children_through() {
     // Disambiguate: SummaryFanout impls all three sink traits, so a
     // bare `.update()` is ambiguous on the call site. Use the trait-
     // qualified form to lock onto PlanUpdateSink.
-    PlanUpdateSink::update(&fanout, plan.clone(), vec![w1.clone(), w2.clone()])
+    PlanUpdateSink::update(&fanout, plan.clone(), vec![w1.clone(), w2.clone()], plan.updated_at)
         .await
         .expect("update");
 

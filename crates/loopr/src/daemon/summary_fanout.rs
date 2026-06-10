@@ -145,10 +145,16 @@ impl<S> PlanUpdateSink for SummaryFanout<S>
 where
     S: PlanUpdateSink,
 {
-    async fn update(&self, plan: Plan, children: Vec<Work>) -> Result<(), PlanUpdateError> {
-        let plan_for_summary = plan.clone();
+    async fn update(
+        &self,
+        mut plan: Plan,
+        children: Vec<Work>,
+        expected_updated_at: i64,
+    ) -> Result<i64, PlanUpdateError> {
         let children_for_summary = children.clone();
-        self.inner.update(plan, children).await?;
+        let persisted = self.inner.update(plan.clone(), children, expected_updated_at).await?;
+        plan.updated_at = persisted;
+        let plan_for_summary = plan;
         if let Err(e) = summary::write_plan(&self.target, &plan_for_summary, &children_for_summary) {
             warn!(
                 plan_id = %plan_for_summary.id,
@@ -156,7 +162,7 @@ where
                 "summary::write_plan failed (non-fatal)"
             );
         }
-        Ok(())
+        Ok(persisted)
     }
 }
 

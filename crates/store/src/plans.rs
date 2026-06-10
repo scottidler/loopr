@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use taskstore_async::AsyncStore;
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use domain::{Plan, PlanId, Work};
@@ -9,11 +10,12 @@ use crate::error::StoreError;
 
 pub struct PlansStore<'a> {
     inner: &'a AsyncStore,
+    update_lock: &'a Mutex<()>,
 }
 
 impl<'a> PlansStore<'a> {
-    pub(crate) fn new(inner: &'a AsyncStore) -> Self {
-        Self { inner }
+    pub(crate) fn new(inner: &'a AsyncStore, update_lock: &'a Mutex<()>) -> Self {
+        Self { inner, update_lock }
     }
 
     /// Persist a new Plan. Errors with `AlreadyExists` if a plan with the
@@ -87,24 +89,57 @@ impl<'a> PlansStore<'a> {
         Ok(result)
     }
 
-    /// Persist a status / field change on an existing Plan. Delegates to
-    /// `AsyncStore::update`, which rewrites the JSONL line and refreshes the
-    /// SQLite cache row. Consumed by the Stage 8 wiring capstone's Integrator
-    /// spawn: after every child Work under a Plan is terminal with at least
-    /// one Done, the Reactor fires `Active -> Complete` via this method.
-    /// Mirrors `WorksStore::update` (blind-write, no OCC); Plans have no
-    /// concurrent-writer race in the single-daemon-per-target threat model.
+    /// Persist a status / field change on an existing Plan with
+    /// intra-daemon optimistic concurrency control.
+    ///
+    /// Sequence under the lock (mirrors `WorksStore::update` /
+    /// `BundlesStore::update`):
+    ///
+    /// 1. acquire `update_lock`,
+    /// 2. read the current Plan by id; missing id -> `RecordNotFound`
+    ///    (the underlying taskstore `update` is an upsert and would
+    ///    silently CREATE a missing id; this pre-`get` converts that into
+    ///    an explicit error, matching Works/Bundles),
+    /// 3. compare on-disk `updated_at` to `expected_updated_at`;
+    ///    mismatch -> `StoreError::Stale { expected, actual }`,
+    /// 4. floor `updated_at` strictly above the prior value and write,
+    /// 5. drop the lock; return the floored `updated_at`.
+    ///
+    /// Plans have three live concurrent writers (the Reactor's
+    /// `transition_and_persist_plan`, the Director's `Stalled` persist, the
+    /// IPC override handler). Without OCC an interleaving writes
+    /// FSM-invalid history (a terminal `Complete` overwritten by a late
+    /// `Stalled`). The returned floored `updated_at` lets a caller chaining
+    /// a second transition refresh its expected version.
     #[instrument(
         name = "plans.update",
         level = "debug",
         skip_all,
-        fields(record_kind = "plan", record_id = %plan.id, op = "update"),
+        fields(record_kind = "plan", record_id = %plan.id, status = ?plan.status, expected_updated_at, op = "update"),
         ret,
         err,
     )]
-    pub async fn update(&self, plan: Plan) -> Result<(), StoreError> {
+    pub async fn update(&self, mut plan: Plan, expected_updated_at: i64) -> Result<i64, StoreError> {
+        let _guard = self.update_lock.lock().await;
+        let id_str = plan.id.as_ref().to_string();
+        let current = self
+            .inner
+            .get::<Plan>(&id_str)
+            .await?
+            .ok_or(StoreError::RecordNotFound {
+                collection: "plans",
+                id: id_str,
+            })?;
+        if current.updated_at != expected_updated_at {
+            return Err(StoreError::Stale {
+                expected: expected_updated_at,
+                actual: current.updated_at,
+            });
+        }
+        let floored = std::cmp::max(domain::now_millis(), current.updated_at + 1);
+        plan.updated_at = floored;
         self.inner.update(plan).await?;
-        Ok(())
+        Ok(floored)
     }
 }
 
@@ -115,9 +150,13 @@ impl<'a> PlansStore<'a> {
 // the Plan and its child Works (`summary::write_plan(target, plan,
 // &children)`). Per design Alternatives §4 option (c-extended), the
 // caller fetches children before invoking `update`; the decorator
-// forwards both args into the renderer. Plan updates are not OCC-
-// tracked today (only Bundle is), so the trait surface omits
-// `expected_updated_at`.
+// forwards both args into the renderer.
+//
+// Phase 3 of the code-review remediation added OCC to Plans (three live
+// concurrent writers), so the trait now carries `expected_updated_at`
+// and surfaces `Stale` separately — mirroring `BundleUpdateSink` /
+// `WorkUpdateSink`. On success it returns the persisted floored
+// `updated_at`.
 // ---------------------------------------------------------------------------
 
 /// Minimal Plan-update interface for sink-generic transition helpers.
@@ -125,40 +164,50 @@ impl<'a> PlansStore<'a> {
 /// impl can render the Plan summary without the decorator gaining a
 /// concrete-store dependency. The real impl on `Store` ignores
 /// `children` for persistence (only `plan` is updated via
-/// `PlansStore::update`).
+/// `PlansStore::update`). Passes the OCC `expected_updated_at` snapshot
+/// the caller took before mutating its clone; returns the persisted
+/// floored `updated_at`.
 #[trait_variant::make(Send)]
 pub trait PlanUpdateSink: Send + Sync {
-    async fn update(&self, plan: Plan, children: Vec<Work>) -> Result<(), PlanUpdateError>;
+    async fn update(&self, plan: Plan, children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanUpdateError {
     #[error("plan update failed: {0}")]
     Update(String),
+    /// OCC version-check failure. Callers in a concurrent-writer path
+    /// (Reactor vs Director vs IPC override) should treat this as a
+    /// benign race (the Plan was already advanced by another writer) and
+    /// return without clobbering.
+    #[error("stale plan: expected updated_at={expected}, actual={actual}")]
+    Stale { expected: i64, actual: i64 },
 }
 
 /// Real `PlanUpdateSink` backed by `store::Store`. Delegates to
 /// `PlansStore::update`; `children` is unused at this layer (the
-/// decorator's render path uses it).
+/// decorator's render path uses it). `StoreError::Stale` is preserved as
+/// `PlanUpdateError::Stale` so downstream matching works.
 impl PlanUpdateSink for crate::Store {
-    async fn update(&self, plan: Plan, _children: Vec<Work>) -> Result<(), PlanUpdateError> {
-        self.plans()
-            .update(plan)
-            .await
-            .map_err(|e| PlanUpdateError::Update(e.to_string()))
+    async fn update(&self, plan: Plan, _children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError> {
+        match self.plans().update(plan, expected_updated_at).await {
+            Ok(ts) => Ok(ts),
+            Err(StoreError::Stale { expected, actual }) => Err(PlanUpdateError::Stale { expected, actual }),
+            Err(other) => Err(PlanUpdateError::Update(other.to_string())),
+        }
     }
 }
 
 /// Forwarding impl for any reference to a `PlanUpdateSink`.
 impl<P: PlanUpdateSink + ?Sized> PlanUpdateSink for &P {
-    async fn update(&self, plan: Plan, children: Vec<Work>) -> Result<(), PlanUpdateError> {
-        (*self).update(plan, children).await
+    async fn update(&self, plan: Plan, children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError> {
+        (*self).update(plan, children, expected_updated_at).await
     }
 }
 
 /// Forwarding impl for `Arc<P>`.
 impl<P: PlanUpdateSink + ?Sized> PlanUpdateSink for std::sync::Arc<P> {
-    async fn update(&self, plan: Plan, children: Vec<Work>) -> Result<(), PlanUpdateError> {
-        (**self).update(plan, children).await
+    async fn update(&self, plan: Plan, children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError> {
+        (**self).update(plan, children, expected_updated_at).await
     }
 }

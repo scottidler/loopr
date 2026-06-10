@@ -630,8 +630,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         match work.status {
             WorkStatus::InReview => {}
             WorkStatus::InProgress => {
+                // F8 (same class): route through the SummaryFanout sink
+                // like every other writer so the Work summary refreshes
+                // with the repair; the raw `&self.store` here skipped it.
                 if let Err(e) = transition_and_persist_work(
-                    &self.store,
+                    &*self.summary_fanout,
                     &mut work,
                     WorkStatus::InReview,
                     Role::Reactor,
@@ -891,7 +894,20 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 // Plan-level completion check: if every sibling Work is
                 // terminal with at least one Done, fire Plan:
                 // Active -> Complete. Best-effort; log + continue on Err.
-                let mut plan_mut = plan.clone();
+                //
+                // F1: re-fetch the Plan fresh immediately before the
+                // transition rather than reusing the snapshot loaded at
+                // the top of this method (minutes ago, before the
+                // integrate). A concurrent Director/IPC write since then
+                // would otherwise make the OCC `expected_updated_at`
+                // stale and reject the Complete transition spuriously.
+                let mut plan_mut = match self.store.plans().get(&plan.id).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!(error = %e, "plan re-fetch before completion check failed; skipping");
+                        return;
+                    }
+                };
                 if let Ok(siblings) = self.store.works().list_by_parent_id(&plan_mut.id).await {
                     let all_terminal = !siblings.is_empty() && siblings.iter().all(|w| w.status.is_terminal());
                     let any_done = siblings.iter().any(|w| w.status == WorkStatus::Done);
@@ -913,6 +929,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                             PlanStatus::Complete,
                             Role::Reactor,
                             extras,
+                            false,
                         )
                         .await
                         {
@@ -1274,13 +1291,20 @@ pub async fn transition_and_persist_plan<S>(
     target: PlanStatus,
     role: Role,
     extras: PlanSummaryExtras,
+    override_: bool,
 ) -> Result<(), String>
 where
     S: store::PlanUpdateSink,
 {
-    let result = plan
-        .transition(target, role)
-        .map_err(|e| format!("fsm transition rejected: {e}"))?;
+    // OCC snapshot BEFORE the FSM transition bumps `plan.updated_at`.
+    let expected_updated_at = plan.updated_at;
+    let result = if override_ {
+        plan.override_status(target, role)
+            .map_err(|e| format!("fsm override rejected: {e}"))?
+    } else {
+        plan.transition(target, role)
+            .map_err(|e| format!("fsm transition rejected: {e}"))?
+    };
     if result == domain::Transition::Unchanged {
         return Ok(());
     }
@@ -1308,9 +1332,11 @@ where
     let plan_id = plan.id.clone();
     let plan_status = plan.status;
 
-    sink.update(plan.clone(), children)
+    let persisted = sink
+        .update(plan.clone(), children, expected_updated_at)
         .await
         .map_err(|e| format!("plans().update: {e}"))?;
+    plan.updated_at = persisted;
 
     // Phase 8: per-Plan terminal summary. `ticks`, `bundles_accepted`,
     // `bundles_rejected` come from the daemon-side `extras`

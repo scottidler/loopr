@@ -422,7 +422,7 @@ impl DirectorStore for FakeStore {
         })
     }
 
-    async fn update_plan(&self, plan: Plan) -> Result<(), StoreError> {
+    async fn update_plan(&self, plan: Plan, _expected_updated_at: i64) -> Result<(), StoreError> {
         *self.plan.lock().unwrap() = Some(plan);
         Ok(())
     }

@@ -12,6 +12,15 @@ use std::path::Path;
 
 use serde_json::Value;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
+
+// Both scenarios install a thread-local `set_default` telemetry
+// subscriber via `init_for_test` and read back their own tempdir
+// `events.log`. Running them concurrently in one test binary races on
+// subscriber capture (events intermittently land in the wrong run-dir),
+// so serialize them. An async (tokio) Mutex is held across the tests'
+// `.await` points without the std-Mutex `await_holding_lock` hazard.
+static TELEMETRY_SERIAL: Mutex<()> = Mutex::const_new(());
 
 use domain::{AcceptanceCriteria, Plan, PlanStatus, Role, Work, WorkStatus};
 use loopr::daemon::context::{PlanSummaryExtras, transition_and_persist_plan, transition_and_persist_work};
@@ -37,6 +46,7 @@ fn find_event<'a>(events: &'a [Value], message: &str) -> Option<&'a Value> {
 
 #[tokio::test(flavor = "current_thread")]
 async fn work_terminal_summary_emits_on_done_transition() {
+    let _serial = TELEMETRY_SERIAL.lock().await;
     let log_dir = TempDir::new().unwrap();
     let target_dir = TempDir::new().unwrap();
 
@@ -90,6 +100,7 @@ async fn work_terminal_summary_emits_on_done_transition() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn plan_terminal_summary_emits_on_complete_transition() {
+    let _serial = TELEMETRY_SERIAL.lock().await;
     let log_dir = TempDir::new().unwrap();
     let target_dir = TempDir::new().unwrap();
 
@@ -135,6 +146,7 @@ async fn plan_terminal_summary_emits_on_complete_transition() {
             PlanStatus::Complete,
             Role::Reactor,
             PlanSummaryExtras::default(),
+            false,
         )
         .await
         .expect("plan transition ok");

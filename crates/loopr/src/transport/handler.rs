@@ -307,6 +307,7 @@ where
         domain::PlanStatus::Stalled,
         domain::Role::Reactor,
         crate::daemon::context::PlanSummaryExtras::default(),
+        false,
     )
     .await
     {
@@ -555,21 +556,35 @@ where
     };
     let prior_status = plan.status;
 
-    if let Err(e) = plan.override_status(target_status, domain::Role::Director) {
+    // F8: route the override through `transition_and_persist_plan` (the
+    // SummaryFanout sink) like every other Plan writer, instead of a raw
+    // `store.plans().update`. That gives OCC, the per-record summary
+    // fanout, and the terminal-state event — all of which the raw write
+    // bypassed. Children are fetched for the summary render (best-effort;
+    // an empty list only degrades the summary, never blocks the override).
+    let children = ctx.store.works().list_by_parent_id(&plan_id).await.unwrap_or_default();
+    if let Err(e) = crate::daemon::context::transition_and_persist_plan(
+        &*ctx.summary_fanout,
+        &mut plan,
+        children,
+        target_status,
+        domain::Role::Director,
+        crate::daemon::context::PlanSummaryExtras::default(),
+        true, // override
+    )
+    .await
+    {
         warn!(
             request_id = id,
             plan_id = %plan_id,
             from = %prior_status,
             to = %target_status,
             error = %e,
-            "plan.override: FSM rejected"
+            "plan.override: FSM/persist failed"
         );
-        return DaemonResponse::err(id, RpcError::InvalidRequest(format!("FSM override rejected: {e}")));
-    }
-
-    if let Err(e) = ctx.store.plans().update(plan.clone()).await {
-        warn!(request_id = id, error = %e, "plan.override: persist failed");
-        return DaemonResponse::err(id, map_store_error(e));
+        // FSM rejection and OCC `Stale` are both client-actionable
+        // (bad target, or a racing writer already moved the Plan).
+        return DaemonResponse::err(id, RpcError::InvalidRequest(format!("plan override failed: {e}")));
     }
 
     info!(
