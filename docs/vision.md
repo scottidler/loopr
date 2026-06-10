@@ -122,7 +122,7 @@ The subprocess and capability layer. Tools are agent-callable capabilities with 
 
 - `Tool` trait with typed `Input` / `Output` / `Error`.
 - Built-in tool impls (first-gate set: `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`); one per file under `src/tools/`.
-- Lane classification (`fn classify(tool_name) -> Lane`): `Local` (no-network, `bwrap --unshare-net`, 10 slots, 30s/60s), `Net` (network allowed, no sandbox, 5 slots, 60s/120s), `Heavy` (network allowed, 1-slot serial, 600s/1800s — for builds/tests/lints).
+- Lane classification (`fn classify(tool_name) -> Lane`): `Local` (no-network, `bwrap --unshare-net`, 10 slots, 30s/60s), `Net` (network allowed, `bwrap` filesystem-contained — Bash lives here, 5 slots, 60s/120s), `Heavy` (network allowed, unsandboxed, 1-slot serial, 600s/1800s — for builds/tests/lints).
 - `LaneRouter`: enforces per-lane concurrency via tokio semaphores.
 - bwrap sandbox integration + the `security.sandbox: required | preferred | off` posture logic.
 - Bash denylist (base + target extensions).
@@ -549,7 +549,7 @@ A three-value config knob controls how strict sandbox enforcement is. Default is
 
 | Value | Behavior | When to use |
 |---|---|---|
-| `required` (default) | `loopr init` fails cleanly if `bwrap` is absent, with install instructions. Every `Local`-lane tool runs under `bwrap --unshare-net`. | Dev laptops, desktops, any long-running environment. Matches the discipline that v4 intended but lost. |
+| `required` (default) | `loopr init` fails cleanly if `bwrap` is absent, with install instructions. Every `Local`-lane tool runs under `bwrap --unshare-net`; the `Net` lane (Bash) runs under `bwrap` with network but the same filesystem containment. | Dev laptops, desktops, any long-running environment. Matches the discipline that v4 intended but lost. |
 | `preferred` | If `bwrap` is present, use it (same behavior as `required`). If absent, emit a prominent `tracing::warn!` at startup and every Local-lane tool invocation; run the tool unsandboxed. Startup proceeds. | Corporate / shared hosts where installing bubblewrap is impossible. Known-unsafe but explicit. |
 | `off` | Skip sandbox entirely, even if `bwrap` is present. No warnings. | CI (GitHub Actions, GitLab CI, Docker-based runners) where the container itself is the isolation boundary. AutoResearch harness running in CI sets this. |
 
@@ -564,8 +564,10 @@ Each tool classifies into a lane. Lane determines sandbox posture, concurrency, 
 | Lane | Network | Sandbox | Slots | Default timeout | Max timeout | Use |
 |---|---|---|---|---|---|---|
 | `Local` | blocked | `bwrap --unshare-net` | 10 | 30s | 60s | filesystem tools (read, write, edit, list, tree, glob, grep, find) |
-| `Net` | allowed | none | 5 | 60s | 120s | network tools (fetch, search, shell) |
+| `Net` | allowed | `bwrap` (network allowed, filesystem-contained) | 5 | 60s | 120s | network tools (fetch, search, **Bash**) |
 | `Heavy` | allowed | none | 1 (serialized) | 600s | 1800s | builds, tests, lints (cargo test, otto ci, npm test, configured project tools) |
+
+The `Net` lane wraps in bwrap WITHOUT `--unshare-net` (network reachable) but WITH the same filesystem containment as `Local` (`--ro-bind / /`, `--bind <worktree>`, `--die-with-parent`). This is the amendment (a8) that made "the Bash tool is the largest blast radius; bwrap contains it" true: pre-amendment, bwrap wrapped only the `Local` lane and Bash (classified `Net`) ran unconfined. The denylist stays as defense-in-depth. `Heavy` (builds) stays unsandboxed because compilers write outside the worktree (toolchain caches, `/tmp` build dirs). Behavior-changing for targets whose build scripts assume an unconfined shell; the `security.sandbox` posture knob (`preferred`/`off`) is the escape hatch.
 
 Tool-to-lane classification is a straight string match on tool name. Unknown tools default to `Heavy` (conservative: slot-limit + long timeout).
 

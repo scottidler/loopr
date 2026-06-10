@@ -22,7 +22,14 @@ pub struct LanePolicy {
     pub max_slots: usize,
     pub default_timeout_secs: u64,
     pub max_timeout_secs: u64,
-    pub sandbox_net: bool,
+    /// Wrap this lane's subprocesses in bwrap for filesystem containment.
+    /// Replaces the old `sandbox_net` flag, which conflated "wrap" with
+    /// "unshare network" (Phase-5 finding 4).
+    pub sandbox: bool,
+    /// When sandboxed, allow network access inside the sandbox (omit
+    /// `--unshare-net`). Ignored when `sandbox` is false. `Local` blocks
+    /// network; `Net` (Bash) allows it but keeps filesystem containment.
+    pub network: bool,
 }
 
 impl LanePolicy {
@@ -32,7 +39,8 @@ impl LanePolicy {
             max_slots: 10,
             default_timeout_secs: 30,
             max_timeout_secs: 60,
-            sandbox_net: true,
+            sandbox: true,
+            network: false,
         }
     }
 
@@ -42,7 +50,12 @@ impl LanePolicy {
             max_slots: 5,
             default_timeout_secs: 60,
             max_timeout_secs: 120,
-            sandbox_net: false,
+            // Finding 4: Bash now runs filesystem-contained under bwrap WITH
+            // network. The vision's "bwrap contains the Bash blast radius"
+            // was previously false (bwrap wrapped only the Local lane); the
+            // denylist remains as defense-in-depth.
+            sandbox: true,
+            network: true,
         }
     }
 
@@ -52,7 +65,11 @@ impl LanePolicy {
             max_slots: 1,
             default_timeout_secs: 600,
             max_timeout_secs: 1800,
-            sandbox_net: false,
+            // Builds need an unconfined filesystem (writes to ~/.cargo,
+            // /tmp build dirs, toolchain caches outside the worktree), so
+            // Heavy stays unsandboxed.
+            sandbox: false,
+            network: true,
         }
     }
 

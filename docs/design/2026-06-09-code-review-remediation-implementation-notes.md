@@ -1017,3 +1017,46 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+### Commit B — Bash bwrap containment + lane shape (finding 4)
+
+#### Design decisions
+- **`LanePolicy.sandbox_net` split into `sandbox` + `network`.** The old
+  flag conflated "wrap in bwrap" with "unshare network." New shape:
+  `Local` (sandbox=true, network=false → `--unshare-net`), `Net`/Bash
+  (sandbox=true, network=true → bwrap WITHOUT `--unshare-net`, full
+  filesystem containment), `Heavy` (sandbox=false → unsandboxed, builds
+  write outside the worktree). The router wrap decision is now
+  `policy.sandbox && bwrap_functional && !Off`, passing `policy.network`
+  into `bwrap_command`.
+- **`bwrap_command(cmd, working_dir, network)`.** `network=false` adds
+  `--unshare-net`; `true` omits it. All other containment flags
+  (`--die-with-parent`, `--ro-bind / /`, `--dev`, `--proc`,
+  `--bind /tmp`, `--bind <cwd>`, `--chdir <cwd>`) are unconditional.
+- **`detect_bwrap_functional` now probes the full flag set.** Was
+  `--unshare-net --ro-bind / /` only; now mirrors `bwrap_command`'s mount
+  flags (`--dev`/`--proc`/`--bind`/`--chdir`) so a kernel that rejects
+  `--proc` surfaces at startup, not first tool call. Probes with
+  `--unshare-net` (the strictest, Local shape); the Net lane uses a strict
+  subset, so a probe pass guarantees both lanes wrap.
+- **Vision amended (finding 4's "amend the lane table").** The lane table,
+  the `classify` ABI bullet, and the `security.sandbox` posture row now
+  describe the `Net`-under-bwrap-with-network shape and call out the
+  behavior change + the `preferred`/`off` escape hatch. (The amendment-log
+  `a8` entry itself lands in Phase 10's doc-truth batch.)
+
+#### Deviations
+- None. (The doc left the exact `Net`-lane shape as a decision — "wrap Bash
+  in bwrap WITH network" — which is implemented verbatim.)
+
+#### Tradeoffs
+- Network-allowed (`Net`) is a strict subset of the Local restrictions, so
+  reusing the `--unshare-net` probe for detection is sound; a separate
+  network-allowed probe would add a second `bwrap` fork at startup for no
+  additional coverage.
+- Behavior-changing for target build scripts that assume an unconfined
+  shell (noted in the doc's Rollout). The escape hatch is the existing
+  `security.sandbox: preferred|off` knob, not a new flag.
+
+#### Open questions
+- None.

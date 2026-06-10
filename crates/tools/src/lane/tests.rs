@@ -23,7 +23,8 @@ fn lane_policy_local_numbers() {
     assert_eq!(p.max_slots, 10);
     assert_eq!(p.default_timeout_secs, 30);
     assert_eq!(p.max_timeout_secs, 60);
-    assert!(p.sandbox_net);
+    assert!(p.sandbox);
+    assert!(!p.network, "Local lane blocks network");
 }
 
 #[test]
@@ -33,7 +34,8 @@ fn lane_policy_net_numbers() {
     assert_eq!(p.max_slots, 5);
     assert_eq!(p.default_timeout_secs, 60);
     assert_eq!(p.max_timeout_secs, 120);
-    assert!(!p.sandbox_net);
+    assert!(p.sandbox, "Net (Bash) lane is filesystem-contained under bwrap");
+    assert!(p.network, "Net lane allows network inside the sandbox");
 }
 
 #[test]
@@ -43,7 +45,7 @@ fn lane_policy_heavy_numbers() {
     assert_eq!(p.max_slots, 1);
     assert_eq!(p.default_timeout_secs, 600);
     assert_eq!(p.max_timeout_secs, 1800);
-    assert!(!p.sandbox_net);
+    assert!(!p.sandbox, "Heavy lane (builds) runs unsandboxed");
 }
 
 #[test]

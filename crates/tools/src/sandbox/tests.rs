@@ -39,8 +39,9 @@ fn detect_bwrap_functional_does_not_panic() {
 
 #[test]
 fn bwrap_command_wraps_sh_command() {
+    // network=false (Local-lane shape): --unshare-net present.
     let inner = sh_command("echo hi", Path::new("/tmp"));
-    let wrapped = bwrap_command(inner, Path::new("/tmp"));
+    let wrapped = bwrap_command(inner, Path::new("/tmp"), false);
     let std_cmd = wrapped.as_std();
     assert_eq!(std_cmd.get_program(), "bwrap");
 
@@ -64,7 +65,7 @@ fn bwrap_command_preserves_custom_program() {
     let mut inner = tokio::process::Command::new("grep");
     inner.arg("-rn").arg("pattern").arg("/tmp");
     inner.current_dir("/tmp");
-    let wrapped = bwrap_command(inner, Path::new("/tmp"));
+    let wrapped = bwrap_command(inner, Path::new("/tmp"), false);
     let args: Vec<String> = wrapped
         .as_std()
         .get_args()
@@ -81,7 +82,7 @@ fn bwrap_command_preserves_custom_program() {
 fn bwrap_command_uses_inner_cwd_when_set() {
     let mut inner = tokio::process::Command::new("pwd");
     inner.current_dir("/tmp/foo");
-    let wrapped = bwrap_command(inner, Path::new("/other"));
+    let wrapped = bwrap_command(inner, Path::new("/other"), false);
     let args: Vec<String> = wrapped
         .as_std()
         .get_args()
@@ -89,4 +90,20 @@ fn bwrap_command_uses_inner_cwd_when_set() {
         .collect();
     let chdir_idx = args.iter().position(|a| a == "--chdir").unwrap();
     assert_eq!(args[chdir_idx + 1], "/tmp/foo");
+}
+
+#[test]
+fn bwrap_command_network_omits_unshare_net() {
+    // network=true (Net/Bash-lane shape): --unshare-net absent, but the
+    // filesystem-containment flags still present.
+    let inner = sh_command("curl https://example.com", Path::new("/tmp"));
+    let wrapped = bwrap_command(inner, Path::new("/tmp"), true);
+    let args: Vec<String> = wrapped
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(!args.contains(&"--unshare-net".into()), "network lane must keep net: {args:?}");
+    assert!(args.contains(&"--die-with-parent".into()), "args: {args:?}");
+    assert!(args.contains(&"--ro-bind".into()), "filesystem containment retained: {args:?}");
 }

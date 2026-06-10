@@ -151,11 +151,11 @@ impl LaneRouter {
             .await
             .map_err(|_| ToolError::LaneClosed(lane))?;
 
-        let wrap = policy.sandbox_net && self.bwrap_functional && !matches!(self.sandbox, SandboxMode::Off);
+        let wrap = policy.sandbox && self.bwrap_functional && !matches!(self.sandbox, SandboxMode::Off);
 
         let (mut final_cmd, kill_strategy) = if wrap {
-            debug!("wrapping command with bwrap");
-            (bwrap_command(cmd, working_dir), KillStrategy::BwrapChild)
+            debug!(network = policy.network, "wrapping command with bwrap");
+            (bwrap_command(cmd, working_dir, policy.network), KillStrategy::BwrapChild)
         } else {
             (cmd, KillStrategy::Pgid)
         };
