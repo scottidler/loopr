@@ -112,7 +112,9 @@ async fn run_tool_happy_path_returns_tool_output() {
         input: json!({"command": "echo hi"}),
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::ToolOutput(s) => assert_eq!(s, "hi from fake"),
         other => panic!("expected ToolOutput, got {other:?}"),
@@ -131,7 +133,9 @@ async fn run_tool_correctable_error_returns_error_variant() {
         input: json!({}),
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Error(msg) => assert!(msg.contains("synthetic tool failure"), "got: {msg}"),
         other => panic!("expected Error variant, got {other:?}"),
@@ -147,7 +151,9 @@ async fn commit_changes_on_clean_tree_returns_nothing_to_commit() {
     };
     let action = AgentAction::CommitChanges { message: "noop".into() };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     assert!(
         matches!(result, ActionResult::NothingToCommit { .. }),
         "expected NothingToCommit, got {result:?}"
@@ -171,7 +177,9 @@ async fn commit_changes_with_empty_scope_stages_new_files() {
         message: "add new.txt".into(),
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Committed { sha, dropped } => {
             assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
@@ -200,7 +208,9 @@ async fn propose_bundle_captures_head_and_loc_changed() {
         claims: vec!["changed readme".into()],
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::BundleCreated { bundle, dropped } => {
             assert!(dropped.is_empty(), "no scope set, no drops expected: {dropped:?}");
@@ -230,7 +240,9 @@ async fn propose_bundle_with_no_commits_errors() {
     };
     let action = AgentAction::ProposeBundle { claims: vec![] };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Error(msg) => {
             assert!(msg.contains("no commits to propose"), "got: {msg}");
@@ -290,7 +302,11 @@ async fn done_bundle_carries_scope_and_message_evidence() {
         .unwrap();
     match result {
         ActionResult::Done(bundle) => {
-            assert_eq!(bundle.paths, vec!["src/lib.rs".to_string()], "noop bundle carries work scope");
+            assert_eq!(
+                bundle.paths,
+                vec!["src/lib.rs".to_string()],
+                "noop bundle carries work scope"
+            );
             assert_eq!(bundle.claims, vec!["no code needed; spec is doc-only".to_string()]);
             assert_eq!(bundle.noop_reason.as_deref(), Some("no code needed; spec is doc-only"));
         }
@@ -309,7 +325,9 @@ async fn done_action_constructs_noop_bundle() {
         message: "no code needed".into(),
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Done(bundle) => {
             assert_eq!(bundle.noop_reason, Some("no code needed".to_string()));
@@ -335,7 +353,9 @@ async fn need_help_returns_reason_after_partial_commit() {
         reason: "don't understand".into(),
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::NeedHelp(reason) => assert_eq!(reason, "don't understand"),
         other => panic!("expected NeedHelp, got {other:?}"),
@@ -356,7 +376,9 @@ async fn need_help_on_clean_tree_does_not_commit() {
     };
     let action = AgentAction::NeedHelp { reason: "clean".into() };
     let work = test_work(vec![]);
-    let _ = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let _ = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     let after = run_capture(wt_path, &["rev-parse", "HEAD"]);
     assert_eq!(before, after, "clean tree must not produce a commit");
 }
@@ -381,7 +403,9 @@ async fn commit_changes_with_nonempty_scope_drops_out_of_scope_files() {
         message: "scoped commit".into(),
     };
     let work = test_work(vec!["main.py".to_string()]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Committed { sha, dropped } => {
             assert_eq!(sha.len(), 40);
@@ -411,7 +435,9 @@ async fn commit_changes_with_empty_scope_still_drops_loopr_artifacts() {
         message: "scoped commit".into(),
     };
     let work = test_work(vec![]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Committed { dropped, .. } => {
             assert_eq!(dropped, vec![".loopr/runs/r-1/log".to_string()]);
@@ -441,7 +467,9 @@ async fn commit_changes_does_not_commit_previously_staged_out_of_scope_file() {
         message: "scoped commit".into(),
     };
     let work = test_work(vec!["main.py".to_string()]);
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Committed { dropped, .. } => {
             // database.py was pre-staged so porcelain reports it; partition
@@ -480,12 +508,16 @@ async fn propose_bundle_paths_reflect_full_branch_diff() {
     let action1 = AgentAction::CommitChanges {
         message: "iter 1".into(),
     };
-    let _ = dispatch_action(action1, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let _ = dispatch_action(action1, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
 
     // Iteration 2: write test_api.py, then propose_bundle.
     std::fs::write(wt_path.join("test_api.py"), "assert True\n").unwrap();
     let action2 = AgentAction::ProposeBundle { claims: vec![] };
-    let result = dispatch_action(action2, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action2, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::BundleCreated { bundle, .. } => {
             let mut paths = bundle.paths.clone();
@@ -519,7 +551,9 @@ async fn commit_changes_enumerates_files_in_untracked_dir() {
     let action = AgentAction::CommitChanges {
         message: "untracked dir".into(),
     };
-    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test()).await.unwrap();
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
     match result {
         ActionResult::Committed { dropped, .. } => {
             assert!(dropped.is_empty(), "no drops expected: {dropped:?}");

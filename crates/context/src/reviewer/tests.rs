@@ -136,7 +136,10 @@ fn noop_reason_rendered_for_noop_bundle() {
         .unwrap();
     let user = out.first_user_text().unwrap();
     assert!(user.contains("### Noop Justification"), "got: {user}");
-    assert!(user.contains("no code needed; the spec is documentation-only"), "got: {user}");
+    assert!(
+        user.contains("no code needed; the spec is documentation-only"),
+        "got: {user}"
+    );
 }
 
 #[test]

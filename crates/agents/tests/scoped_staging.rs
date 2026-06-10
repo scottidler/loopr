@@ -68,7 +68,9 @@ async fn scoped_staging_end_to_end_drops_out_of_scope_and_populates_bundle_paths
     let action1 = AgentAction::CommitChanges {
         message: "implement feature".into(),
     };
-    let result1 = dispatch_action(action1, &work, &wt, &NoopTools, &CommitContext::test()).await.unwrap();
+    let result1 = dispatch_action(action1, &work, &wt, &NoopTools, &CommitContext::test())
+        .await
+        .unwrap();
     match result1 {
         ActionResult::Committed { sha, dropped } => {
             assert_eq!(sha.len(), 40);
@@ -87,7 +89,9 @@ async fn scoped_staging_end_to_end_drops_out_of_scope_and_populates_bundle_paths
     let action2 = AgentAction::ProposeBundle {
         claims: vec!["did the work".into()],
     };
-    let result2 = dispatch_action(action2, &work, &wt, &NoopTools, &CommitContext::test()).await.unwrap();
+    let result2 = dispatch_action(action2, &work, &wt, &NoopTools, &CommitContext::test())
+        .await
+        .unwrap();
     match result2 {
         ActionResult::BundleCreated { bundle, dropped } => {
             assert_eq!(dropped, vec!["database.py".to_string()]);

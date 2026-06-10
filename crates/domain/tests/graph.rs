@@ -142,7 +142,11 @@ fn duplicate_dep_edge_is_deduped() {
         work(&a, vec![], WorkStatus::Done),
         work(&b, vec![a.clone(), a.clone()], WorkStatus::Pending),
     ]);
-    assert_eq!(graph.dependents_of(&a), std::slice::from_ref(&b), "reverse edge deduped");
+    assert_eq!(
+        graph.dependents_of(&a),
+        std::slice::from_ref(&b),
+        "reverse edge deduped"
+    );
     // The duplicate edge must not be mistaken for a cycle.
     WorkGraph::from_edges([(a.clone(), vec![]), (b.clone(), vec![a.clone(), a.clone()])])
         .expect("duplicate dep edge is not a cycle");

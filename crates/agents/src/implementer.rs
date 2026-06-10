@@ -622,18 +622,13 @@ where
     );
     bundle.force_proposed = true;
     bundle.head_commit = head_after.or(head_before);
-    bundle.base_commit = if worktree.sha().is_empty() {
-        None
-    } else {
-        Some(worktree.sha().to_string())
-    };
+    bundle.base_commit = if worktree.sha().is_empty() { None } else { Some(worktree.sha().to_string()) };
     bundle.paths = branch_paths;
     bundle.loc_changed = loc_changed;
     let id = deps.bundles.persist(bundle.clone()).await?;
     bundle.id = id;
     Ok(bundle)
 }
-
 
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {

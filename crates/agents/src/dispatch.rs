@@ -177,8 +177,11 @@ pub async fn dispatch_action<T: ToolExecutor>(
             // evidence to judge "no code needed". Carry the Work's scope
             // as `paths` (the files the reviewer reads) and the operator
             // message as both `noop_reason` and a claim.
-            let mut bundle =
-                Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), vec![message.clone()]);
+            let mut bundle = Bundle::new(
+                worktree.work_id().clone(),
+                worktree.branch().to_string(),
+                vec![message.clone()],
+            );
             bundle.paths = work.files.clone();
             bundle.noop_reason = Some(message);
             Ok(ActionResult::Done(bundle))
@@ -246,7 +249,12 @@ async fn commit_changes(
     let mut add_args: Vec<&str> = vec!["add", "--"];
     add_args.extend(in_scope.iter().map(String::as_str));
     run_git(path, &add_args).await?;
-    let mut commit_args: Vec<String> = vec!["commit".into(), "--only".into(), "--message".into(), message.to_string()];
+    let mut commit_args: Vec<String> = vec![
+        "commit".into(),
+        "--only".into(),
+        "--message".into(),
+        message.to_string(),
+    ];
     commit_args.extend(commit_ctx.commit_args());
     commit_args.push("--".into());
     commit_args.extend(in_scope.iter().cloned());
@@ -434,11 +442,7 @@ async fn propose_bundle(
     // Finding 4: persist the base sha so the reviewer diffs
     // `base_commit..head_commit` across ALL the implementer's commits,
     // not just the final one. Empty base (test construction) stays None.
-    bundle.base_commit = if worktree.sha().is_empty() {
-        None
-    } else {
-        Some(worktree.sha().to_string())
-    };
+    bundle.base_commit = if worktree.sha().is_empty() { None } else { Some(worktree.sha().to_string()) };
     bundle.loc_changed = loc_changed;
     bundle.paths = branch_paths.clone();
 

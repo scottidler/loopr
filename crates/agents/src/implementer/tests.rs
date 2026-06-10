@@ -212,7 +212,11 @@ async fn force_propose_fires_at_iteration_cap() {
     // Finding 3: a force-proposed bundle must populate paths (the bundle
     // class most deserving scrutiny) so the reviewer's diff filter and
     // the integrator's collision detector see the change.
-    assert_eq!(bundle.paths, vec!["README.md".to_string()], "force-propose paths from branch diff");
+    assert_eq!(
+        bundle.paths,
+        vec!["README.md".to_string()],
+        "force-propose paths from branch diff"
+    );
     // Finding 4: base sha persisted for the reviewer's range diff.
     assert_eq!(bundle.base_commit.as_deref(), Some(base.as_str()));
     assert_eq!(deps.bundles.persisted.lock().unwrap().len(), 1);
