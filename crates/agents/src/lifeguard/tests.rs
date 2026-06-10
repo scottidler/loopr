@@ -42,6 +42,42 @@ fn different_actions_do_not_escalate() {
 }
 
 #[test]
+fn interleaved_repeats_do_not_escalate_consecutive_only() {
+    // A,B,A,B,A: the same action recurs 3 times TOTAL but never 3 times
+    // in a row. Cumulative-per-hash counting (the bug) would escalate on
+    // the 5th call; consecutive-run semantics must NOT — a legitimately
+    // repeated `cargo test` between distinct edits is healthy.
+    let mut lg = Lifeguard::new(3, 5);
+    let a = bash_action("cargo test");
+    let b = bash_action("write src/foo.rs");
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(matches!(lg.check_action(&b), Decision::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(matches!(lg.check_action(&b), Decision::Continue));
+    assert!(
+        matches!(lg.check_action(&a), Decision::Continue),
+        "A,B,A,B,A must not escalate: no 3 consecutive identical actions"
+    );
+}
+
+#[test]
+fn consecutive_run_resets_after_interruption() {
+    // A,A,B,A,A: the run of A is broken by B, so the trailing A,A is only
+    // length 2 — below max_repeat=3. No escalation.
+    let mut lg = Lifeguard::new(3, 5);
+    let a = bash_action("ls");
+    let b = bash_action("pwd");
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(matches!(lg.check_action(&b), Decision::Continue));
+    assert!(matches!(lg.check_action(&a), Decision::Continue));
+    assert!(
+        matches!(lg.check_action(&a), Decision::Continue),
+        "the run reset at B, so trailing A,A is below threshold"
+    );
+}
+
+#[test]
 fn parse_failure_escalates_at_max() {
     let mut lg = Lifeguard::new(3, 5);
     assert!(matches!(lg.record_parse_failure(), Decision::Continue));

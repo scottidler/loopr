@@ -23,7 +23,7 @@
 //! across LLM key-emission order. Canonicalization removes that
 //! dependency on the feature flag.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::hash::Hasher;
 
 use serde_json::Value;
@@ -38,8 +38,16 @@ pub enum Decision {
 }
 
 pub struct Lifeguard {
-    action_counts: HashMap<u64, u32>,
+    /// Hash of the immediately preceding action. `None` before the first
+    /// `check_action`. Load-bearing: the consecutive-streak detector
+    /// compares each new action against it.
     last_hash: Option<u64>,
+    /// Length of the current run of consecutive-identical actions. Reset
+    /// to 1 whenever a different action arrives. This is CONSECUTIVE, not
+    /// cumulative-per-hash: a legitimately repeated `cargo test` after
+    /// distinct edits (A, B, A, B, A) never reaches the threshold because
+    /// each repeat is interrupted.
+    consecutive_count: u32,
     consecutive_parse_failures: u32,
     max_repeat: u32,
     max_parse_failures: u32,
@@ -48,18 +56,18 @@ pub struct Lifeguard {
 impl Lifeguard {
     pub fn new(max_repeat: u32, max_parse_failures: u32) -> Self {
         Self {
-            action_counts: HashMap::new(),
             last_hash: None,
+            consecutive_count: 0,
             consecutive_parse_failures: 0,
             max_repeat,
             max_parse_failures,
         }
     }
 
-    /// Hash the action structurally and record the occurrence. If
-    /// this is the same hash as the last recorded action and the
-    /// count has hit `max_repeat`, return Escalate. Otherwise
-    /// Continue.
+    /// Hash the action structurally and update the consecutive-run
+    /// counter. If this action equals the immediately preceding one and
+    /// the run length has reached `max_repeat`, return Escalate. A
+    /// different action resets the run to 1. Otherwise Continue.
     #[instrument(
         level = "debug",
         skip_all,
@@ -75,11 +83,16 @@ impl Lifeguard {
         let span = tracing::Span::current();
         let hash = canonical_hash(action);
         span.record("action_hash", hash);
-        let count = self.action_counts.entry(hash).or_insert(0);
-        *count += 1;
-        let my_count = *count;
-        span.record("action_count", my_count);
+        // Consecutive-run semantics keyed off `last_hash`: same as the
+        // previous action -> extend the run; different -> reset to 1.
+        let my_count = if self.last_hash == Some(hash) {
+            self.consecutive_count + 1
+        } else {
+            1
+        };
+        self.consecutive_count = my_count;
         self.last_hash = Some(hash);
+        span.record("action_count", my_count);
         debug!(
             action_kind = action.kind(),
             action_hash = format!("{hash:#018x}"),

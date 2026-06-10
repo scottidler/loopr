@@ -501,6 +501,24 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         );
         let tool_schemas = ::tools::all_schemas();
 
+        // F8/bullet 8: thread the most-recent Rejected Bundle's reviewer
+        // verification into the retry Implementer's StateSummary so it
+        // learns WHY the prior bundle was rejected. Pre-fix this was
+        // hardcoded `StateSummary::default()`, severing the doom-loop
+        // feedback channel that exists end-to-end except this one wire.
+        let rejected_bundle_reason = match self.store.bundles().list_by_work_id(&work.id).await {
+            Ok(bundles) => bundles
+                .into_iter()
+                .filter(|b| b.status == BundleStatus::Rejected)
+                .max_by_key(|b| b.updated_at)
+                .map(|b| b.verification)
+                .filter(|v| !v.trim().is_empty()),
+            Err(e) => {
+                warn!(error = %e, work_id = %work.id, "rejected-bundle feedback lookup failed; retrying without it");
+                None
+            }
+        };
+
         let deps = Deps {
             llm: Arc::clone(&self.llm),
             tools,
@@ -508,7 +526,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             context: Arc::clone(&self.context_builder),
             config: self.implementer_config.clone(),
             tool_schemas,
-            state: StateSummary::default(),
+            state: StateSummary { rejected_bundle_reason },
             run_id: Some(self.process_id.to_string()),
         };
 

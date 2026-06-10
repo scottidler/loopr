@@ -821,3 +821,37 @@ Landing across commits (mirrors Phases 1-3):
   rename suggested by bullet 16 ripples across `ipc` + the loopr handler +
   tests for a wire-serialized field; deferred as disproportionate to a
   cosmetic nit. The field's meaning is unchanged.
+
+### Commit D — lifeguard consecutive streak + rejected-bundle feedback
+
+#### Design decisions
+- **Lifeguard consecutive-run semantics (bullet 10).** Replaced the
+  cumulative-per-hash `action_counts: HashMap<u64, u32>` with a
+  `consecutive_count: u32` keyed off the now-load-bearing `last_hash`:
+  same-as-previous extends the run, a different action resets it to 1.
+  A,B,A,B,A (3 total A's, never 3 in a row) no longer escalates; the
+  doc-promised "consecutive" semantics now hold. New tests:
+  `interleaved_repeats_do_not_escalate_consecutive_only` and
+  `consecutive_run_resets_after_interruption`. All existing lifeguard
+  tests (a,a,a escalates; key-reorder dedup) remain green — they were
+  already consecutive-shaped.
+- **Rejected-bundle feedback wired (bullet 8).** `spawn_implementer_for_work`
+  loads the work's most-recent `Rejected` Bundle (max by `updated_at`) and
+  threads its non-empty `verification` into
+  `StateSummary { rejected_bundle_reason }`, replacing the hardcoded
+  `StateSummary::default()`. The retry Implementer now sees WHY the prior
+  bundle was rejected — the doom-loop feedback channel that existed
+  end-to-end except this one wire. Lookup failure is best-effort (warn +
+  retry without feedback).
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- Rejected-bundle lookup is a per-spawn `list_by_work_id` + in-memory
+  filter/max rather than an indexed "latest rejected" query. Bundle
+  cardinality per Work is tiny (a handful of attempts), so the scan is
+  cheaper than adding a new indexed accessor.
+
+#### Open questions
+- None.
