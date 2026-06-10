@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tracing::{debug, info, instrument, warn};
 
 use agents::{DirectorDeps, DirectorError, run_director};
+use futures_util::FutureExt;
 use ipc::{
     BundleSummary, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DaemonRequest, DaemonResponse, DirectorChatParams,
     DirectorChatResult, DirectorStatusParams, DirectorStatusResult, DirectorStatusSnapshot, HandshakeParams,
@@ -843,14 +844,25 @@ where
     let director_statuses = Arc::clone(&ctx.director_statuses);
     let plan_id_for_cleanup = plan_id.clone();
     directors.spawn(async move {
-        match run_director(&plan_id, &deps).await {
-            Ok(()) => info!(plan_id = %plan_id_for_log, "director task exited Ok"),
-            Err(DirectorError::NeedHelp(reason)) => warn!(
+        // Panic posture: `catch_unwind` so a panic inside `run_director`
+        // is logged and the per-Plan Notify + status-snapshot cleanup
+        // below still runs (the JoinSet would otherwise swallow the
+        // panic and leak both sidecar entries).
+        let result = std::panic::AssertUnwindSafe(run_director(&plan_id, &deps))
+            .catch_unwind()
+            .await;
+        match result {
+            Ok(Ok(())) => info!(plan_id = %plan_id_for_log, "director task exited Ok"),
+            Ok(Err(DirectorError::NeedHelp(reason))) => warn!(
                 plan_id = %plan_id_for_log,
                 reason = %reason,
                 "director exited with NeedHelp"
             ),
-            Err(e) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
+            Ok(Err(e)) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
+            Err(panic) => {
+                let msg = crate::daemon::context::panic_message(&*panic);
+                tracing::error!(plan_id = %plan_id_for_log, panic = %msg, "director task panicked");
+            }
         }
         // Phase 9: drop the per-Plan operator Notify on Director task
         // exit. See startup_reconcile_directors for the rationale.

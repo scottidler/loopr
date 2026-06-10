@@ -84,3 +84,24 @@ fn scoped_id_guards_keep_independent_keys() {
     assert!(!snap.contains_key(&k1));
     assert!(!snap.contains_key(&k3));
 }
+
+#[test]
+fn panic_message_extracts_str_payload() {
+    // `panic!("...")` boxes a &str payload.
+    let payload = std::panic::catch_unwind(|| panic!("implementer boom")).expect_err("should panic");
+    assert_eq!(super::panic_message(&*payload), "implementer boom");
+}
+
+#[test]
+fn panic_message_extracts_string_payload() {
+    let s = "dynamic boom".to_string();
+    let payload = std::panic::catch_unwind(move || panic!("{s}")).expect_err("should panic");
+    assert_eq!(super::panic_message(&*payload), "dynamic boom");
+}
+
+#[test]
+fn panic_message_handles_opaque_payload() {
+    // `panic_any` with a non-string payload is opaque.
+    let payload = std::panic::catch_unwind(|| std::panic::panic_any(42u32)).expect_err("should panic");
+    assert_eq!(super::panic_message(&*payload), "<non-string panic payload>");
+}

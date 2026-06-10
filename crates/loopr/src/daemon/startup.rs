@@ -35,7 +35,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agents::{DirectorDeps, DirectorError, run_director};
-use domain::{BundleStatus, PlanStatus, WorkStatus};
+use domain::{BundleStatus, FailureReason, PlanStatus, WorkStatus};
+use futures_util::FutureExt;
 use llm::LlmClient;
 use store::Store;
 
@@ -198,7 +199,7 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
         };
 
         match store.works().get(&work_id).await {
-            Ok(work) => {
+            Ok(mut work) => {
                 if work.status.is_terminal() {
                     worktree::cleanup_at(target, &info.path)
                         .map_err(|e| LooprError::DaemonStartup(format!("cleanup_at: {e}")))?;
@@ -215,12 +216,31 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
                     );
                     report.cleaned += 1;
                 } else {
+                    // A non-terminal Work with a worktree on disk at boot
+                    // means a prior daemon crashed mid-flight. Record the
+                    // typed `CrashInterrupted` reason (the placeholder this
+                    // log line described for stages) so the carry-forward is
+                    // machine-visible, not only a log entry. Idempotent: skip
+                    // the write if already stamped so repeated boots don't
+                    // churn `updated_at`. Best-effort — a failed write logs
+                    // and still carries the worktree forward.
+                    if work.failure_reason != Some(FailureReason::CrashInterrupted) {
+                        let expected = work.updated_at;
+                        work.failure_reason = Some(FailureReason::CrashInterrupted);
+                        if let Err(e) = store.works().update(work.clone(), expected).await {
+                            tracing::warn!(
+                                work_id = %work_id,
+                                error = %e,
+                                "reconcile: failed to stamp CrashInterrupted; carrying forward anyway"
+                            );
+                        }
+                    }
                     tracing::info!(
                         work_id = %work_id,
                         seq,
                         status = %work.status,
                         path = %info.path.display(),
-                        "reconcile: carrying forward non-terminal worktree (Stage 7 will mark crash-interrupted when that field exists)"
+                        "reconcile: carrying forward non-terminal worktree (failure_reason=crash-interrupted)"
                     );
                     report.carried_forward += 1;
                 }
@@ -398,14 +418,24 @@ where
         let director_statuses = Arc::clone(&ctx.director_statuses);
         let plan_id_for_cleanup = plan_id.clone();
         directors.spawn(async move {
-            match run_director(&plan_id, &deps).await {
-                Ok(()) => tracing::info!(plan_id = %plan_id_for_log, "director task exited Ok"),
-                Err(DirectorError::NeedHelp(reason)) => tracing::warn!(
+            // Panic posture: `catch_unwind` so a panic inside
+            // `run_director` is logged and the per-Plan Notify +
+            // status-snapshot cleanup below still runs.
+            let result = std::panic::AssertUnwindSafe(run_director(&plan_id, &deps))
+                .catch_unwind()
+                .await;
+            match result {
+                Ok(Ok(())) => tracing::info!(plan_id = %plan_id_for_log, "director task exited Ok"),
+                Ok(Err(DirectorError::NeedHelp(reason))) => tracing::warn!(
                     plan_id = %plan_id_for_log,
                     reason = %reason,
                     "director exited with NeedHelp"
                 ),
-                Err(e) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
+                Ok(Err(e)) => tracing::error!(plan_id = %plan_id_for_log, error = %e, "director exited with error"),
+                Err(panic) => {
+                    let msg = crate::daemon::context::panic_message(&*panic);
+                    tracing::error!(plan_id = %plan_id_for_log, panic = %msg, "director task panicked");
+                }
             }
             // Phase 9: drop the per-Plan operator Notify on Director
             // task exit. Director exits on terminal Plan transitions

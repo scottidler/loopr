@@ -655,3 +655,75 @@ Landing across commits (mirrors Phases 1-3):
   failure arms) land in Commits B-F; Commit A is the type + field only,
   hence the `dead_code`-free export (the field is constructed by
   `Work::new`/`Bundle::new` as `None`).
+
+### Commit B — loopr panic posture + session_failure_count
+
+#### Design decisions
+- **`catch_unwind` at all three role invocation sites.** `run_implementer`
+  (context.rs spawn_implementer_for_work), `run_reviewer`
+  (spawn_reviewer_for_bundle), and `run_director` (both spawn sites:
+  handler.rs `spawn_director_for_plan` and startup.rs
+  `startup_reconcile_directors`) are wrapped in
+  `std::panic::AssertUnwindSafe(fut).catch_unwind().await`. The match arms
+  gained an `Err(panic)` (panic) variant and the old `Err(..)` arms became
+  `Ok(Err(..))`. A pure `panic_message(&(dyn Any + Send)) -> String` helper
+  (pub(crate) in context.rs, downcasts `&str`/`String`, else opaque)
+  renders the payload; unit-tested in context/tests.rs.
+- **Implementer panic posture (the leak fix).** A panic used to abort the
+  whole `spawn_implementer_for_work` task BEFORE its worktree-cleanup tail
+  ran, leaking the worktree. Catching the panic records
+  `FailureReason::Panic` + `blocked_reason`, increments
+  `session_failure_count`, transitions the Work to `Blocked`, and falls
+  through to the SAME cleanup tail — so the worktree is reclaimed.
+- **`session_failure_count` is now live (bullet 9).** Incremented (saturating)
+  in all three implementer failure arms (panic / EscalationNeeded / other
+  error) before the Blocked persist. The doc's "fold bundle_rejections
+  into the existing attempt/rejection accounting" is satisfied by the
+  existing `attempt_count` (Layer-1 retry budget) + this now-live
+  `session_failure_count`; no separate `bundle_rejections` field is added
+  (it never existed and the two live counters cover the advertised nets).
+- **`failure_reason` populated on the non-panic failure arms too.** The
+  implementer/reviewer EscalationNeeded and generic-error arms set
+  `FailureReason::Other(detail)` so the typed discriminant is meaningful,
+  not only set on the Panic path. The reviewer panic arm records `Panic`
+  on the Work (the record that gets persisted Blocked); the Bundle is left
+  Triaged and superseded by the next recovery sweep's Work-Blocked entry
+  guard (Commit F).
+- **Director panic posture.** A `run_director` panic is logged at `error!`
+  with the payload; the per-Plan `Notify` + status-snapshot cleanup that
+  follows the match still runs (the JoinSet would otherwise swallow the
+  panic and leak both sidecar entries). The Plan is NOT force-Stalled from
+  the panic arm — see Open questions.
+- **`CrashInterrupted` reconcile (startup.rs).** The carry-forward branch
+  of `sweep_worktrees` (a non-terminal Work with a worktree on disk at boot
+  = a prior crash mid-flight) now stamps `FailureReason::CrashInterrupted`
+  on the Work via a best-effort OCC `update`, replacing the "Stage 7 will
+  mark crash-interrupted when that field exists" placeholder. Idempotent:
+  skipped when already stamped, so repeated boots don't churn `updated_at`.
+
+#### Deviations
+- The doc bullet says "wrap ... a panic persists FailureReason::Panic on
+  the Work/Bundle." For the Director there is no Work/Bundle (it supervises
+  a Plan, which has no `failure_reason` field), so the Director panic arm
+  logs + lets cleanup run rather than persisting a typed reason. This is the
+  honest mapping of the requirement onto the Director's record shape.
+
+#### Tradeoffs
+- `failure_reason` is set on failure but never CLEARED on a subsequent
+  successful transition (e.g. a CrashInterrupted Work that later reaches
+  InReview keeps the stale reason). Clearing would mean threading reason
+  resets through `transition_and_persist_work`; out of scope for Phase 4
+  and low-harm (the field is diagnostic, the live status is authoritative).
+
+#### Open questions
+- A panicked Director leaves its Plan `Active` with no supervisor until a
+  daemon restart's `startup_reconcile_directors` respawns it. Forcing the
+  Plan to `Stalled` from the panic arm (matching the NeedHelp posture)
+  would make the stall visible immediately, but the panic arm lacks a
+  summary-fanout handle there; deferred as a possible follow-up.
+- The 3 `failure_paths.rs` E2E tests still fail after Commit B (unchanged
+  from the pre-Phase-4 baseline): the root cause is an unscripted extra
+  implementer/reviewer `complete_free` call (a doom-loop symptom). Commit B
+  catches the resulting panic instead of letting the JoinSet swallow it,
+  but the EXTRA call itself is what the later Phase 4 brakes + Phase 7
+  target. Re-checked at phase end.

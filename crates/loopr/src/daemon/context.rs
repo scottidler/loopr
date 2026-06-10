@@ -25,8 +25,10 @@ use agents::{
 };
 use context::{InlineContextBuilder, StateSummary};
 use domain::{
-    Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkGraph, WorkId, WorkStatus,
+    Bundle, BundleId, BundleStatus, FailureReason, Plan, PlanId, PlanStatus, Role, Verdict, Work, WorkGraph, WorkId,
+    WorkStatus,
 };
+use futures_util::FutureExt;
 // Stage 8 used to consume `BundleUpdateError` here; Director Phase 3
 // shifts that match into the `WorkSpawner::accept_bundle` path which
 // matches `StoreError::Stale` directly. The import is kept available for
@@ -56,6 +58,21 @@ pub const INTEGRATOR_BACKOFF: &[Duration] = &[
 /// Capacity of the daemon's event broadcast channel. Stage 4 never sends
 /// on it; the capacity is future-proofing for Stage 7+. v4 value.
 pub const EVENTS_CAPACITY: usize = 64;
+
+/// Extract a human-readable message from a caught panic payload. The
+/// standard library boxes panic payloads as `&str` (the common
+/// `panic!("...")` / `unwrap` case) or `String`; anything else
+/// (`panic_any`) is opaque. Used by the daemon's `catch_unwind` panic
+/// posture to log + record what failed without re-panicking.
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
 
 /// Phase 2 sidecar-map presence guard. Inserts `key` into `map` on
 /// construction; removes on `Drop` so `panic!` or normal exit both clean
@@ -495,9 +512,33 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             run_id: Some(self.process_id.to_string()),
         };
 
-        let result = run_implementer(&work, &worktree, &deps).await;
+        // Panic posture (vision.md "Failure posture"). Wrap the
+        // implementer future in `catch_unwind` so a panic inside
+        // `run_implementer` does NOT abort this task before the
+        // worktree-cleanup tail below — a panicking implementer used to
+        // leak its worktree (the JoinSet swallowed the panic). On panic
+        // we record `FailureReason::Panic`, mark the Work Blocked, and
+        // fall through to the same cleanup tail as every other arm.
+        let result = std::panic::AssertUnwindSafe(run_implementer(&work, &worktree, &deps))
+            .catch_unwind()
+            .await;
         match result {
-            Ok(bundle) => {
+            Err(panic) => {
+                let msg = panic_message(&*panic);
+                error!(panic = %msg, "implementer panicked; marking Work Blocked (FailureReason::Panic)");
+                work.session_failure_count = work.session_failure_count.saturating_add(1);
+                work.failure_reason = Some(FailureReason::Panic);
+                work.blocked_reason = Some(format!("implementer panicked: {msg}"));
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Reactor,
+                    false,
+                )
+                .await;
+            }
+            Ok(Ok(bundle)) => {
                 // Phase 6: the canonical "implementer produced bundle" event
                 // is emitted from `agents::dispatch::propose_bundle` with
                 // the full paths/patch_id manifest. The daemon-context
@@ -530,8 +571,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     rts.spawn(reviewer_ctx.spawn_reviewer_for_bundle(bundle));
                 }
             }
-            Err(ImplementerError::EscalationNeeded(reason)) => {
+            Ok(Err(ImplementerError::EscalationNeeded(reason))) => {
                 warn!(%reason, "implementer escalated; marking Work Blocked");
+                work.session_failure_count = work.session_failure_count.saturating_add(1);
+                work.failure_reason = Some(FailureReason::Other(reason.clone()));
+                work.blocked_reason = Some(reason);
                 let _ = transition_and_persist_work(
                     &*self.summary_fanout,
                     &mut work,
@@ -541,8 +585,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 )
                 .await;
             }
-            Err(other) => {
-                error!(error = %other, "implementer error; marking Work Blocked");
+            Ok(Err(other)) => {
+                let detail = other.to_string();
+                error!(error = %detail, "implementer error; marking Work Blocked");
+                work.session_failure_count = work.session_failure_count.saturating_add(1);
+                work.failure_reason = Some(FailureReason::Other(detail.clone()));
+                work.blocked_reason = Some(detail);
                 let _ = transition_and_persist_work(
                     &*self.summary_fanout,
                     &mut work,
@@ -667,9 +715,34 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         };
 
         // Step 5: single LLM turn (plus bounded parse-retry inside run_reviewer).
-        let verdict = match run_reviewer(&bundle, &work, &deps).await {
-            Ok(v) => v,
-            Err(ReviewerError::EscalationNeeded(reason)) => {
+        // Panic posture: `catch_unwind` so a panic inside `run_reviewer`
+        // records `FailureReason::Panic`, Blocks the Work, and wakes the
+        // Director instead of silently killing this reviewer task (the
+        // JoinSet would otherwise swallow it). The Bundle stays Triaged
+        // and is superseded by the next recovery sweep's Work-Blocked
+        // entry guard.
+        let reviewer_result = std::panic::AssertUnwindSafe(run_reviewer(&bundle, &work, &deps))
+            .catch_unwind()
+            .await;
+        let verdict = match reviewer_result {
+            Err(panic) => {
+                let msg = panic_message(&*panic);
+                error!(panic = %msg, "reviewer panicked; marking Work Blocked (FailureReason::Panic)");
+                work.failure_reason = Some(FailureReason::Panic);
+                work.blocked_reason = Some(format!("reviewer panicked: {msg}"));
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Reactor,
+                    true,
+                )
+                .await;
+                self.wake_director(&work.parent_id).await;
+                return;
+            }
+            Ok(Ok(v)) => v,
+            Ok(Err(ReviewerError::EscalationNeeded(reason))) => {
                 warn!(%reason, "reviewer escalated; marking Work Blocked");
                 let _ = transition_and_persist_work(
                     &*self.summary_fanout,
@@ -688,12 +761,15 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             // Work Blocked). Drop the losing verdict silently and let the
             // winner's routing stand. Mirrors spawner.rs's accept_bundle
             // Stale handling.
-            Err(ReviewerError::Update(store::BundleUpdateError::Stale { .. })) => {
+            Ok(Err(ReviewerError::Update(store::BundleUpdateError::Stale { .. }))) => {
                 debug!("reviewer OCC Stale; another reviewer won, leaving Work untouched");
                 return;
             }
-            Err(other) => {
-                error!(error = %other, "reviewer error; marking Work Blocked");
+            Ok(Err(other)) => {
+                let detail = other.to_string();
+                error!(error = %detail, "reviewer error; marking Work Blocked");
+                work.failure_reason = Some(FailureReason::Other(detail.clone()));
+                work.blocked_reason = Some(detail);
                 let _ = transition_and_persist_work(
                     &*self.summary_fanout,
                     &mut work,
