@@ -453,14 +453,24 @@ fn transient_accept_errors_classified() {
 
     // Resource-pressure errnos are transient: the daemon must survive an
     // EMFILE burst from tool subprocesses rather than dying on accept.
-    for errno in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM, libc::ECONNABORTED, libc::EINTR] {
+    for errno in [
+        libc::EMFILE,
+        libc::ENFILE,
+        libc::ENOBUFS,
+        libc::ENOMEM,
+        libc::ECONNABORTED,
+        libc::EINTR,
+    ] {
         assert!(
             is_transient_accept_error(&Error::from_raw_os_error(errno)),
             "errno {errno} should be transient"
         );
     }
     // ErrorKind-classified variants too.
-    assert!(is_transient_accept_error(&Error::new(ErrorKind::ConnectionAborted, "aborted")));
+    assert!(is_transient_accept_error(&Error::new(
+        ErrorKind::ConnectionAborted,
+        "aborted"
+    )));
     assert!(is_transient_accept_error(&Error::new(ErrorKind::Interrupted, "intr")));
 
     // A genuinely broken listener (EINVAL / EBADF) is fatal and must

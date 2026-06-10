@@ -78,9 +78,17 @@ fn grows_list_on_already_initialized_target() {
     assert!(body.contains(".loopr/records/"), "list did not grow: {body}");
     assert!(body.contains(".loopr/costs.jsonl"));
     // The marker is not duplicated.
-    assert_eq!(body.matches(LOOPR_EXCLUDE_MARKER).count(), 1, "marker duplicated: {body}");
+    assert_eq!(
+        body.matches(LOOPR_EXCLUDE_MARKER).count(),
+        1,
+        "marker duplicated: {body}"
+    );
     // Pre-existing patterns are not re-appended.
-    assert_eq!(body.matches(".loopr/worktrees/").count(), 1, "worktrees re-appended: {body}");
+    assert_eq!(
+        body.matches(".loopr/worktrees/").count(),
+        1,
+        "worktrees re-appended: {body}"
+    );
 }
 
 #[test]

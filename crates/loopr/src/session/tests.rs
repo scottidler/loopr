@@ -157,9 +157,15 @@ fn readonly_returns_ephemeral_without_claiming_pointer() {
         let target = TempDir::new().unwrap();
         std::fs::create_dir_all(target.path().join(".loopr")).unwrap();
         let id = resolve_session_id_readonly(target.path(), None).unwrap();
-        assert!(!pointer_path(target.path()).exists(), "readonly must not claim the pointer");
+        assert!(
+            !pointer_path(target.path()).exists(),
+            "readonly must not claim the pointer"
+        );
         // The ephemeral session has no manifest, so it is invisible to list_all.
-        assert!(!session_manifest_exists(&id).unwrap(), "ephemeral session must have no manifest");
+        assert!(
+            !session_manifest_exists(&id).unwrap(),
+            "ephemeral session must have no manifest"
+        );
     });
 }
 

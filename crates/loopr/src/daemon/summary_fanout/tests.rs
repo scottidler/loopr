@@ -172,7 +172,10 @@ async fn blocked_work_emits_daemon_event_but_non_terminal_does_not() {
         .await
         .unwrap();
     work.updated_at = persisted;
-    assert!(rx.try_recv().is_err(), "Ready transition must not emit a lifecycle event");
+    assert!(
+        rx.try_recv().is_err(),
+        "Ready transition must not emit a lifecycle event"
+    );
 
     // A Blocked transition emits `work.blocked` carrying the ids.
     work.status = WorkStatus::Blocked;

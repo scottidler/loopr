@@ -172,10 +172,16 @@ fn hooks_step_installs_merge_driver_even_with_user_precommit_hook() {
     assert!(matches!(outcome, super::StepOutcome::Created { .. }), "got {outcome:?}");
 
     let content = std::fs::read_to_string(hooks.join("pre-commit")).unwrap();
-    assert!(content.contains(super::TASKSTORE_HOOK_MARKER), "marker missing: {content}");
+    assert!(
+        content.contains(super::TASKSTORE_HOOK_MARKER),
+        "marker missing: {content}"
+    );
     assert!(content.contains("echo husky"), "user content clobbered: {content}");
 
     // Second call now sees the marker -> Preserved.
     let outcome2 = rt.block_on(super::step_install_taskstore_hooks(td.path())).unwrap();
-    assert!(matches!(outcome2, super::StepOutcome::Preserved { .. }), "got {outcome2:?}");
+    assert!(
+        matches!(outcome2, super::StepOutcome::Preserved { .. }),
+        "got {outcome2:?}"
+    );
 }

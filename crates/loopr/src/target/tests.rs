@@ -129,7 +129,11 @@ fn canonical_start_does_not_walk_to_git_toplevel() {
     let walked = resolve(Some(&sub), None, Path::new("/tmp")).unwrap();
     let named = canonical_start(Some(&sub), None, Path::new("/tmp")).unwrap();
 
-    assert_eq!(walked, td.path().canonicalize().unwrap(), "resolve should walk to toplevel");
+    assert_eq!(
+        walked,
+        td.path().canonicalize().unwrap(),
+        "resolve should walk to toplevel"
+    );
     assert_eq!(named, sub.canonicalize().unwrap(), "canonical_start must not walk");
     assert_ne!(walked, named, "the two must diverge inside a subdir of a repo");
 }

@@ -159,7 +159,10 @@ async fn drain_pool(tasks: &mut tokio::task::JoinSet<()>, timeout_secs: u64, poo
             }
         }
     };
-    if tokio::time::timeout(Duration::from_secs(timeout_secs), drain).await.is_err() {
+    if tokio::time::timeout(Duration::from_secs(timeout_secs), drain)
+        .await
+        .is_err()
+    {
         tracing::warn!(
             pool,
             timeout_secs,
@@ -217,9 +220,7 @@ async fn reap_all_pools<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonCo
 /// Returns the handle so `serve` can join it alongside the signal watcher.
 /// Not spawned by `serve_core` (the test path), which drains pools
 /// explicitly.
-fn spawn_pool_reaper<L: LlmClient + Send + Sync + 'static>(
-    ctx: Arc<DaemonContext<L>>,
-) -> tokio::task::JoinHandle<()> {
+fn spawn_pool_reaper<L: LlmClient + Send + Sync + 'static>(ctx: Arc<DaemonContext<L>>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(POOL_REAP_INTERVAL_SECS));
         // Consume the immediate first tick so the first real sweep is one

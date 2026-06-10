@@ -175,7 +175,10 @@ async fn step_install_taskstore_hooks(target: &Path) -> Result<StepOutcome, Loop
     }
     if was_present {
         Ok(StepOutcome::Preserved {
-            detail: format!("taskstore hooks + merge driver already installed at {}", hooks_dir.display()),
+            detail: format!(
+                "taskstore hooks + merge driver already installed at {}",
+                hooks_dir.display()
+            ),
         })
     } else {
         Ok(StepOutcome::Created {

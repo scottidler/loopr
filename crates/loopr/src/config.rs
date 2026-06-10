@@ -237,8 +237,7 @@ impl Config {
         let env_applied = apply_env_overrides(&mut merged);
 
         let mut config: Self = if have_layer || env_applied {
-            serde_yaml::from_value(merged)
-                .map_err(|e| LooprError::DaemonStartup(format!("config deserialize: {e}")))?
+            serde_yaml::from_value(merged).map_err(|e| LooprError::DaemonStartup(format!("config deserialize: {e}")))?
         } else {
             Self::default()
         };

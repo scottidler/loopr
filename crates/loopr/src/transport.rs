@@ -152,8 +152,8 @@ where
     rt.block_on(async {
         let mut client = connect_or_wait_with_timeouts(target, timeouts).await?;
         client.handshake(None).await?;
-        let params_value =
-            serde_json::to_value(params).map_err(|e| LooprError::ClientIo(format!("serialize {method} params: {e}")))?;
+        let params_value = serde_json::to_value(params)
+            .map_err(|e| LooprError::ClientIo(format!("serialize {method} params: {e}")))?;
         let (resp, _events) = client.request(method, params_value).await?;
         if let Some(err) = resp.error {
             return Err(LooprError::Rpc(err));

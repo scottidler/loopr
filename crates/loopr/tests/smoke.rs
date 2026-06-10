@@ -122,9 +122,15 @@ fn plan_on_tempdir_creates_and_prints_plan() {
     let v: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("plan create must be valid JSON ({e}); got: {stdout}"));
     let plan = v.get("plan").expect("plan field");
-    assert_eq!(plan.get("goal").and_then(|g| g.as_str()), Some("x"), "goal echoed: {stdout}");
+    assert_eq!(
+        plan.get("goal").and_then(|g| g.as_str()),
+        Some("x"),
+        "goal echoed: {stdout}"
+    );
     assert!(
-        plan.get("id").and_then(|i| i.as_str()).is_some_and(|id| id.starts_with("pl-")),
+        plan.get("id")
+            .and_then(|i| i.as_str())
+            .is_some_and(|id| id.starts_with("pl-")),
         "plan id present: {stdout}"
     );
 

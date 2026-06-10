@@ -132,10 +132,7 @@ async fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<
     // degrades to 0 (with a warn!) rather than failing the whole status
     // request.
     let active_plans = match ctx.store.plans().list().await {
-        Ok(plans) => plans
-            .iter()
-            .filter(|p| p.status == domain::PlanStatus::Active)
-            .count() as u32,
+        Ok(plans) => plans.iter().filter(|p| p.status == domain::PlanStatus::Active).count() as u32,
         Err(e) => {
             warn!(request_id = id, error = %e, "system.status: plans().list() failed; reporting 0 active plans");
             0

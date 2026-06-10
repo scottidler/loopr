@@ -30,7 +30,13 @@ pub struct Cli {
     /// Output format for data-returning verbs. Default picks JSON when
     /// stdout is a pipe, YAML when stdout is a TTY. Case-insensitive
     /// (`--output JSON` and `--output json` both parse).
-    #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT", ignore_case = true)]
+    #[arg(
+        short = 'o',
+        long = "output",
+        global = true,
+        value_name = "FORMAT",
+        ignore_case = true
+    )]
     pub output: Option<Format>,
 
     /// Force attach this process to the given session id. Bypasses the

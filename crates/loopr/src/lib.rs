@@ -320,7 +320,8 @@ fn plan_create_command(target: &Path, goal: String, output_format: Option<output
     let params = ipc::PlanCreateParams { goal };
     let result: ipc::PlanCreateResult = transport::ipc_call(target, ipc::MethodName::PlanCreate, &params)?;
     let fmt = output::Format::resolve(output_format);
-    let rendered = output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render plan.create: {e}")))?;
+    let rendered =
+        output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render plan.create: {e}")))?;
     println!("{rendered}");
     Ok(())
 }
