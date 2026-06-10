@@ -369,10 +369,7 @@ fn invalid_scope_path(p: &str) -> Option<&'static str> {
     if path.is_absolute() {
         return Some("absolute path (must be repo-relative)");
     }
-    if path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Some("parent-directory traversal (`..`)");
     }
     None

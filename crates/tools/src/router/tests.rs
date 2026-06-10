@@ -75,7 +75,11 @@ fn lane_override_zero_slots_floors_at_one() {
         ..Default::default()
     };
     let r = LaneRouter::with_config(SandboxMode::Off, &cfg).unwrap();
-    assert_eq!(r.available_slots(Lane::Net), 1, "0 slots floored to 1 to avoid deadlock");
+    assert_eq!(
+        r.available_slots(Lane::Net),
+        1,
+        "0 slots floored to 1 to avoid deadlock"
+    );
 }
 
 #[test]

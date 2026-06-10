@@ -359,7 +359,10 @@ async fn relative_files_path_is_accepted() {
     let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect("ok");
-    assert_eq!(works[0].files, vec!["src/main.rs".to_string(), "src/cli.rs".to_string()]);
+    assert_eq!(
+        works[0].files,
+        vec!["src/main.rs".to_string(), "src/cli.rs".to_string()]
+    );
 }
 
 #[tokio::test]

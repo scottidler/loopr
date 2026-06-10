@@ -66,6 +66,30 @@ async fn spawn_timeout_kills_pgid_strategy() {
 }
 
 #[tokio::test]
+async fn spawn_backgrounded_pipe_holder_does_not_hang_drain() {
+    // Finding 7: the foreground command exits immediately (echo) but a
+    // backgrounded `sleep` inherits and holds the stdout write end open.
+    // Without the bounded drain, the reader's read_until would block on the
+    // open pipe for the full 20s. The bound (DRAIN_TIMEOUT_SECS) must kill
+    // the group and return well before that.
+    let cmd = sh_command("sleep 20 & echo done", &std::env::temp_dir());
+    let started = Instant::now();
+    let result = spawn_with_process_group(cmd, 30, KillStrategy::Pgid, PersistConfig::default())
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "drain hung on backgrounded pipe holder: {elapsed:?}"
+    );
+    assert!(
+        result.stdout.contains("done"),
+        "foreground output must still be captured: {:?}",
+        result.stdout
+    );
+}
+
+#[tokio::test]
 async fn spawn_non_utf8_output_survives() {
     // Emit genuine raw bytes via python3 (printf \xNN is inconsistent across
     // sh/bash/coreutils). This is D15's regression test: the lines()-based

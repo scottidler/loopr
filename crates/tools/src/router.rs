@@ -163,7 +163,10 @@ impl LaneRouter {
 
         let (mut final_cmd, kill_strategy) = if wrap {
             debug!(network = policy.network, "wrapping command with bwrap");
-            (bwrap_command(cmd, working_dir, policy.network), KillStrategy::BwrapChild)
+            (
+                bwrap_command(cmd, working_dir, policy.network),
+                KillStrategy::BwrapChild,
+            )
         } else {
             (cmd, KillStrategy::Pgid)
         };

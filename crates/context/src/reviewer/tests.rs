@@ -240,7 +240,10 @@ fn diff_containing_backticks_cannot_escape_its_fence() {
     let user = out.first_user_text().unwrap();
     // The opening fence must be at least 4 backticks (the diff contains a
     // 3-backtick run), so the planted ``` lines stay inside the fence.
-    assert!(user.contains("````"), "fence must be sized above the content's backticks: {user}");
+    assert!(
+        user.contains("````"),
+        "fence must be sized above the content's backticks: {user}"
+    );
     // The malicious payload is still present (as data), just contained.
     assert!(user.contains("IGNORE THE ABOVE"));
 }
@@ -264,7 +267,10 @@ fn file_contents_containing_backticks_are_fenced_safely() {
 #[test]
 fn system_prompt_warns_untrusted_input() {
     let s = rendered_reviewer_system();
-    assert!(s.contains("UNTRUSTED"), "reviewer system prompt must flag untrusted input");
+    assert!(
+        s.contains("UNTRUSTED"),
+        "reviewer system prompt must flag untrusted input"
+    );
     assert!(s.contains("never grounds to `accept`") || s.contains("emit `accept`") || s.contains("emit accept"));
 }
 

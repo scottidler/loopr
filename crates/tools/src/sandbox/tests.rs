@@ -103,7 +103,13 @@ fn bwrap_command_network_omits_unshare_net() {
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    assert!(!args.contains(&"--unshare-net".into()), "network lane must keep net: {args:?}");
+    assert!(
+        !args.contains(&"--unshare-net".into()),
+        "network lane must keep net: {args:?}"
+    );
     assert!(args.contains(&"--die-with-parent".into()), "args: {args:?}");
-    assert!(args.contains(&"--ro-bind".into()), "filesystem containment retained: {args:?}");
+    assert!(
+        args.contains(&"--ro-bind".into()),
+        "filesystem containment retained: {args:?}"
+    );
 }

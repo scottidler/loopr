@@ -17,6 +17,15 @@ pub const MAX_INLINE_OUTPUT: usize = 32_000;
 /// (used only by `KillStrategy::Pgid`).
 const KILL_GRACE_SECS: u64 = 5;
 
+/// Bound on the post-exit pipe drain. A child that backgrounds a process
+/// holding the stdout/stderr write end (`some-server &`) keeps the pipe open
+/// after the foreground child exits, so an unbounded drain await hangs the
+/// spawn future forever (Phase-5 finding 7). On expiry we SIGKILL the process
+/// group to close the pipes, then briefly wait for the readers to hit EOF.
+const DRAIN_TIMEOUT_SECS: u64 = 5;
+/// Grace after a drain-timeout group-kill for the readers to observe EOF.
+const DRAIN_KILL_GRACE_SECS: u64 = 1;
+
 #[derive(Debug, Clone, Copy)]
 pub enum KillStrategy {
     /// Non-bwrap spawn: `setsid()` put the child at the head of its own
@@ -145,9 +154,25 @@ pub async fn spawn_with_process_group(
         }
     }
 
-    // Drain both reader tasks now that the child is no longer writing.
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
+    // Drain both reader tasks now that the foreground child has exited.
+    // Bound the drain (finding 7): a backgrounded grandchild that inherited
+    // the pipe write end keeps it open, so an unbounded await would hang.
+    // On timeout, kill the whole process group to close the pipes, then give
+    // the readers a brief grace to observe EOF.
+    let drain = async move {
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+    };
+    tokio::pin!(drain);
+    if tokio::time::timeout(Duration::from_secs(DRAIN_TIMEOUT_SECS), &mut drain)
+        .await
+        .is_err()
+    {
+        debug!(child_pid, "output drain stalled; killing process group to close pipes");
+        force_kill_group(child_pid, kill_strategy);
+        let _ = child.wait().await;
+        let _ = tokio::time::timeout(Duration::from_secs(DRAIN_KILL_GRACE_SECS), drain).await;
+    }
 
     let mut stdout_out = take_arc_string(stdout_buf);
     let mut stderr_out = take_arc_string(stderr_buf);
@@ -267,6 +292,24 @@ async fn apply_kill(child: &mut tokio::process::Child, child_pid: i32, strategy:
         KillStrategy::BwrapChild => {
             let _ = child.kill().await;
         }
+    }
+}
+
+/// Immediate, hard kill used by the drain-timeout path to close pipes a
+/// backgrounded grandchild is still holding. For `Pgid`, `killpg(SIGKILL)`
+/// reaches the whole group (the group leader's pgid persists while members
+/// live, even after the leader exited). For `BwrapChild`, bwrap's PID
+/// namespace + `--die-with-parent` already tear down descendants on exit, so
+/// there is nothing reliable left to target.
+fn force_kill_group(child_pid: i32, strategy: KillStrategy) {
+    match strategy {
+        KillStrategy::Pgid => {
+            #[cfg(unix)]
+            unsafe {
+                libc::killpg(child_pid, libc::SIGKILL);
+            }
+        }
+        KillStrategy::BwrapChild => {}
     }
 }
 
