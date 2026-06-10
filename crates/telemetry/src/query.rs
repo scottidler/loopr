@@ -54,7 +54,7 @@ pub fn tail_latest_session(target: &Path, n: usize, exclude_process: Option<&Pro
             }
         }
     }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
     let log_path = candidates
         .into_iter()
         .next()
