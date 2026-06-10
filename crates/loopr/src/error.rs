@@ -13,6 +13,14 @@ pub enum LooprError {
     #[error("target {} is a file, not a directory (try -C {} to use its parent)", path.display(), parent_hint(path))]
     TargetIsFile { path: PathBuf },
 
+    #[error(
+        "init refuses to re-root: the named target {} resolves to the enclosing git toplevel {}; \
+         run init from the toplevel, or point -C directly at it",
+        named.display(),
+        resolved.display()
+    )]
+    InitTargetMismatch { named: PathBuf, resolved: PathBuf },
+
     #[error("log query failed: {0}")]
     LogsQuery(String),
 

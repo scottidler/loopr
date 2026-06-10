@@ -127,3 +127,55 @@ fn step_create_loopr_dir_reports_created_when_fresh() {
     let outcome = super::step_create_loopr_dir(td.path()).unwrap();
     assert!(matches!(outcome, super::StepOutcome::Created { .. }));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8: init + target correctness.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn excludes_step_skips_on_non_git_target() {
+    // Finding 2: a non-git target must not fabricate `.git/info/exclude`
+    // (which a later run would then mistake for a real repo).
+    let td = tempfile::tempdir().unwrap();
+    let outcome = super::step_ensure_git_excludes(td.path()).unwrap();
+    assert!(matches!(outcome, super::StepOutcome::Skipped { .. }), "got {outcome:?}");
+    assert!(!td.path().join(".git").exists(), ".git must not be fabricated");
+}
+
+#[test]
+fn run_on_non_git_target_does_not_fabricate_git_dir() {
+    let td = tempfile::tempdir().unwrap();
+    super::run(td.path(), false).unwrap();
+    assert!(td.path().join(".loopr").is_dir());
+    assert!(
+        !td.path().join(".git").exists(),
+        ".git must not be fabricated on a non-git target"
+    );
+}
+
+#[test]
+fn hooks_step_installs_merge_driver_even_with_user_precommit_hook() {
+    // Finding 3: a husky/user pre-commit (no taskstore marker) must NOT read
+    // as "taskstore installed" — the installer must still run so the merge
+    // driver lands, and the step reports Created (not a false Preserved).
+    let td = tempfile::tempdir().unwrap();
+    init_git_repo(td.path());
+    let hooks = td.path().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\necho husky\n").unwrap();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome = rt.block_on(super::step_install_taskstore_hooks(td.path())).unwrap();
+    assert!(matches!(outcome, super::StepOutcome::Created { .. }), "got {outcome:?}");
+
+    let content = std::fs::read_to_string(hooks.join("pre-commit")).unwrap();
+    assert!(content.contains(super::TASKSTORE_HOOK_MARKER), "marker missing: {content}");
+    assert!(content.contains("echo husky"), "user content clobbered: {content}");
+
+    // Second call now sees the marker -> Preserved.
+    let outcome2 = rt.block_on(super::step_install_taskstore_hooks(td.path())).unwrap();
+    assert!(matches!(outcome2, super::StepOutcome::Preserved { .. }), "got {outcome2:?}");
+}

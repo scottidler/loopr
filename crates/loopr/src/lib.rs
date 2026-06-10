@@ -40,6 +40,23 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
     // Every downstream code path (auto-fork, dispatch) matches on a concrete
     // Command, not an Option.
     let command = cli.command.unwrap_or(Command::Tui);
+
+    // `init` must not silently re-root. `target::resolve` walks `-C`/CWD up
+    // to the enclosing git toplevel (correct for READ verbs operating on an
+    // existing target), but `loopr -C ~/repo/subdir init` walking up to
+    // `~/repo` would write `.loopr/`, hooks, and excludes into the WRONG
+    // place. Refuse when the named path differs from the walked root; read
+    // verbs keep the convenient walk.
+    if matches!(command, Command::Init { .. }) {
+        let named = target::canonical_start(cli.chdir.as_deref(), env_target.as_deref(), &cwd)?;
+        if named != effective {
+            return Err(LooprError::InitTargetMismatch {
+                named,
+                resolved: effective,
+            });
+        }
+    }
+
     match &command {
         Command::Daemon {
             cmd: DaemonCmd::Start {

@@ -116,6 +116,35 @@ fn bare_taskstore_dir_is_no_longer_a_marker() {
 }
 
 #[test]
+fn canonical_start_does_not_walk_to_git_toplevel() {
+    // The seam the `init` strictness check relies on: inside a git repo,
+    // `resolve` walks up to the toplevel, but `canonical_start` returns the
+    // named subdir as-is. A divergence between the two is exactly what
+    // `loopr ... init` refuses.
+    let td = TempDir::new().unwrap();
+    git_init(td.path());
+    let sub = td.path().join("src/foo");
+    fs::create_dir_all(&sub).unwrap();
+
+    let walked = resolve(Some(&sub), None, Path::new("/tmp")).unwrap();
+    let named = canonical_start(Some(&sub), None, Path::new("/tmp")).unwrap();
+
+    assert_eq!(walked, td.path().canonicalize().unwrap(), "resolve should walk to toplevel");
+    assert_eq!(named, sub.canonicalize().unwrap(), "canonical_start must not walk");
+    assert_ne!(walked, named, "the two must diverge inside a subdir of a repo");
+}
+
+#[test]
+fn canonical_start_equals_resolve_at_toplevel() {
+    // At the repo toplevel the two agree, so `init` there is allowed.
+    let td = TempDir::new().unwrap();
+    git_init(td.path());
+    let walked = resolve(Some(td.path()), None, Path::new("/tmp")).unwrap();
+    let named = canonical_start(Some(td.path()), None, Path::new("/tmp")).unwrap();
+    assert_eq!(walked, named);
+}
+
+#[test]
 fn fall_through_to_start_when_nothing_found() {
     let td = TempDir::new().unwrap();
     let resolved = resolve(Some(td.path()), None, Path::new("/tmp")).unwrap();

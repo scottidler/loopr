@@ -19,6 +19,23 @@ use crate::error::LooprError;
 /// bare `.taskstore/` at a target's root is not a v5-created directory
 /// and no longer counts as an init marker.
 pub fn resolve(chdir: Option<&Path>, env: Option<&str>, cwd: &Path) -> Result<PathBuf, LooprError> {
+    let canonical = canonical_start(chdir, env, cwd)?;
+
+    if let Some(root) = git_toplevel(&canonical) {
+        return Ok(root);
+    }
+    if let Some(root) = marker_walk(&canonical) {
+        return Ok(root);
+    }
+    Ok(canonical)
+}
+
+/// Steps 1-2 of resolution only: pick the start path (`-C` > env > CWD),
+/// canonicalize it, and confirm it is a directory. This is the named path
+/// the user pointed at, WITHOUT the step-3 walk to a git toplevel / `.loopr`
+/// ancestor. `init` compares this against `resolve`'s walked result to refuse
+/// silently re-rooting a subdirectory init into the enclosing repo.
+pub fn canonical_start(chdir: Option<&Path>, env: Option<&str>, cwd: &Path) -> Result<PathBuf, LooprError> {
     let start = if let Some(p) = chdir {
         p.to_path_buf()
     } else if let Some(v) = env.filter(|s| !s.is_empty()) {
@@ -32,13 +49,6 @@ pub fn resolve(chdir: Option<&Path>, env: Option<&str>, cwd: &Path) -> Result<Pa
         .map_err(|_| LooprError::TargetInvalid { path: start.clone() })?;
     if !canonical.is_dir() {
         return Err(LooprError::TargetIsFile { path: start });
-    }
-
-    if let Some(root) = git_toplevel(&canonical) {
-        return Ok(root);
-    }
-    if let Some(root) = marker_walk(&canonical) {
-        return Ok(root);
     }
     Ok(canonical)
 }

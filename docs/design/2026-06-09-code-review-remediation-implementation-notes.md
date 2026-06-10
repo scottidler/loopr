@@ -1857,3 +1857,74 @@ Landing across six commits (mirrors Phases 1-6):
 - None. (Scott's existing `~/.config/loopr/loopr.yml` is a v3/v4 file; v5
   now warns-and-ignores it rather than bricking — no operator action
   required, though removing the stale file would silence the boot warning.)
+
+## Phase 8: CLI and init correctness
+
+Landing across commits (mirrors Phases 1-7):
+- **Commit A** — init + target correctness (target `-C` strict for init,
+  init non-git excludes skip, init hook content-marker, worktree excludes
+  3-part fix).
+- **Commit B** — CLI output/enum correctness (`--output` ignore_case,
+  `plan override --to` ValueEnum, `--output` rendering for the four
+  hardcoded-`println!` verbs, `show` validate_kind_match).
+- **Commit C** — sessions correctness (skip implicit allocation for
+  `Command::Sessions`, compare-and-delete TOCTOU, `--session`/resume
+  requires the manifest to exist).
+- **Commit D** — CLI minors batch (connect-error in timeout message, init
+  help text, `ipc_call` consolidation + config wiring, dead `AtomicU64`,
+  `mod tests` placement, client-body instrumentation).
+
+### Commit A — init + target correctness
+
+#### Design decisions
+- **Finding 1 (target `-C` re-root).** Extracted `target::canonical_start`
+  (steps 1-2: pick `-C`/env/CWD start, canonicalize, dir-check) out of
+  `resolve` (which still appends step-3's walk to the git toplevel /
+  `.loopr` ancestor). `lib::run` enforces, ONLY for `Command::Init`, that
+  the named path equals the walked root; a mismatch returns the new
+  `LooprError::InitTargetMismatch { named, resolved }`. Read verbs keep the
+  convenient walk. The check lives in `run` (not `target::resolve`) because
+  resolve has no command context and read verbs must NOT be made strict.
+- **Finding 2 (non-git excludes).** `step_ensure_git_excludes` now mirrors
+  the hooks step's `.git` is-dir guard and returns `Skipped` on a non-git
+  target, so init no longer fabricates `.git/info/exclude` (which a later
+  run would mistake for a real repo).
+- **Finding 3 (hook detection).** Replaced the filename-existence check
+  (which also listed the WRONG canonical set — taskstore installs
+  `post-merge`, not `post-commit`) with a CONTENT-marker check: a husky/user
+  `pre-commit` no longer reads as "taskstore installed." Decision: **always
+  run the idempotent installer** (`taskstore::install_hook` is itself
+  content-aware — it appends its `taskstore sync` line only when absent), so
+  the merge driver + `.gitattributes` always land; the pre-existing
+  `taskstore sync` marker in `pre-commit` decides only the
+  Created-vs-Preserved label.
+- **Finding 4 (worktree excludes, 3-in-1).** (a) Read errors other than
+  `NotFound` propagate (`match` on `ErrorKind`) instead of
+  `unwrap_or_default`, so a present-but-unreadable exclude file is never
+  clobbered. (b) Per-pattern append: membership is decided line-by-line
+  against the existing file, so a list that GROWS in a later release reaches
+  already-init'd targets (the old marker-gate skipped them entirely). The
+  `# loopr-managed` marker is still written once for readability but no
+  longer gates the whole block. (c) Pattern list aligned with reality:
+  added `.loopr/active-session`, `.loopr/daemon.*` (glob covering pid /
+  version / process-id / startup-error), `.loopr/prompts/`; dropped the
+  stale `.loopr/runs/` and the now-subsumed `.loopr/daemon.pid`.
+
+#### Deviations
+- The doc says `plan override --to` etc. are Phase 8; this commit is only
+  the init/target/excludes cluster. The CLI-enum and output-rendering
+  findings land in Commit B (split for durability, per the phase pattern).
+
+#### Tradeoffs
+- `InitTargetMismatch` is a hard error rather than a re-root-with-warning.
+  Chosen because writing `.loopr/`, hooks, and excludes into the wrong
+  directory is silent and hard to notice; an explicit refusal naming both
+  paths is the safe default. The user re-runs from the toplevel or points
+  `-C` directly at it.
+- Always-run-installer (finding 3) over a marker-gated skip: one extra
+  idempotent git-hook write per init re-run, in exchange for the guarantee
+  that the merge driver is never silently absent. The installer's own
+  content-check keeps it a no-op on already-installed hooks.
+
+#### Open questions
+- None.
