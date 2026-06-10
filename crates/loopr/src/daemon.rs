@@ -98,6 +98,128 @@ pub const WORK_SPAWNER_DRAIN_TIMEOUT_SECS: u64 = 10;
 /// decompose cannot block shutdown past this ceiling.
 pub const PLAN_CREATE_DRAIN_TIMEOUT_SECS: u64 = 30;
 
+/// Install the process-wide panic hook so a panicking pipeline task does
+/// not vanish silently. The daemon's stdio is `/dev/null` post-fork, so
+/// the default libstd hook (which writes to stderr) produces zero
+/// evidence; a panicking Implementer would strand its Work with no trace.
+/// This hook routes the panic payload + location through `tracing::error!`
+/// so it lands in the daemon's `events.log`. Installed AFTER
+/// `telemetry::init` so the subscriber is live. The previous hook is
+/// chained so the default behavior (and any test harness hook) still runs.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+        tracing::error!(location = %location, payload = %payload, "daemon task panicked");
+        previous(info);
+    }));
+}
+
+/// Drain a JoinSet pool with a bounded timeout, logging any panicked
+/// (non-cancelled) task via `warn!` so a swallowed panic leaves a trace.
+/// On timeout, `abort_all()` the remainder; aborted tasks resolve to
+/// `Cancelled` join errors, which are expected and not logged. Shared by
+/// the six pool-specific drain helpers so the panic-visibility contract is
+/// identical across pools.
+async fn drain_pool(tasks: &mut tokio::task::JoinSet<()>, timeout_secs: u64, pool: &'static str) {
+    let drain = async {
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) = res
+                && !e.is_cancelled()
+            {
+                tracing::warn!(pool, error = %e, "task panicked during shutdown drain");
+            }
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(timeout_secs), drain).await.is_err() {
+        tracing::warn!(
+            pool,
+            timeout_secs,
+            remaining = tasks.len(),
+            "task drain timed out; aborting remainder"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Reap completed tasks from a locked pool without blocking, logging any
+/// panicked (non-cancelled) task. Lets finished tasks (and their
+/// `Arc<DaemonContext>` clones) release during a long run instead of
+/// accumulating in the JoinSet until shutdown drain, and surfaces a
+/// mid-run panic promptly rather than waiting for the drain.
+fn reap_finished(tasks: &mut tokio::task::JoinSet<()>, pool: &'static str) {
+    while let Some(res) = tasks.try_join_next() {
+        if let Err(e) = res
+            && !e.is_cancelled()
+        {
+            tracing::warn!(pool, error = %e, "task panicked (reaped mid-run)");
+        }
+    }
+}
+
+/// Cadence at which the background reaper sweeps every pool for finished
+/// tasks. The pools never receive new spawns after their shutdown drain
+/// returns, so this only matters during the active phase; 30s keeps the
+/// JoinSets from growing unbounded under a long multi-Work run without
+/// adding meaningful contention on the per-pool mutexes.
+pub const POOL_REAP_INTERVAL_SECS: u64 = 30;
+
+/// Reap every pipeline pool once. Acquires each pool's mutex briefly,
+/// drains its finished tasks, and releases. Mutex contention with the
+/// spawn paths and the shutdown drains is negligible (microsecond reaps).
+async fn reap_all_pools<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonContext<L>>) {
+    let pools: [(&tokio::sync::Mutex<tokio::task::JoinSet<()>>, &'static str); 6] = [
+        (&ctx.plan_create_tasks, "plan-create"),
+        (&ctx.implementer_tasks, "implementer"),
+        (&ctx.reviewer_tasks, "reviewer"),
+        (&ctx.director_tasks, "director"),
+        (&ctx.work_spawner_tasks, "work-spawner"),
+        (&ctx.integrator_tasks, "integrator"),
+    ];
+    for (pool, name) in pools {
+        let mut tasks = pool.lock().await;
+        reap_finished(&mut tasks, name);
+    }
+}
+
+/// Spawn the background pool reaper. Wakes every `POOL_REAP_INTERVAL_SECS`
+/// to reap finished tasks across all pools; exits promptly on shutdown so
+/// its `Arc<DaemonContext>` clone drops before `serve`'s `Arc::try_unwrap`.
+/// Returns the handle so `serve` can join it alongside the signal watcher.
+/// Not spawned by `serve_core` (the test path), which drains pools
+/// explicitly.
+fn spawn_pool_reaper<L: LlmClient + Send + Sync + 'static>(
+    ctx: Arc<DaemonContext<L>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(POOL_REAP_INTERVAL_SECS));
+        // Consume the immediate first tick so the first real sweep is one
+        // full interval out.
+        interval.tick().await;
+        loop {
+            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            tokio::select! {
+                biased;
+                _ = ctx.shutdown_notify.notified() => return,
+                _ = interval.tick() => reap_all_pools(&ctx).await,
+            }
+        }
+    })
+}
+
 /// Drain `ctx.implementer_tasks` with `IMPLEMENTER_DRAIN_TIMEOUT_SECS`
 /// budget. On timeout, `abort_all()` remaining tasks — their
 /// `Arc<DaemonContext>` clones release as the abort handles fire.
@@ -108,19 +230,7 @@ async fn drain_implementer_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc
     }
     let n = tasks.len();
     tracing::info!(count = n, "draining implementer tasks");
-    let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(Duration::from_secs(IMPLEMENTER_DRAIN_TIMEOUT_SECS), drain)
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_secs = IMPLEMENTER_DRAIN_TIMEOUT_SECS,
-            remaining = tasks.len(),
-            "implementer task drain timed out; aborting remainder"
-        );
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    drain_pool(&mut tasks, IMPLEMENTER_DRAIN_TIMEOUT_SECS, "implementer").await;
 }
 
 /// Drain `ctx.reviewer_tasks` with `REVIEWER_DRAIN_TIMEOUT_SECS` budget.
@@ -133,19 +243,7 @@ async fn drain_reviewer_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<Da
     }
     let n = tasks.len();
     tracing::info!(count = n, "draining reviewer tasks");
-    let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(Duration::from_secs(REVIEWER_DRAIN_TIMEOUT_SECS), drain)
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_secs = REVIEWER_DRAIN_TIMEOUT_SECS,
-            remaining = tasks.len(),
-            "reviewer task drain timed out; aborting remainder"
-        );
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    drain_pool(&mut tasks, REVIEWER_DRAIN_TIMEOUT_SECS, "reviewer").await;
 }
 
 /// Drain `ctx.integrator_tasks` with `INTEGRATOR_DRAIN_TIMEOUT_SECS`
@@ -158,19 +256,7 @@ async fn drain_integrator_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<
     }
     let n = tasks.len();
     tracing::info!(count = n, "draining integrator tasks");
-    let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(Duration::from_secs(INTEGRATOR_DRAIN_TIMEOUT_SECS), drain)
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_secs = INTEGRATOR_DRAIN_TIMEOUT_SECS,
-            remaining = tasks.len(),
-            "integrator task drain timed out; aborting remainder"
-        );
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    drain_pool(&mut tasks, INTEGRATOR_DRAIN_TIMEOUT_SECS, "integrator").await;
 }
 
 /// Drain `ctx.director_tasks` with `DIRECTOR_DRAIN_TIMEOUT_SECS` budget.
@@ -188,19 +274,7 @@ async fn drain_director_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<Da
     }
     let n = tasks.len();
     tracing::info!(count = n, "draining director tasks");
-    let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(Duration::from_secs(DIRECTOR_DRAIN_TIMEOUT_SECS), drain)
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_secs = DIRECTOR_DRAIN_TIMEOUT_SECS,
-            remaining = tasks.len(),
-            "director task drain timed out; aborting remainder"
-        );
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    drain_pool(&mut tasks, DIRECTOR_DRAIN_TIMEOUT_SECS, "director").await;
 }
 
 /// Drain `ctx.work_spawner_tasks` with `WORK_SPAWNER_DRAIN_TIMEOUT_SECS`
@@ -217,19 +291,7 @@ async fn drain_work_spawner_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Ar
     }
     let n = tasks.len();
     tracing::info!(count = n, "draining work-spawner tasks");
-    let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(Duration::from_secs(WORK_SPAWNER_DRAIN_TIMEOUT_SECS), drain)
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_secs = WORK_SPAWNER_DRAIN_TIMEOUT_SECS,
-            remaining = tasks.len(),
-            "work-spawner task drain timed out; aborting remainder"
-        );
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    drain_pool(&mut tasks, WORK_SPAWNER_DRAIN_TIMEOUT_SECS, "work-spawner").await;
 }
 
 /// Drain `ctx.plan_create_tasks` with `PLAN_CREATE_DRAIN_TIMEOUT_SECS`
@@ -247,19 +309,7 @@ async fn drain_plan_create_tasks<L: LlmClient + Send + Sync + 'static>(ctx: &Arc
     }
     let n = tasks.len();
     tracing::info!(count = n, "draining plan-create tasks");
-    let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(Duration::from_secs(PLAN_CREATE_DRAIN_TIMEOUT_SECS), drain)
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_secs = PLAN_CREATE_DRAIN_TIMEOUT_SECS,
-            remaining = tasks.len(),
-            "plan-create task drain timed out; aborting remainder"
-        );
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    drain_pool(&mut tasks, PLAN_CREATE_DRAIN_TIMEOUT_SECS, "plan-create").await;
 }
 
 /// Unconditional parent-side entry: fork a daemon, wait (briefly) for its
@@ -477,6 +527,11 @@ async fn run_active_daemon(
     let directive = std::env::var(telemetry::LOG_ENV_VAR).unwrap_or_else(|_| "info".to_string());
     let _guard = telemetry::init(&target, &session_id, &target_slug, &process_id, &directive)
         .map_err(|e| LooprError::DaemonStartup(format!("telemetry init: {e}")))?;
+
+    // Route task panics through tracing now that the subscriber is live.
+    // Daemon stdio is `/dev/null` post-fork, so without this a panicking
+    // pipeline task would leave zero evidence in the run log.
+    install_panic_hook();
 
     // One-shot legacy-state detector. Fires once per daemon boot; no-op
     // on fresh targets or targets already cleaned with `rkvr rmrf`.
@@ -831,12 +886,19 @@ where
     // signal-handler-safety concerns.
     let watcher_handle = spawn_signal_watcher(ctx.clone());
 
+    // Background pool reaper: keeps the JoinSets from accumulating finished
+    // tasks during a long run and surfaces mid-run panics. Joined below
+    // (before `try_unwrap`) so its `Arc<DaemonContext>` clone drops.
+    let reaper_handle = spawn_pool_reaper(ctx.clone());
+
     let ctx = serve_core(ctx).await?;
 
-    // Wait for the signal watcher to finish so its `Arc<DaemonContext>`
-    // clone drops. Bounded by WATCHER_JOIN_TIMEOUT_SECS in case the
-    // watcher never observed a signal (e.g. registration error).
+    // Wait for the signal watcher and the pool reaper to finish so their
+    // `Arc<DaemonContext>` clones drop. Both observe `shutting_down` /
+    // `shutdown_notify` set by the watcher, so they exit within a few
+    // scheduler ticks; the timeout is defensive.
     let _ = tokio::time::timeout(Duration::from_secs(WATCHER_JOIN_TIMEOUT_SECS), watcher_handle).await;
+    let _ = tokio::time::timeout(Duration::from_secs(WATCHER_JOIN_TIMEOUT_SECS), reaper_handle).await;
 
     // Every other `Arc<DaemonContext>` clone (accept loop's parameter,
     // watcher task, every handler task) should be dropped by now. Try

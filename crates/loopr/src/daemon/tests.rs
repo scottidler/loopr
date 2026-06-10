@@ -1,7 +1,29 @@
+use std::path::Path;
 use std::time::Duration;
 
-use super::bound_startup;
+use serde_json::Value;
+use tempfile::TempDir;
+use tokio::task::JoinSet;
+
+use super::{bound_startup, drain_pool, reap_finished};
 use crate::error::LooprError;
+
+/// Read `events.log` JSONL lines from a test run dir.
+fn read_events(run_dir: &Path) -> Vec<Value> {
+    let body = std::fs::read_to_string(run_dir.join("events.log")).expect("read events.log");
+    body.lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_str(l).expect("parse JSONL"))
+        .collect()
+}
+
+fn has_event_with_pool(events: &[Value], message: &str, pool: &str) -> bool {
+    events.iter().any(|ev| {
+        let f = ev.get("fields");
+        f.and_then(|f| f.get("message")).and_then(Value::as_str) == Some(message)
+            && f.and_then(|f| f.get("pool")).and_then(Value::as_str) == Some(pool)
+    })
+}
 
 #[tokio::test]
 async fn bound_startup_passes_through_ok() {
@@ -47,4 +69,44 @@ async fn bound_startup_returns_daemon_startup_on_elapsed() {
         }
         other => panic!("expected DaemonStartup, got {other:?}"),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn drain_pool_logs_panicked_task() {
+    // A panicking pipeline task must leave a `warn!` trace at drain time
+    // instead of vanishing into the JoinSet (Phase 7: silent death).
+    let run_dir = TempDir::new().unwrap();
+    {
+        let _guard = telemetry::init_for_test(run_dir.path(), "debug").expect("init_for_test");
+        let mut tasks: JoinSet<()> = JoinSet::new();
+        tasks.spawn(async { panic!("boom in implementer task") });
+        // Generous budget: the task panics immediately, so the drain
+        // completes well within it (no abort path taken).
+        drain_pool(&mut tasks, 5, "implementer").await;
+    }
+    let events = read_events(run_dir.path());
+    assert!(
+        has_event_with_pool(&events, "task panicked during shutdown drain", "implementer"),
+        "expected a drain-time panic warning tagged pool=implementer; events: {events:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reap_finished_logs_panicked_task() {
+    // The mid-run reaper surfaces a panic without waiting for shutdown.
+    let run_dir = TempDir::new().unwrap();
+    {
+        let _guard = telemetry::init_for_test(run_dir.path(), "debug").expect("init_for_test");
+        let mut tasks: JoinSet<()> = JoinSet::new();
+        tasks.spawn(async { panic!("boom mid-run") });
+        // Let the panicking task complete so `try_join_next` observes it.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        reap_finished(&mut tasks, "director");
+    }
+    let events = read_events(run_dir.path());
+    assert!(
+        has_event_with_pool(&events, "task panicked (reaped mid-run)", "director"),
+        "expected a reaped panic warning tagged pool=director; events: {events:?}"
+    );
 }
