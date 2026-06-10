@@ -102,7 +102,7 @@ impl BashDenylist {
                 return Ok(());
             }
         };
-        self.check_tree(&tree, command)
+        self.check_inner(&tree, command, 0)
     }
 
     /// Same as `check`, but reuses a pre-parsed `Tree`. Bash::execute parses
@@ -111,6 +111,13 @@ impl BashDenylist {
     /// tree"). Re-parsing inside `check` would double the tree-sitter cost
     /// for every bash invocation.
     pub fn check_tree(&self, tree: &Tree, source: &str) -> Result<(), &DenyPattern> {
+        self.check_inner(tree, source, 0)
+    }
+
+    /// Core check. `depth` bounds the recursion into `sh|bash|zsh -c <payload>`
+    /// re-parsing (Phase-5 finding 1: `bash -c "<denied>"` previously bypassed
+    /// the entire denylist).
+    fn check_inner(&self, tree: &Tree, source: &str, depth: usize) -> Result<(), &DenyPattern> {
         // Structural check: any `sh` / `bash` as a bare command inside a
         // pipeline is the canonical `curl X | sh` footgun. Because "|" is a
         // pipeline node in the CST rather than an argv token, a plain token
@@ -123,15 +130,44 @@ impl BashDenylist {
 
         let commands = collect_commands(tree, source);
         for argv in &commands {
-            // Skip the synthetic pipe-to-shell pattern in token matching;
-            // it only fires via the structural check above.
+            // `argv_norm` differs from `argv` only at index 0, whose path
+            // components and `./` prefix are stripped to a basename (finding
+            // 2: `/usr/bin/git push` previously bypassed the `git push`
+            // pattern). Matching against BOTH preserves user-extension
+            // patterns written as literal paths (`./deploy.sh`) while
+            // catching absolute-path invocations of built-in denials.
+            let argv_norm = normalized_argv(argv);
+
+            // Structural `rm` matching (finding 3): `rm -fr /`, `rm -r -f /`,
+            // `rm -rf /*`, `--recursive --force ~` all map to the
+            // root/home-deletion reasons regardless of flag ordering or
+            // grouping. The literal `rm -rf /` / `rm -rf ~` patterns it
+            // replaces are kept in `base()` only as the reason carriers.
+            if let Some(idx) = dangerous_rm(&argv_norm) {
+                return Err(&self.patterns[idx]);
+            }
+
             for (i, pat) in self.patterns.iter().enumerate() {
-                if i == PIPE_TO_SHELL_IDX {
+                // Skip the synthetic patterns (pipe-to-shell + the two rm
+                // reason carriers); they only fire via the structural checks
+                // above.
+                if SYNTHETIC_IDXS.contains(&i) {
                     continue;
                 }
-                if pat.matches(argv) {
+                if pat.matches(argv) || pat.matches(&argv_norm) {
                     return Err(pat);
                 }
+            }
+
+            // Recurse into `sh|bash|zsh -c <payload>` (finding 1). The payload
+            // is a single argv token (quotes already stripped by `argv_text`);
+            // re-parse it and check its commands too.
+            if depth < MAX_SHELL_C_DEPTH
+                && let Some(pidx) = shell_c_index(&argv_norm)
+                && let Some(payload) = argv.get(pidx)
+                && let Some(sub) = parse(payload)
+            {
+                self.check_inner(&sub, payload, depth + 1)?;
             }
         }
         Ok(())
@@ -145,6 +181,94 @@ pub fn parse_bash(source: &str) -> Option<Tree> {
 /// Index of the synthetic pipe-to-shell pattern inside `base()`.
 /// Checked via structural CST walk rather than argv-token matching.
 const PIPE_TO_SHELL_IDX: usize = 0;
+/// Index of the `rm`-deletes-root reason carrier (matched structurally).
+const RM_ROOT_IDX: usize = 1;
+/// Index of the `rm`-deletes-home reason carrier (matched structurally).
+const RM_HOME_IDX: usize = 2;
+/// Pattern indices whose `tokens` are NOT used at match time - they fire
+/// via the structural checks (`pipe_to_shell`, `dangerous_rm`) and carry
+/// only their `reason`.
+const SYNTHETIC_IDXS: [usize; 3] = [PIPE_TO_SHELL_IDX, RM_ROOT_IDX, RM_HOME_IDX];
+/// Recursion cap for `sh|bash|zsh -c <payload>` re-parsing. A pathological
+/// `bash -c "bash -c \"...\""` nest terminates here rather than spinning.
+const MAX_SHELL_C_DEPTH: usize = 8;
+
+/// Copy `argv` with index 0 reduced to its command basename: strip a leading
+/// `./`, then everything up to and including the last `/`. Quotes are already
+/// stripped upstream by `argv_text`. Other tokens are untouched.
+fn normalized_argv(argv: &[String]) -> Vec<String> {
+    let mut out = argv.to_vec();
+    if let Some(head) = out.first_mut() {
+        *head = basename(head);
+    }
+    out
+}
+
+fn basename(s: &str) -> String {
+    let s = s.strip_prefix("./").unwrap_or(s);
+    match s.rfind('/') {
+        Some(idx) => s[idx + 1..].to_string(),
+        None => s.to_string(),
+    }
+}
+
+/// If `argv` (with a normalized head) is `sh`/`bash`/`zsh ... -c <payload>`,
+/// return the index of the `<payload>` token so the caller can re-parse it.
+fn shell_c_index(argv: &[String]) -> Option<usize> {
+    let head = argv.first()?;
+    if !matches!(head.as_str(), "sh" | "bash" | "zsh") {
+        return None;
+    }
+    let pos = argv.iter().position(|a| a == "-c")?;
+    let payload_idx = pos + 1;
+    argv.get(payload_idx).map(|_| payload_idx)
+}
+
+/// Structural `rm` danger check. Returns the reason-carrier pattern index when
+/// `argv` (normalized head) is an `rm` invocation that combines recursive
+/// (`-r`/`-R`/`--recursive`) AND force (`-f`/`--force`) flags - in any order
+/// or grouping - against a catastrophic target (`/`, `/*`, `~`, `~/...`,
+/// `$HOME`, `$HOME/...`). Plain `rm file.txt` and `rm -rf ./build` do not trip.
+fn dangerous_rm(argv: &[String]) -> Option<usize> {
+    if argv.first().map(String::as_str) != Some("rm") {
+        return None;
+    }
+    let mut recursive = false;
+    let mut force = false;
+    let mut danger: Option<usize> = None;
+    for tok in &argv[1..] {
+        if let Some(long) = tok.strip_prefix("--") {
+            match long {
+                "recursive" => recursive = true,
+                "force" => force = true,
+                _ => {}
+            }
+        } else if tok.len() > 1
+            && let Some(short) = tok.strip_prefix('-')
+        {
+            for c in short.chars() {
+                match c {
+                    'r' | 'R' => recursive = true,
+                    'f' => force = true,
+                    _ => {}
+                }
+            }
+        } else if danger.is_none() {
+            danger = dangerous_rm_target(tok);
+        }
+    }
+    if recursive && force { danger } else { None }
+}
+
+fn dangerous_rm_target(tok: &str) -> Option<usize> {
+    if tok == "/" || tok == "/*" {
+        Some(RM_ROOT_IDX)
+    } else if tok == "~" || tok == "$HOME" || tok.starts_with("~/") || tok.starts_with("$HOME/") {
+        Some(RM_HOME_IDX)
+    } else {
+        None
+    }
+}
 
 fn base() -> Vec<DenyPattern> {
     use TokenMatcher::*;
@@ -156,6 +280,9 @@ fn base() -> Vec<DenyPattern> {
             tokens: vec![Literal("|sh".into())],
             reason: "piped shell execution".into(),
         },
+        // RM_ROOT_IDX / RM_HOME_IDX: reason carriers only. `tokens` is unused
+        // at match time (matched structurally via `dangerous_rm`); the
+        // `reason` is what callers surface.
         DenyPattern {
             tokens: vec![Literal("rm".into()), Literal("-rf".into()), Literal("/".into())],
             reason: "deletes root filesystem".into(),
@@ -214,7 +341,9 @@ fn is_shell_sink_command(node: Node<'_>, source: &str) -> bool {
         Some(a) => a,
         None => return false,
     };
-    matches!(argv.first().map(String::as_str), Some("sh") | Some("bash"))
+    // Normalize the head so `/bin/sh` / `./sh` are caught too.
+    let head = argv.first().map(|h| basename(h));
+    matches!(head.as_deref(), Some("sh") | Some("bash"))
 }
 
 fn parser() -> Parser {

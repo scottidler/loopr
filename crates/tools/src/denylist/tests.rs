@@ -152,6 +152,116 @@ fn unparseable_fragment_does_not_panic() {
     let _ = deny.check("$(");
 }
 
+// --- Finding 1: `sh|bash|zsh -c <payload>` recursion ---------------------
+
+#[test]
+fn blocks_bash_dash_c_git_push() {
+    assert_eq!(reject(r#"bash -c "git push origin main""#), "push policy is human-only");
+}
+
+#[test]
+fn blocks_bash_dash_c_rm_rf_root_single_quoted() {
+    assert_eq!(reject(r#"bash -c 'rm -rf /'"#), "deletes root filesystem");
+}
+
+#[test]
+fn blocks_sh_dash_c_sudo() {
+    assert_eq!(reject(r#"sh -c "sudo apt install foo""#), "privilege escalation");
+}
+
+#[test]
+fn blocks_zsh_dash_c_gh_repo_delete() {
+    assert_eq!(reject(r#"zsh -c "gh repo delete foo/bar""#), "destructive github op");
+}
+
+#[test]
+fn blocks_nested_bash_dash_c() {
+    assert_eq!(reject(r#"bash -c "bash -c 'rm -rf /'""#), "deletes root filesystem");
+}
+
+#[test]
+fn allows_bash_dash_c_benign() {
+    accept(r#"bash -c "ls -la /tmp""#);
+}
+
+// --- Finding 2: absolute / relative-path invocation ----------------------
+
+#[test]
+fn blocks_absolute_path_git_push() {
+    assert_eq!(reject("/usr/bin/git push origin main"), "push policy is human-only");
+}
+
+#[test]
+fn blocks_absolute_path_sudo() {
+    assert_eq!(reject("/usr/bin/sudo apt install foo"), "privilege escalation");
+}
+
+#[test]
+fn blocks_relative_path_gh_repo_delete() {
+    assert_eq!(reject("./gh repo delete foo/bar"), "destructive github op");
+}
+
+#[test]
+fn allows_path_invocation_of_benign_tool() {
+    accept("/usr/bin/ls -la");
+}
+
+// --- Finding 3: structural rm matching -----------------------------------
+
+#[test]
+fn blocks_rm_fr_root() {
+    assert_eq!(reject("rm -fr /"), "deletes root filesystem");
+}
+
+#[test]
+fn blocks_rm_split_flags_root() {
+    assert_eq!(reject("rm -r -f /"), "deletes root filesystem");
+}
+
+#[test]
+fn blocks_rm_rf_root_glob() {
+    assert_eq!(reject("rm -rf /*"), "deletes root filesystem");
+}
+
+#[test]
+fn blocks_rm_long_flags_root() {
+    assert_eq!(reject("rm --recursive --force /"), "deletes root filesystem");
+}
+
+#[test]
+fn blocks_rm_rf_home_expansion() {
+    assert_eq!(reject("rm -rf $HOME"), "deletes home directory");
+}
+
+#[test]
+fn blocks_rm_rf_home_slash() {
+    assert_eq!(reject("rm -rf ~/"), "deletes home directory");
+}
+
+#[test]
+fn blocks_absolute_path_rm_rf_root() {
+    assert_eq!(reject("/bin/rm -rf /"), "deletes root filesystem");
+}
+
+#[test]
+fn allows_rm_rf_local_dir() {
+    // recursive+force but a safe target - the common `rm -rf ./build` case.
+    accept("rm -rf ./build");
+    accept("rm -rf target");
+}
+
+#[test]
+fn allows_rm_without_both_flags() {
+    // recursive-only or force-only against / does not trip the r+f matcher.
+    accept("rm -r /tmp/scratch");
+    accept("rm -f /tmp/scratch");
+}
+
+#[test]
+fn allows_rm_single_file() {
+    accept("rm notes.txt");
+}
+
 #[test]
 fn matcher_any_accepts_anything() {
     let m = TokenMatcher::Any;

@@ -965,3 +965,55 @@ Landing across commits (mirrors Phases 1-3):
 
 #### Deviations / Tradeoffs / Open questions
 - None.
+
+## Phase 5: Containment - denylist, sandbox, prompt injection, scope
+
+Landing across commits (mirrors Phases 1-4):
+- **Commit A** — denylist hardening (findings 1-3): `sh|bash|zsh -c`
+  recursion, argv[0] basename normalization, structural `rm` matching.
+- **Commit B** — Bash bwrap containment + lane shape (finding 4).
+- **Commit C** — builtin hardening (findings 5-8): edit/write
+  non-UTF8 + atomic, grep/glob excludes, spawn drain bound, read cap.
+- **Commit D** — tools config/error (findings 13, 14).
+- **Commit E** — prompt-injection fencing (finding 9).
+- **Commit F** — work-scope enforcement end-to-end (finding 10).
+- **Commit G** — telemetry + worktree path/branch guards (findings 11, 12).
+
+### Commit A — denylist hardening (findings 1-3)
+
+#### Design decisions
+- **`check`/`check_tree` delegate to a new `check_inner(tree, source,
+  depth)`** so the `sh|bash|zsh -c <payload>` recursion (finding 1) has a
+  bound (`MAX_SHELL_C_DEPTH = 8`). The payload is a single argv token
+  (quotes already stripped by `argv_text`); `shell_c_index` locates the
+  token after `-c` and `check_inner` re-parses + re-checks it. Nested
+  `bash -c "bash -c '...'"` terminates at the depth cap.
+- **`normalized_argv` (finding 2).** Per-command, index 0 is reduced to its
+  basename (`basename`: strips a leading `./` then everything through the
+  last `/`). Patterns are matched against BOTH the raw argv and the
+  normalized one: the raw match preserves user-extension patterns written
+  as literal paths (`./deploy.sh`, exercised by `extend_from_*` tests),
+  while the normalized match catches `/usr/bin/git push`-style absolute
+  invocations of the built-in denials. `is_shell_sink_command`
+  (pipe-to-shell detection) also normalizes its head so `... | /bin/sh`
+  is caught.
+- **Structural `rm` (finding 3): `dangerous_rm`.** Parses flags
+  (`-rf`/`-fr`/`-r -f`, `--recursive`/`--force`) in any order/grouping and
+  requires BOTH recursive and force, then a catastrophic target (`/`,
+  `/*`, `~`, `~/...`, `$HOME`, `$HOME/...`). The two literal `rm -rf /` /
+  `rm -rf ~` `base()` patterns are retained ONLY as the reason carriers at
+  `RM_ROOT_IDX`/`RM_HOME_IDX`; their `tokens` are no longer matched (added
+  to `SYNTHETIC_IDXS` alongside the pipe-to-shell carrier).
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- `dangerous_rm`'s target set is the doc's listed catastrophic roots plus
+  the `~/` and `$HOME/` prefixes (a recursive-force against the home tree).
+  It deliberately does NOT flag `rm -rf /usr` or other absolute subpaths —
+  the goal is the unambiguous footguns, not a filesystem-policy engine; the
+  bwrap filesystem containment (Commit B) is the backstop for the rest.
+
+#### Open questions
+- None.
