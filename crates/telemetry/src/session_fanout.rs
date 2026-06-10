@@ -79,6 +79,12 @@ impl SessionFanoutLayer {
     }
 
     fn writer_for(&self, session_id: &str) -> Option<SharedWriter> {
+        // Finding 11: the daemon records `client_session_id` from the wire
+        // after a handshake; reject anything that isn't a safe path segment
+        // before joining it into the sessions tree.
+        if !crate::safe_id_segment(session_id) {
+            return None;
+        }
         let mut cache = self.cache.lock().ok()?;
         if let Some(existing) = cache.get(session_id) {
             return Some(existing.clone());

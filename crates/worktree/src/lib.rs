@@ -65,7 +65,21 @@ pub fn parse_branch(branch: &str) -> Option<(WorkId, u32)> {
     err,
 )]
 pub fn cleanup_at(repo_path: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
+    // Finding 12: refuse to `git worktree remove --force` a path that is not
+    // under a `.loopr/worktrees/` root. `cleanup_at` takes no handle, so this
+    // is the only guard between a buggy caller and force-removing a user's own
+    // worktree (or any registered worktree).
+    if !under_worktrees_root(worktree_path) {
+        return Err(WorktreeError::NotFound(worktree_path.to_path_buf()));
+    }
     ops::remove_worktree(repo_path, worktree_path)
+}
+
+/// True if `path` contains a `.loopr` component immediately followed by a
+/// `worktrees` component - i.e. it sits under a `.loopr/worktrees/` root.
+fn under_worktrees_root(path: &Path) -> bool {
+    let comps: Vec<&str> = path.components().filter_map(|c| c.as_os_str().to_str()).collect();
+    comps.windows(2).any(|w| w == [".loopr", "worktrees"])
 }
 
 /// Delete a `loopr/wk-*` branch. Called by the integrator after a Tick
@@ -80,6 +94,12 @@ pub fn cleanup_at(repo_path: &Path, worktree_path: &Path) -> Result<(), Worktree
     err,
 )]
 pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError> {
+    // Finding 12: only ever delete loopr-managed branches. A buggy caller
+    // passing `main` (or any non-`loopr/` ref) is refused here rather than
+    // force-deleting a real branch via `git branch -D`.
+    if !branch.starts_with("loopr/") {
+        return Err(WorktreeError::InvalidBranchName(branch.to_string()));
+    }
     ops::delete_branch(repo_path, branch)
 }
 
@@ -99,3 +119,6 @@ pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError
 pub fn resolve_sha(repo_path: &Path, base_ref: &str) -> Result<String, WorktreeError> {
     ops::resolve_sha(repo_path, base_ref)
 }
+
+#[cfg(test)]
+mod tests;

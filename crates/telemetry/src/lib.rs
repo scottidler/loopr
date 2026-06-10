@@ -42,5 +42,23 @@ pub use subscriber::{
 };
 pub use xdg::{XdgError, session_dir, session_run_dir, session_target_dir, xdg_root};
 
+/// True if `s` is safe to use as a single on-disk path segment: non-empty,
+/// no path separators, no parent-traversal, no leading dot, no NUL.
+///
+/// Phase-5 finding 11: the fanout layers route on span-supplied ids,
+/// including the wire-influenced `client_session_id` the daemon records
+/// after a handshake. They `Path::join` those ids into the sessions tree; an
+/// unvalidated `../../escape` would write outside it. The fanouts gate every
+/// id through this before joining and silently skip (no fanout file) on a
+/// rejection - the event still lands in the primary `events.log`.
+pub(crate) fn safe_id_segment(s: &str) -> bool {
+    !s.is_empty()
+        && !s.contains('/')
+        && !s.contains('\\')
+        && !s.contains("..")
+        && !s.starts_with('.')
+        && !s.contains('\0')
+}
+
 #[cfg(test)]
 mod tests;

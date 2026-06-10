@@ -1205,3 +1205,41 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+### Commit G — telemetry + worktree path/branch guards (findings 11, 12)
+
+#### Design decisions
+- **`telemetry::safe_id_segment` (finding 11).** A single `pub(crate)`
+  guard in `lib.rs` (rejects empty, `/`, `\`, `..`, leading dot, NUL),
+  called at the top of both fanout layers' `writer_for` before the id is
+  `Path::join`ed into the sessions/work tree. An unsafe id (e.g. a
+  wire-supplied `client_session_id` of `../../escape`) yields `None` — the
+  layer silently skips the fanout file; the event still lands in the primary
+  `events.log`, matching the layers' existing best-effort posture. One
+  shared guard rather than `SessionId::parse`, because `WorkFanoutLayer`
+  routes on `work_id` (a `wk-…`, not a `SessionId`), so the parse approach
+  would not cover both layers uniformly.
+- **`worktree::delete_branch` requires `loopr/` prefix (finding 12).** The
+  pub wrapper rejects non-`loopr/` branches with the
+  never-before-constructed `InvalidBranchName` before reaching
+  `git branch -D`. (The internal `ops::delete_branch` is unguarded and still
+  used by its own tests.)
+- **`worktree::cleanup_at` requires a `.loopr/worktrees/` root (finding
+  12).** New `under_worktrees_root` checks for consecutive `.loopr` →
+  `worktrees` path components; a path outside it is refused with `NotFound`
+  before `git worktree remove --force`. The production callers (reconcile)
+  pass `list()`-derived paths already under that root.
+- **Worktree lib gains a `src/tests.rs`** (the crate root had no `mod
+  tests`) for the two guards, per the sibling-test-file rule.
+
+#### Deviations
+- `cleanup_at`'s rejection uses `NotFound` per the doc's explicit "wire the
+  never-constructed NotFound guard" instruction, even though the path may
+  exist — the semantics here is "not a loopr-managed worktree we will
+  remove," and `NotFound(path)` is the closest existing variant.
+
+#### Tradeoffs
+- None.
+
+#### Open questions
+- None.

@@ -12,6 +12,27 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 use super::*;
 
+// ---------- safe_id_segment (finding 11) ----------
+
+#[test]
+fn safe_id_segment_accepts_real_ids() {
+    assert!(safe_id_segment("20260609-141500"));
+    assert!(safe_id_segment("20260609-141500-2"));
+    assert!(safe_id_segment("wk-abc12"));
+    assert!(safe_id_segment("pc-9f3a1b"));
+}
+
+#[test]
+fn safe_id_segment_rejects_path_escapes() {
+    assert!(!safe_id_segment(""));
+    assert!(!safe_id_segment("../../etc/passwd"));
+    assert!(!safe_id_segment("a/b"));
+    assert!(!safe_id_segment("a\\b"));
+    assert!(!safe_id_segment(".."));
+    assert!(!safe_id_segment(".hidden"));
+    assert!(!safe_id_segment("a\0b"));
+}
+
 // ---------- floor_at_info ----------
 
 #[test]

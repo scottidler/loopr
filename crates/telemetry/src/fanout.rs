@@ -43,6 +43,10 @@ impl WorkFanoutLayer {
     }
 
     fn writer_for(&self, work_id: &str) -> Option<SharedWriter> {
+        // Finding 11: never join an unvalidated id into the on-disk tree.
+        if !crate::safe_id_segment(work_id) {
+            return None;
+        }
         if let Some(existing) = self.cache.get(work_id) {
             return Some(existing.clone());
         }
