@@ -38,6 +38,12 @@ pub struct ImplementerConfig {
     /// Force-propose guard: if any single staged file exceeds this
     /// size in bytes at iteration cap, escalate instead of committing.
     pub max_force_propose_file_size_bytes: u64,
+
+    /// GPG-sign agent commits. Default `false` appends `--no-gpg-sign`
+    /// to every agent commit (the historical behavior); `true` omits it
+    /// so git applies its configured signing (vision Git Posture). The
+    /// `Loopr-*` commit trailers are emitted regardless of this flag.
+    pub gpg_sign: bool,
 }
 
 impl Default for ImplementerConfig {
@@ -49,6 +55,7 @@ impl Default for ImplementerConfig {
             max_repeat_action: 3,
             max_force_propose_files: 100,
             max_force_propose_file_size_bytes: 10 * 1024 * 1024,
+            gpg_sign: false,
         }
     }
 }

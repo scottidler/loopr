@@ -80,6 +80,11 @@ async fn full_roundtrip_bundle_persists_in_real_store() {
     std::fs::create_dir_all(&worktree_root).unwrap();
     let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &sha).unwrap();
 
+    // Finding 1: propose_bundle rejects a propose with no new commits.
+    // RecordedTools is a fake (the echo writes nothing), so seed a dirty
+    // in-scope change for propose_bundle's staging step to commit.
+    std::fs::write(wt.path().join("feature.rs"), "fn main() {}\n").unwrap();
+
     // Fake LLM with a 2-step script.
     let llm = ScriptedLlm::new();
     llm.queue_free(Ok(
@@ -99,6 +104,7 @@ async fn full_roundtrip_bundle_persists_in_real_store() {
         config: ImplementerConfig::default(),
         tool_schemas: vec![],
         state: StateSummary::default(),
+        run_id: None,
     };
 
     let bundle = run_implementer(&work, &wt, &deps).await.unwrap();

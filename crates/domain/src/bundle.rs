@@ -103,6 +103,13 @@ pub struct Bundle {
     pub noop_reason: Option<String>,
     #[serde(default)]
     pub head_commit: Option<String>,
+    /// Base sha the implementer branched from (the worktree's base at
+    /// propose time). The Reviewer diffs `base_commit..head_commit` so a
+    /// multi-commit bundle is reviewed across ALL its commits, not just
+    /// the final one. `None` for noop (`Done`) bundles and pre-existing
+    /// rows; the Reviewer falls back to `git show <head_commit>` then.
+    #[serde(default)]
+    pub base_commit: Option<String>,
     #[serde(default)]
     pub force_proposed: bool,
     #[record(indexed)]
@@ -130,6 +137,7 @@ impl Bundle {
             loc_changed: None,
             noop_reason: None,
             head_commit: None,
+            base_commit: None,
             force_proposed: false,
             status: BundleStatus::Proposed,
         }

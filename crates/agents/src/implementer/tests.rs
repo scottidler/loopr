@@ -150,6 +150,7 @@ fn make_deps<L: LlmClient>(
         config,
         tool_schemas: vec![],
         state: StateSummary::default(),
+        run_id: None,
     }
 }
 
@@ -163,6 +164,11 @@ async fn happy_path_propose_bundle_on_first_call() {
     let work = make_work();
     let wt = fake_worktree(&repo, &base, work.id.clone());
 
+    // Finding 1: propose_bundle now rejects a propose with no new
+    // commits. Make a dirty in-scope change so propose_bundle's staging
+    // step commits it and HEAD advances past base.
+    std::fs::write(wt.path().join("feature.rs"), "fn main() {}\n").unwrap();
+
     let llm = FakeLlm::new(vec![
         r#"[{"type":"propose_bundle","claims":["it compiles"]}]"#.to_string(),
     ]);
@@ -172,6 +178,9 @@ async fn happy_path_propose_bundle_on_first_call() {
     assert_eq!(bundle.work_id, work.id);
     assert_eq!(bundle.claims, vec!["it compiles".to_string()]);
     assert!(!bundle.force_proposed);
+    // Finding 4: base sha persisted so the reviewer can diff base..head.
+    assert_eq!(bundle.base_commit.as_deref(), Some(base.as_str()));
+    assert!(bundle.head_commit.is_some());
     assert_eq!(deps.bundles.persisted.lock().unwrap().len(), 1);
 }
 
@@ -200,6 +209,12 @@ async fn force_propose_fires_at_iteration_cap() {
     assert_eq!(bundle.work_id, work.id);
     // A commit should have been made since we had a tracked modification.
     assert!(bundle.head_commit.is_some());
+    // Finding 3: a force-proposed bundle must populate paths (the bundle
+    // class most deserving scrutiny) so the reviewer's diff filter and
+    // the integrator's collision detector see the change.
+    assert_eq!(bundle.paths, vec!["README.md".to_string()], "force-propose paths from branch diff");
+    // Finding 4: base sha persisted for the reviewer's range diff.
+    assert_eq!(bundle.base_commit.as_deref(), Some(base.as_str()));
     assert_eq!(deps.bundles.persisted.lock().unwrap().len(), 1);
 }
 
@@ -329,6 +344,9 @@ async fn parse_failure_then_recovery_resets_counter() {
     let (_dir, repo, base) = init_repo();
     let work = make_work();
     let wt = fake_worktree(&repo, &base, work.id.clone());
+
+    // Finding 1: give propose_bundle a real change to commit.
+    std::fs::write(wt.path().join("feature.rs"), "fn main() {}\n").unwrap();
 
     let llm = FakeLlm::new(vec![
         "garbage".to_string(),

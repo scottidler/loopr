@@ -86,6 +86,10 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     std::fs::create_dir_all(&worktree_root).unwrap();
     let wt = Worktree::create(&repo_path, &worktree_root, work.id.clone(), &sha).unwrap();
 
+    // Finding 1: propose_bundle rejects a propose with no new commits.
+    // Seed a dirty in-scope change for the staging step to commit.
+    std::fs::write(wt.path().join("feature.rs"), "fn main() {}\n").unwrap();
+
     // Stage 7: Implementer emits a propose_bundle immediately.
     let impl_llm = ScriptedLlm::new();
     impl_llm.queue_free(Ok(
@@ -99,6 +103,7 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
         config: ImplementerConfig::default(),
         tool_schemas: vec![],
         state: StateSummary::default(),
+        run_id: None,
     };
     let bundle = run_implementer(&work, &wt, &impl_deps).await.unwrap();
     assert_eq!(bundle.status, BundleStatus::Proposed);

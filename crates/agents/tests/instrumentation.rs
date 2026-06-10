@@ -183,6 +183,7 @@ async fn agents_smoke_spans_lifeguard_escalation() {
         config,
         tool_schemas: vec![],
         state: StateSummary::default(),
+        run_id: None,
     };
 
     // `set_default` makes the subscriber thread-local; current_thread

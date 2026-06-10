@@ -492,6 +492,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             config: self.implementer_config.clone(),
             tool_schemas,
             state: StateSummary::default(),
+            run_id: Some(self.process_id.to_string()),
         };
 
         let result = run_implementer(&work, &worktree, &deps).await;

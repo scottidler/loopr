@@ -73,3 +73,66 @@ and threads a new `CommitContext` through ~20 call sites):
 
 ### Open questions
 - None for Part 1.
+
+### Part 2 — git/commit/bundle pipeline (findings 1-6)
+
+#### Design decisions
+- **`CommitContext` (dispatch.rs).** New type carrying `run_id`,
+  `plan_id`, `work_id`, `role`, `model`, `gpg_sign`, threaded into every
+  agent commit helper (`commit_changes`, `propose_bundle`,
+  `commit_partial_for_inspection`, `force_propose`). Built once per
+  `run_implementer` invocation. `commit_args()` emits the sign posture
+  (`--no-gpg-sign` when `gpg_sign == false`, the default) plus one
+  `--trailer Key=Val` per populated field. git normalizes the trailers
+  to `Key: value` on disk (tests assert that form).
+- **`Loopr-Run` source.** Added `run_id: Option<String>` to agents
+  `Deps`; the daemon sets it from `self.process_id` at the implementer
+  spawn site. `Loopr-Model` comes from `deps.llm.model()` (the trait
+  accessor added in Part 1). `Loopr-Plan`/`Loopr-Work` from
+  `work.parent_id`/`work.id`; `Loopr-Role` is the literal `implementer`.
+- **`gpg_sign` config.** New `ImplementerConfig.gpg_sign` (kebab
+  `gpg-sign`), default `false` — preserves the historical
+  `--no-gpg-sign` behavior. Only the implementer commits, so the knob
+  lives there (not Reviewer/Director).
+- **Finding 1 (zero-commit propose).** `propose_bundle` returns
+  `ActionResult::Error` when `HEAD == worktree.sha()` (no new commits).
+  Skipped when the base sha is empty (fabricated test worktrees).
+- **Finding 4 (`Bundle.base_commit`).** New additive
+  `#[serde(default)] base_commit: Option<String>`. Populated by
+  `propose_bundle` and `force_propose`; the reviewer diffs
+  `base_commit..head_commit` via a new `git_diff_range` helper, falling
+  back to `git show <head>` when `base_commit` is `None` (noop bundles
+  and pre-existing rows). `git diff` output begins with `diff --git`, so
+  the existing `strip_commit_header` handles both shapes.
+- **Finding 2 (`commit_partial_for_inspection`).** Rerouted from
+  `git add -u` + plain commit to the scoped
+  `git_status_porcelain -> partition_by_scope -> git commit --only`
+  pipeline. Removed the now-dead `is_staging_empty` helper.
+- **Finding 5 (noop evidence).** The `Done` arm now sets
+  `bundle.paths = work.files` and `bundle.claims = [message]`;
+  `build_evidence_section` renders a `### Noop Justification` block from
+  `noop_reason` ahead of the file contents.
+
+#### Deviations
+- The force-propose guard previously counted `git ls-files --modified`
+  (tracked modifications); it now counts the in-scope set that actually
+  gets committed (porcelain + `partition_by_scope`). This is a slightly
+  different denominator but is the correct thing to bound, and the doc's
+  finding 2 mandates the porcelain pipeline. `list_modified_tracked` was
+  deleted (its only caller was rewritten).
+
+#### Tradeoffs
+- Made `git_status_porcelain` / `git_diff_name_only` `pub(crate)` so
+  `force_propose` reuses them instead of duplicating the git calls
+  (Phase 9 consolidates the remaining implementer/dispatch git-helper
+  duplication; this avoids adding to it).
+- Phase 1 split into two commits (Part 1 already shipped). The trailers
+  + Bundle-field change touched 7 crates and ~20 call sites; committing
+  the independent fixes first kept durable progress against context
+  limits.
+
+#### Open questions
+- The `Loopr-Model` trailer records the *configured* model
+  (`deps.llm.model()`), not the per-response model the provider echoes.
+  Phase 6's model-pinning detector adds the response-reported model on
+  the Bundle; the trailer can be reconciled to that then if desired.

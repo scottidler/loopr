@@ -124,6 +124,22 @@ fn file_contents_section_rendered_when_noop_files_is_some() {
 }
 
 #[test]
+fn noop_reason_rendered_for_noop_bundle() {
+    // Finding 5: a noop (`Done`) bundle's justification must reach the
+    // reviewer ahead of the file contents.
+    let work = sample_work();
+    let mut bundle = sample_bundle(work.id.clone(), None);
+    bundle.noop_reason = Some("no code needed; the spec is documentation-only".to_string());
+    let files = vec![("README.md".to_string(), "# project\n".to_string())];
+    let out = InlineContextBuilder::new()
+        .build_for_reviewer(&bundle, &work, "", Some(&files))
+        .unwrap();
+    let user = out.first_user_text().unwrap();
+    assert!(user.contains("### Noop Justification"), "got: {user}");
+    assert!(user.contains("no code needed; the spec is documentation-only"), "got: {user}");
+}
+
+#[test]
 fn empty_diff_with_head_commit_renders_structural_corruption_marker() {
     let work = sample_work();
     let bundle = sample_bundle(work.id.clone(), Some("deadbeef"));

@@ -148,8 +148,15 @@ where
     }
 
     let (diff, noop_files) = match bundle.head_commit.as_deref() {
-        Some(sha) => {
-            let raw = git_show(&deps.target, sha, &bundle.paths).await?;
+        Some(head) => {
+            // Finding 4: review the full base..head range so every commit
+            // on the branch is seen, not just the final one. Fall back to
+            // `git show <head>` for bundles with no recorded base (noop
+            // bundles, or rows persisted before base_commit existed).
+            let raw = match bundle.base_commit.as_deref() {
+                Some(base) => git_diff_range(&deps.target, base, head, &bundle.paths).await?,
+                None => git_show(&deps.target, head, &bundle.paths).await?,
+            };
             let body = strip_commit_header(&raw);
             let truncated = truncate_diff(body, deps.config.diff_byte_cap);
             (truncated, None)
@@ -585,6 +592,43 @@ pub async fn git_show(target: &Path, head_commit: &str, paths: &[String]) -> Res
     if !out.status.success() {
         return Err(ReviewerError::Git(format!(
             "git show {head_commit} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Run `git -C <target> diff --no-color <base>..<head> -- <paths...>`.
+/// Used for multi-commit bundles so the reviewer sees the cumulative
+/// diff across ALL the implementer's commits (finding 4) - what the
+/// integrator actually merges - not just `git show <head>`, which is the
+/// final commit alone and leaves earlier commits unreviewed.
+#[instrument(
+    level = "debug",
+    skip_all,
+    fields(target = %target.display(), base_commit, head_commit, path_count = paths.len()),
+    err
+)]
+pub async fn git_diff_range(
+    target: &Path,
+    base_commit: &str,
+    head_commit: &str,
+    paths: &[String],
+) -> Result<String, ReviewerError> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(target);
+    let range = format!("{base_commit}..{head_commit}");
+    cmd.args(["diff", "--no-color", &range]);
+    if !paths.is_empty() {
+        cmd.arg("--");
+        for p in paths {
+            cmd.arg(p);
+        }
+    }
+    let out = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output().await?;
+    if !out.status.success() {
+        return Err(ReviewerError::Git(format!(
+            "git diff {range} failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }

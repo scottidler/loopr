@@ -61,7 +61,12 @@ pub(crate) fn build_reviewer_user_ctx<'a>(
         .map(|n| n.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let evidence_section = build_evidence_section(diff, noop_files, bundle.head_commit.is_some());
+    let evidence_section = build_evidence_section(
+        diff,
+        noop_files,
+        bundle.head_commit.is_some(),
+        bundle.noop_reason.as_deref(),
+    );
 
     ReviewerUserCtx {
         work_title: work.title.as_str(),
@@ -84,7 +89,12 @@ pub(crate) fn build_reviewer_user_ctx<'a>(
 /// section (heading + code fences + special-case prose). Keeps the
 /// `.pmt` template a flat layout instead of branching on diff vs
 /// noop-files vs empty-with-head vs empty-without-head.
-fn build_evidence_section(diff: &str, noop_files: Option<&[(String, String)]>, has_head_commit: bool) -> String {
+fn build_evidence_section(
+    diff: &str,
+    noop_files: Option<&[(String, String)]>,
+    has_head_commit: bool,
+    noop_reason: Option<&str>,
+) -> String {
     match noop_files {
         None => {
             let mut s = String::from("### Diff\n");
@@ -103,7 +113,22 @@ fn build_evidence_section(diff: &str, noop_files: Option<&[(String, String)]>, h
             s
         }
         Some(files) => {
-            let mut s = String::from("### File Contents\n");
+            // Finding 5: a noop (`Done`) bundle's primary evidence is the
+            // agent's stated justification. Render it ahead of the file
+            // contents so the reviewer has something to judge "no code
+            // needed" against (previously the reviewer got empty claims,
+            // empty paths, and `noop_reason` was never surfaced).
+            let mut s = String::from("### Noop Justification\n");
+            match noop_reason {
+                Some(reason) if !reason.trim().is_empty() => {
+                    s.push_str(reason);
+                    if !reason.ends_with('\n') {
+                        s.push('\n');
+                    }
+                }
+                _ => s.push_str("(none given)\n"),
+            }
+            s.push_str("\n### File Contents\n");
             if files.is_empty() {
                 s.push_str("(no paths on noop bundle)\n");
             } else {

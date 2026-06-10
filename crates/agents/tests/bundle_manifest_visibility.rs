@@ -16,7 +16,7 @@ use std::process::Command as StdCommand;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use agents::{ActionResult, AgentAction, DispatchError, ToolExecutor, dispatch_action};
+use agents::{ActionResult, AgentAction, CommitContext, DispatchError, ToolExecutor, dispatch_action};
 use domain::{PlanId, Work};
 use worktree::Worktree;
 
@@ -94,7 +94,9 @@ async fn propose_bundle_emits_manifest_event() {
         let action = AgentAction::ProposeBundle {
             claims: vec!["did the work".into()],
         };
-        let result = dispatch_action(action, &work, &wt, &NoopTools).await.unwrap();
+        let result = dispatch_action(action, &work, &wt, &NoopTools, &CommitContext::test())
+            .await
+            .unwrap();
         assert!(matches!(result, ActionResult::BundleCreated { .. }));
     }
 

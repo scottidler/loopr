@@ -20,7 +20,7 @@ pub use director::{
     build_director_state, compute_state_hash, director_accept_bundle, next_mode, parse_director_actions,
     reconcile_director, run_director,
 };
-pub use dispatch::{ActionResult, DispatchError, RealTools, ToolExecutor, dispatch_action};
+pub use dispatch::{ActionResult, CommitContext, DispatchError, RealTools, ToolExecutor, dispatch_action};
 pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
 pub use lifeguard::{Decision, Lifeguard, canonical_hash};
 pub use parse::{ParseError, parse_actions, parse_one};

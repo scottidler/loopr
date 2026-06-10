@@ -79,6 +79,69 @@ pub trait ToolExecutor: Send + Sync {
     ) -> Result<String, DispatchError>;
 }
 
+/// Identity + signing posture for an agent git commit. Built once per
+/// `run_implementer` invocation and threaded into every commit helper so
+/// each agent commit carries the `Loopr-*` trailers (vision Git Posture)
+/// and honors the gpg-sign posture. The default posture is unsigned
+/// (`gpg_sign = false`), which preserves the historical `--no-gpg-sign`
+/// behavior; flipping it to `true` lets git apply its configured signing.
+#[derive(Debug, Clone)]
+pub struct CommitContext {
+    /// Per-OS-process run id (telemetry `ProcessId`). `None` when the
+    /// caller has no run scope (test construction).
+    pub run_id: Option<String>,
+    pub plan_id: String,
+    pub work_id: String,
+    /// Lowercase role name (`implementer`).
+    pub role: String,
+    /// Configured model id for the role's LLM. `None` when unavailable.
+    pub model: Option<String>,
+    /// `false` (default) appends `--no-gpg-sign`; `true` omits it so git
+    /// applies its configured signing.
+    pub gpg_sign: bool,
+}
+
+impl CommitContext {
+    /// `git commit` args carrying the sign posture plus one `--trailer
+    /// Key=Val` per populated identity field. Order is stable for tests.
+    /// Returned as owned `String`s so the trailer values (which embed
+    /// ids) outlive the call.
+    pub(crate) fn commit_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if !self.gpg_sign {
+            args.push("--no-gpg-sign".to_string());
+        }
+        if let Some(run) = &self.run_id {
+            args.push("--trailer".to_string());
+            args.push(format!("Loopr-Run={run}"));
+        }
+        args.push("--trailer".to_string());
+        args.push(format!("Loopr-Plan={}", self.plan_id));
+        args.push("--trailer".to_string());
+        args.push(format!("Loopr-Work={}", self.work_id));
+        args.push("--trailer".to_string());
+        args.push(format!("Loopr-Role={}", self.role));
+        if let Some(model) = &self.model {
+            args.push("--trailer".to_string());
+            args.push(format!("Loopr-Model={model}"));
+        }
+        args
+    }
+
+    /// Unsigned placeholder context for tests: no run/model scope, fixed
+    /// `implementer` role.
+    pub fn test() -> Self {
+        Self {
+            run_id: None,
+            plan_id: "p-test".to_string(),
+            work_id: "wk-test".to_string(),
+            role: "implementer".to_string(),
+            model: None,
+            gpg_sign: false,
+        }
+    }
+}
+
 #[instrument(
     level = "debug",
     skip_all,
@@ -94,6 +157,7 @@ pub async fn dispatch_action<T: ToolExecutor>(
     work: &Work,
     worktree: &Worktree,
     tools: &T,
+    commit_ctx: &CommitContext,
 ) -> Result<ActionResult, DispatchError> {
     debug!(action_kind = action.kind(), "dispatch: action begin");
     match action {
@@ -104,15 +168,23 @@ pub async fn dispatch_action<T: ToolExecutor>(
                 Err(e) => Ok(ActionResult::Error(format!("tool {tool} failed: {e}"))),
             }
         }
-        AgentAction::CommitChanges { message } => commit_changes(worktree.path(), &work.files, &message).await,
-        AgentAction::ProposeBundle { claims } => propose_bundle(worktree, &work.files, claims).await,
+        AgentAction::CommitChanges { message } => {
+            commit_changes(worktree.path(), &work.files, &message, commit_ctx).await
+        }
+        AgentAction::ProposeBundle { claims } => propose_bundle(worktree, &work.files, claims, commit_ctx).await,
         AgentAction::Done { message } => {
-            let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), vec![]);
+            // Finding 5: a noop (`Done`) bundle must give the reviewer
+            // evidence to judge "no code needed". Carry the Work's scope
+            // as `paths` (the files the reviewer reads) and the operator
+            // message as both `noop_reason` and a claim.
+            let mut bundle =
+                Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), vec![message.clone()]);
+            bundle.paths = work.files.clone();
             bundle.noop_reason = Some(message);
             Ok(ActionResult::Done(bundle))
         }
         AgentAction::NeedHelp { reason } => {
-            if let Err(e) = commit_partial_for_inspection(worktree.path()).await {
+            if let Err(e) = commit_partial_for_inspection(worktree.path(), &work.files, commit_ctx).await {
                 warn!(error = %e, "partial commit for need_help failed");
             }
             Ok(ActionResult::NeedHelp(reason))
@@ -143,7 +215,12 @@ pub async fn dispatch_action<T: ToolExecutor>(
     ),
     err,
 )]
-async fn commit_changes(path: &Path, scope_files: &[String], message: &str) -> Result<ActionResult, DispatchError> {
+async fn commit_changes(
+    path: &Path,
+    scope_files: &[String],
+    message: &str,
+    commit_ctx: &CommitContext,
+) -> Result<ActionResult, DispatchError> {
     let dirty = git_status_porcelain(path).await?;
     if dirty.is_empty() {
         Span::current().record("in_scope_count", 0u64);
@@ -169,9 +246,12 @@ async fn commit_changes(path: &Path, scope_files: &[String], message: &str) -> R
     let mut add_args: Vec<&str> = vec!["add", "--"];
     add_args.extend(in_scope.iter().map(String::as_str));
     run_git(path, &add_args).await?;
-    let mut commit_args: Vec<&str> = vec!["commit", "--only", "--message", message, "--no-gpg-sign", "--"];
-    commit_args.extend(in_scope.iter().map(String::as_str));
-    run_git(path, &commit_args).await?;
+    let mut commit_args: Vec<String> = vec!["commit".into(), "--only".into(), "--message".into(), message.to_string()];
+    commit_args.extend(commit_ctx.commit_args());
+    commit_args.push("--".into());
+    commit_args.extend(in_scope.iter().cloned());
+    let arg_refs: Vec<&str> = commit_args.iter().map(String::as_str).collect();
+    run_git(path, &arg_refs).await?;
     let sha = rev_parse_head(path).await?;
     debug!(
         sha = %sha,
@@ -185,21 +265,44 @@ async fn commit_changes(path: &Path, scope_files: &[String], message: &str) -> R
     })
 }
 
-/// Commit any in-progress work for human inspection and keep going.
-/// `git add -u` is intentional: only tracked modifications, so a
-/// runaway agent dropping garbage files doesn't pollute the branch.
-#[instrument(level = "debug", skip_all, fields(path = %path.display()), err)]
-async fn commit_partial_for_inspection(path: &Path) -> Result<(), DispatchError> {
-    run_git(path, &["add", "-u"]).await?;
-    if is_staging_empty(path).await? {
-        debug!("dispatch: commit_partial_for_inspection nothing-staged");
+/// Commit in-progress in-scope work for human inspection and keep
+/// going. Routes through the same `git_status_porcelain` ->
+/// `partition_by_scope` -> `git commit --only` pipeline as
+/// `commit_changes` (finding 2): `--only` snapshots exactly the
+/// in-scope paths, so a prior `bash` action's stray `git add` of junk
+/// (the `.venv`-class index leak) cannot fold into the inspection
+/// commit. Empty scope falls back to artifact-only filtering (every
+/// non-`.loopr/` dirty path is in-scope), matching `commit_changes`.
+#[instrument(level = "debug", skip_all, fields(path = %path.display(), scope_count = scope_files.len()), err)]
+async fn commit_partial_for_inspection(
+    path: &Path,
+    scope_files: &[String],
+    commit_ctx: &CommitContext,
+) -> Result<(), DispatchError> {
+    let dirty = git_status_porcelain(path).await?;
+    if dirty.is_empty() {
+        debug!("dispatch: commit_partial_for_inspection nothing-dirty");
         return Ok(());
     }
-    run_git(
-        path,
-        &["commit", "--message", "partial: agent needed help", "--no-gpg-sign"],
-    )
-    .await?;
+    let (in_scope, _out_of_scope) = scope::partition_by_scope(&dirty, scope_files);
+    if in_scope.is_empty() {
+        debug!("dispatch: commit_partial_for_inspection nothing-in-scope");
+        return Ok(());
+    }
+    let mut add_args: Vec<&str> = vec!["add", "--"];
+    add_args.extend(in_scope.iter().map(String::as_str));
+    run_git(path, &add_args).await?;
+    let mut commit_args: Vec<String> = vec![
+        "commit".into(),
+        "--only".into(),
+        "--message".into(),
+        "partial: agent needed help".into(),
+    ];
+    commit_args.extend(commit_ctx.commit_args());
+    commit_args.push("--".into());
+    commit_args.extend(in_scope.iter().cloned());
+    let arg_refs: Vec<&str> = commit_args.iter().map(String::as_str).collect();
+    run_git(path, &arg_refs).await?;
     debug!("dispatch: commit_partial_for_inspection ok");
     Ok(())
 }
@@ -230,6 +333,7 @@ async fn propose_bundle(
     worktree: &Worktree,
     scope_files: &[String],
     claims: Vec<String>,
+    commit_ctx: &CommitContext,
 ) -> Result<ActionResult, DispatchError> {
     let mut total_dropped: Vec<String> = vec![];
     let dirty = git_status_porcelain(worktree.path()).await?;
@@ -251,16 +355,17 @@ async fn propose_bundle(
             let mut add_args: Vec<&str> = vec!["add", "--"];
             add_args.extend(in_scope.iter().map(String::as_str));
             run_git(worktree.path(), &add_args).await?;
-            let mut commit_args: Vec<&str> = vec![
-                "commit",
-                "--only",
-                "--message",
-                "propose_bundle: stage remaining changes",
-                "--no-gpg-sign",
-                "--",
+            let mut commit_args: Vec<String> = vec![
+                "commit".into(),
+                "--only".into(),
+                "--message".into(),
+                "propose_bundle: stage remaining changes".into(),
             ];
-            commit_args.extend(in_scope.iter().map(String::as_str));
-            run_git(worktree.path(), &commit_args).await?;
+            commit_args.extend(commit_ctx.commit_args());
+            commit_args.push("--".into());
+            commit_args.extend(in_scope.iter().cloned());
+            let arg_refs: Vec<&str> = commit_args.iter().map(String::as_str).collect();
+            run_git(worktree.path(), &arg_refs).await?;
         }
     } else {
         Span::current().record("in_scope_count", 0u64);
@@ -268,6 +373,18 @@ async fn propose_bundle(
     }
 
     let head_commit = rev_parse_head(worktree.path()).await.ok();
+    // Finding 1: a propose with no new commits leaves HEAD at the
+    // worktree BASE sha. Capturing that as `head_commit` would have the
+    // reviewer review the base commit's foreign diff against this Work's
+    // ACs. Reject instead (the implementer must commit first or emit
+    // `done`). Skip when the base sha is empty (test-only construction
+    // with a fabricated worktree).
+    if !worktree.sha().is_empty() && head_commit.as_deref() == Some(worktree.sha()) {
+        warn!("propose_bundle: HEAD == base sha; no commits to propose");
+        return Ok(ActionResult::Error(
+            "no commits to propose; commit your changes first or emit `done` with a reason".to_string(),
+        ));
+    }
     let loc_changed = compute_loc_changed(worktree.path(), worktree.sha()).await.ok();
     // Branch-vs-base diff: every path the bundle touches across all the
     // implementer's commits, not just the last staging step. With an
@@ -314,6 +431,14 @@ async fn propose_bundle(
 
     let mut bundle = Bundle::new(worktree.work_id().clone(), worktree.branch().to_string(), claims);
     bundle.head_commit = head_commit.clone();
+    // Finding 4: persist the base sha so the reviewer diffs
+    // `base_commit..head_commit` across ALL the implementer's commits,
+    // not just the final one. Empty base (test construction) stays None.
+    bundle.base_commit = if worktree.sha().is_empty() {
+        None
+    } else {
+        Some(worktree.sha().to_string())
+    };
     bundle.loc_changed = loc_changed;
     bundle.paths = branch_paths.clone();
 
@@ -353,7 +478,7 @@ const PATCH_ID_OVERSIZE_CAP: usize = 1024 * 1024;
 /// single `?? new_dir/` entry that exact-path scope matching cannot
 /// resolve to any file under it.
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
-async fn git_status_porcelain(path: &Path) -> Result<Vec<String>, DispatchError> {
+pub(crate) async fn git_status_porcelain(path: &Path) -> Result<Vec<String>, DispatchError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -377,7 +502,7 @@ async fn git_status_porcelain(path: &Path) -> Result<Vec<String>, DispatchError>
 /// branch touched across all of the implementer's commits, not just
 /// the final staging step.
 #[instrument(level = "trace", skip_all, fields(path = %path.display(), base_sha = base_sha), err)]
-async fn git_diff_name_only(path: &Path, base_sha: &str) -> Result<Vec<String>, DispatchError> {
+pub(crate) async fn git_diff_name_only(path: &Path, base_sha: &str) -> Result<Vec<String>, DispatchError> {
     let spec = format!("{base_sha}..HEAD");
     let output = Command::new("git")
         .arg("-C")
@@ -517,25 +642,6 @@ async fn git_patch_id(
         .next()
         .map(str::to_string);
     Ok((patch_id, diff_bytes))
-}
-
-#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
-async fn is_staging_empty(path: &Path) -> Result<bool, DispatchError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["diff", "--cached", "--name-only"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(DispatchError::Git(format!(
-            "git diff --cached failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(output.stdout.is_empty())
 }
 
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]

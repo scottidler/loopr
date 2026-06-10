@@ -21,7 +21,10 @@ fn ok(call: ToolCall) -> Result<ToolCall, LlmError> {
 
 fn schema_validation_err(msg: &str) -> Result<ToolCall, LlmError> {
     Err(LlmError::Fatal {
-        reason: FatalReason::SchemaValidation(msg.to_string()),
+        reason: FatalReason::SchemaValidation {
+            message: msg.to_string(),
+            usage: llm::Usage::default(),
+        },
     })
 }
 

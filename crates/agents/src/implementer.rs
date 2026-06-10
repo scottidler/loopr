@@ -15,7 +15,6 @@
 //!   travels only via `history: Vec<IterationSummary>`.
 
 use std::path::Path;
-use std::process::Stdio;
 
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
@@ -28,7 +27,7 @@ use worktree::Worktree;
 
 use crate::action::AgentAction;
 use crate::config::ImplementerConfig;
-use crate::dispatch::{ActionResult, DispatchError, ToolExecutor, dispatch_action};
+use crate::dispatch::{ActionResult, CommitContext, DispatchError, ToolExecutor, dispatch_action};
 use crate::lifeguard::{Decision, Lifeguard};
 use crate::parse::{parse_actions, parse_one};
 
@@ -164,6 +163,9 @@ where
     /// Optional state summary (e.g. rejected-bundle reason on a
     /// retry). `None` on first attempts.
     pub state: StateSummary,
+    /// Per-OS-process run id (telemetry `ProcessId`) for the
+    /// `Loopr-Run` commit trailer. `None` in tests / when no run scope.
+    pub run_id: Option<String>,
 }
 
 #[instrument(
@@ -190,6 +192,17 @@ where
 {
     let mut history: Vec<IterationSummary> = Vec::new();
     let mut lifeguard = Lifeguard::new(deps.config.max_repeat_action, deps.config.max_parse_failures);
+
+    // Built once per Work: identity + signing posture for every agent
+    // commit this loop makes (the `Loopr-*` trailers + gpg-sign posture).
+    let commit_ctx = CommitContext {
+        run_id: deps.run_id.clone(),
+        plan_id: work.parent_id.to_string(),
+        work_id: work.id.to_string(),
+        role: "implementer".to_string(),
+        model: Some(deps.llm.model().to_string()),
+        gpg_sign: deps.config.gpg_sign,
+    };
 
     for iteration in 1..=deps.config.max_iterations {
         info!(iteration, work_id = %work.id, "implementer iteration start");
@@ -292,7 +305,7 @@ where
                 );
                 return Err(ImplementerError::EscalationNeeded(reason));
             }
-            let result = dispatch_action(action.clone(), work, worktree, &deps.tools).await?;
+            let result = dispatch_action(action.clone(), work, worktree, &deps.tools, &commit_ctx).await?;
             match result {
                 ActionResult::BundleCreated { mut bundle, dropped } => {
                     summaries.push("propose_bundle (id pending persistence)".to_string());
@@ -381,7 +394,8 @@ where
                         .await?;
                     match parse_one(&corrected_raw) {
                         Ok(corrected) => {
-                            let corrected_result = dispatch_action(corrected, work, worktree, &deps.tools).await?;
+                            let corrected_result =
+                                dispatch_action(corrected, work, worktree, &deps.tools, &commit_ctx).await?;
                             match corrected_result {
                                 ActionResult::BundleCreated { mut bundle, dropped } => {
                                     summaries.push("corrected -> propose_bundle".to_string());
@@ -500,7 +514,7 @@ where
     }
 
     // Iteration cap: force-propose path.
-    force_propose(work, worktree, deps).await
+    force_propose(work, worktree, deps, &commit_ctx).await
 }
 
 /// Force-propose path: the LLM produced parseable actions but never
@@ -523,6 +537,7 @@ async fn force_propose<L, T, S, C>(
     work: &Work,
     worktree: &Worktree,
     deps: &Deps<L, T, S, C>,
+    commit_ctx: &CommitContext,
 ) -> Result<Bundle, ImplementerError>
 where
     L: LlmClient,
@@ -530,15 +545,26 @@ where
     S: BundleSink,
     C: ContextBuilder,
 {
-    let modified = list_modified_tracked(worktree.path()).await?;
-    if modified.len() as u32 > deps.config.max_force_propose_files {
+    // Finding 2: route force-propose through the same
+    // `git_status_porcelain` -> `partition_by_scope` -> `git commit
+    // --only` pipeline as `commit_changes`. The old `git add -u` + plain
+    // commit folded in any pre-staged junk (the `.venv`-class index leak
+    // scoped staging was built to kill) and was invisible to the
+    // file-count / size guard. The guard now runs against the in-scope
+    // set that actually gets committed.
+    let dirty = crate::dispatch::git_status_porcelain(worktree.path()).await?;
+    let (in_scope, out_of_scope) = crate::scope::partition_by_scope(&dirty, &work.files);
+    if !out_of_scope.is_empty() {
+        warn!(out_of_scope = ?out_of_scope, "force_propose: dropping out-of-scope dirty paths");
+    }
+    if in_scope.len() as u32 > deps.config.max_force_propose_files {
         return Err(ImplementerError::EscalationNeeded(format!(
-            "force-propose guard tripped: {} modified files exceeds max {}",
-            modified.len(),
+            "force-propose guard tripped: {} in-scope files exceeds max {}",
+            in_scope.len(),
             deps.config.max_force_propose_files
         )));
     }
-    for file in &modified {
+    for file in &in_scope {
         let full = worktree.path().join(file);
         if let Ok(meta) = tokio::fs::metadata(&full).await
             && meta.len() > deps.config.max_force_propose_file_size_bytes
@@ -554,18 +580,21 @@ where
 
     let head_before = rev_parse_head(worktree.path()).await.ok();
 
-    if !modified.is_empty() {
-        run_git(worktree.path(), &["add", "-u"]).await?;
-        run_git(
-            worktree.path(),
-            &[
-                "commit",
-                "--message",
-                "force-propose: iteration cap reached",
-                "--no-gpg-sign",
-            ],
-        )
-        .await?;
+    if !in_scope.is_empty() {
+        let mut add_args: Vec<&str> = vec!["add", "--"];
+        add_args.extend(in_scope.iter().map(String::as_str));
+        run_git(worktree.path(), &add_args).await?;
+        let mut commit_args: Vec<String> = vec![
+            "commit".into(),
+            "--only".into(),
+            "--message".into(),
+            "force-propose: iteration cap reached".into(),
+        ];
+        commit_args.extend(commit_ctx.commit_args());
+        commit_args.push("--".into());
+        commit_args.extend(in_scope.iter().cloned());
+        let arg_refs: Vec<&str> = commit_args.iter().map(String::as_str).collect();
+        run_git(worktree.path(), &arg_refs).await?;
     }
 
     let head_after = rev_parse_head(worktree.path()).await.ok();
@@ -573,6 +602,17 @@ where
         compute_loc_changed(worktree.path(), worktree.sha()).await.ok()
     } else {
         None
+    };
+    // Finding 3: populate bundle.paths from the full branch-vs-base diff
+    // so the reviewer's diff filter and the integrator's collision
+    // detector see every path this force-proposed bundle touches - the
+    // bundle class that most deserves the scrutiny.
+    let branch_paths = if worktree.sha().is_empty() {
+        Vec::new()
+    } else {
+        crate::dispatch::git_diff_name_only(worktree.path(), worktree.sha())
+            .await
+            .unwrap_or_default()
     };
 
     let mut bundle = Bundle::new(
@@ -582,32 +622,18 @@ where
     );
     bundle.force_proposed = true;
     bundle.head_commit = head_after.or(head_before);
+    bundle.base_commit = if worktree.sha().is_empty() {
+        None
+    } else {
+        Some(worktree.sha().to_string())
+    };
+    bundle.paths = branch_paths;
     bundle.loc_changed = loc_changed;
     let id = deps.bundles.persist(bundle.clone()).await?;
     bundle.id = id;
     Ok(bundle)
 }
 
-#[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
-async fn list_modified_tracked(path: &Path) -> Result<Vec<String>, DispatchError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["ls-files", "--modified"])
-        .stdout(Stdio::piped())
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(DispatchError::Git(format!(
-            "git ls-files --modified failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect())
-}
 
 #[instrument(level = "trace", skip_all, fields(path = %path.display()), err)]
 async fn rev_parse_head(path: &Path) -> Result<String, DispatchError> {
