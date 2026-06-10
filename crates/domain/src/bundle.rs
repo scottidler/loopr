@@ -110,6 +110,14 @@ pub struct Bundle {
     pub base_commit: Option<String>,
     #[serde(default)]
     pub force_proposed: bool,
+    /// Typed reason this Bundle last failed (Rejected / IntegrationFailed
+    /// / Superseded). `None` on the success path. The companion free-text
+    /// detail lives in `verification`; this is the machine-matchable
+    /// discriminant. Additive `#[serde(default)]` — old JSONL rows
+    /// deserialize as `None`. Written by the daemon's panic posture
+    /// (`Panic`) and the reviewer/integrator failure routing.
+    #[serde(default)]
+    pub failure_reason: Option<crate::FailureReason>,
     #[record(indexed)]
     pub status: BundleStatus,
 }
@@ -136,6 +144,7 @@ impl Bundle {
             head_commit: None,
             base_commit: None,
             force_proposed: false,
+            failure_reason: None,
             status: BundleStatus::Proposed,
         }
     }

@@ -129,6 +129,15 @@ pub struct Work {
     /// recovery loop and by the Work summary renderer.
     #[serde(default)]
     pub blocked_reason: Option<String>,
+    /// Typed reason this Work last failed (Blocked / Abandoned). `None`
+    /// on the success path. The companion free-text detail lives in
+    /// `blocked_reason`; this is the machine-matchable discriminant.
+    /// Additive `#[serde(default)]` — old JSONL rows deserialize as
+    /// `None`. Written by the daemon's panic posture (`Panic`), the
+    /// startup reconcile sweep (`CrashInterrupted`), and the
+    /// implementer/reviewer failure arms.
+    #[serde(default)]
+    pub failure_reason: Option<crate::FailureReason>,
 }
 
 impl Work {
@@ -155,6 +164,7 @@ impl Work {
             attempt_count: 0,
             session_failure_count: 0,
             blocked_reason: None,
+            failure_reason: None,
         }
     }
 

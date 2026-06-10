@@ -107,6 +107,7 @@ async fn create_same_id_twice_returns_already_exists() {
         attempt_count: 0,
         session_failure_count: 0,
         blocked_reason: None,
+        failure_reason: None,
     };
     store.works().create(w1).await.expect("first create");
     let err = store.works().create(w2).await.expect_err("second should reject");

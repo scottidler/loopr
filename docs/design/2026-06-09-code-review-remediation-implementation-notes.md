@@ -605,3 +605,53 @@ Landing across commits (mirrors Phase 1/2):
   integration test is a Phase 11 item (the doc's store/domain test-gap
   list); the store-level collision rejection and the pure re-mint remap
   are unit-tested here.
+
+## Phase 4: Doom-loop brakes and panic posture
+
+Landing across commits (mirrors Phases 1-3):
+- **Commit A** — domain `FailureReason` foundation (the typed failure
+  enum + the `failure_reason` field on Work/Bundle).
+- **Commit B** — loopr panic posture (catch_unwind, persist Panic,
+  cleanup-on-panic, startup CrashInterrupted) + `session_failure_count`
+  increment.
+- **Commit C** — Director brakes (config caps, pattern/mode escalation,
+  parse-requery counters, need_help->Stalled, restart backoff, operator
+  notes cap, minors).
+- **Commit D** — lifeguard consecutive-streak semantics +
+  rejected-bundle feedback wiring.
+- **Commit E** — decomposer validation-retry + max-children bound.
+- **Commit F** — handler Stalled->Active re-decompose + spawner
+  supersede-Triaged-on-Blocked.
+
+### Commit A — domain FailureReason foundation
+
+#### Design decisions
+- **`FailureReason` lives in its own `domain/src/failure.rs` module**
+  (single-word filename per the naming rule) with the exact variant set
+  the vision specifies: `TokenBudget`, `ToolFailure { tool }`,
+  `ReviewerRejection`, `AcUnmet`, `Panic`, `CrashInterrupted`,
+  `Other(String)`. Externally-tagged serde, kebab-case variant tags.
+- **No new `error: String` companion field.** The Data Model line says
+  the enum is "carried on Work/Bundle with a companion error: String";
+  both records already have that companion in domain-appropriate form
+  (`Work.blocked_reason`, `Bundle.verification`), so `FailureReason` is
+  added as the discriminant alongside the existing prose field rather
+  than introducing a redundant third field. Documented on each field.
+- **Field is `Option<FailureReason>` with `#[serde(default)]`** on both
+  `Work` and `Bundle` — additive, so JSONL rows written before this
+  enum existed deserialize clean as `None` (verified by a unit test).
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- Reusing `blocked_reason`/`verification` as the companion prose (vs. a
+  dedicated `error: String`) avoids a fourth Work field and a breaking
+  JSONL change; the cost is that the detail's field name differs by
+  record kind, which the doc comments call out.
+
+#### Open questions
+- None for Commit A. The enum's *writers* (panic posture, reconcile,
+  failure arms) land in Commits B-F; Commit A is the type + field only,
+  hence the `dead_code`-free export (the field is constructed by
+  `Work::new`/`Bundle::new` as `None`).

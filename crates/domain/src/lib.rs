@@ -8,6 +8,7 @@ extern crate self as domain;
 
 mod bundle;
 mod criteria;
+mod failure;
 mod fsm;
 mod graph;
 mod id;
@@ -20,6 +21,7 @@ mod work;
 
 pub use bundle::{Bundle, BundleStatus};
 pub use criteria::AcceptanceCriteria;
+pub use failure::FailureReason;
 pub use fsm::{FsmError, FsmErrorKind, TargetKind, Transition};
 pub use graph::{GraphError, WorkGraph};
 pub use id::{BundleId, NoteId, PlanId, TickId, WorkId, generate_id, now_millis};
