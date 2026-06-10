@@ -56,6 +56,16 @@ fn classify_status_typed_reasons() {
             reason: RetryableReason::ServerError { status: 503 }
         }
     ));
-    assert!(matches!(r(401, None), LlmError::Fatal { reason: FatalReason::Auth(_) }));
-    assert!(matches!(r(400, None), LlmError::Fatal { reason: FatalReason::BadRequest(_) }));
+    assert!(matches!(
+        r(401, None),
+        LlmError::Fatal {
+            reason: FatalReason::Auth(_)
+        }
+    ));
+    assert!(matches!(
+        r(400, None),
+        LlmError::Fatal {
+            reason: FatalReason::BadRequest(_)
+        }
+    ));
 }

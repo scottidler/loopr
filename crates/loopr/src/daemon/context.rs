@@ -623,10 +623,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             work_id: Some(work.id.to_string()),
             role: Some("implementer".to_string()),
         };
-        let result =
-            std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_implementer(&work, &worktree, &deps)))
-                .catch_unwind()
-                .await;
+        let result = std::panic::AssertUnwindSafe(llm::CallContext::scope(
+            call_ctx,
+            run_implementer(&work, &worktree, &deps),
+        ))
+        .catch_unwind()
+        .await;
         match result {
             Err(panic) => {
                 let msg = panic_message(&*panic);
@@ -1010,32 +1012,35 @@ pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
     plan_id: PlanId,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
     let span = tracing::info_span!("daemon.promote_unblocked_siblings", plan_id = %plan_id);
-    Box::pin(async move {
-        let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "promote_unblocked_siblings: list_by_parent_id failed");
-                return;
+    Box::pin(
+        async move {
+            let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "promote_unblocked_siblings: list_by_parent_id failed");
+                    return;
+                }
+            };
+            let graph = WorkGraph::from_works(&siblings);
+            let done: HashSet<WorkId> = siblings
+                .iter()
+                .filter(|w| w.status == WorkStatus::Done)
+                .map(|w| w.id.clone())
+                .collect();
+            let ready: HashSet<WorkId> = graph.ready_set(&done).into_iter().collect();
+            let pending_ready: Vec<Work> = siblings
+                .into_iter()
+                .filter(|w| w.status == WorkStatus::Pending && ready.contains(&w.id))
+                .collect();
+            let promoted = pending_ready.len();
+            for work in pending_ready {
+                let mut tasks = ctx.implementer_tasks.lock().await;
+                tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
             }
-        };
-        let graph = WorkGraph::from_works(&siblings);
-        let done: HashSet<WorkId> = siblings
-            .iter()
-            .filter(|w| w.status == WorkStatus::Done)
-            .map(|w| w.id.clone())
-            .collect();
-        let ready: HashSet<WorkId> = graph.ready_set(&done).into_iter().collect();
-        let pending_ready: Vec<Work> = siblings
-            .into_iter()
-            .filter(|w| w.status == WorkStatus::Pending && ready.contains(&w.id))
-            .collect();
-        let promoted = pending_ready.len();
-        for work in pending_ready {
-            let mut tasks = ctx.implementer_tasks.lock().await;
-            tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
+            info!(promoted, "promote_unblocked_siblings: done");
         }
-        info!(promoted, "promote_unblocked_siblings: done");
-    }.instrument(span))
+        .instrument(span),
+    )
 }
 
 /// Mark any Pending Works whose `dependencies` contains `terminal_work_id`
@@ -1060,55 +1065,58 @@ pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
         terminal_work_id = %terminal_work_id,
         terminal_status = ?terminal_status,
     );
-    Box::pin(async move {
-        let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "block_dependent_siblings: list_by_parent_id failed");
-                return;
+    Box::pin(
+        async move {
+            let siblings = match ctx.store.works().list_by_parent_id(&plan_id).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "block_dependent_siblings: list_by_parent_id failed");
+                    return;
+                }
+            };
+            let graph = WorkGraph::from_works(&siblings);
+            // F7: block the FULL transitive closure of dependents, not just
+            // the direct ones. A Work that depends (even transitively) on a
+            // terminal Work can never have all its deps reach Done, so it is
+            // irrecoverable. BFS over the reverse-dependency edges from the
+            // terminal Work to a fixpoint; the graph topology is static, so a
+            // single closure pass IS the fixpoint (no re-listing needed).
+            let mut closure: HashSet<WorkId> = HashSet::new();
+            let mut frontier: Vec<WorkId> = graph.dependents_of(&terminal_work_id).to_vec();
+            while let Some(node) = frontier.pop() {
+                if closure.insert(node.clone()) {
+                    frontier.extend(graph.dependents_of(&node).iter().cloned());
+                }
             }
-        };
-        let graph = WorkGraph::from_works(&siblings);
-        // F7: block the FULL transitive closure of dependents, not just
-        // the direct ones. A Work that depends (even transitively) on a
-        // terminal Work can never have all its deps reach Done, so it is
-        // irrecoverable. BFS over the reverse-dependency edges from the
-        // terminal Work to a fixpoint; the graph topology is static, so a
-        // single closure pass IS the fixpoint (no re-listing needed).
-        let mut closure: HashSet<WorkId> = HashSet::new();
-        let mut frontier: Vec<WorkId> = graph.dependents_of(&terminal_work_id).to_vec();
-        while let Some(node) = frontier.pop() {
-            if closure.insert(node.clone()) {
-                frontier.extend(graph.dependents_of(&node).iter().cloned());
+            let pending_dependents: Vec<Work> = siblings
+                .iter()
+                .filter(|w| w.status == WorkStatus::Pending && closure.contains(&w.id))
+                .cloned()
+                .collect();
+            let mut blocked = 0usize;
+            for mut work in pending_dependents {
+                work.blocked_reason = Some(format!(
+                    "dep {} reached {:?}; irrecoverable",
+                    terminal_work_id, terminal_status
+                ));
+                if let Err(e) = transition_and_persist_work(
+                    &*ctx.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Reactor,
+                    false,
+                )
+                .await
+                {
+                    warn!(work_id = %work.id, error = %e, "block_dependent_siblings: Pending -> Blocked failed");
+                } else {
+                    blocked += 1;
+                }
             }
+            warn!(blocked, "block_dependent_siblings: done");
         }
-        let pending_dependents: Vec<Work> = siblings
-            .iter()
-            .filter(|w| w.status == WorkStatus::Pending && closure.contains(&w.id))
-            .cloned()
-            .collect();
-        let mut blocked = 0usize;
-        for mut work in pending_dependents {
-            work.blocked_reason = Some(format!(
-                "dep {} reached {:?}; irrecoverable",
-                terminal_work_id, terminal_status
-            ));
-            if let Err(e) = transition_and_persist_work(
-                &*ctx.summary_fanout,
-                &mut work,
-                WorkStatus::Blocked,
-                Role::Reactor,
-                false,
-            )
-            .await
-            {
-                warn!(work_id = %work.id, error = %e, "block_dependent_siblings: Pending -> Blocked failed");
-            } else {
-                blocked += 1;
-            }
-        }
-        warn!(blocked, "block_dependent_siblings: done");
-    }.instrument(span))
+        .instrument(span),
+    )
 }
 
 /// Resolve the current HEAD commit of the target repo. Async via

@@ -1,7 +1,11 @@
 use super::*;
 
 fn sample_bundle() -> Bundle {
-    Bundle::new(WorkId::new(), "loopr/wk-abc12".to_string(), vec!["did the thing".to_string()])
+    Bundle::new(
+        WorkId::new(),
+        "loopr/wk-abc12".to_string(),
+        vec!["did the thing".to_string()],
+    )
 }
 
 #[test]

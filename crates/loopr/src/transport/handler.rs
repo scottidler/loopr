@@ -899,10 +899,9 @@ where
             work_id: None,
             role: Some("director".to_string()),
         };
-        let result =
-            std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_director(&plan_id, &deps)))
-                .catch_unwind()
-                .await;
+        let result = std::panic::AssertUnwindSafe(llm::CallContext::scope(call_ctx, run_director(&plan_id, &deps)))
+            .catch_unwind()
+            .await;
         match result {
             Ok(Ok(())) => info!(plan_id = %plan_id_for_log, "director task exited Ok"),
             Ok(Err(DirectorError::NeedHelp(reason))) => warn!(

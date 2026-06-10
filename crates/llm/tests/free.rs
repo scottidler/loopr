@@ -228,10 +228,7 @@ async fn free_usage_carries_concrete_response_model() {
         .await;
 
     let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
-    let (_out, usage) = client
-        .complete_free("s", &[Message::user("q")], None)
-        .await
-        .unwrap();
+    let (_out, usage) = client.complete_free("s", &[Message::user("q")], None).await.unwrap();
     assert_eq!(
         usage.model.as_deref(),
         Some("claude-sonnet-4-6-20260115"),
@@ -303,7 +300,10 @@ async fn free_empty_system_omits_system_field() {
 
     let reqs = server.received_requests().await.unwrap();
     let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
-    assert!(body.get("system").is_none(), "empty system must be omitted, got: {body}");
+    assert!(
+        body.get("system").is_none(),
+        "empty system must be omitted, got: {body}"
+    );
 }
 
 #[tokio::test]

@@ -412,7 +412,11 @@ impl AnthropicClient {
         // RateLimited reason; request_id is diagnostic.
         let retry_after = parse_retry_after(response.headers());
         let request_id = request_id_header(response.headers());
-        debug!(?retry_after, request_id = request_id.as_deref().unwrap_or(""), "anthropic response headers");
+        debug!(
+            ?retry_after,
+            request_id = request_id.as_deref().unwrap_or(""),
+            "anthropic response headers"
+        );
         let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
             reason: RetryableReason::MalformedBody {
                 detail: format!("failed to read response body: {e}"),
@@ -461,7 +465,11 @@ impl AnthropicClient {
         let status = response.status();
         let retry_after = parse_retry_after(response.headers());
         let request_id = request_id_header(response.headers());
-        debug!(?retry_after, request_id = request_id.as_deref().unwrap_or(""), "anthropic response headers");
+        debug!(
+            ?retry_after,
+            request_id = request_id.as_deref().unwrap_or(""),
+            "anthropic response headers"
+        );
         let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
             reason: RetryableReason::MalformedBody {
                 detail: format!("failed to read response body: {e}"),
@@ -630,9 +638,7 @@ fn reqwest_err_to_llm_error(e: reqwest::Error) -> LlmError {
         };
     }
     LlmError::Retryable {
-        reason: RetryableReason::Network {
-            detail: format!("{e}"),
-        },
+        reason: RetryableReason::Network { detail: format!("{e}") },
     }
 }
 
