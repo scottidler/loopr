@@ -192,16 +192,34 @@ impl Config {
         let mut merged = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
         let mut have_layer = false;
 
-        // XDG user layer (lowest file layer).
+        // XDG user layer (lowest file layer). Best-effort: the
+        // `~/.config/loopr/loopr.yml` path is shared across ALL loopr
+        // versions on the machine (v3, v4, v5, ...), so this version
+        // cannot demand it conform to its own schema. A file that does not
+        // validate as a v5 `Config` (e.g. a leftover v3/v4 config with
+        // keys like `debug` / `agents.enabled`) is WARNED about and
+        // skipped rather than bricking daemon startup. Files this version
+        // OWNS — the target `.loopr/config.yml`, written by `loopr init` —
+        // stay strict below. Read / parse / validate failures all degrade
+        // to warn-and-skip here.
         if let Some(xdg_path) = xdg_config_file()
             && xdg_path.exists()
         {
-            let body = fs::read_to_string(&xdg_path)
-                .map_err(|e| LooprError::DaemonStartup(format!("read {}: {e}", xdg_path.display())))?;
-            let value: serde_yaml::Value = serde_yaml::from_str(&body)
-                .map_err(|e| LooprError::DaemonStartup(format!("parse {}: {e}", xdg_path.display())))?;
-            deep_merge(&mut merged, value);
-            have_layer = true;
+            match Self::read_optional_layer(&xdg_path) {
+                Ok(Some(value)) => {
+                    deep_merge(&mut merged, value);
+                    have_layer = true;
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    tracing::warn!(
+                        path = %xdg_path.display(),
+                        reason = %reason,
+                        "XDG user config is not valid for this loopr version; ignoring it \
+                         (it is shared across loopr versions). Remove or migrate it to silence this."
+                    );
+                }
+            }
         }
 
         // Target layer (overrides XDG).
@@ -236,6 +254,26 @@ impl Config {
 
         config.resolve_model_tiers();
         Ok(config)
+    }
+
+    /// Read a best-effort config layer (the shared XDG user config) and
+    /// return its YAML `Value` only if it both parses AND validates as a
+    /// v5 `Config` standalone (every key known, under `deny_unknown_fields`;
+    /// `#[serde(default)]` fills the absent ones, so a partial file is
+    /// fine). `Ok(None)` is reserved for an empty file; `Err(reason)` means
+    /// the caller should warn and skip the layer. Validating standalone
+    /// keeps the later merged deserialize strict (target typos still fail)
+    /// while letting a foreign/legacy XDG file be ignored instead of
+    /// bricking startup.
+    fn read_optional_layer(path: &Path) -> Result<Option<serde_yaml::Value>, String> {
+        let body = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+        let value: serde_yaml::Value = serde_yaml::from_str(&body).map_err(|e| format!("parse: {e}"))?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        // Validate as a standalone Config (strict) before accepting it.
+        serde_yaml::from_value::<Self>(value.clone()).map_err(|e| format!("not valid for this version: {e}"))?;
+        Ok(Some(value))
     }
 
     /// Rewrite every role's model reference to a concrete model ID by

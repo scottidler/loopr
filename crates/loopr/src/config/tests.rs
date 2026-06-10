@@ -371,6 +371,42 @@ fn env_invalid_value_errors_cleanly() {
 }
 
 #[test]
+fn invalid_legacy_xdg_layer_is_skipped_not_fatal() {
+    // The XDG user config is shared across loopr versions; a leftover
+    // v3/v4 file (unknown keys under deny_unknown_fields) must be warned-
+    // and-skipped, NOT brick the load. Defaults stand.
+    let g = load_guard();
+    let xdg_path = g.xdg_config_path();
+    std::fs::create_dir_all(xdg_path.parent().unwrap()).expect("mkdir xdg");
+    std::fs::write(
+        &xdg_path,
+        "debug: true\nagents:\n  enabled: true\nvalidator:\n  enabled: false\n",
+    )
+    .expect("write legacy xdg");
+
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("legacy XDG config must be skipped, not fatal");
+    assert_eq!(cfg.llm.model, "claude-sonnet-4-6", "defaults stand after skipping XDG");
+    assert_eq!(cfg.transport.client_request_secs, 10);
+}
+
+#[test]
+fn invalid_target_file_is_still_fatal() {
+    // A target .loopr/config.yml is v5-owned (written by `loopr init`), so
+    // it stays strict: an unknown field is a hard error, unlike the shared
+    // XDG layer.
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    std::fs::write(loopr_dir.join("config.yml"), "debug: true\n").expect("write");
+    assert!(
+        Config::load(dir.path()).is_err(),
+        "an unknown field in the v5-owned target config must be fatal"
+    );
+}
+
+#[test]
 fn xdg_layer_applied_when_no_target_file() {
     // A key set only in the XDG user layer reaches the loaded config even
     // when the target has no .loopr/config.yml.

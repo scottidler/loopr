@@ -1808,3 +1808,52 @@ Landing across six commits (mirrors Phases 1-6):
   or populate it with v5-schema keys. Flagged for the operator; not
   worked around in code (silently tolerating unknown fields in the XDG
   layer would hide exactly the drift this chain is meant to surface).
+
+### Commit G — XDG layer is best-effort; tests isolate XDG_CONFIG_HOME (finding 13 follow-up)
+
+#### Design decisions
+- **The shared XDG user config is best-effort, not strict.** Commit F's
+  open question (a pre-existing v3/v4 `~/.config/loopr/loopr.yml` would
+  brick v5 startup under `deny_unknown_fields`) is RESOLVED here, and the
+  resolution surfaced immediately as 12 failing `tests/daemon.rs`
+  integration tests — they fork a real daemon, which read the developer's
+  real legacy global config and refused to boot. The principled fix:
+  `~/.config/loopr/loopr.yml` is a single file shared by ALL loopr
+  versions on the machine, so v5 cannot demand it conform to the v5
+  schema. `Config::read_optional_layer` validates the XDG file standalone
+  (parse + `deny_unknown_fields` deserialize into `Config`); if it fails
+  for ANY reason (unreadable / unparseable / unknown key), the daemon
+  WARNS and skips the XDG layer instead of aborting. The TARGET config
+  (`.loopr/config.yml`, written by `loopr init` — v5-owned) stays strict:
+  an unknown field there is still fatal. "Strict where you own the schema,
+  tolerant where you share it."
+- **Test hygiene.** The `tests/daemon.rs` and `tests/smoke.rs` binary
+  helpers already isolated `XDG_DATA_HOME` to a per-test dir; they now also
+  isolate `XDG_CONFIG_HOME`, so the daemon never reads the developer's real
+  global config (a valid one could otherwise perturb tests). The
+  `config/tests.rs` `load_guard` does the same for the in-process load
+  tests.
+- **`ac15` retargeted + no-fork smoke test added.** `ac15` used `daemon
+  status` to trigger an auto-fork; Phase 7 finding 9 removed status from
+  the auto-fork arm, so `ac15` now uses `plans` (still auto-forks) and a
+  new `daemon_status_does_not_fork` asserts status leaves no pid file.
+
+#### Deviations
+- This SUPERSEDES Commit F's strict-XDG stance and the "fail-loud, don't
+  silently tolerate" framing in F's notes / the vision text F wrote. The
+  vision's chain prose should be read with this refinement: the env/target
+  layers are strict; the XDG layer is best-effort. (A follow-up vision
+  tweak to state the strict-vs-tolerant split explicitly is left for the
+  Phase 10 doc-truth pass / amendment `a8`.)
+
+#### Tradeoffs
+- A user's INTENDED v5 XDG config with a single typo'd key is dropped
+  WHOLESALE (with a warning naming the bad key) rather than partially
+  applied. Acceptable for a shared cross-version file; the warning is the
+  signal. Per-key tolerance would require deserializing into a parallel
+  non-strict struct, not worth it.
+
+#### Open questions
+- None. (Scott's existing `~/.config/loopr/loopr.yml` is a v3/v4 file; v5
+  now warns-and-ignores it rather than bricking — no operator action
+  required, though removing the stale file would silence the boot warning.)

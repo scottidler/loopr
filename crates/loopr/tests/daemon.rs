@@ -17,12 +17,14 @@ use tempfile::TempDir;
 mod common;
 use common::{DaemonAutoStop, init_git_repo};
 
-/// Build a `loopr` subprocess with `XDG_DATA_HOME` pointed at a
-/// test-local dir so session state doesn't pollute the real user's
-/// `~/.local/share/loopr/`.
+/// Build a `loopr` subprocess with `XDG_DATA_HOME` and `XDG_CONFIG_HOME`
+/// pointed at a test-local dir so session state doesn't pollute the real
+/// user's `~/.local/share/loopr/` and the daemon's config load doesn't
+/// read the real `~/.config/loopr/loopr.yml` (the XDG user config layer).
 fn loopr(target: &Path) -> Command {
     let mut cmd = Command::cargo_bin("loopr").unwrap();
     cmd.env("XDG_DATA_HOME", xdg_home_for(target));
+    cmd.env("XDG_CONFIG_HOME", xdg_home_for(target));
     cmd
 }
 
@@ -392,9 +394,12 @@ fn ac15_pid_reuse_protection_rejects_non_loopr() {
     fs::create_dir_all(td.path().join(".loopr")).unwrap();
     fs::write(td.path().join(".loopr").join("daemon.pid"), "1\n").unwrap();
 
-    // Use a command that triggers ensure_daemon_if_needed.
+    // Use a command that triggers ensure_daemon_if_needed and auto-forks.
+    // `daemon status` is deliberately NOT such a command anymore (Phase 7:
+    // a read-only status query must not auto-fork — see
+    // `daemon_status_does_not_fork`), so this uses `plans` instead.
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "daemon", "status"])
+        .args(["-C", td.path().to_str().unwrap(), "plans"])
         .assert()
         .success();
 
@@ -403,6 +408,26 @@ fn ac15_pid_reuse_protection_rejects_non_loopr() {
     assert!(pid_is_alive(pid_after), "fresh daemon is alive at pid {pid_after}");
 
     stop_daemon(td.path());
+}
+
+// Phase 7: `daemon status` is read-only and must NOT auto-fork a daemon.
+// With no daemon running it prints "no daemon running" and leaves no pid
+// file behind (a read never becomes a mutate).
+#[test]
+fn daemon_status_does_not_fork() {
+    let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
+
+    loopr(td.path())
+        .args(["-C", td.path().to_str().unwrap(), "daemon", "status"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("no daemon running"));
+
+    assert!(
+        read_pid(td.path()).is_none(),
+        "daemon status must not auto-fork a daemon"
+    );
 }
 
 // AC 22: cargo-tree on loopr shows tokio / tokio-util / libc (and the

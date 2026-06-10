@@ -15,10 +15,12 @@ mod common;
 use common::{DaemonAutoStop, init_git_repo, stop_daemon_for};
 
 /// XDG-isolated `loopr` subprocess so session state stays per-test
-/// instead of polluting `~/.local/share/loopr/`.
+/// instead of polluting `~/.local/share/loopr/`, and so the daemon's
+/// config load does not read the real `~/.config/loopr/loopr.yml`.
 fn loopr(target: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("loopr").unwrap();
     cmd.env("XDG_DATA_HOME", xdg_home_for(target));
+    cmd.env("XDG_CONFIG_HOME", xdg_home_for(target));
     cmd
 }
 
