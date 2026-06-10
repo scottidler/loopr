@@ -203,10 +203,13 @@ fn ac14_foreground_start_blocked_by_running_background_daemon() {
 }
 
 // AC 6: `loopr -C /tmp daemon status` connects, handshakes, receives a
-// StatusResult, prints it in a human-readable form (key: value lines),
-// exits 0.
+// StatusResult, and renders it through `output::render`. Phase 8 of the
+// code-review remediation replaced the hand-rolled human key:value lines
+// with structured output (the old form ignored `--output`, so `-o json`
+// emitted unparseable text). assert_cmd pipes stdout, so the default
+// resolves to JSON, which must parse and carry the status fields.
 #[test]
-fn ac6_daemon_status_prints_human_readable() {
+fn ac6_daemon_status_renders_structured_output() {
     let td = TempDir::new().unwrap();
     let _stop = DaemonAutoStop::for_target(td.path());
     start_daemon(td.path());
@@ -216,10 +219,12 @@ fn ac6_daemon_status_prints_human_readable() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
-    assert!(stdout.contains("pid:"), "pid line: {stdout}");
-    assert!(stdout.contains("started-at:"), "started-at line: {stdout}");
-    assert!(stdout.contains("active-plans:"), "active-plans line: {stdout}");
-    assert!(stdout.contains("active-works:"), "active-works line: {stdout}");
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("status must be valid JSON ({e}); got: {stdout}"));
+    assert!(v.get("pid").is_some(), "pid field: {stdout}");
+    assert!(v.get("started_at").is_some(), "started_at field: {stdout}");
+    assert!(v.get("active_plans").is_some(), "active_plans field: {stdout}");
+    assert!(v.get("active_works").is_some(), "active_works field: {stdout}");
 
     stop_daemon(td.path());
 }
@@ -287,11 +292,12 @@ fn ac9_plan_auto_forks_daemon_and_creates_plan() {
     let td = TempDir::new().unwrap();
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
+    // Piped stdout -> JSON render of PlanCreateResult (`{ "plan": {...} }`).
     loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "plan", "create", "x"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("plan:"));
+        .stdout(predicate::str::contains("\"plan\""));
     assert!(read_pid(td.path()).is_some(), "daemon was auto-forked");
 
     stop_daemon(td.path());

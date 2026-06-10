@@ -2026,3 +2026,73 @@ Landing across commits (mirrors Phases 1-7):
 
 #### Open questions
 - None.
+
+### Commit D — CLI minors batch + output rendering (finding 3)
+
+#### Design decisions
+- **`transport::ipc_call<P, R>` consolidation.** One shared helper replaces
+  the ~7 hand-rolled runtime+connect+handshake+request+decode blocks
+  (`daemon status`, `plan create`, `plan override`, `show`, `list`,
+  `director chat`, `director status`). Runs on a CURRENT-thread runtime
+  (these are one-shot client calls; the multi-thread runtime was overkill).
+  It loads `Config` to honor the `transport.client-request-secs` knob
+  (previously unreachable from the CLI) — best-effort: a config that fails
+  to load warns and falls back to `ClientTimeouts::default()` rather than
+  blocking a read verb on a malformed config (the daemon's own startup is
+  the strict surface).
+- **Finding 3 (`--output` rendering).** `daemon status`, `plan create`,
+  `plan override`, and `director status` now render their result through
+  `output::render` (YAML for a TTY, JSON for a pipe; `-o` overrides),
+  matching `list`/`show`. The hand-rolled `println!` lines (which ignored
+  `--output`, so `-o json` emitted unparseable text) are gone, including
+  `director::print_status`. The "no daemon running" and `note: <id>` lines
+  stay plain — they are status messages, not structured data results.
+- **Connect error in the timeout message (transport).**
+  `connect_or_wait_with_timeouts` now carries the last `IpcClient::connect`
+  error into the "socket never appeared" message (ENOENT vs ECONNREFUSED
+  vs perms), via a per-iteration `let err` (no `mut`/unused-assignment).
+- **`IpcClient::next_id` is a plain `u64`, not `AtomicU64`.** Every request
+  goes through `&mut self`, so the client is single-threaded by
+  construction and the atomic bought nothing.
+- **`client.rs` `mod tests` moved to the bottom**, after
+  `protocol_version_or_override`, so the function's doc comment attaches to
+  the function instead of sitting above the `mod tests;` line.
+- **Init help text rewritten** (`cli.rs`) to describe the shipped six-step
+  init + the re-root refusal + non-git skips, replacing the pre-Phase-9
+  "Future scope: .loopr/, taskstore, git hooks" text.
+- **Client-body instrumentation.** `#[tracing::instrument]` added to the
+  previously-uninstrumented client entry points: `daemon_status`,
+  `daemon_stop`, `commands::director::run`, `commands::sessions::run`,
+  `logs::handle_tail`, `logs::handle_runs`.
+
+#### Deviations
+- Rendering all four verbs through `output::render` changes their default
+  INTERACTIVE output from the old aligned `key: value` lines to YAML (TTY)
+  / JSON (pipe). This is the finding's explicit instruction and aligns them
+  with `list`/`show`; the friendly `director::print_status` formatting is
+  the cost. Two integration tests (`ac6_daemon_status_prints_human_readable`
+  → renamed `..._renders_structured_output`; `plan_on_tempdir_creates_and_prints_plan`)
+  and `ac9`/`show_on_created_plan...` were updated to parse the structured
+  output — the same behavior-change-test-inversion pattern as Phases 1/2.
+
+#### Tradeoffs
+- The `ipc_call` consolidation loads `Config` per client call (one extra
+  XDG + target-file read). Negligible for a short-lived CLI, and it is what
+  makes the `client-request-secs` override actually reachable — the
+  alternative the finding offered (caveat the CLAUDE.md and leave it
+  unreachable) was the weaker choice.
+- Losing `director status`'s bespoke human formatting (mode / streak / last
+  action lines) in favor of YAML is a readability regression for that one
+  verb, accepted for consistency + parseability per finding 3. A future
+  TUI is the place for rich rendering, not the plumbing CLI.
+
+#### Open questions
+- None.
+
+## Phase 8 — phase-end status
+
+`otto ci` green except the 3 `failure_paths.rs` E2E tests, which fail with
+the same pre-existing `ScriptedLlm: complete_free called with empty queue`
+stub-exhaustion panic they exhibit at the pre-Phase-7 base — a doom-loop
+symptom in the agent pipeline, unrelated to Phase 8's CLI/init/sessions
+scope. Not a Phase 8 regression.

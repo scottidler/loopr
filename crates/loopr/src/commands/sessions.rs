@@ -14,6 +14,13 @@ use crate::session;
 
 /// Dispatch for `loopr sessions <cmd>`. Each arm is a thin shell that
 /// delegates to the `session` module helpers.
+#[tracing::instrument(
+    name = "client.sessions",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), subcommand = "sessions"),
+    err,
+)]
 pub fn run(target: &Path, cmd: SessionsCmd) -> Result<(), LooprError> {
     match cmd {
         SessionsCmd::List => list(),

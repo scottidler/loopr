@@ -117,12 +117,16 @@ fn plan_on_tempdir_creates_and_prints_plan() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    // Phase 8: plan create renders the PlanCreateResult through
+    // `output::render` (piped stdout -> JSON), no longer hand-rolled lines.
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("plan create must be valid JSON ({e}); got: {stdout}"));
+    let plan = v.get("plan").expect("plan field");
+    assert_eq!(plan.get("goal").and_then(|g| g.as_str()), Some("x"), "goal echoed: {stdout}");
     assert!(
-        stdout.contains("plan:"),
-        "stdout prints the created plan id line: {stdout}"
+        plan.get("id").and_then(|i| i.as_str()).is_some_and(|id| id.starts_with("pl-")),
+        "plan id present: {stdout}"
     );
-    assert!(stdout.contains("goal:"), "stdout prints the goal line: {stdout}");
-    assert!(stdout.contains("  x"), "stdout echoes the goal text: {stdout}");
 
     stop_daemon(td.path());
 }
@@ -192,10 +196,12 @@ fn show_on_created_plan_returns_full_record() {
         .assert()
         .success();
     let plan_stdout = String::from_utf8_lossy(&plan_out.get_output().stdout).to_string();
-    let plan_id = plan_stdout
-        .lines()
-        .find_map(|l| l.strip_prefix("plan:   ").map(str::trim))
-        .expect("plan line in stdout")
+    // Phase 8: plan create renders JSON (piped); pull the id out of it.
+    let plan_json: serde_json::Value =
+        serde_json::from_str(&plan_stdout).unwrap_or_else(|e| panic!("plan create JSON ({e}); got: {plan_stdout}"));
+    let plan_id = plan_json["plan"]["id"]
+        .as_str()
+        .expect("plan.id in JSON output")
         .to_string();
     assert!(plan_id.starts_with("pl-"), "expected pl- id, got {plan_id}");
 

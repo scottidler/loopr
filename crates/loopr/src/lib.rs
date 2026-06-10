@@ -215,8 +215,8 @@ fn dispatch(
     match command {
         Command::Init { force } => commands::init::run(target, force),
         Command::Plan { cmd } => match cmd {
-            cli::PlanCmd::Create { goal } => plan_create_command(target, goal),
-            cli::PlanCmd::Override { plan_id, to } => plan_override_command(target, plan_id, to),
+            cli::PlanCmd::Create { goal } => plan_create_command(target, goal, output_format),
+            cli::PlanCmd::Override { plan_id, to } => plan_override_command(target, plan_id, to, output_format),
         },
         Command::Plans => commands::list::run(target, output_format, ipc::RecordKind::Plan),
         Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),
@@ -230,7 +230,7 @@ fn dispatch(
                 unreachable!("DaemonCmd::Start is fork-hoisted in run() before dispatch")
             }
             DaemonCmd::Stop => daemon_stop(target),
-            DaemonCmd::Status => daemon_status(target),
+            DaemonCmd::Status => daemon_status(target, output_format),
         },
         Command::Logs { cmd } => match cmd {
             // `logs tail` excludes the caller's own process dir (whose
@@ -242,7 +242,7 @@ fn dispatch(
             LogsCmd::Runs => logs::handle_runs(target, Some(session_id)),
         },
         Command::Sessions { cmd } => commands::sessions::run(target, cmd),
-        Command::Director { cmd } => commands::director::run(target, cmd),
+        Command::Director { cmd } => commands::director::run(target, cmd, output_format),
         Command::Tui => Err(LooprError::TuiNotInstalled),
     }
 }
@@ -250,6 +250,13 @@ fn dispatch(
 /// `loopr daemon stop` body. Idempotent: if no daemon is running, prints
 /// "no daemon running" and exits 0. Otherwise SIGTERMs the daemon, polls
 /// for exit with escalation to SIGKILL, and cleans up residual sentinels.
+#[tracing::instrument(
+    name = "client.daemon_stop",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), subcommand = "daemon-stop"),
+    err,
+)]
 fn daemon_stop(target: &Path) -> Result<(), LooprError> {
     let pid_file = daemon::sentinel::pid_path(target);
     match daemon::sentinel::read_pid(&pid_file)? {
@@ -270,9 +277,17 @@ fn daemon_stop(target: &Path) -> Result<(), LooprError> {
 }
 
 /// `loopr daemon status` body. Connects to the daemon, handshakes, asks
-/// for `system.status`, prints the response in a human-readable form.
-/// Idempotent on the no-daemon path.
-fn daemon_status(target: &Path) -> Result<(), LooprError> {
+/// for `system.status`, and renders the `StatusResult` through
+/// `output::render` (YAML for a TTY, JSON for a pipe; `-o` overrides). The
+/// no-daemon path is plain text — it is not a structured data result.
+#[tracing::instrument(
+    name = "client.daemon_status",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), subcommand = "daemon-status"),
+    err,
+)]
+fn daemon_status(target: &Path, output_format: Option<output::Format>) -> Result<(), LooprError> {
     let pid_file = daemon::sentinel::pid_path(target);
     match daemon::sentinel::read_pid(&pid_file)? {
         Some(pid) if daemon::sentinel::is_daemon_alive(pid) => {}
@@ -282,30 +297,12 @@ fn daemon_status(target: &Path) -> Result<(), LooprError> {
         }
     }
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
-    rt.block_on(async {
-        let mut client = transport::connect_or_wait(target).await?;
-        client.handshake(None).await?;
-        let (resp, _events) = client
-            .request(ipc::MethodName::SystemStatus, serde_json::Value::Null)
-            .await?;
-        if let Some(err) = resp.error {
-            return Err(LooprError::Rpc(err));
-        }
-        let result_value = resp
-            .result
-            .ok_or_else(|| LooprError::ClientIo("status response missing result".into()))?;
-        let status: ipc::StatusResult =
-            serde_json::from_value(result_value).map_err(|e| LooprError::ClientIo(format!("decode status: {e}")))?;
-        println!("pid:           {}", status.pid);
-        println!("started-at:    {}", status.started_at);
-        println!("active-plans:  {}", status.active_plans);
-        println!("active-works:  {}", status.active_works);
-        Ok(())
-    })
+    let status: ipc::StatusResult =
+        transport::ipc_call(target, ipc::MethodName::SystemStatus, &serde_json::Value::Null)?;
+    let fmt = output::Format::resolve(output_format);
+    let rendered = output::render(&status, fmt).map_err(|e| LooprError::ClientIo(format!("render status: {e}")))?;
+    println!("{rendered}");
+    Ok(())
 }
 
 /// `loopr plan "x"` body: connect to the daemon, handshake, issue a
@@ -319,31 +316,13 @@ fn daemon_status(target: &Path) -> Result<(), LooprError> {
     fields(target = %target.display(), goal_len = goal.len(), subcommand = "plan"),
     err,
 )]
-fn plan_create_command(target: &Path, goal: String) -> Result<(), LooprError> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
-    rt.block_on(async {
-        let mut client = transport::connect_or_wait(target).await?;
-        client.handshake(None).await?;
-        let params = ipc::PlanCreateParams { goal };
-        let params_value = serde_json::to_value(&params)
-            .map_err(|e| LooprError::ClientIo(format!("serialize plan.create params: {e}")))?;
-        let (resp, _events) = client.request(ipc::MethodName::PlanCreate, params_value).await?;
-        if let Some(err) = resp.error {
-            return Err(LooprError::Rpc(err));
-        }
-        let result_value = resp
-            .result
-            .ok_or_else(|| LooprError::ClientIo("plan.create response missing result".into()))?;
-        let result: ipc::PlanCreateResult = serde_json::from_value(result_value)
-            .map_err(|e| LooprError::ClientIo(format!("decode plan.create: {e}")))?;
-        println!("plan:   {}", result.plan.id);
-        println!("goal:   {}", result.plan.goal);
-        println!("status: {}", result.plan.status);
-        Ok(())
-    })
+fn plan_create_command(target: &Path, goal: String, output_format: Option<output::Format>) -> Result<(), LooprError> {
+    let params = ipc::PlanCreateParams { goal };
+    let result: ipc::PlanCreateResult = transport::ipc_call(target, ipc::MethodName::PlanCreate, &params)?;
+    let fmt = output::Format::resolve(output_format);
+    let rendered = output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render plan.create: {e}")))?;
+    println!("{rendered}");
+    Ok(())
 }
 
 /// `loopr plan override <plan-id> --to <status>` body. Phase 10 of
@@ -358,33 +337,22 @@ fn plan_create_command(target: &Path, goal: String) -> Result<(), LooprError> {
     fields(target = %target.display(), plan_id = %plan_id, to = to.as_str(), subcommand = "plan-override"),
     err,
 )]
-fn plan_override_command(target: &Path, plan_id: String, to: cli::PlanOverrideTo) -> Result<(), LooprError> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
-    rt.block_on(async {
-        let mut client = transport::connect_or_wait(target).await?;
-        client.handshake(None).await?;
-        let params = ipc::PlanOverrideParams {
-            plan_id,
-            target_status: to.as_str().to_string(),
-        };
-        let params_value = serde_json::to_value(&params)
-            .map_err(|e| LooprError::ClientIo(format!("serialize plan.override params: {e}")))?;
-        let (resp, _events) = client.request(ipc::MethodName::PlanOverride, params_value).await?;
-        if let Some(err) = resp.error {
-            return Err(LooprError::Rpc(err));
-        }
-        let result_value = resp
-            .result
-            .ok_or_else(|| LooprError::ClientIo("plan.override response missing result".into()))?;
-        let result: ipc::PlanOverrideResult = serde_json::from_value(result_value)
-            .map_err(|e| LooprError::ClientIo(format!("decode plan.override: {e}")))?;
-        println!("plan:   {}", result.plan.id);
-        println!("status: {}", result.plan.status);
-        Ok(())
-    })
+fn plan_override_command(
+    target: &Path,
+    plan_id: String,
+    to: cli::PlanOverrideTo,
+    output_format: Option<output::Format>,
+) -> Result<(), LooprError> {
+    let params = ipc::PlanOverrideParams {
+        plan_id,
+        target_status: to.as_str().to_string(),
+    };
+    let result: ipc::PlanOverrideResult = transport::ipc_call(target, ipc::MethodName::PlanOverride, &params)?;
+    let fmt = output::Format::resolve(output_format);
+    let rendered =
+        output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render plan.override: {e}")))?;
+    println!("{rendered}");
+    Ok(())
 }
 
 #[cfg(test)]

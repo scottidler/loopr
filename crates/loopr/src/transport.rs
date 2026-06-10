@@ -13,9 +13,12 @@ pub(crate) mod server;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
 pub use client::IpcClient;
 
-use crate::config::TransportSection;
+use crate::config::{Config, TransportSection};
 use crate::daemon::sentinel;
 use crate::error::LooprError;
 
@@ -102,15 +105,62 @@ pub async fn connect_or_wait_with_timeouts(target: &Path, timeouts: ClientTimeou
     let socket = sentinel::socket_path(target);
     let deadline = Instant::now() + Duration::from_secs(START_TIMEOUT_SECS);
     loop {
-        if let Ok(client) = IpcClient::connect(&socket, timeouts).await {
-            return Ok(client);
-        }
+        let err = match IpcClient::connect(&socket, timeouts).await {
+            Ok(client) => return Ok(client),
+            Err(e) => e,
+        };
         if Instant::now() > deadline {
+            // Carry the most recent connect failure into the timeout message
+            // so the operator sees WHY (ENOENT vs ECONNREFUSED vs perms),
+            // not just "socket never appeared".
             return Err(LooprError::DaemonStartup(format!(
-                "socket never appeared at {}",
+                "socket never appeared at {} (last connect error: {err})",
                 socket.display()
             )));
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
+}
+
+/// One-shot typed IPC call: build a current-thread runtime, connect (with
+/// operator-tunable timeouts loaded from `Config`), handshake, send `method`
+/// with `params`, and decode the success result as `R`. Collapses the ~7
+/// hand-rolled runtime+connect+handshake+request+decode blocks that the CLI
+/// verb bodies each carried.
+///
+/// Client timeouts honor `<target>/.loopr/config.yml`'s `transport:` section
+/// (the `client-request-secs` knob, previously unreachable from the CLI).
+/// A config that fails to load is **best-effort**: warn and fall back to
+/// defaults rather than blocking a read verb on a malformed config — the
+/// daemon's own startup is where a broken config is surfaced strictly.
+pub fn ipc_call<P, R>(target: &Path, method: ipc::MethodName, params: &P) -> Result<R, LooprError>
+where
+    P: Serialize,
+    R: DeserializeOwned,
+{
+    let timeouts = match Config::load(target) {
+        Ok(cfg) => ClientTimeouts::from(&cfg.transport),
+        Err(e) => {
+            tracing::warn!(error = %e, "config load failed; using default client timeouts");
+            ClientTimeouts::default()
+        }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
+    rt.block_on(async {
+        let mut client = connect_or_wait_with_timeouts(target, timeouts).await?;
+        client.handshake(None).await?;
+        let params_value =
+            serde_json::to_value(params).map_err(|e| LooprError::ClientIo(format!("serialize {method} params: {e}")))?;
+        let (resp, _events) = client.request(method, params_value).await?;
+        if let Some(err) = resp.error {
+            return Err(LooprError::Rpc(err));
+        }
+        let result_value = resp
+            .result
+            .ok_or_else(|| LooprError::ClientIo(format!("{method} response missing result")))?;
+        serde_json::from_value(result_value).map_err(|e| LooprError::ClientIo(format!("decode {method}: {e}")))
+    })
 }

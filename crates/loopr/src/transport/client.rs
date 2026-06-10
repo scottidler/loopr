@@ -8,7 +8,6 @@
 //! future stage's concern.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
@@ -26,7 +25,10 @@ use crate::transport::ClientTimeouts;
 /// socket; drops on exit.
 pub struct IpcClient {
     framed: Framed<UnixStream, LinesCodec>,
-    next_id: AtomicU64,
+    // Monotonic per-connection request id. Plain `u64`, not an atomic: every
+    // request goes through `&mut self`, so the client is single-threaded by
+    // construction and the atomic bought nothing.
+    next_id: u64,
     timeouts: ClientTimeouts,
 }
 
@@ -48,7 +50,7 @@ impl IpcClient {
         let framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
         Ok(Self {
             framed,
-            next_id: AtomicU64::new(1),
+            next_id: 1,
             timeouts,
         })
     }
@@ -113,7 +115,8 @@ impl IpcClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<(DaemonResponse, Vec<DaemonEvent>), LooprError> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let id = self.next_id;
+        self.next_id += 1;
         let req = DaemonRequest {
             id,
             method: method.to_string(),
@@ -177,9 +180,6 @@ impl IpcClient {
 /// (and `#[cfg(test)]`) read `LOOPR_PROTOCOL_VERSION_OVERRIDE` first, so
 /// the acceptance test for version-mismatch rejection can exercise the
 /// unhappy path without a second binary build.
-#[cfg(test)]
-mod tests;
-
 pub fn protocol_version_or_override() -> u32 {
     if cfg!(debug_assertions)
         && let Ok(v) = std::env::var("LOOPR_PROTOCOL_VERSION_OVERRIDE")
@@ -189,3 +189,6 @@ pub fn protocol_version_or_override() -> u32 {
     }
     PROTOCOL_VERSION
 }
+
+#[cfg(test)]
+mod tests;

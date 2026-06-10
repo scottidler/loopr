@@ -47,14 +47,18 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize loopr state at the target. Currently seeds
-    /// `.loopr/prompts/` from the baked prompt tree (idempotent merge
-    /// by default; `--force` overwrites). Future scope: `.loopr/`,
-    /// `.loopr/taskstore/`, git hooks.
+    /// Initialize loopr state at the target (idempotent). Creates
+    /// `.loopr/`, opens the taskstore at `.loopr/taskstore/`, installs the
+    /// taskstore git hooks + JSONL merge driver, appends loopr's patterns to
+    /// `.git/info/exclude`, and seeds `.loopr/prompts/` from the baked
+    /// prompt tree. Refuses to re-root: run it from the repo toplevel (a
+    /// `-C` into a subdirectory is rejected, not silently walked up). On a
+    /// non-git target the git-hook and exclude steps are skipped.
     Init {
         /// Overwrite existing `.loopr/prompts/<file>` instead of
         /// preserving them. Default mode is merge: only missing files
-        /// are written.
+        /// are written. Does not affect the other init steps (all
+        /// idempotent regardless of `--force`).
         #[arg(long, short = 'f')]
         force: bool,
     },

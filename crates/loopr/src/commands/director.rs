@@ -2,98 +2,44 @@
 //! `docs/design/2026-05-09-director-phase-2.md` shipped `chat`;
 //! Phase 2 follow-ups (Item 3) of
 //! `docs/design/2026-05-12-director-phase-2-followups.md` added
-//! `status`.
+//! `status`. Phase 8 of `docs/design/2026-06-09-code-review-remediation.md`
+//! routed both through the shared `transport::ipc_call` helper and made
+//! `status` honor `--output`.
 
 use std::path::Path;
 
 use crate::cli::DirectorCmd;
 use crate::error::LooprError;
+use crate::output::{self, Format};
 use crate::transport;
 
-pub fn run(target: &Path, cmd: DirectorCmd) -> Result<(), LooprError> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| LooprError::ClientIo(format!("runtime build: {e}")))?;
-    rt.block_on(async {
-        match cmd {
-            DirectorCmd::Chat { plan_id, message } => chat(target, plan_id, message).await,
-            DirectorCmd::Status { plan_id } => status(target, plan_id).await,
-        }
-    })
+#[tracing::instrument(
+    name = "client.director",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), subcommand = "director"),
+    err,
+)]
+pub fn run(target: &Path, cmd: DirectorCmd, output_format: Option<Format>) -> Result<(), LooprError> {
+    match cmd {
+        DirectorCmd::Chat { plan_id, message } => chat(target, plan_id, message),
+        DirectorCmd::Status { plan_id } => status(target, plan_id, output_format),
+    }
 }
 
-async fn chat(target: &Path, plan_id: String, message: String) -> Result<(), LooprError> {
-    let mut client = transport::connect_or_wait(target).await?;
-    client.handshake(None).await?;
+fn chat(target: &Path, plan_id: String, message: String) -> Result<(), LooprError> {
     let params = ipc::DirectorChatParams { plan_id, message };
-    let params_value = serde_json::to_value(&params)
-        .map_err(|e| LooprError::ClientIo(format!("serialize director.chat params: {e}")))?;
-    let (resp, _events) = client.request(ipc::MethodName::DirectorChat, params_value).await?;
-    if let Some(err) = resp.error {
-        return Err(LooprError::Rpc(err));
-    }
-    let result_value = resp
-        .result
-        .ok_or_else(|| LooprError::ClientIo("director.chat response missing result".into()))?;
-    let result: ipc::DirectorChatResult =
-        serde_json::from_value(result_value).map_err(|e| LooprError::ClientIo(format!("decode director.chat: {e}")))?;
+    let result: ipc::DirectorChatResult = transport::ipc_call(target, ipc::MethodName::DirectorChat, &params)?;
     println!("note: {}", result.note_id);
     Ok(())
 }
 
-async fn status(target: &Path, plan_id: String) -> Result<(), LooprError> {
-    let mut client = transport::connect_or_wait(target).await?;
-    client.handshake(None).await?;
+fn status(target: &Path, plan_id: String, output_format: Option<Format>) -> Result<(), LooprError> {
     let params = ipc::DirectorStatusParams { plan_id };
-    let params_value = serde_json::to_value(&params)
-        .map_err(|e| LooprError::ClientIo(format!("serialize director.status params: {e}")))?;
-    let (resp, _events) = client.request(ipc::MethodName::DirectorStatus, params_value).await?;
-    if let Some(err) = resp.error {
-        return Err(LooprError::Rpc(err));
-    }
-    let result_value = resp
-        .result
-        .ok_or_else(|| LooprError::ClientIo("director.status response missing result".into()))?;
-    let result: ipc::DirectorStatusResult = serde_json::from_value(result_value)
-        .map_err(|e| LooprError::ClientIo(format!("decode director.status: {e}")))?;
-    print_status(&result);
+    let result: ipc::DirectorStatusResult = transport::ipc_call(target, ipc::MethodName::DirectorStatus, &params)?;
+    let fmt = Format::resolve(output_format);
+    let rendered =
+        output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render director.status: {e}")))?;
+    println!("{rendered}");
     Ok(())
-}
-
-fn print_status(result: &ipc::DirectorStatusResult) {
-    println!("plan:           {}", result.plan_id);
-    println!("status:         {}", result.plan_status);
-    match &result.snapshot {
-        None => {
-            println!("director:       not running (plan is {})", result.plan_status);
-        }
-        Some(s) => {
-            println!("director mode:  {}", s.mode);
-            println!("no-progress:    streak={}", s.no_progress_streak);
-            println!("same-action:    streak={}", s.same_action_streak);
-            match (
-                s.last_action_kind.as_deref(),
-                s.last_action_target_id.as_deref(),
-                s.last_action_ts,
-            ) {
-                (None, _, _) => println!("last action:    (none this iteration)"),
-                (Some(kind), Some(target), Some(ts)) => {
-                    println!("last action:    {kind} {target}  (ts={ts}ms)");
-                }
-                (Some(kind), None, Some(ts)) => {
-                    println!("last action:    {kind}  (ts={ts}ms)");
-                }
-                (Some(kind), Some(target), None) => {
-                    println!("last action:    {kind} {target}");
-                }
-                (Some(kind), None, None) => {
-                    println!("last action:    {kind}");
-                }
-            }
-            println!("unread notes:   {}", s.unread_note_count);
-            println!("iteration:      {}", s.iteration);
-            println!("needs-operator: {} iters", s.needs_operator_iters);
-        }
-    }
 }
