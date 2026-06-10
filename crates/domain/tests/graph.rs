@@ -157,6 +157,30 @@ fn dependents_of_phantom_node_tracked() {
     assert_eq!(graph.dependents_of(&phantom), &[a]);
 }
 
+#[test]
+fn transitive_dependents_via_bfs_reaches_indirect_nodes() {
+    // Phase 3 F7: `block_dependent_siblings` blocks the FULL transitive
+    // closure of dependents (a BFS over `dependents_of`), not just direct
+    // ones. Pin that the primitive supports it: chain a <- b <- c <- d
+    // (each depends on the prior). The closure of `a`'s dependents is
+    // {b, c, d}.
+    let (a, b, c, d) = (WorkId::new(), WorkId::new(), WorkId::new(), WorkId::new());
+    let graph = WorkGraph::from_works(&[
+        work(&a, vec![], WorkStatus::Abandoned),
+        work(&b, vec![a.clone()], WorkStatus::Pending),
+        work(&c, vec![b.clone()], WorkStatus::Pending),
+        work(&d, vec![c.clone()], WorkStatus::Pending),
+    ]);
+    let mut closure: HashSet<WorkId> = HashSet::new();
+    let mut frontier: Vec<WorkId> = graph.dependents_of(&a).to_vec();
+    while let Some(node) = frontier.pop() {
+        if closure.insert(node.clone()) {
+            frontier.extend(graph.dependents_of(&node).iter().cloned());
+        }
+    }
+    assert_eq!(closure, done(&[&b, &c, &d]), "closure reaches indirect dependents");
+}
+
 // from_works specifically
 
 #[test]

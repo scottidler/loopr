@@ -682,6 +682,16 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 self.wake_director(&work.parent_id).await;
                 return;
             }
+            // F6: a benign OCC lost-race (the winning Reviewer already
+            // persisted this Bundle's verdict) must NOT force the Work to
+            // Blocked — that manufactures divergence (Bundle Reviewed while
+            // Work Blocked). Drop the losing verdict silently and let the
+            // winner's routing stand. Mirrors spawner.rs's accept_bundle
+            // Stale handling.
+            Err(ReviewerError::Update(store::BundleUpdateError::Stale { .. })) => {
+                debug!("reviewer OCC Stale; another reviewer won, leaving Work untouched");
+                return;
+            }
             Err(other) => {
                 error!(error = %other, "reviewer error; marking Work Blocked");
                 let _ = transition_and_persist_work(
@@ -1079,10 +1089,22 @@ pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
             }
         };
         let graph = WorkGraph::from_works(&siblings);
-        let dependents: HashSet<&WorkId> = graph.dependents_of(&terminal_work_id).iter().collect();
+        // F7: block the FULL transitive closure of dependents, not just
+        // the direct ones. A Work that depends (even transitively) on a
+        // terminal Work can never have all its deps reach Done, so it is
+        // irrecoverable. BFS over the reverse-dependency edges from the
+        // terminal Work to a fixpoint; the graph topology is static, so a
+        // single closure pass IS the fixpoint (no re-listing needed).
+        let mut closure: HashSet<WorkId> = HashSet::new();
+        let mut frontier: Vec<WorkId> = graph.dependents_of(&terminal_work_id).to_vec();
+        while let Some(node) = frontier.pop() {
+            if closure.insert(node.clone()) {
+                frontier.extend(graph.dependents_of(&node).iter().cloned());
+            }
+        }
         let pending_dependents: Vec<Work> = siblings
             .iter()
-            .filter(|w| w.status == WorkStatus::Pending && dependents.contains(&w.id))
+            .filter(|w| w.status == WorkStatus::Pending && closure.contains(&w.id))
             .cloned()
             .collect();
         let mut blocked = 0usize;
@@ -1137,9 +1159,38 @@ async fn rev_parse_head(target: &std::path::Path) -> Result<String, std::io::Err
 /// operator-tunable soft cap.
 pub const MAX_WORK_ATTEMPTS_HARD_CAP: u32 = 100;
 
+/// Typed failure of `transition_and_persist_work`. Replaces the prior
+/// `String` so callers can distinguish a benign OCC lost-race (`Stale`)
+/// from a hard failure — `override_work` must NOT spawn an Implementer
+/// when the persist lost the race (the persisted state belongs to the
+/// racing winner), and the reviewer/spawner paths treat `Stale` as a
+/// no-op rather than forcing the Work to `Blocked`.
+#[derive(Debug, thiserror::Error)]
+pub enum TransitionError {
+    /// The FSM rejected the (override) transition.
+    #[error("fsm rejected: {0}")]
+    Fsm(String),
+    /// Layer-3 hard cap refused the persist (attempt_count at the cap).
+    #[error("work {work_id} attempt_count={attempt_count} hit MAX_WORK_ATTEMPTS_HARD_CAP={cap}; refusing persist")]
+    HardCap {
+        work_id: String,
+        attempt_count: u32,
+        cap: u32,
+    },
+    /// OCC version-check lost the race — benign; the Work was already
+    /// advanced by another writer. Callers should return without
+    /// clobbering rather than treat it as a hard failure.
+    #[error("stale work: expected updated_at={expected}, actual={actual}")]
+    Stale { expected: i64, actual: i64 },
+    /// Underlying store write failed (non-OCC).
+    #[error("works().update: {0}")]
+    Persist(String),
+}
+
 /// Transition a Work via the FSM (transition or override) and persist via
-/// `WorksStore::update`. Returns Err if the FSM rejects the transition or
-/// if persistence fails; the caller logs and decides whether to continue.
+/// `WorksStore::update`. Returns a typed `TransitionError` if the FSM
+/// rejects the transition or if persistence fails; the caller logs and
+/// decides whether to continue (matching `Stale` for benign races).
 ///
 /// Stage 8 wiring capstone replaced the Stage 7 `mark_blocked` function,
 /// which mutated `work.status = ...` by raw assignment and bypassed the
@@ -1158,17 +1209,17 @@ pub async fn transition_and_persist_work<S>(
     target: WorkStatus,
     role: Role,
     override_: bool,
-) -> Result<(), String>
+) -> Result<(), TransitionError>
 where
     S: store::WorkUpdateSink,
 {
     let expected_updated_at = work.updated_at;
     let result = if override_ {
         work.override_status(target, role)
-            .map_err(|e| format!("fsm override rejected: {e}"))?
+            .map_err(|e| TransitionError::Fsm(format!("override: {e}")))?
     } else {
         work.transition(target, role)
-            .map_err(|e| format!("fsm transition rejected: {e}"))?
+            .map_err(|e| TransitionError::Fsm(format!("transition: {e}")))?
     };
     if result == domain::Transition::Unchanged {
         return Ok(());
@@ -1186,10 +1237,11 @@ where
     // off-by-one. Documented here so a future reader doesn't try to
     // "fix" it back to the spec's literal sequence.
     if matches!(target, WorkStatus::Ready) && work.attempt_count >= MAX_WORK_ATTEMPTS_HARD_CAP {
-        return Err(format!(
-            "work {} attempt_count={} hit MAX_WORK_ATTEMPTS_HARD_CAP={}; refusing persist",
-            work.id, work.attempt_count, MAX_WORK_ATTEMPTS_HARD_CAP
-        ));
+        return Err(TransitionError::HardCap {
+            work_id: work.id.to_string(),
+            attempt_count: work.attempt_count,
+            cap: MAX_WORK_ATTEMPTS_HARD_CAP,
+        });
     }
 
     // Layer 1 increment: bump the cross-iteration retry counter on any
@@ -1204,10 +1256,13 @@ where
     // Integrated -> Done in `spawn_integrator_for_bundle`) carries the
     // correct OCC expected-version even when both writes land in the same
     // millisecond.
-    let persisted = sink
-        .update(work.clone(), expected_updated_at)
-        .await
-        .map_err(|e| format!("works().update: {e}"))?;
+    let persisted = match sink.update(work.clone(), expected_updated_at).await {
+        Ok(ts) => ts,
+        Err(store::WorkUpdateError::Stale { expected, actual }) => {
+            return Err(TransitionError::Stale { expected, actual });
+        }
+        Err(store::WorkUpdateError::Update(s)) => return Err(TransitionError::Persist(s)),
+    };
     work.updated_at = persisted;
 
     // Phase 8: per-Work terminal summary. The richer metrics

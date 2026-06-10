@@ -124,7 +124,12 @@ async fn seed_bundle_at_status(ctx: &Arc<DaemonContext<ScriptedLlm>>, target_sta
     for (target, role) in path {
         let expected = bundle.updated_at;
         bundle.transition(*target, *role).unwrap();
-        ctx.store.bundles().update(bundle.clone(), expected).await.unwrap();
+        // Thread the persisted (monotonically-floored) updated_at back into
+        // the in-memory bundle so the next chained transition's OCC
+        // expected-version matches even when both writes land in the same
+        // millisecond (the F2 floor makes them strictly increasing).
+        let new_ts = ctx.store.bundles().update(bundle.clone(), expected).await.unwrap();
+        bundle.updated_at = new_ts;
     }
     bundle_id
 }

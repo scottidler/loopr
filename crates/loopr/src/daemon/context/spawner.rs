@@ -19,7 +19,7 @@ use domain::{BundleId, BundleStatus, Role, WorkId, WorkStatus};
 use llm::LlmClient;
 use tracing::{debug, info, warn};
 
-use super::{DaemonContext, transition_and_persist_work};
+use super::{DaemonContext, TransitionError, block_dependent_siblings, transition_and_persist_work};
 
 // ---------------------------------------------------------------------------
 // WorkSpawner: Director's fire-and-forget surface into the daemon.
@@ -150,7 +150,14 @@ where
                     reason = %reason,
                     "override_work: applying Director-issued FSM override"
                 );
-                if let Err(e) = transition_and_persist_work(
+                // Gate the spawn on PERSIST SUCCESS. The pre-fix code
+                // spawned an Implementer off the locally-mutated
+                // `work.status == Ready` even when the persist FAILED —
+                // spawning for a Work whose persisted state belongs to the
+                // racing winner (OCC Stale) or whose write erred. A Stale
+                // is benign (another writer already advanced the Work), so
+                // it logs at debug and simply does not spawn.
+                let persisted = match transition_and_persist_work(
                     &*ctx.summary_fanout,
                     &mut work,
                     target_status,
@@ -159,17 +166,36 @@ where
                 )
                 .await
                 {
-                    warn!(error = %e, work_id = %work_id, "override_work: persist failed");
-                }
-                // If the override pushed the Work to Ready, kick the Implementer
-                // pipeline. The Director's primary recovery path is
-                // `Blocked -> Ready` to retry a previously-rejected Bundle;
-                // without this spawn, the Work would sit Ready forever until
-                // a sibling completion triggered `promote_unblocked_siblings`.
-                if work.status == WorkStatus::Ready && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                    Ok(()) => true,
+                    Err(TransitionError::Stale { .. }) => {
+                        debug!(work_id = %work_id, "override_work: OCC Stale; another writer won, not spawning");
+                        false
+                    }
+                    Err(e) => {
+                        warn!(error = %e, work_id = %work_id, "override_work: persist failed; not spawning");
+                        false
+                    }
+                };
+                // If the override persisted AND pushed the Work to Ready,
+                // kick the Implementer pipeline. The Director's primary
+                // recovery path is `Blocked -> Ready` to retry a
+                // previously-rejected Bundle; without this spawn, the Work
+                // would sit Ready forever until a sibling completion
+                // triggered `promote_unblocked_siblings`.
+                if persisted
+                    && work.status == WorkStatus::Ready
+                    && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed)
+                {
                     let task_ctx = Arc::clone(&ctx);
                     let mut tasks = ctx.implementer_tasks.lock().await;
                     tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                } else if persisted && matches!(work.status, WorkStatus::Abandoned | WorkStatus::Superseded) {
+                    // F7: a Director override that terminalizes the Work
+                    // (Abandoned/Superseded) at runtime must block its
+                    // transitive Pending dependents now — otherwise they
+                    // strand until the next daemon restart's reconcile.
+                    block_dependent_siblings(Arc::clone(&ctx), work.parent_id.clone(), work.id.clone(), work.status)
+                        .await;
                 }
             });
         });

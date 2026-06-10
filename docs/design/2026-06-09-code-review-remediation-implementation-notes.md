@@ -501,3 +501,67 @@ Landing across commits (mirrors Phase 1/2):
 
 #### Open questions
 - None for Commit B.
+
+### Commit C — loopr daemon concurrency (F5, F6, F7)
+
+#### Design decisions
+- **F5 (typed result + spawn gate).** `transition_and_persist_work` now
+  returns a typed `TransitionError` (`Fsm` / `HardCap` / `Stale` /
+  `Persist`) instead of `String`. `override_work` gates the Implementer
+  spawn on PERSIST SUCCESS: the pre-fix code spawned off the
+  locally-mutated `work.status == Ready` even when the persist failed
+  (spawning for a Work whose persisted state belongs to the racing
+  winner). A `Stale` is benign (logs debug, no spawn); any other error
+  logs warn and does not spawn. All ~18 other call sites use
+  `let _ =`/`if let Err(e)` and consume the typed error via `Display`
+  unchanged.
+- **F6 (reviewer Stale not conflated).** `run_reviewer` returns
+  `ReviewerError::Update(BundleUpdateError::Stale)` when it loses the
+  Bundle OCC race (the winning Reviewer already persisted the verdict).
+  The daemon's reviewer match added an explicit arm that drops the losing
+  verdict silently and leaves the Work untouched, instead of force-
+  Blocking it (which manufactured Bundle-Reviewed-while-Work-Blocked
+  divergence). Mirrors spawner.rs's accept_bundle Stale handling.
+- **F7 (runtime + transitive blocking).** `block_dependent_siblings` now
+  blocks the FULL transitive closure of dependents (BFS over
+  `WorkGraph::dependents_of` to a fixpoint) rather than only the direct
+  ones — a Work depending even transitively on a terminal Work can never
+  have all deps reach Done. It is now invoked at RUNTIME from
+  `override_work` when a Director override terminalizes the Work
+  (Abandoned/Superseded), not only at startup reconcile.
+
+#### Deviations
+- The doc says "invoke from `transition_and_persist_work`'s terminal
+  path." That free function is generic over `S: WorkUpdateSink` and has no
+  `DaemonContext` handle (needed for the sibling listing + recursion), so
+  the invocation lives at the runtime call site that actually terminalizes
+  a Work — `override_work` — which is the only daemon path that reaches
+  Abandoned/Superseded today (a grep confirms no other site transitions a
+  Work to those states). Same effect, correct seam.
+- F7's `block_dependent_siblings` blocked_reason still names the
+  originating terminal Work even for transitively-blocked dependents
+  (whose direct dep is the now-Blocked intermediate, not the terminal
+  Work). The root-cause attribution is the useful operator signal; not
+  worth threading the intermediate.
+
+#### Tradeoffs
+- **Test regression-test placement.** `block_dependent_siblings` is
+  `pub(crate)` and needs a full `DaemonContext`, and the F5 spawn-gate /
+  F6 reviewer-Stale paths are daemon-orchestration scenarios — the design
+  doc's Phase 11 explicitly lists these daemon integration tests
+  ("override_work persist-failure suppresses spawn", reviewer/director
+  scenarios). The testable CORE of F7 (the transitive-dependents BFS over
+  the public `WorkGraph` API) landed as a domain test here; the
+  end-to-end daemon scenarios land in Phase 11 per the doc's structure.
+- **Same-ms chained-transition test helpers.** The F2 floor (Commit A)
+  makes `updated_at` strictly increasing, so hand-rolled test helpers that
+  chain `transition` + `store.update(.., expected)` on one in-memory
+  record WITHOUT writing back the returned floored ts hit a spurious
+  `Stale` when two writes land in the same millisecond. Fixed the one such
+  helper found (`director_stuck_states.rs` bundle seed); the two work-seed
+  loops re-fetch after each update and are already safe. Production chains
+  go through `transition_and_persist_work` / `transition_bundle_returning`,
+  which write the floored ts back (Commit A).
+
+#### Open questions
+- None for Commit C.

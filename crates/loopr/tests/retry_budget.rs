@@ -134,7 +134,7 @@ async fn hard_cap_refuses_persist_at_max() {
         .await
         .expect_err("must refuse at hard cap");
     assert!(
-        err.contains("MAX_WORK_ATTEMPTS_HARD_CAP"),
+        err.to_string().contains("MAX_WORK_ATTEMPTS_HARD_CAP"),
         "error must name the cap: {err}"
     );
     assert_eq!(
