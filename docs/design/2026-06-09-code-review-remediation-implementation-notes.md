@@ -258,3 +258,49 @@ Landing across commits (mirrors Phase 1's Part split):
   (would-overwrite, ENOSPC) are blocked by the unconditional dirty-tree
   guard or are not reproducible in CI. The classification is the
   load-bearing logic and is unit-tested directly.
+
+### Commit C — rollback + validation correctness
+
+#### Design decisions
+- **AdoptedExisting validation-failure (lib.rs + new error variant).**
+  When every Phase-2 outcome is `AdoptedExisting`, `pre_merge` was
+  captured AFTER a prior crashed call's merge landed, so
+  `reset_hard(pre_merge)` cannot un-merge and `fail_all` would mark the
+  Bundles `IntegrationFailed` while their commits sit durably on the
+  integration branch. The validation-failure path now branches on
+  `outcomes.iter().all(|o| AdoptedExisting)`: if all adopted, skip
+  rollback + fail_all entirely, run `clean_fd`, and return the new
+  NON-terminal `IntegrationError::ValidationFailedAfterAdopt` (Bundles
+  stay `Integrating`). The mixed/fresh-merge path is unchanged
+  (reset + terminal `ValidationFailed`).
+- **clean_fd on the success path (finding 12).** `git clean -fd` now
+  runs after validation passes (or is skipped), not only on failure, so
+  untracked build artifacts validation produced don't linger in the
+  operator-visible tree on every successful Tick. `-fd` (not `-fdx`)
+  leaves ignored paths (`.loopr/`) intact; the entry-time dirty-tree
+  guard guarantees anything untracked at this point was produced by this
+  integrate, so the clean is safe.
+- **Validation instrumentation + head+tail output (validation.rs,
+  finding 11).** `run_one` gains `#[instrument]` (command, timeout,
+  recorded `elapsed_ms`) plus `debug!`/`warn!` on each terminal branch.
+  Output truncation switched from head-only `truncate(CAP)` to
+  `cap_head_tail` (first CAP/2 + elision marker + last CAP/2): cargo/test
+  failures live at the tail, which head-only truncation discarded.
+  `from_utf8_lossy` on the byte-boundary slices is panic-safe (the
+  Phase-1 multibyte-truncate lesson).
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- `ValidationFailedAfterAdopt` leaves the Bundles `Integrating`, so the
+  driver's retry contract re-enqueues them and validation will fail
+  again - a potential loop. Chosen over the alternatives (silently
+  un-merge durable commits, or mark terminal-while-merged) because both
+  of those corrupt state; a visible, distinct, non-terminal error is the
+  honest signal for operator/driver intervention. A smarter recovery
+  (e.g., escalate after N adopt-validation failures) is out of Phase 2
+  scope.
+
+#### Open questions
+- None.

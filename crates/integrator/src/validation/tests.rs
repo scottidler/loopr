@@ -4,10 +4,29 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-use super::run_validation;
+use super::{cap_head_tail, run_validation};
 
 fn temp_dir() -> TempDir {
     tempfile::tempdir().unwrap()
+}
+
+#[test]
+fn cap_head_tail_returns_full_when_under_cap() {
+    let s = cap_head_tail(b"short output", 64);
+    assert_eq!(s, "short output");
+}
+
+#[test]
+fn cap_head_tail_keeps_head_and_tail_when_oversized() {
+    // 200 'a' bytes then a 20-byte failure marker at the very end.
+    let mut bytes = vec![b'a'; 200];
+    bytes.extend_from_slice(b"FAILURE_AT_THE_TAIL!");
+    let capped = cap_head_tail(&bytes, 40);
+    // Head-only truncation would have dropped the tail marker entirely;
+    // head+tail keeps it.
+    assert!(capped.contains("FAILURE_AT_THE_TAIL!"), "tail must survive: {capped}");
+    assert!(capped.contains("bytes omitted"), "elision marker present: {capped}");
+    assert!(capped.starts_with("aaaa"), "head retained: {capped}");
 }
 
 #[tokio::test]

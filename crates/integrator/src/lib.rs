@@ -469,6 +469,30 @@ where
         )
         .await
     {
+        // AdoptedExisting rollback hazard: when EVERY outcome is
+        // AdoptedExisting, a prior crashed call already merged this
+        // slice, so `pre_merge` was captured AFTER that merge landed.
+        // `reset_hard(pre_merge)` would be a no-op that cannot un-merge,
+        // and `fail_all` would then mark the Bundles IntegrationFailed
+        // while their commits sit durably on the integration branch -
+        // manufactured git/DB divergence. Skip the rollback-and-fail
+        // path entirely: clean up validation's untracked artifacts and
+        // surface a distinct, NON-terminal error (the Bundles stay
+        // Integrating; the driver/operator decides recovery).
+        let all_adopted = outcomes
+            .iter()
+            .all(|(_, o)| matches!(o, MergeOutcome::AdoptedExisting { .. }));
+        if all_adopted {
+            git::clean_fd(&deps.target, deps.config.git_timeout).await;
+            return Err(IntegrationError::ValidationFailedAfterAdopt {
+                command: val_err.command,
+                exit_code: val_err.exit_code,
+                log: val_err.log,
+            });
+        }
+
+        // At least one fresh NewMerge: roll back to pre_merge (which
+        // precedes this call's merges) and fail the Bundles terminally.
         git::reset_hard(&deps.target, &pre_merge, deps.config.git_timeout).await?;
         git::clean_fd(&deps.target, deps.config.git_timeout).await;
         return fail_all_without_reset(
@@ -482,6 +506,15 @@ where
         )
         .await;
     }
+
+    // Validation passed (or was skipped). Remove any untracked build
+    // artifacts validation produced so the operator-visible tree stays
+    // clean on the SUCCESS path too (previously clean_fd ran only on
+    // failure, leaving build output behind on every successful Tick).
+    // `git clean -fd` leaves ignored paths (`.loopr/`) untouched, so the
+    // Store's files survive. The entry-time dirty-tree guard guarantees
+    // anything untracked here was produced by this integrate.
+    git::clean_fd(&deps.target, deps.config.git_timeout).await;
 
     let sha = git::rev_parse_head(&deps.target, deps.config.git_timeout).await?;
 

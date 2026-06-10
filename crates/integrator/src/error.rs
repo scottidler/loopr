@@ -81,4 +81,15 @@ pub enum IntegrationError {
         exit_code: Option<i32>,
         log: String,
     },
+
+    #[error(
+        "validation failed on already-merged (crash-recovery) content: `{command}` exited {exit_code:?}; \
+         the merge commits are durable on the integration branch and were NOT rolled back, and the \
+         bundles were NOT marked IntegrationFailed (that would diverge from git)\n{log}"
+    )]
+    ValidationFailedAfterAdopt {
+        command: String,
+        exit_code: Option<i32>,
+        log: String,
+    },
 }

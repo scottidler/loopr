@@ -753,6 +753,82 @@ async fn crash_recovery_aborts_stale_merge_before_reentry() {
     store.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn validation_failure_after_adopt_is_non_terminal_and_preserves_merge() {
+    // Crash-recovery: a prior call merged the bundle (AdoptedExisting on
+    // re-entry), then this re-entry's validation fails. The merge
+    // commits are durable on the integration branch and pre_merge was
+    // captured AFTER them, so the old code's reset_hard(pre_merge) +
+    // fail_all would mark the Bundle IntegrationFailed while its commits
+    // stay merged - divergence. The fix: skip rollback, return the
+    // distinct ValidationFailedAfterAdopt, leave the Bundle Integrating.
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
+
+    // Simulate the prior call: merge already landed on the integration branch.
+    let integ = format!("loopr/plan-{}", plan.id);
+    git(&repo, &["checkout", "-q", &integ]);
+    git(
+        &repo,
+        &[
+            "merge",
+            "--no-ff",
+            &branch,
+            "-m",
+            &format!("Merge bundle branch {branch}"),
+            "--no-gpg-sign",
+        ],
+    );
+    let merged_head = git_capture(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["checkout", "-q", "main"]);
+
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
+    let bundle = transition_bundle_via_store(&store, &bundle, BundleStatus::Integrating, Role::Integrator).await;
+
+    let deps = IntegratorDeps {
+        bundle_sink: &store,
+        works: &store,
+        ticks: &store,
+        config: IntegratorConfig {
+            validation_commands: vec!["false".to_string()], // always fails
+            ..IntegratorConfig::default()
+        },
+        target: repo.clone(),
+        git_lock: Arc::new(AsyncMutex::new(())),
+    };
+
+    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
+    match result {
+        Err(IntegrationError::ValidationFailedAfterAdopt {
+            ref command, exit_code, ..
+        }) => {
+            assert_eq!(command, "false");
+            assert_eq!(exit_code, Some(1));
+        }
+        other => panic!("expected ValidationFailedAfterAdopt, got {other:?}"),
+    }
+
+    // The merge commits are PRESERVED (not rolled back).
+    let post = git_capture(&repo, &["rev-parse", &integ]);
+    assert_eq!(post, merged_head, "adopted merge must NOT be rolled back");
+
+    // The Bundle stays Integrating (NOT terminally IntegrationFailed).
+    let final_bundle = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(
+        final_bundle.status,
+        BundleStatus::Integrating,
+        "adopted-then-validation-failed Bundle must stay Integrating, not IntegrationFailed"
+    );
+
+    store.close().await.unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Validation failure
 // ---------------------------------------------------------------------------

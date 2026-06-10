@@ -110,6 +110,15 @@ fn integration_error_display_covers_every_variant() {
             .to_string(),
             "cargo test",
         ),
+        (
+            IntegrationError::ValidationFailedAfterAdopt {
+                command: "cargo test".to_string(),
+                exit_code: Some(101),
+                log: "test failed output".to_string(),
+            }
+            .to_string(),
+            "already-merged",
+        ),
     ];
     for (msg, needle) in cases {
         assert!(
