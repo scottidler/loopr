@@ -142,22 +142,64 @@ and threads a new `CommitContext` through ~20 call sites):
 In progress. This phase is the system's riskiest code (git crash
 recovery); findings land incrementally so each is durable.
 
-### Design decisions
+Landing across commits (mirrors Phase 1's Part split):
+- **Commit 1 (shipped)** — `run_git` kill_on_drop.
+- **Commit A** — entry-sequence guards (findings: TOCTOU ordering,
+  unconditional dirty-tree guard, crash-recovery merge-abort).
+- **Commit B** — merge-loop correctness (conflict-vs-error
+  classification, merge infra errors through fail_all, is_ancestor
+  false-adopt).
+- **Commit C** — rollback + validation correctness (AdoptedExisting
+  rollback skip, clean_fd both paths, validation instrumentation).
+- **Commit D** — determinism, branch deletion, multi-bundle re-entry.
+
+### Commit 1 — run_git kill_on_drop
+
+#### Design decisions
 - **`run_git` kill_on_drop (git.rs).** Set `cmd.kill_on_drop(true)` so a
   timed-out `git merge`/`checkout` is killed when the timeout drops the
   future, rather than continuing to run and landing its mutation after
   `integrate` returned `Err`. Matches the posture validation.rs already
   uses.
 
-### Deviations
-- None yet.
+#### Deviations / Tradeoffs / Open questions
+- None.
 
-### Tradeoffs
-- None yet.
+### Commit A — entry-sequence guards (TOCTOU, dirty-guard, merge-abort)
 
-### Open questions
-- Remaining Phase 2 findings (merge-abort crash window, AdoptedExisting
-  rollback, is_ancestor false-adopt, dirty-tree guard, conflict-vs-error
-  classification, pinned-date determinism, branch deletion, multi-bundle
-  re-entry, TOCTOU ordering, validation instrumentation, clean_fd) are
-  not yet implemented.
+#### Design decisions
+- **TOCTOU ordering (lib.rs).** Moved integration-branch resolution,
+  `verify_branch`, the new crash-recovery merge-abort, and the
+  dirty-tree guard ALL under `git_lock`. Previously branch
+  resolution/verify/dirty ran before the lock, racing a concurrent
+  `integrate` mutating the same working tree.
+- **Crash-recovery merge-abort (`git::merge_in_progress` + lib.rs).**
+  New `merge_in_progress` helper (`git rev-parse --verify --quiet
+  MERGE_HEAD`). At Phase-2 entry, before the dirty-tree guard and before
+  checkout, a detected in-progress merge (conflicted index + MERGE_HEAD
+  left by a prior crash) is aborted best-effort. This heals the "you
+  need to resolve your current index first" checkout wedge. Ordered
+  before the dirty-tree guard because a conflicted index reads as dirty.
+- **Unconditional dirty-tree guard (lib.rs).** `working_tree_dirty` now
+  runs in BOTH modes. The per-Plan-branch path was previously unguarded
+  on the false premise that `git checkout loopr/plan-<id>` protects it;
+  it does not (non-conflicting dirty state is carried silently across
+  the checkout and later misclassified as a terminal conflict). Updated
+  the `DirtyWorkingTree` Display text to drop the "(no-branch override)"
+  qualifier.
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- **HEAD-parking decision.** Finding 5 asked to "decide and document HEAD
+  restoration." Decision: per-Plan-branch mode intentionally leaves HEAD
+  parked on `loopr/plan-<id>` after `integrate` returns — that branch is
+  the daemon's integration workspace (subsequent integrates and the
+  operator's eventual merge-to-main happen there); restoring HEAD to the
+  prior branch would force a redundant re-checkout every integrate. The
+  unconditional dirty guard makes the parked HEAD safe (the tree is
+  always clean at entry). Documented inline in `integrate`.
+
+#### Open questions
+- None.

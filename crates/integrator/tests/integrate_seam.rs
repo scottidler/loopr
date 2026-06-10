@@ -575,6 +575,127 @@ async fn crash_recovery_d_merge_never_landed_merge_fails_produces_conflict() {
 }
 
 // ---------------------------------------------------------------------------
+// Entry-sequence guards: dirty tree + crash-recovery merge-abort
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn dirty_working_tree_refused_in_per_plan_mode() {
+    // Per-Plan-branch mode (the default) must refuse a dirty tree, not
+    // silently carry the dirt across the checkout. Previously only the
+    // no-branch override checked.
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
+
+    // Dirty the working tree with an untracked, non-ignored file.
+    std::fs::write(repo.join("uncommitted.txt"), "operator work in progress\n").unwrap();
+
+    let deps = deps_for(&store, &repo);
+    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
+    match result {
+        Err(IntegrationError::DirtyWorkingTree { branch: b }) => {
+            assert_eq!(b, format!("loopr/plan-{}", plan.id));
+        }
+        other => panic!("expected DirtyWorkingTree, got {other:?}"),
+    }
+
+    // No mutation: the Bundle is untouched (still Accepted) and no Tick exists.
+    let unchanged = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(unchanged.status, BundleStatus::Accepted);
+    let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
+    assert!(ticks.is_empty());
+
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn crash_recovery_aborts_stale_merge_before_reentry() {
+    // A daemon crash mid-merge leaves a conflicted index + MERGE_HEAD
+    // on disk. Without the entry-time merge-abort, re-entry's `git
+    // checkout` fails with "you need to resolve your current index
+    // first" and wedges integration permanently. With it, the stale
+    // merge is aborted and integration proceeds to a clean
+    // classification (here: the same conflict re-surfaces as
+    // ConflictRetryable - the point is it is NOT a checkout wedge).
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, sha) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    // Integration branch gets a conflicting change to conflict.rs.
+    let integ = format!("loopr/plan-{}", plan.id);
+    git(&repo, &["checkout", "-q", &integ]);
+    std::fs::write(repo.join("conflict.rs"), "fn integ_side() {}\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "integ-side change", "--no-gpg-sign"]);
+
+    // Bundle branch from the base sha with a DIFFERENT conflict.rs.
+    let branch = format!("loopr/wk-{}", work.id);
+    git(&repo, &["checkout", "-q", "-b", &branch, &sha]);
+    std::fs::write(repo.join("conflict.rs"), "fn bundle_side() {}\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "bundle-side change", "--no-gpg-sign"]);
+    let head = git_capture(&repo, &["rev-parse", "HEAD"]);
+
+    // Simulate the prior crash: start the merge ON the integration
+    // branch and leave it conflicted (MERGE_HEAD + conflicted index),
+    // never aborting. HEAD parks on the integration branch.
+    git(&repo, &["checkout", "-q", &integ]);
+    let merge_out = StdCommand::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["merge", "--no-ff", &branch, "-m", "crashed merge", "--no-gpg-sign"])
+        .output()
+        .unwrap();
+    assert!(!merge_out.status.success(), "merge must conflict to leave MERGE_HEAD");
+    // Confirm the wedge state exists.
+    let merge_head = StdCommand::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        merge_head.status.success(),
+        "MERGE_HEAD must be present (mid-merge wedge)"
+    );
+
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["conflict.rs".to_string()]).await;
+    let bundle = transition_bundle_via_store(&store, &bundle, BundleStatus::Integrating, Role::Integrator).await;
+
+    let deps = deps_for(&store, &repo);
+    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
+    match result {
+        Err(IntegrationError::ConflictRetryable { .. }) => {
+            // Reached the merge classification: the stale merge was
+            // aborted and checkout succeeded.
+        }
+        other => panic!("expected ConflictRetryable (healed wedge), got {other:?}"),
+    }
+
+    // No MERGE_HEAD should linger after integrate's rollback.
+    let merge_head_after = StdCommand::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        !merge_head_after.status.success(),
+        "no MERGE_HEAD should linger after integrate"
+    );
+
+    store.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // Validation failure
 // ---------------------------------------------------------------------------
 

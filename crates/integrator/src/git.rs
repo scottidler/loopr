@@ -238,6 +238,25 @@ pub(crate) async fn merge_abort(target: &Path, git_timeout: Duration) {
     let _ = run_git(target, &["merge", "--abort"], git_timeout).await;
 }
 
+/// Return `true` if a merge is in progress (MERGE_HEAD resolves) via
+/// `git rev-parse --verify --quiet MERGE_HEAD`. Exit 0 = a merge is
+/// pending (conflicted index left by a prior crash); non-zero = no
+/// merge in progress. A subprocess failure (git missing, timeout)
+/// surfaces as `Err`.
+///
+/// Used at Phase-2 entry: a daemon crash mid-merge leaves a conflicted
+/// index + MERGE_HEAD on disk, and the re-entry's `git checkout` then
+/// fails ("you need to resolve your current index first"), wedging
+/// integration permanently. Detecting + aborting the stale merge
+/// before checkout heals that window.
+#[instrument(name = "integrator.git.merge_in_progress", level = "debug", skip_all, err)]
+pub(crate) async fn merge_in_progress(target: &Path, git_timeout: Duration) -> Result<bool, IntegrationError> {
+    let out = run_git(target, &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], git_timeout).await?;
+    let in_progress = out.status.success();
+    debug!(in_progress, "integrator.git: merge_in_progress check");
+    Ok(in_progress)
+}
+
 /// Best-effort `git clean -fd`. Removes untracked files and directories
 /// left by validation commands that `git reset --hard` cannot restore.
 /// Errors are swallowed; the rollback continues regardless.

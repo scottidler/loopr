@@ -215,10 +215,20 @@ where
         bundle_count = bundles.len(),
         "integrator: phase begin"
     );
-    // Phase 1: pre-flight
+    // Phase 1: pre-flight (no git, no lock)
     preflight_shape(bundles, deps.config.allow_multi_bundle)?;
     preflight_status(bundles)?;
     preflight_plan_consistency(bundles, plan, &deps.works).await?;
+
+    // Phase 2: git sequence (serialize against the working tree).
+    //
+    // TOCTOU (findings: review 2026-06-09): branch resolution,
+    // `verify_branch`, the crash-recovery merge-abort, and the
+    // dirty-tree guard ALL run UNDER `git_lock`. Resolving or verifying
+    // the branch outside the lock raced a concurrent `integrate`
+    // mutating the same working tree.
+    span.record("phase", "git_sequence");
+    let _git_guard = deps.git_lock.lock().await;
 
     // Phase C: per-Plan branch is the default; the no-branch override
     // integrates onto the currently-checked-out branch (loopr never
@@ -229,26 +239,46 @@ where
         git::current_branch(&deps.target, deps.config.git_timeout).await?
     };
     span.record("integration_branch", integ_branch.as_str());
-    if !git::verify_branch(&deps.target, &integ_branch, deps.config.git_timeout).await? {
-        return Err(IntegrationError::IntegrationBranchMissing { branch: integ_branch });
-    }
-    // No-branch override safety: `git checkout <current-branch>` is a no-op
-    // that does not fail on a dirty tree, so refuse explicitly before any
-    // merge touches the operator's uncommitted work. The per-Plan-branch
-    // path is implicitly protected (checkout to a different branch fails on
-    // a dirty tree), so this guard runs only in override mode.
-    if !deps.config.integration_branch && git::working_tree_dirty(&deps.target, deps.config.git_timeout).await? {
-        return Err(IntegrationError::DirtyWorkingTree { branch: integ_branch });
-    }
-
-    // Phase 2: git sequence (serialize against the working tree)
-    span.record("phase", "git_sequence");
     info!(
         phase = "git_sequence",
         integration_branch = %integ_branch,
         "integrator: phase begin"
     );
-    let _git_guard = deps.git_lock.lock().await;
+    if !git::verify_branch(&deps.target, &integ_branch, deps.config.git_timeout).await? {
+        return Err(IntegrationError::IntegrationBranchMissing { branch: integ_branch });
+    }
+
+    // Crash-recovery merge-abort: a daemon crash mid-merge leaves a
+    // conflicted index + MERGE_HEAD on disk; the re-entry's `git
+    // checkout` below then fails ("you need to resolve your current
+    // index first") and wedges integration permanently. Abort any
+    // in-progress merge BEFORE the dirty-tree guard (a conflicted index
+    // reads as dirty) and BEFORE checkout. Best-effort: a no-op when no
+    // merge is in progress.
+    if git::merge_in_progress(&deps.target, deps.config.git_timeout).await? {
+        warn!("integrator: aborting in-progress merge left by a prior crash before re-entry");
+        git::merge_abort(&deps.target, deps.config.git_timeout).await;
+    }
+
+    // Dirty-tree guard (unconditional, both modes): refuse to integrate
+    // onto a dirty working tree. The per-Plan-branch path was previously
+    // unguarded on the false premise that `git checkout loopr/plan-<id>`
+    // protects it - it does not: non-conflicting dirty state is carried
+    // silently across the checkout and a later merge then misclassifies
+    // it as a terminal conflict. The no-branch override path is even
+    // more exposed (`git checkout <current-branch>` is a no-op that
+    // never fails on a dirty tree). Guard both.
+    //
+    // HEAD-parking decision: per-Plan-branch mode intentionally leaves
+    // HEAD on `loopr/plan-<id>` after `integrate` returns. That branch
+    // is the daemon's integration workspace, where subsequent integrates
+    // and the operator's eventual merge-to-main happen; restoring HEAD
+    // to the prior branch would force a redundant re-checkout on every
+    // integrate with no benefit. The dirty-tree guard makes the parked
+    // HEAD safe (the tree is always clean at entry).
+    if git::working_tree_dirty(&deps.target, deps.config.git_timeout).await? {
+        return Err(IntegrationError::DirtyWorkingTree { branch: integ_branch });
+    }
 
     // Phase 2 prologue: transition every Accepted Bundle to Integrating.
     // This is a single OCC write per Bundle, BEFORE any git operation.
