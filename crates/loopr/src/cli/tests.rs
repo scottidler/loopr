@@ -42,10 +42,35 @@ fn test_cli_parses_plan_override() {
             cmd: crate::cli::PlanCmd::Override { plan_id, to },
         } => {
             assert_eq!(plan_id, "pl-abc12");
-            assert_eq!(to, "active");
+            assert_eq!(to, PlanOverrideTo::Active);
         }
         _ => panic!("expected Plan::Override"),
     }
+}
+
+#[test]
+fn test_cli_parses_plan_override_to_is_case_insensitive() {
+    // `--to Stalled` (the cased form `show` displays) must parse, not error.
+    let cli = Cli::parse_from(["loopr", "plan", "override", "pl-abc12", "--to", "Stalled"]);
+    match cli.command.unwrap() {
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Override { to, .. },
+        } => assert_eq!(to, PlanOverrideTo::Stalled),
+        _ => panic!("expected Plan::Override"),
+    }
+}
+
+#[test]
+fn test_cli_parses_plan_override_to_rejects_unknown_status() {
+    let res = Cli::try_parse_from(["loopr", "plan", "override", "pl-abc12", "--to", "bogus"]);
+    assert!(res.is_err(), "unknown --to value must be rejected at parse time");
+}
+
+#[test]
+fn test_cli_parses_output_uppercase_is_case_insensitive() {
+    use crate::output::Format;
+    let cli = Cli::parse_from(["loopr", "--output", "JSON", "plans"]);
+    assert_eq!(cli.output, Some(Format::Json));
 }
 
 #[test]

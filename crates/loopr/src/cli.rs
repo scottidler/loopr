@@ -28,8 +28,9 @@ pub struct Cli {
     pub log_level: Option<String>,
 
     /// Output format for data-returning verbs. Default picks JSON when
-    /// stdout is a pipe, YAML when stdout is a TTY.
-    #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT")]
+    /// stdout is a pipe, YAML when stdout is a TTY. Case-insensitive
+    /// (`--output JSON` and `--output json` both parse).
+    #[arg(short = 'o', long = "output", global = true, value_name = "FORMAT", ignore_case = true)]
     pub output: Option<Format>,
 
     /// Force attach this process to the given session id. Bypasses the
@@ -168,10 +169,40 @@ pub enum PlanCmd {
     Override {
         /// Target Plan id, e.g. `pl-abc12`.
         plan_id: String,
-        /// Target status: `active`, `stalled`, `draft`, or `complete`.
-        #[arg(long = "to")]
-        to: String,
+        /// Target status. Case-insensitive, so `--to Stalled` (what `show`
+        /// displays) and `--to stalled` both parse.
+        #[arg(long = "to", ignore_case = true)]
+        to: PlanOverrideTo,
     },
+}
+
+/// Operator-permitted Plan override targets. Mirrors the closed set the
+/// daemon's `parse_plan_status` accepts; a `ValueEnum` (not a bare
+/// `String`) so clap rejects typos at parse time and `--to` is
+/// case-insensitive. `Abandoned`/`Superseded` are reachable as FSM edges
+/// but the daemon's override RPC does not parse them today, so they are
+/// intentionally absent here (their addition is a daemon-surface change,
+/// not a Phase 8 CLI concern).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum PlanOverrideTo {
+    Draft,
+    Active,
+    Complete,
+    Stalled,
+}
+
+impl PlanOverrideTo {
+    /// Canonical lowercase status string sent to the daemon's
+    /// `plan.override` RPC (`PlanOverrideParams::target_status`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlanOverrideTo::Draft => "draft",
+            PlanOverrideTo::Active => "active",
+            PlanOverrideTo::Complete => "complete",
+            PlanOverrideTo::Stalled => "stalled",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

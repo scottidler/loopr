@@ -40,3 +40,19 @@ fn kind_from_prefix_accepts_truncated_id_with_dash() {
     // what it validates (prefix only, not the id body).
     assert_eq!(kind_from_prefix("pl-").unwrap(), RecordKind::Plan);
 }
+
+#[test]
+fn validate_kind_match_accepts_matching_kind() {
+    let result = RecordResult::Plan(domain::Plan::new("goal".to_string()));
+    assert!(validate_kind_match(&result, RecordKind::Plan).is_ok());
+}
+
+#[test]
+fn validate_kind_match_rejects_mismatched_kind() {
+    // Prefix said Work but the daemon returned a Plan: a protocol mismatch.
+    let result = RecordResult::Plan(domain::Plan::new("goal".to_string()));
+    match validate_kind_match(&result, RecordKind::Work) {
+        Err(LooprError::ClientIo(msg)) => assert!(msg.contains("protocol mismatch"), "got: {msg}"),
+        other => panic!("expected ClientIo protocol mismatch, got {other:?}"),
+    }
+}

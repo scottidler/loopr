@@ -346,10 +346,10 @@ fn plan_create_command(target: &Path, goal: String) -> Result<(), LooprError> {
     name = "client.plan_override_command",
     level = "info",
     skip_all,
-    fields(target = %target.display(), plan_id = %plan_id, to = %to, subcommand = "plan-override"),
+    fields(target = %target.display(), plan_id = %plan_id, to = to.as_str(), subcommand = "plan-override"),
     err,
 )]
-fn plan_override_command(target: &Path, plan_id: String, to: String) -> Result<(), LooprError> {
+fn plan_override_command(target: &Path, plan_id: String, to: cli::PlanOverrideTo) -> Result<(), LooprError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -359,7 +359,7 @@ fn plan_override_command(target: &Path, plan_id: String, to: String) -> Result<(
         client.handshake(None).await?;
         let params = ipc::PlanOverrideParams {
             plan_id,
-            target_status: to,
+            target_status: to.as_str().to_string(),
         };
         let params_value = serde_json::to_value(&params)
             .map_err(|e| LooprError::ClientIo(format!("serialize plan.override params: {e}")))?;

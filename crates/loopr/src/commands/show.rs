@@ -26,10 +26,11 @@ use crate::transport;
 )]
 pub fn run(target: &Path, explicit_format: Option<Format>, id: String) -> Result<(), LooprError> {
     // Local prefix check so a bad id doesn't trigger a pointless IPC
-    // round-trip. The `_kind` is kept as documentation (and as a
-    // compile-time reminder to extend the match when Spec/Phase land);
-    // the id itself is what the daemon routes on.
-    let _kind = kind_from_prefix(&id)?;
+    // round-trip; the prefix-derived kind is also cross-checked against the
+    // daemon's returned record below (the defensive check list.rs already
+    // does), so a routing/serde mismatch surfaces as a clear client error
+    // rather than rendering the wrong sum-type arm.
+    let kind = kind_from_prefix(&id)?;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -50,12 +51,32 @@ pub fn run(target: &Path, explicit_format: Option<Format>, id: String) -> Result
             .ok_or_else(|| LooprError::ClientIo("record.get response missing result".into()))?;
         let result: RecordResult = serde_json::from_value(result_value)
             .map_err(|e| LooprError::ClientIo(format!("decode record.get: {e}")))?;
+        validate_kind_match(&result, kind)?;
         let fmt = Format::resolve(explicit_format);
         let rendered =
             output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render record.get: {e}")))?;
         println!("{rendered}");
         Ok(())
     })
+}
+
+/// Defensive check: the record the daemon returned matches the kind the
+/// id prefix implied. A mismatch is a daemon routing or serde bug; surface
+/// it as a client-side error rather than silently rendering the wrong arm.
+/// Mirrors `list::validate_kind_match`.
+fn validate_kind_match(result: &RecordResult, requested: RecordKind) -> Result<(), LooprError> {
+    let got = match result {
+        RecordResult::Plan(_) => RecordKind::Plan,
+        RecordResult::Work(_) => RecordKind::Work,
+        RecordResult::Bundle(_) => RecordKind::Bundle,
+        RecordResult::Tick(_) => RecordKind::Tick,
+    };
+    if got != requested {
+        return Err(LooprError::ClientIo(format!(
+            "daemon returned {got:?} for a RecordGet(prefix-kind={requested:?}) request (protocol mismatch)"
+        )));
+    }
+    Ok(())
 }
 
 fn kind_from_prefix(id: &str) -> Result<RecordKind, LooprError> {

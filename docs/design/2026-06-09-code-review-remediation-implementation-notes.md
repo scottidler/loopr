@@ -1928,3 +1928,48 @@ Landing across commits (mirrors Phases 1-7):
 
 #### Open questions
 - None.
+
+### Commit B — CLI output/enum correctness
+
+#### Design decisions
+- **`--output` ignore_case.** Added `ignore_case = true` to the global
+  `--output` arg. `Format` is already a `ValueEnum`; `--output JSON` now
+  parses as well as `--output json` (CLI rule: enum flags are
+  case-insensitive).
+- **`plan override --to` as a typed `ValueEnum`.** Replaced the bare
+  `to: String` with a new `cli::PlanOverrideTo` enum (`Draft`/`Active`/
+  `Complete`/`Stalled`, `rename_all = "lower"`, `ignore_case = true`). clap
+  now rejects typos at parse time and `--to Stalled` (the cased form `show`
+  displays) parses. `PlanOverrideTo::as_str()` produces the canonical
+  lowercase string for the `plan.override` RPC's `target_status` param, so
+  the wire contract with the daemon's `parse_plan_status` is unchanged.
+  `plan_override_command` takes the enum and renders `to.as_str()` into its
+  span field.
+- **`show` defensive kind check (drop the `_kind` crutch).** `kind_from_prefix`'s
+  result is now bound to `kind` (not `_kind`) and fed to a new
+  `validate_kind_match(&RecordResult, RecordKind)` that confirms the
+  daemon-returned record arm matches the prefix-implied kind, mirroring
+  `list::validate_kind_match`. A mismatch is a `ClientIo` "protocol
+  mismatch" error rather than silently rendering the wrong sum-type arm.
+
+#### Deviations
+- `PlanOverrideTo` intentionally omits `Abandoned`/`Superseded` even though
+  `Stalled => Abandoned` is a valid FSM override edge (added in Phase 3):
+  the daemon's `parse_plan_status` does not accept those strings today, so
+  exposing them in the CLI enum would produce a confusing daemon-side
+  rejection. Aligning the CLI enum to the RPC's accepted set is the
+  faithful Phase 8 scope; widening the override RPC is a daemon-surface
+  change, not a CLI concern. Noted as a known gap.
+- Finding 3 of the phase (render the four hardcoded-`println!` verbs
+  through `output::render`) is deferred to Commit D, where the `ipc_call`
+  consolidation reshapes those verb bodies — doing the rendering there
+  avoids editing the same lines twice.
+
+#### Tradeoffs
+- A typed `ValueEnum` + `as_str()` round-trip (vs. keeping `String` and
+  lowercasing) costs one small enum + impl but buys parse-time rejection
+  and the case-insensitivity the CLI rule requires; the daemon stays the
+  single source of truth for which statuses are actually permitted.
+
+#### Open questions
+- None.
