@@ -63,6 +63,14 @@ where
                 return;
             }
             let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            // Re-check under the lock: the shutdown drain holds this same
+            // lock while draining, and `shutting_down` is set before any
+            // drain runs, so a shim that passed the pre-lock check could
+            // otherwise insert into an already-drained JoinSet
+            // (check-then-lock race). Observing it true here means skip.
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tasks.spawn(async move {
                 if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                     debug!(bundle_id = %bundle_id, "shutdown in progress; skipping accept_bundle");
@@ -128,6 +136,14 @@ where
                 return;
             }
             let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            // Re-check under the lock: the shutdown drain holds this same
+            // lock while draining, and `shutting_down` is set before any
+            // drain runs, so a shim that passed the pre-lock check could
+            // otherwise insert into an already-drained JoinSet
+            // (check-then-lock race). Observing it true here means skip.
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tasks.spawn(async move {
                 if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                     debug!(work_id = %work_id, "shutdown in progress; skipping override_work");
@@ -210,6 +226,14 @@ where
                 return;
             }
             let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            // Re-check under the lock: the shutdown drain holds this same
+            // lock while draining, and `shutting_down` is set before any
+            // drain runs, so a shim that passed the pre-lock check could
+            // otherwise insert into an already-drained JoinSet
+            // (check-then-lock race). Observing it true here means skip.
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tasks.spawn(async move {
                 if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                     debug!(work_id = %work_id, "shutdown in progress; skipping assign_work");
@@ -266,6 +290,14 @@ where
                 return;
             }
             let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            // Re-check under the lock: the shutdown drain holds this same
+            // lock while draining, and `shutting_down` is set before any
+            // drain runs, so a shim that passed the pre-lock check could
+            // otherwise insert into an already-drained JoinSet
+            // (check-then-lock race). Observing it true here means skip.
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tasks.spawn(async move {
                 if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                     debug!(bundle_id = %bundle_id, "shutdown in progress; skipping spawn_reviewer");
@@ -310,6 +342,14 @@ where
                 return;
             }
             let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            // Re-check under the lock: the shutdown drain holds this same
+            // lock while draining, and `shutting_down` is set before any
+            // drain runs, so a shim that passed the pre-lock check could
+            // otherwise insert into an already-drained JoinSet
+            // (check-then-lock race). Observing it true here means skip.
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tasks.spawn(async move {
                 if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                     debug!(bundle_id = %bundle_id, "shutdown in progress; skipping spawn_integrator");
@@ -401,6 +441,14 @@ where
                 return;
             }
             let mut tasks = ctx_for_lock.work_spawner_tasks.lock().await;
+            // Re-check under the lock: the shutdown drain holds this same
+            // lock while draining, and `shutting_down` is set before any
+            // drain runs, so a shim that passed the pre-lock check could
+            // otherwise insert into an already-drained JoinSet
+            // (check-then-lock race). Observing it true here means skip.
+            if ctx_for_lock.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tasks.spawn(async move {
                 if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
                     debug!(work_id = %work_id, "shutdown in progress; skipping recover_in_progress_work");

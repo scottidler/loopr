@@ -38,6 +38,34 @@ use crate::transport::handler::{self, HandshakeState};
 /// `daemon::run_active_daemon` calls `Arc::try_unwrap` to close the store.
 pub const HANDLER_DRAIN_TIMEOUT_SECS: u64 = 10;
 
+/// Backoff after a transient `accept()` error, so a persistent transient
+/// condition (e.g. EMFILE while file descriptors are exhausted by tool
+/// subprocesses) does not spin the accept loop hot.
+const ACCEPT_BACKOFF_MS: u64 = 50;
+
+/// Classify an `accept()` error as transient (resource pressure or an
+/// aborted/interrupted connection) versus fatal (the listener itself is
+/// broken). A transient error must NOT kill the daemon — one EMFILE burst
+/// from tool subprocesses would otherwise take the whole process down.
+fn is_transient_accept_error(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    if matches!(
+        e.kind(),
+        ErrorKind::ConnectionAborted | ErrorKind::Interrupted | ErrorKind::OutOfMemory
+    ) {
+        return true;
+    }
+    matches!(
+        e.raw_os_error(),
+        Some(libc::EMFILE)
+            | Some(libc::ENFILE)
+            | Some(libc::ENOBUFS)
+            | Some(libc::ENOMEM)
+            | Some(libc::ECONNABORTED)
+            | Some(libc::EINTR)
+    )
+}
+
 /// Bind a `UnixListener` at `socket`. Caller is responsible for removing
 /// any pre-existing file at the path (the daemon's active-phase does that
 /// unconditionally; see `daemon::run_active_daemon`).
@@ -96,8 +124,15 @@ where
                 break;
             }
             accept = listener.accept() => {
-                let (stream, _) = accept
-                    .map_err(|e| LooprError::ClientIo(format!("accept: {e}")))?;
+                let (stream, _) = match accept {
+                    Ok(pair) => pair,
+                    Err(e) if is_transient_accept_error(&e) => {
+                        warn!(error = %e, "accept: transient error; backing off and continuing");
+                        tokio::time::sleep(Duration::from_millis(ACCEPT_BACKOFF_MS)).await;
+                        continue;
+                    }
+                    Err(e) => return Err(LooprError::ClientIo(format!("accept: {e}"))),
+                };
                 let conn_id = uuid::Uuid::new_v4();
                 let span = tracing::info_span!(
                     "ipc.connection",
