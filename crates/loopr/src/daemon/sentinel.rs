@@ -17,10 +17,24 @@ use std::time::{Duration, Instant};
 
 use crate::error::LooprError;
 
-/// SIGTERM escalation window used by `kill_stale` and `stop` flows before
-/// we escalate to SIGKILL.
-const STOP_TIMEOUT_SECS: u64 = 3;
+/// Margin added on top of the daemon's worst-case graceful-drain budget
+/// to get the SIGTERM->SIGKILL escalation window. The old flat 3s window
+/// SIGKILLed daemons mid-LLM-call because it was an order of magnitude
+/// below the real drain budget (`GRACEFUL_SHUTDOWN_BUDGET_SECS`, ~2.5min);
+/// deriving the window from that budget + this margin means a daemon that
+/// is genuinely draining is never force-killed, while one that ignores
+/// SIGTERM entirely is still escalated within a bounded time.
+const STOP_MARGIN_SECS: u64 = 15;
 const STOP_POLL_INTERVAL_MS: u64 = 50;
+/// Cadence at which `kill_stale` prints a progress line while waiting for
+/// the daemon to drain, so a multi-second wait does not look like a hang.
+const STOP_PROGRESS_INTERVAL_SECS: u64 = 5;
+
+/// The full SIGTERM->SIGKILL escalation window: the daemon's worst-case
+/// graceful-drain budget plus a margin.
+fn stop_timeout_secs() -> u64 {
+    crate::daemon::GRACEFUL_SHUTDOWN_BUDGET_SECS + STOP_MARGIN_SECS
+}
 
 /// Filename of the PID file under `<target>/.loopr/`.
 pub const PID_FILENAME: &str = "daemon.pid";
@@ -217,9 +231,10 @@ fn process_name_is_loopr(pid: u32) -> bool {
     }
 }
 
-/// Send SIGTERM to the PID in `pid_file`, poll for exit up to
-/// `STOP_TIMEOUT_SECS`, escalate to SIGKILL on timeout. Removes the
-/// sentinel files afterward. No-op if no daemon is running.
+/// Send SIGTERM to the PID in `pid_file`, poll for exit up to the full
+/// graceful-drain budget (`stop_timeout_secs`), printing progress, then
+/// escalate to SIGKILL on timeout. Removes the sentinel files afterward.
+/// No-op if no daemon is running.
 pub fn kill_stale(target: &Path) -> Result<(), LooprError> {
     let pid_file = pid_path(target);
     let pid = match read_pid(&pid_file)? {
@@ -233,15 +248,26 @@ pub fn kill_stale(target: &Path) -> Result<(), LooprError> {
     // SAFETY: kill(pid, SIGTERM) delivers a signal to the PID. The PID
     // was name-verified as `loopr` above.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    let deadline = Instant::now() + Duration::from_secs(STOP_TIMEOUT_SECS);
+    let timeout_secs = stop_timeout_secs();
+    eprintln!("stopping daemon (pid {pid}); waiting up to {timeout_secs}s for graceful drain...");
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(timeout_secs);
+    let mut next_progress = Duration::from_secs(STOP_PROGRESS_INTERVAL_SECS);
     while Instant::now() < deadline {
         if !is_daemon_alive(pid) {
             clean(target);
             return Ok(());
         }
+        let elapsed = start.elapsed();
+        if elapsed >= next_progress {
+            eprintln!("  still draining ({}s/{}s)...", elapsed.as_secs(), timeout_secs);
+            next_progress += Duration::from_secs(STOP_PROGRESS_INTERVAL_SECS);
+        }
         std::thread::sleep(Duration::from_millis(STOP_POLL_INTERVAL_MS));
     }
-    // SIGKILL escalation.
+    // SIGKILL escalation: the daemon did not exit within its full drain
+    // budget + margin, so it is genuinely wedged (ignoring SIGTERM).
+    eprintln!("daemon did not exit within {timeout_secs}s; escalating to SIGKILL");
     // SAFETY: same as SIGTERM above.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     // Give the kernel a beat to reap.

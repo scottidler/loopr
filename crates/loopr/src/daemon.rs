@@ -98,6 +98,24 @@ pub const WORK_SPAWNER_DRAIN_TIMEOUT_SECS: u64 = 10;
 /// decompose cannot block shutdown past this ceiling.
 pub const PLAN_CREATE_DRAIN_TIMEOUT_SECS: u64 = 30;
 
+/// Worst-case wall-clock for a graceful shutdown, derived from the drains
+/// that `serve_core` runs SEQUENTIALLY plus the watcher + reaper joins in
+/// `serve`. This is the floor the SIGTERM->SIGKILL escalation window in
+/// `sentinel::kill_stale` must clear (+ margin) so `daemon stop` and
+/// version-drift auto-kill never SIGKILL a daemon that is still inside its
+/// legitimate drain budget mid-LLM-call. Each pool drain has its own
+/// internal abort-on-timeout, so a wedged daemon still exits within this
+/// bound; the escalation window is the backstop for a daemon that ignores
+/// SIGTERM entirely.
+pub const GRACEFUL_SHUTDOWN_BUDGET_SECS: u64 = crate::transport::server::HANDLER_DRAIN_TIMEOUT_SECS
+    + PLAN_CREATE_DRAIN_TIMEOUT_SECS
+    + IMPLEMENTER_DRAIN_TIMEOUT_SECS
+    + REVIEWER_DRAIN_TIMEOUT_SECS
+    + DIRECTOR_DRAIN_TIMEOUT_SECS
+    + WORK_SPAWNER_DRAIN_TIMEOUT_SECS
+    + INTEGRATOR_DRAIN_TIMEOUT_SECS
+    + 2 * WATCHER_JOIN_TIMEOUT_SECS;
+
 /// Install the process-wide panic hook so a panicking pipeline task does
 /// not vanish silently. The daemon's stdio is `/dev/null` post-fork, so
 /// the default libstd hook (which writes to stderr) produces zero

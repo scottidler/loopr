@@ -20,6 +20,34 @@ fn read_pid_missing_returns_none() {
 }
 
 #[test]
+fn stop_timeout_clears_graceful_drain_budget() {
+    // The SIGTERM->SIGKILL window must exceed the daemon's worst-case
+    // graceful-drain budget so `daemon stop` never SIGKILLs a daemon that
+    // is still legitimately draining (the old flat 3s window did).
+    let window = stop_timeout_secs();
+    assert!(
+        window > crate::daemon::GRACEFUL_SHUTDOWN_BUDGET_SECS,
+        "stop window {window}s must exceed drain budget {}s",
+        crate::daemon::GRACEFUL_SHUTDOWN_BUDGET_SECS
+    );
+    assert!(window > 3, "stop window must be well above the old flat 3s");
+}
+
+#[test]
+fn startup_error_sentinel_roundtrip() {
+    let td = target_with_loopr_dir();
+    assert!(read_startup_error(td.path()).is_none(), "absent by default");
+    write_startup_error(td.path(), "refusing to start: 2 corrupt record(s)");
+    assert_eq!(
+        read_startup_error(td.path()).as_deref(),
+        Some("refusing to start: 2 corrupt record(s)")
+    );
+    // clean() removes it so a later boot is not misled.
+    clean(td.path());
+    assert!(read_startup_error(td.path()).is_none(), "cleaned");
+}
+
+#[test]
 fn write_pid_then_read_roundtrip() {
     let td = target_with_loopr_dir();
     let p = pid_path(td.path());
