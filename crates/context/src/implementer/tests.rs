@@ -46,6 +46,45 @@ fn build_returns_non_empty_assembled_context() {
 }
 
 #[test]
+fn renders_allowed_files_scope_when_present() {
+    // Finding 10: work.files must be rendered so the agent can see its scope.
+    let builder = InlineContextBuilder::new();
+    let mut work = sample_work();
+    work.files = vec!["src/cli.rs".to_string(), "src/config.rs".to_string()];
+    let out = builder
+        .build_for_implementer(
+            &work,
+            Path::new("/tmp/wt"),
+            &[bash_schema()],
+            &[],
+            &StateSummary::default(),
+            1,
+        )
+        .unwrap();
+    let user = out.first_user_text().unwrap();
+    assert!(user.contains("Allowed Files"), "scope section missing: {user}");
+    assert!(user.contains("src/cli.rs"));
+    assert!(user.contains("src/config.rs"));
+}
+
+#[test]
+fn omits_allowed_files_section_when_scope_empty() {
+    let builder = InlineContextBuilder::new();
+    let work = sample_work(); // files empty by default
+    let out = builder
+        .build_for_implementer(
+            &work,
+            Path::new("/tmp/wt"),
+            &[bash_schema()],
+            &[],
+            &StateSummary::default(),
+            1,
+        )
+        .unwrap();
+    assert!(!out.first_user_text().unwrap().contains("Allowed Files"));
+}
+
+#[test]
 fn system_prompt_contains_tool_names() {
     let builder = InlineContextBuilder::new();
     let work = sample_work();

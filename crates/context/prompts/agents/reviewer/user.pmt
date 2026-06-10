@@ -9,6 +9,14 @@ Work ID: {{work_id}}
 (none specified)
 {{/each}}
 
+{{#if allowed_files}}
+### Allowed Files (scope)
+The Work is scoped to these repo-relative paths. Any change to a file outside this list is an out-of-scope modification (a blocking issue).
+{{#each allowed_files}}
+- {{this}}
+{{/each}}
+{{/if}}
+
 ## Bundle Under Review
 - id:             {{bundle.id}}
 - branch:         {{bundle.branch_name}}

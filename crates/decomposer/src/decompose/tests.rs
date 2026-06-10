@@ -302,6 +302,67 @@ async fn unresolved_dep_errors() {
 }
 
 #[tokio::test]
+async fn absolute_files_path_errors_invalid_files() {
+    // Finding 10: an absolute scope path is rejected (after the retry).
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {
+                "title": "A",
+                "content": "a",
+                "acceptance_criteria": ["assert a"],
+                "files": ["/etc/passwd"]
+            }
+        ]
+    }));
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect_err("invalid files");
+    match err {
+        DecomposerError::InvalidFiles { path, .. } => assert_eq!(path, "/etc/passwd"),
+        other => panic!("expected InvalidFiles, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn parent_traversal_files_path_errors_invalid_files() {
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {
+                "title": "A",
+                "content": "a",
+                "acceptance_criteria": ["assert a"],
+                "files": ["../../etc/shadow"]
+            }
+        ]
+    }));
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect_err("invalid files");
+    assert!(matches!(err, DecomposerError::InvalidFiles { .. }), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn relative_files_path_is_accepted() {
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {
+                "title": "A",
+                "content": "a",
+                "acceptance_criteria": ["assert a"],
+                "files": ["src/main.rs", "src/cli.rs"]
+            }
+        ]
+    }));
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect("ok");
+    assert_eq!(works[0].files, vec!["src/main.rs".to_string(), "src/cli.rs".to_string()]);
+}
+
+#[tokio::test]
 async fn empty_title_errors_empty_title_with_index() {
     let dir = TempDir::new().expect("tempdir");
     let response = tool_call(json!({

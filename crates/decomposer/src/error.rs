@@ -82,6 +82,19 @@ pub enum DecomposerError {
     #[error("child at index {0} has empty title")]
     EmptyTitle(usize),
 
+    /// A child's `files` scope contained an unusable path: absolute, a
+    /// parent-traversal (`..`), or a backslash separator. The per-Work scope
+    /// is rendered into the implementer/reviewer prompts (Phase-5 finding
+    /// 10) and is meaningless — or an escape — if it isn't a repo-relative
+    /// forward-slash path. Caught at produce time and routed through the
+    /// retry-with-error path so the model re-emits a clean scope.
+    #[error("child {child:?} has invalid scope path {path:?}: {why}")]
+    InvalidFiles {
+        child: String,
+        path: String,
+        why: &'static str,
+    },
+
     /// Failure constructing or rendering a `.pmt` template via the
     /// `context::PromptLoader`. Surfaces e.g. a malformed override
     /// `.pmt` file in `<target>/.loopr/prompts/`, or a missing

@@ -102,6 +102,11 @@ struct ImplementerUserCtx<'a> {
     acceptance_criteria: Vec<AcCtx<'a>>,
     rejected_bundle_reason: Option<&'a str>,
     prior_iterations: Vec<PriorIterationCtx<'a>>,
+    /// Per-Work allowed-files scope (`work.files`). Rendered as an "Allowed
+    /// Files" section so the agent can actually SEE the scope it is told to
+    /// respect (Phase-5 finding 10: previously the scope existed on the
+    /// record but was never rendered into any prompt). Empty = no restriction.
+    files: &'a [String],
 }
 
 impl ContextBuilder for InlineContextBuilder {
@@ -167,6 +172,7 @@ impl ContextBuilder for InlineContextBuilder {
             acceptance_criteria,
             rejected_bundle_reason: state.rejected_bundle_reason.as_deref(),
             prior_iterations,
+            files: work.files.as_slice(),
         };
         let user_message = self.loader.render("agents/implementer/user.pmt", &user_ctx)?;
 

@@ -22,7 +22,7 @@ Apply these criteria in order; the first that yields a blocker drives the verdic
 1. **Correctness** — Does the code do what the Work requires? Verify each acceptance criterion is satisfied by the implementation.
 2. **Quality** — Is the code clean, idiomatic, and maintainable?
 3. **Tests** — Are there adequate tests? Every public function should have at least one test. Edge cases for error paths. Coverage of the acceptance criteria from the Work.
-4. **Scope** — Does the change stay within the Work's resource_tags? Files modified outside scope are blockers.
+4. **Scope** — Does the change stay within the Work's allowed files (the "Allowed Files (scope)" list in the user message, when present)? Files modified outside scope are blockers.
 5. **Safety** — Are there security concerns (OWASP top 10, injection, unsound unsafe, lost invariants)?
 6. **Concurrency** — Are there potential deadlocks, race conditions, or unsafe shared state mutations?
 7. **Architecture** — Does the change follow existing patterns in the codebase? Are module boundaries respected?
@@ -58,7 +58,7 @@ Rules on the schema:
 2. Correctness defects. Logic errors, incorrect assumptions, off-by-one bugs, unhandled error paths.
 3. Security or safety regressions. Credentials exposed, injection vectors, unsound unsafe, lost invariants.
 4. Contract violations. Breaking API changes without a deprecation path, incompatible schema migrations, removed error variants callers depend on.
-5. Out-of-scope file modifications. Changes to files outside the Work's resource_tags.
+5. Out-of-scope file modifications. Changes to files outside the Work's allowed files (the "Allowed Files (scope)" list).
 
 ## Non-blocking notes (emit alongside `accept`, or as `warning`/`info` issues in `change_requested`)
 

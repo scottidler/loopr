@@ -1170,3 +1170,38 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+### Commit F — work-scope enforcement end-to-end (finding 10)
+
+#### Design decisions
+- **Decomposer scope validation.** New `DecomposerError::InvalidFiles
+  { child, path, why }` + `invalid_scope_path` helper: each child `files`
+  entry is rejected at produce time if it is absolute, contains a `..`
+  traversal, or uses a backslash separator. Checked in `parse_and_validate`
+  after the duplicate-titles check, so it routes through the existing
+  retry-with-error-in-prompt path (the model re-emits a clean scope once
+  before bailing).
+- **Scope rendered into both prompts.** `ImplementerUserCtx` gains
+  `files: &[String]` (rendered as an "## Allowed Files (scope)" section in
+  `implementer/user.pmt`, gated on non-empty); `ReviewerUserCtx` gains
+  `allowed_files: &[String]` (rendered as an "### Allowed Files (scope)"
+  section in `reviewer/user.pmt`). Previously `work.files` lived on the
+  record but reached no prompt — agents were told to respect a list they
+  could not see.
+- **Ghost `resource_tags` renamed.** The field has been `files` in Rust for
+  some time; the two prompts that still said `resource_tags`
+  (`implementer/system.pmt` Scope Enforcement, `reviewer/system.pmt`
+  criterion 4 + blocking-issue 5) now reference the "Allowed Files (scope)"
+  list that actually renders.
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- `invalid_scope_path` uses `std::path::Path` component inspection rather
+  than a regex, so it is OS-portable (`is_absolute`, `Component::ParentDir`)
+  while still catching the backslash case explicitly (backslash is not a
+  separator on Unix, so `Path` would treat `a\b` as one component).
+
+#### Open questions
+- None.

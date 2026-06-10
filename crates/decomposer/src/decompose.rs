@@ -359,6 +359,25 @@ impl ValidationFailure {
 /// Runs the seven post-parse checks (plus the max-children bound) in the
 /// order that yields the clearest operator-facing error, and on success
 /// returns the built `Vec<Work>` alongside the parsed response.
+/// Reject a child `files` scope entry that cannot be a repo-relative
+/// forward-slash path. Returns a static reason on rejection.
+fn invalid_scope_path(p: &str) -> Option<&'static str> {
+    if p.contains('\\') {
+        return Some("backslash path separator (use forward slashes)");
+    }
+    let path = std::path::Path::new(p);
+    if path.is_absolute() {
+        return Some("absolute path (must be repo-relative)");
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Some("parent-directory traversal (`..`)");
+    }
+    None
+}
+
 fn parse_and_validate(
     input: &serde_json::Value,
     plan: &Plan,
@@ -420,6 +439,27 @@ fn parse_and_validate(
             "duplicate_titles",
             render_decompose_response(&response),
         ));
+    }
+
+    // Scope-path validation (finding 10): each child's `files` must be a
+    // repo-relative forward-slash path. An absolute path, a `..` traversal,
+    // or a backslash separator silently voids the scope the agents are told
+    // to respect, so reject it at produce time and let the retry path
+    // re-emit a clean scope.
+    for child in &response.children {
+        for f in &child.files {
+            if let Some(why) = invalid_scope_path(f) {
+                return Err(ValidationFailure::boxed(
+                    DecomposerError::InvalidFiles {
+                        child: child.title.clone(),
+                        path: f.clone(),
+                        why,
+                    },
+                    "invalid_files",
+                    render_decompose_response(&response),
+                ));
+            }
+        }
     }
 
     // Pre-mint one WorkId per child, keyed by normalized title.

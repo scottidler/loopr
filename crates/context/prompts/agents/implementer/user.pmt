@@ -10,6 +10,14 @@ Iteration: {{iteration}}
 (none specified)
 {{/each}}
 
+{{#if files}}
+## Allowed Files (scope)
+You may only create or modify these repo-relative paths. To touch anything outside this list, emit `need_help` with the reason.
+{{#each files}}
+- {{this}}
+{{/each}}
+
+{{/if}}
 {{#if rejected_bundle_reason}}
 ## Prior Bundle Was Rejected
 {{rejected_bundle_reason}}

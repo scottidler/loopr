@@ -201,6 +201,21 @@ fn bundle_claims_rendered() {
 }
 
 #[test]
+fn renders_allowed_files_scope() {
+    // Finding 10: the reviewer must see the Work's scope to enforce the
+    // out-of-scope criterion.
+    let mut work = sample_work();
+    work.files = vec!["src/cli.rs".to_string()];
+    let bundle = sample_bundle(work.id.clone(), Some("deadbeef"));
+    let out = InlineContextBuilder::new()
+        .build_for_reviewer(&bundle, &work, "diff", None)
+        .unwrap();
+    let user = out.first_user_text().unwrap();
+    assert!(user.contains("Allowed Files"), "scope section missing: {user}");
+    assert!(user.contains("src/cli.rs"));
+}
+
+#[test]
 fn empty_ac_does_not_crash() {
     let mut work = sample_work();
     work.acceptance_criteria = AcceptanceCriteria::default();

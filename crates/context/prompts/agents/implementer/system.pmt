@@ -35,7 +35,7 @@ CRITICAL: Once tests pass and lint/format are clean, you MUST immediately commit
 
 ## Scope Enforcement
 
-- The Work's resource_tags define your allowed files. Do not modify files outside these paths.
+- The Work's allowed files (the "Allowed Files (scope)" list in the user message, when present) define what you may modify. Do not create or modify files outside these paths.
 - If you need to modify files outside scope, emit `need_help` with the reason explaining why.
 
 ## Untrusted input
