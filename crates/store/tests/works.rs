@@ -194,6 +194,63 @@ async fn update_floors_updated_at_strictly_above_prior() {
 }
 
 #[tokio::test]
+async fn create_many_rejects_id_colliding_with_store() {
+    // Phase 3 F4: an incoming id that collides with an already-persisted
+    // Work must be rejected (not silently INSERT OR REPLACE-overwritten).
+    let (_dir, store, plan) = fresh_store_with_plan().await;
+    let existing = sample_work(&plan, "already here");
+    let collide_id = existing.id.clone();
+    store.works().create(existing).await.expect("seed existing");
+
+    let mut fresh = sample_work(&plan, "fresh");
+    fresh.id = collide_id.clone(); // force collision
+    let err = store
+        .works()
+        .create_many(vec![fresh])
+        .await
+        .expect_err("colliding id must reject");
+    match err {
+        StoreError::AlreadyExists { collection, id } => {
+            assert_eq!(collection, "works");
+            assert_eq!(id, collide_id.as_ref());
+        }
+        other => panic!("expected AlreadyExists, got {other:?}"),
+    }
+    // The original must survive untouched.
+    let got = store.works().get(&collide_id).await.expect("get original");
+    assert_eq!(got.title, "already here", "collision must not overwrite");
+}
+
+#[tokio::test]
+async fn create_many_rejects_intra_batch_duplicate_id() {
+    // Phase 3 F4: two incoming Works sharing an id (decomposer bug) would
+    // self-overwrite; the pre-check rejects the batch.
+    let (_dir, store, plan) = fresh_store_with_plan().await;
+    let a = sample_work(&plan, "a");
+    let mut b = sample_work(&plan, "b");
+    b.id = a.id.clone();
+    let err = store
+        .works()
+        .create_many(vec![a, b])
+        .await
+        .expect_err("intra-batch dup must reject");
+    assert!(
+        matches!(
+            err,
+            StoreError::AlreadyExists {
+                collection: "works",
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
+    assert!(
+        store.works().list().await.expect("list").is_empty(),
+        "rejected batch persists nothing"
+    );
+}
+
+#[tokio::test]
 async fn list_by_parent_id_filters_correctly() {
     let dir = TempDir::new().expect("tempdir");
     let store = Store::open(dir.path()).await.expect("open");

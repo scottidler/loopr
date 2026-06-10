@@ -219,53 +219,12 @@ where
     match decomposer::decompose(&plan, &ctx.target, &*ctx.llm).await {
         Ok(works) => {
             let count = works.len();
-            match ctx.store.works().create_many(works.clone()).await {
-                Ok(ids) => {
-                    // Dep gate: partition into unblocked (all deps Done or
-                    // no deps) and held (at least one dep not Done). Only
-                    // unblocked Works get an Implementer spawned immediately;
-                    // held Works stay Pending and are promoted reactively when
-                    // their deps reach Done (see promote_unblocked_siblings).
-                    let graph = domain::WorkGraph::from_works(&works);
-                    let done: std::collections::HashSet<domain::WorkId> = works
-                        .iter()
-                        .filter(|w| w.status == domain::WorkStatus::Done)
-                        .map(|w| w.id.clone())
-                        .collect();
-                    let ready: std::collections::HashSet<domain::WorkId> = graph.ready_set(&done).into_iter().collect();
-                    let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| ready.contains(&w.id));
-                    let unblocked_count = unblocked.len();
-                    let held_count = held.len();
-                    // Warn on any held Work whose dep ids are not in this
-                    // batch - indicates a decomposer bug (unknown dep ref).
-                    for w in &held {
-                        for dep_id in &w.dependencies {
-                            if !works.iter().any(|s| &s.id == dep_id) {
-                                warn!(
-                                    work_id = %w.id,
-                                    dep_id = %dep_id,
-                                    "dep_gate: unknown dep id not in decomposed batch; Work may hang Pending"
-                                );
-                            }
-                        }
-                    }
-                    info!(
-                        request_id,
-                        plan_id = %plan.id,
-                        work_count = count,
-                        ids = ?ids,
-                        unblocked = unblocked_count,
-                        held = held_count,
-                        "plan.create decomposed + persisted"
-                    );
-                    let mut tasks = ctx.implementer_tasks.lock().await;
-                    for work in unblocked {
-                        let task_ctx = Arc::clone(ctx);
-                        tasks.spawn(task_ctx.spawn_implementer_for_work(work.clone()));
-                    }
-                    drop(tasks);
-                    spawn_director_for_plan(ctx, plan.id.clone()).await;
-                }
+            // F4: persist with collision re-minting. `create_many` now
+            // rejects an id that collides with an earlier Plan's Work; on
+            // collision we re-mint the batch (remapping the dep edges) and
+            // retry, then proceed with the (possibly re-minted) works.
+            let (works, ids) = match persist_works_with_remint(&ctx.store, works).await {
+                Ok(pair) => pair,
                 Err(e) => {
                     warn!(
                         request_id,
@@ -274,8 +233,53 @@ where
                         "plan.create persisted Plan but works.create_many failed; Plan -> Stalled"
                     );
                     stall_plan_after_decompose_failure(ctx, &mut plan).await;
+                    return;
+                }
+            };
+            // Dep gate: partition into unblocked (all deps Done or
+            // no deps) and held (at least one dep not Done). Only
+            // unblocked Works get an Implementer spawned immediately;
+            // held Works stay Pending and are promoted reactively when
+            // their deps reach Done (see promote_unblocked_siblings).
+            let graph = domain::WorkGraph::from_works(&works);
+            let done: std::collections::HashSet<domain::WorkId> = works
+                .iter()
+                .filter(|w| w.status == domain::WorkStatus::Done)
+                .map(|w| w.id.clone())
+                .collect();
+            let ready: std::collections::HashSet<domain::WorkId> = graph.ready_set(&done).into_iter().collect();
+            let (unblocked, held): (Vec<_>, Vec<_>) = works.iter().partition(|w| ready.contains(&w.id));
+            let unblocked_count = unblocked.len();
+            let held_count = held.len();
+            // Warn on any held Work whose dep ids are not in this
+            // batch - indicates a decomposer bug (unknown dep ref).
+            for w in &held {
+                for dep_id in &w.dependencies {
+                    if !works.iter().any(|s| &s.id == dep_id) {
+                        warn!(
+                            work_id = %w.id,
+                            dep_id = %dep_id,
+                            "dep_gate: unknown dep id not in decomposed batch; Work may hang Pending"
+                        );
+                    }
                 }
             }
+            info!(
+                request_id,
+                plan_id = %plan.id,
+                work_count = count,
+                ids = ?ids,
+                unblocked = unblocked_count,
+                held = held_count,
+                "plan.create decomposed + persisted"
+            );
+            let mut tasks = ctx.implementer_tasks.lock().await;
+            for work in unblocked {
+                let task_ctx = Arc::clone(ctx);
+                tasks.spawn(task_ctx.spawn_implementer_for_work(work.clone()));
+            }
+            drop(tasks);
+            spawn_director_for_plan(ctx, plan.id.clone()).await;
         }
         Err(e) => {
             warn!(
@@ -287,6 +291,62 @@ where
             stall_plan_after_decompose_failure(ctx, &mut plan).await;
         }
     }
+}
+
+/// Persist a decomposed Work batch, re-minting ids on collision (F4).
+///
+/// `WorkId`s are 5-char base36 (~60.4M space), so a fresh decomposition's
+/// ids can collide with an earlier Plan's persisted Work. `create_many`
+/// now rejects such a collision with `AlreadyExists` (it would otherwise
+/// `INSERT OR REPLACE`-overwrite the earlier Work). On collision we
+/// re-mint EVERY id in the batch and remap the freshly-built dependency
+/// edges (which reference the ids we just minted), then retry. Returns the
+/// (possibly re-minted) works alongside their persisted ids so the caller's
+/// dep-gate + spawn logic operates on the ids that actually landed on disk.
+/// Bounded so a pathological store can't loop forever.
+async fn persist_works_with_remint(
+    store: &store::Store,
+    mut works: Vec<domain::Work>,
+) -> Result<(Vec<domain::Work>, Vec<domain::WorkId>), store::StoreError> {
+    const MAX_REMINT_ATTEMPTS: usize = 5;
+    for attempt in 0..MAX_REMINT_ATTEMPTS {
+        match store.works().create_many(works.clone()).await {
+            Ok(ids) => return Ok((works, ids)),
+            Err(store::StoreError::AlreadyExists { id, .. }) => {
+                warn!(
+                    colliding_id = %id,
+                    attempt = attempt + 1,
+                    "create_many id collision; re-minting batch and retrying"
+                );
+                works = remint_work_batch(works);
+            }
+            Err(other) => return Err(other),
+        }
+    }
+    Err(store::StoreError::AlreadyExists {
+        collection: "works",
+        id: format!("re-mint exhausted after {MAX_REMINT_ATTEMPTS} attempts"),
+    })
+}
+
+/// Re-mint every `WorkId` in the batch and rewrite each Work's dependency
+/// edges through the old->new remap. Deps referencing ids absent from the
+/// batch are kept verbatim (defensive; the decomposer never emits them).
+fn remint_work_batch(works: Vec<domain::Work>) -> Vec<domain::Work> {
+    let remap: std::collections::HashMap<domain::WorkId, domain::WorkId> =
+        works.iter().map(|w| (w.id.clone(), domain::WorkId::new())).collect();
+    works
+        .into_iter()
+        .map(|mut w| {
+            w.id = remap.get(&w.id).cloned().expect("every batch id is in the remap");
+            w.dependencies = w
+                .dependencies
+                .iter()
+                .map(|d| remap.get(d).cloned().unwrap_or_else(|| d.clone()))
+                .collect();
+            w
+        })
+        .collect()
 }
 
 /// Transition a Plan to `Stalled` (Reactor role) after a decompose or

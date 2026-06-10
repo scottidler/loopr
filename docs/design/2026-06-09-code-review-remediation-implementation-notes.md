@@ -565,3 +565,43 @@ Landing across commits (mirrors Phase 1/2):
 
 #### Open questions
 - None for Commit C.
+
+### Commit D — create_many collision + re-mint (F4)
+
+#### Design decisions
+- **Store pre-check.** `WorksStore::create_many` now pre-checks every
+  incoming id against the store AND for intra-batch duplicates, returning
+  `StoreError::AlreadyExists` on the first collision instead of letting
+  taskstore's `INSERT OR REPLACE` silently overwrite an earlier Plan's
+  Work. The stale "a fresh decomposition never has id collisions" comment
+  was replaced with the real ~0.8%-per-1k-records math.
+- **Handler re-mint.** `decompose_and_dispatch` persists through a new
+  `persist_works_with_remint` helper: on `AlreadyExists` it re-mints EVERY
+  id in the batch (`remint_work_batch`) and remaps each Work's dependency
+  edges through the old->new map, then retries (bounded to 5 attempts).
+  The helper returns the (possibly re-minted) works so the downstream
+  dep-gate partition + Implementer spawns operate on the ids that actually
+  landed on disk.
+
+#### Deviations
+- The doc says "re-mint the colliding ids"; the implementation re-mints
+  the WHOLE batch on any collision rather than surgically re-minting only
+  the offender. Reason: `create_many` returns one colliding id per call,
+  and re-minting the whole batch is simpler, keeps the dep-edge remap
+  trivially total, and is cheap given collisions are rare. The net effect
+  (no overwrite, deps stay consistent) is identical.
+
+#### Tradeoffs
+- The store pre-check is N sequential `get`s per batch (decompose batches
+  are single-digit Works), not a bulk existence query — acceptable at this
+  cardinality and consistent with `create`'s existing per-id pre-check.
+- The handler's persist-failure path (non-collision store error, or
+  re-mint exhaustion) folds into the existing `stall_plan_after_decompose_failure`
+  via an early `return`, replacing the old inline `Err` arm — same
+  operator-visible outcome (Plan -> Stalled).
+
+#### Open questions
+- None for Commit D. The end-to-end "handler re-mints on a real collision"
+  integration test is a Phase 11 item (the doc's store/domain test-gap
+  list); the store-level collision rejection and the pure re-mint remap
+  are unit-tested here.

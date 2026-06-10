@@ -799,3 +799,34 @@ async fn wake_director_notifies_registered_plan_and_noops_for_absent() {
     // Absent Plan: must not panic (benign miss, same as handle_director_chat).
     ctx.wake_director(&domain::PlanId::new()).await;
 }
+
+// --- F4: re-mint helper remaps ids + dependency edges ---
+
+#[test]
+fn remint_work_batch_remaps_ids_and_dependency_edges() {
+    let plan_id = domain::PlanId::new();
+    let a = domain::Work::new(plan_id.clone(), "a".to_string());
+    let mut b = domain::Work::new(plan_id.clone(), "b".to_string());
+    let mut c = domain::Work::new(plan_id.clone(), "c".to_string());
+    // b depends on a; c depends on a and b.
+    b.dependencies = vec![a.id.clone()];
+    c.dependencies = vec![a.id.clone(), b.id.clone()];
+    let (a_old, b_old, c_old) = (a.id.clone(), b.id.clone(), c.id.clone());
+
+    let reminted = super::remint_work_batch(vec![a, b, c]);
+    assert_eq!(reminted.len(), 3);
+    let (na, nb, nc) = (reminted[0].id.clone(), reminted[1].id.clone(), reminted[2].id.clone());
+
+    // Every id is fresh.
+    assert_ne!(na, a_old);
+    assert_ne!(nb, b_old);
+    assert_ne!(nc, c_old);
+
+    // Dependency edges are remapped to the new sibling ids, not stale.
+    assert_eq!(reminted[1].dependencies, vec![na.clone()], "b's dep -> a's new id");
+    assert_eq!(
+        reminted[2].dependencies,
+        vec![na, nb],
+        "c's deps -> a's and b's new ids"
+    );
+}

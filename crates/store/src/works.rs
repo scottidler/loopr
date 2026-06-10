@@ -50,9 +50,16 @@ impl<'a> WorksStore<'a> {
     /// Stage 7's reconcile-on-restart concern; within a single collection
     /// the writer-thread primitive is atomic.
     ///
-    /// A fresh decomposition never has id collisions because `WorkId`s are
-    /// freshly minted by the decomposer, so this method's practical failure
-    /// mode is limited to IO errors on disk.
+    /// F4: `WorkId`s are 5-char base36 (~60.4M space), so a fresh
+    /// decomposition's ids can collide with an earlier Plan's persisted
+    /// Work (~0.8% by 1k records). The underlying `create_many` is
+    /// `INSERT OR REPLACE` and would silently overwrite the earlier Work;
+    /// this method pre-checks every incoming id against the store (and for
+    /// intra-batch duplicates) and returns `StoreError::AlreadyExists` on
+    /// the first collision so the caller can re-mint + remap and retry.
+    /// The pre-check is not transactional (same caveat as `create`), but
+    /// the single-daemon model makes the get->create window race-free in
+    /// practice.
     #[instrument(
         name = "works.create_many",
         level = "debug",
@@ -61,6 +68,24 @@ impl<'a> WorksStore<'a> {
         err,
     )]
     pub async fn create_many(&self, works: Vec<Work>) -> Result<Vec<WorkId>, StoreError> {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::with_capacity(works.len());
+        for w in &works {
+            let id = w.id.as_ref();
+            // Intra-batch duplicate (decomposer bug) — would self-overwrite.
+            if !seen.insert(id) {
+                return Err(StoreError::AlreadyExists {
+                    collection: "works",
+                    id: id.to_string(),
+                });
+            }
+            // Cross-Plan collision against the store.
+            if self.inner.get::<Work>(id).await?.is_some() {
+                return Err(StoreError::AlreadyExists {
+                    collection: "works",
+                    id: id.to_string(),
+                });
+            }
+        }
         let returned = self.inner.create_many(works).await?;
         Ok(returned
             .into_iter()
