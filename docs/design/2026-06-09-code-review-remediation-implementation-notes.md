@@ -136,3 +136,28 @@ and threads a new `CommitContext` through ~20 call sites):
   (`deps.llm.model()`), not the per-response model the provider echoes.
   Phase 6's model-pinning detector adds the response-reported model on
   the Bundle; the trailer can be reconciled to that then if desired.
+
+## Phase 2: Integrator git-state integrity
+
+In progress. This phase is the system's riskiest code (git crash
+recovery); findings land incrementally so each is durable.
+
+### Design decisions
+- **`run_git` kill_on_drop (git.rs).** Set `cmd.kill_on_drop(true)` so a
+  timed-out `git merge`/`checkout` is killed when the timeout drops the
+  future, rather than continuing to run and landing its mutation after
+  `integrate` returned `Err`. Matches the posture validation.rs already
+  uses.
+
+### Deviations
+- None yet.
+
+### Tradeoffs
+- None yet.
+
+### Open questions
+- Remaining Phase 2 findings (merge-abort crash window, AdoptedExisting
+  rollback, is_ancestor false-adopt, dirty-tree guard, conflict-vs-error
+  classification, pinned-date determinism, branch deletion, multi-bundle
+  re-entry, TOCTOU ordering, validation instrumentation, clean_fd) are
+  not yet implemented.

@@ -278,6 +278,13 @@ async fn run_git(target: &Path, args: &[&str], git_timeout: Duration) -> Result<
     for arg in args {
         cmd.arg(arg);
     }
+    // kill_on_drop is load-bearing here (contrast validation.rs): without
+    // it, a timed-out `git merge`/`checkout` keeps running after the
+    // timeout future is dropped and can land its mutation AFTER
+    // `integrate` returned Err - git advances, the DB records nothing,
+    // and the retry races the orphaned process. Kill the child when the
+    // timeout drops the future.
+    cmd.kill_on_drop(true);
     let fut = cmd.output();
     let out = match timeout(git_timeout, fut).await {
         Ok(Ok(out)) => out,
