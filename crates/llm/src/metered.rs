@@ -257,7 +257,9 @@ mod tests {
         let snapshot = fresh_snapshot();
         let stub = ScriptedLlm::new();
         stub.queue_free(Err(LlmError::Retryable {
-            reason: "transient".to_string(),
+            reason: crate::error::RetryableReason::Network {
+                detail: "transient".to_string(),
+            },
         }));
         let metered = MeteredLlmClient::new(stub, Arc::clone(&snapshot));
         let _ = metered.complete_free("s", &[], None).await.unwrap_err();

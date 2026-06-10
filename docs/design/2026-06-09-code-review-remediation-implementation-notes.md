@@ -1458,3 +1458,55 @@ Landing across commits (mirrors Phases 1-5):
   are daemon/agent integration tests; per the doc's structure they land in
   Phase 11 alongside the other daemon-orchestration gaps. Commit D unit-
   tests the pure pieces (`over_work_budget`, `budgets` config parse).
+
+### Commit E — RetryableReason enum + timeout scaling (findings 5, 6)
+
+#### Design decisions
+- **`RetryableReason` enum** (`error.rs`) replaces the bare
+  `Retryable { reason: String }`: `RateLimited { retry_after }`,
+  `Overloaded`, `ServerError { status }`, `Network { detail }`,
+  `MalformedBody { detail }`. Implements `Display` so `LlmError`'s
+  `#[error("...{reason}")]` and the span `warn!(reason = %reason)` still
+  render a readable message. A backoff strategy can now `match` the class
+  (honor `retry-after` on a rate limit, exponential on a 5xx) instead of
+  scraping a string.
+- **Header capture before body consumption (`anthropic.rs`).**
+  `send_request` / `send_free_request` read `retry-after` and the
+  request-id header off `response.headers()` BEFORE `response.bytes()`.
+  `retry_after` (parsed to whole seconds) flows into the typed
+  `RateLimited`; `request_id` is logged at `debug!` ("anthropic response
+  headers") for correlation — captured for diagnostics without bloating
+  the enum. A shared `classify_status(code, body, retry_after)` builds the
+  typed error: 401/403→Auth(fatal), 429→RateLimited, 529→Overloaded,
+  408/5xx→ServerError, 400/other→BadRequest(fatal). Both classify paths
+  call it; non-JSON bodies and body-read failures become `MalformedBody`;
+  transport errors become `Network`.
+- **Timeout scaling (finding 6).** Replaced the flat
+  `REQUEST_TIMEOUT_SECS = 120` with `scaled_timeout_secs(max_tokens) =
+  BASE (60) + max_tokens / 40` (a pessimistic 40 tok/s output-rate
+  floor). Sonnet at 8192 max_tokens → ~265s; a 1024-token call → ~85s. A
+  near-`max_tokens` response is no longer aborted mid-flight (then billed
+  in full and retried into the same wall). Computed once at client
+  construction from `config.max_tokens` — chose the "scale with
+  max_tokens" option over a new `timeout-secs` config field to avoid
+  churning every `LlmConfig { .. }` literal in the test suite (the
+  config-field option is the documented alternative, deferrable).
+
+#### Deviations
+- The doc lists `request-id` capture alongside `retry-after`. `retry_after`
+  is captured into the typed enum (it changes retry behavior);
+  `request_id` is captured into the debug log/span rather than the enum
+  (it is purely diagnostic), keeping `RetryableReason` to the five listed
+  variants without a per-variant id field.
+
+#### Tradeoffs
+- `408` is bucketed as `ServerError { status: 408 }` rather than a
+  distinct timeout reason — it is rare and retryable like a 5xx, so a
+  dedicated variant adds no caller value.
+- The timeout is per-client (sized from `config.max_tokens`), not
+  per-call. All calls from one client share one `max_tokens`, so a
+  per-call ceiling would be identical; the client-level timeout is where
+  reqwest applies it.
+
+#### Open questions
+- None.

@@ -208,8 +208,10 @@ async fn free_http_500_maps_to_retryable() {
         .await
         .unwrap_err();
     match err {
-        LlmError::Retryable { reason } => assert!(reason.contains("500"), "got: {reason}"),
-        other => panic!("expected Retryable, got {other:?}"),
+        LlmError::Retryable {
+            reason: llm::RetryableReason::ServerError { status },
+        } => assert_eq!(status, 500),
+        other => panic!("expected Retryable::ServerError(500), got {other:?}"),
     }
 }
 
@@ -282,6 +284,61 @@ async fn free_request_body_uses_config_model_when_none() {
     let reqs = server.received_requests().await.unwrap();
     let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
     assert_eq!(body["model"], "claude-sonnet-4-6");
+}
+
+#[tokio::test]
+async fn free_http_429_maps_to_rate_limited_with_retry_after() {
+    // Phase 6 finding 5: 429 becomes a typed RateLimited carrying the
+    // parsed retry-after header (seconds).
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "12")
+                .set_body_string("slow down"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    let err = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap_err();
+    match err {
+        LlmError::Retryable {
+            reason: llm::RetryableReason::RateLimited { retry_after },
+        } => assert_eq!(retry_after, Some(12)),
+        other => panic!("expected Retryable::RateLimited(Some(12)), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn free_http_529_maps_to_overloaded() {
+    // Phase 6 finding 5: 529 (Anthropic overloaded_error) is its own
+    // typed reason, distinct from a generic 5xx.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(529).set_body_string("overloaded"))
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::new(test_config(server.uri()), "test-key".into()).unwrap();
+    let err = client
+        .complete_free("s", &[Message::user("q")], None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            LlmError::Retryable {
+                reason: llm::RetryableReason::Overloaded
+            }
+        ),
+        "got: {err:?}"
+    );
 }
 
 #[tokio::test]

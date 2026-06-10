@@ -94,10 +94,14 @@ async fn cold_boot_redecomposes_active_plan_with_zero_works() {
     // Plan->Stalled) rather than panic on an empty tool queue.
     let llm = ScriptedLlm::new();
     llm.queue_tool(Err(llm::LlmError::Retryable {
-        reason: "test: no decompose".to_string(),
+        reason: llm::RetryableReason::Network {
+            detail: "test: no decompose".to_string(),
+        },
     }));
     llm.queue_tool(Err(llm::LlmError::Retryable {
-        reason: "test: no decompose".to_string(),
+        reason: llm::RetryableReason::Network {
+            detail: "test: no decompose".to_string(),
+        },
     }));
     let ctx = build_test_context_with_llm(&target, llm).await;
     {

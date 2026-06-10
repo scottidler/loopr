@@ -17,7 +17,7 @@ use tracing::{debug, info_span, instrument, warn};
 
 use crate::client::LlmClient;
 use crate::config::LlmConfig;
-use crate::error::{FatalReason, LlmError};
+use crate::error::{FatalReason, LlmError, RetryableReason};
 use crate::message::{Message, MessageContent};
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
@@ -29,14 +29,27 @@ use crate::usage::Usage;
 /// Security → Telemetry payload rules.
 const PROMPT_PREVIEW_MAX_BYTES: usize = 4096;
 
-/// Wall-clock ceiling for a single Anthropic call. Sonnet with 8192
-/// max_tokens usually completes in 1-10s; 120s is 12x headroom for
-/// slow paths without letting a hung call stall the decomposer
-/// indefinitely. The daemon is async, so other IPC traffic is
-/// unaffected while this call is outstanding; the ceiling exists
-/// only to guarantee the decomposer's request handler eventually
-/// returns an error instead of hanging forever.
-const REQUEST_TIMEOUT_SECS: u64 = 120;
+/// Base wall-clock ceiling for any Anthropic call, before the
+/// max_tokens-scaled component. The daemon is async, so other IPC
+/// traffic is unaffected while a call is outstanding; the ceiling exists
+/// only to guarantee a call eventually returns an error instead of
+/// hanging forever.
+const BASE_TIMEOUT_SECS: u64 = 60;
+
+/// Conservative per-token output rate (tokens/sec) used to size the
+/// timeout. A near-`max_tokens` response generating at this floor rate
+/// must not be aborted mid-flight (finding 6: a flat 120s aborted
+/// legitimate large responses, which were then billed in full AND
+/// retried into the same wall). Real throughput is far higher; this is a
+/// pessimistic floor so the ceiling scales with the work requested.
+const TIMEOUT_OUTPUT_TOKENS_PER_SEC: u64 = 40;
+
+/// Wall-clock ceiling for a single Anthropic call, scaled by the
+/// configured `max_tokens`: `BASE + max_tokens / RATE`. Sonnet at 8192
+/// max_tokens → 60 + 205 ≈ 265s; a 1024-token call → 60 + 25 ≈ 85s.
+fn scaled_timeout_secs(max_tokens: u32) -> u64 {
+    BASE_TIMEOUT_SECS + (max_tokens as u64) / TIMEOUT_OUTPUT_TOKENS_PER_SEC
+}
 
 /// Anthropic Messages API version header value. Pinned to a known-
 /// stable date; upgrade deliberately when a specific newer feature is
@@ -94,7 +107,7 @@ impl AnthropicClient {
 
         let http = reqwest::Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(scaled_timeout_secs(config.max_tokens)))
             .build()
             .map_err(|e| LlmError::Fatal {
                 reason: FatalReason::ConfigInvalid(format!("reqwest client build failed: {e}")),
@@ -363,11 +376,19 @@ impl AnthropicClient {
             .map_err(reqwest_err_to_llm_error)?;
 
         let status = response.status();
+        // Capture retry-after + request-id from the headers BEFORE the
+        // body is consumed (finding 5). retry_after feeds the typed
+        // RateLimited reason; request_id is diagnostic.
+        let retry_after = parse_retry_after(response.headers());
+        let request_id = request_id_header(response.headers());
+        debug!(?retry_after, request_id = request_id.as_deref().unwrap_or(""), "anthropic response headers");
         let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
-            reason: format!("failed to read response body: {e}"),
+            reason: RetryableReason::MalformedBody {
+                detail: format!("failed to read response body: {e}"),
+            },
         })?;
 
-        classify_free_response(status, &body_bytes, self.config.max_tokens)
+        classify_free_response(status, &body_bytes, self.config.max_tokens, retry_after)
     }
 
     async fn send_request(
@@ -407,12 +428,35 @@ impl AnthropicClient {
             .map_err(reqwest_err_to_llm_error)?;
 
         let status = response.status();
+        let retry_after = parse_retry_after(response.headers());
+        let request_id = request_id_header(response.headers());
+        debug!(?retry_after, request_id = request_id.as_deref().unwrap_or(""), "anthropic response headers");
         let body_bytes = response.bytes().await.map_err(|e| LlmError::Retryable {
-            reason: format!("failed to read response body: {e}"),
+            reason: RetryableReason::MalformedBody {
+                detail: format!("failed to read response body: {e}"),
+            },
         })?;
 
-        classify_response(status, &body_bytes, &tool.name, self.config.max_tokens)
+        classify_response(status, &body_bytes, &tool.name, self.config.max_tokens, retry_after)
     }
+}
+
+/// Parse the `retry-after` response header to whole seconds. Anthropic
+/// sends it as an integer-seconds value on 429s; a missing or
+/// unparseable header yields `None` (the caller falls back to its own
+/// backoff schedule).
+fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
+    headers.get("retry-after")?.to_str().ok()?.trim().parse::<u64>().ok()
+}
+
+/// Pull the provider's request-id header for diagnostics. Anthropic uses
+/// `request-id`; some gateways echo `x-request-id`.
+fn request_id_header(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("request-id")
+        .or_else(|| headers.get("x-request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
 }
 
 /// Validate `api_base_url` at construction time so a malformed config
@@ -554,14 +598,37 @@ fn reqwest_err_to_llm_error(e: reqwest::Error) -> LlmError {
             reason: FatalReason::ConfigInvalid(format!("request builder error: {e}")),
         };
     }
-    if e.is_timeout() || e.is_connect() || e.is_request() {
-        LlmError::Retryable {
-            reason: format!("network error: {e}"),
-        }
-    } else {
-        LlmError::Retryable {
-            reason: format!("reqwest error: {e}"),
-        }
+    LlmError::Retryable {
+        reason: RetryableReason::Network {
+            detail: format!("{e}"),
+        },
+    }
+}
+
+/// Classify a non-2xx status into a typed `LlmError`. Shared by both
+/// response paths: 401/403 → Auth (fatal); 429 → RateLimited (typed,
+/// carries `retry_after`); 529 → Overloaded; 408/5xx → ServerError;
+/// 400/other → BadRequest (fatal).
+fn classify_status(code: u16, body_text: String, retry_after: Option<u64>) -> LlmError {
+    match code {
+        401 | 403 => LlmError::Fatal {
+            reason: FatalReason::Auth(body_text),
+        },
+        429 => LlmError::Retryable {
+            reason: RetryableReason::RateLimited { retry_after },
+        },
+        529 => LlmError::Retryable {
+            reason: RetryableReason::Overloaded,
+        },
+        408 | 500..=599 => LlmError::Retryable {
+            reason: RetryableReason::ServerError { status: code },
+        },
+        400 => LlmError::Fatal {
+            reason: FatalReason::BadRequest(body_text),
+        },
+        _ => LlmError::Fatal {
+            reason: FatalReason::BadRequest(format!("HTTP {code}: {body_text}")),
+        },
     }
 }
 
@@ -577,30 +644,19 @@ fn classify_response(
     body: &[u8],
     expected_tool_name: &str,
     max_tokens: u32,
+    retry_after: Option<u64>,
 ) -> Result<(ToolCall, Usage), LlmError> {
     if status.is_success() {
-        let parsed: Value = serde_json::from_slice(body).map_err(|_| LlmError::Retryable {
-            reason: "non-JSON response body".into(),
+        let parsed: Value = serde_json::from_slice(body).map_err(|e| LlmError::Retryable {
+            reason: RetryableReason::MalformedBody {
+                detail: format!("non-JSON response body: {e}"),
+            },
         })?;
         return extract_tool_call(&parsed, expected_tool_name, max_tokens);
     }
 
     let body_text = String::from_utf8_lossy(body).to_string();
-    let code = status.as_u16();
-    match code {
-        401 | 403 => Err(LlmError::Fatal {
-            reason: FatalReason::Auth(body_text),
-        }),
-        408 | 429 | 500..=599 => Err(LlmError::Retryable {
-            reason: format!("HTTP {code}: {body_text}"),
-        }),
-        400 => Err(LlmError::Fatal {
-            reason: FatalReason::BadRequest(body_text),
-        }),
-        _ => Err(LlmError::Fatal {
-            reason: FatalReason::BadRequest(format!("HTTP {code}: {body_text}")),
-        }),
-    }
+    Err(classify_status(status.as_u16(), body_text, retry_after))
 }
 
 #[instrument(
@@ -614,30 +670,19 @@ fn classify_free_response(
     status: reqwest::StatusCode,
     body: &[u8],
     max_tokens: u32,
+    retry_after: Option<u64>,
 ) -> Result<(String, Usage), LlmError> {
     if status.is_success() {
-        let parsed: Value = serde_json::from_slice(body).map_err(|_| LlmError::Retryable {
-            reason: "non-JSON response body".into(),
+        let parsed: Value = serde_json::from_slice(body).map_err(|e| LlmError::Retryable {
+            reason: RetryableReason::MalformedBody {
+                detail: format!("non-JSON response body: {e}"),
+            },
         })?;
         return extract_text_block(&parsed, max_tokens);
     }
 
     let body_text = String::from_utf8_lossy(body).to_string();
-    let code = status.as_u16();
-    match code {
-        401 | 403 => Err(LlmError::Fatal {
-            reason: FatalReason::Auth(body_text),
-        }),
-        408 | 429 | 500..=599 => Err(LlmError::Retryable {
-            reason: format!("HTTP {code}: {body_text}"),
-        }),
-        400 => Err(LlmError::Fatal {
-            reason: FatalReason::BadRequest(body_text),
-        }),
-        _ => Err(LlmError::Fatal {
-            reason: FatalReason::BadRequest(format!("HTTP {code}: {body_text}")),
-        }),
-    }
+    Err(classify_status(status.as_u16(), body_text, retry_after))
 }
 
 /// Pull the `usage` object out of a Messages-API response and stamp it
@@ -795,3 +840,6 @@ fn extract_tool_call(
         },
     })
 }
+
+#[cfg(test)]
+mod tests;

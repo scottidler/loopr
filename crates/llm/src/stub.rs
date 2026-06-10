@@ -286,7 +286,9 @@ mod tests {
     async fn errors_propagate() {
         let stub = ScriptedLlm::new();
         stub.queue_free(Err(LlmError::Retryable {
-            reason: "transient".to_string(),
+            reason: crate::error::RetryableReason::Network {
+                detail: "transient".to_string(),
+            },
         }));
         stub.queue_tool(Err(LlmError::Fatal {
             reason: FatalReason::SchemaValidation {

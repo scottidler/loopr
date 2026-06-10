@@ -31,7 +31,9 @@ fn schema_validation_err(msg: &str) -> Result<ToolCall, LlmError> {
 
 fn retryable_err(msg: &str) -> Result<ToolCall, LlmError> {
     Err(LlmError::Retryable {
-        reason: msg.to_string(),
+        reason: llm::RetryableReason::Network {
+            detail: msg.to_string(),
+        },
     })
 }
 
@@ -180,10 +182,12 @@ async fn retry_failure_propagates_final_error() {
         .expect_err("should fail after retry");
     match err {
         DecomposerError::LlmFailed(boxed) => match *boxed {
-            LlmError::Retryable { reason } => {
-                assert_eq!(reason, "second", "retry's error propagates, not first");
+            LlmError::Retryable {
+                reason: llm::RetryableReason::Network { detail },
+            } => {
+                assert_eq!(detail, "second", "retry's error propagates, not first");
             }
-            other => panic!("expected Retryable, got {other:?}"),
+            other => panic!("expected Retryable::Network, got {other:?}"),
         },
         other => panic!("expected LlmFailed(Retryable), got {other:?}"),
     }

@@ -25,7 +25,7 @@ pub use anthropic::AnthropicClient;
 pub use call::CallContext;
 pub use client::LlmClient;
 pub use config::LlmConfig;
-pub use error::{FatalReason, LlmError};
+pub use error::{FatalReason, LlmError, RetryableReason};
 pub use message::{Message, MessageContent, MessageRole};
 pub use metered::{CostSink, MeteredLlmClient};
 pub use tier::ModelTiers;

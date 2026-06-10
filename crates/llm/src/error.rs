@@ -14,16 +14,55 @@ use crate::usage::Usage;
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     /// Transient condition. The caller's retry policy may re-issue the
-    /// same call and reasonably expect a different result: rate limits,
-    /// 5xx, network timeouts, non-JSON bodies from broken proxies.
+    /// same call and reasonably expect a different result. The typed
+    /// `RetryableReason` lets a backoff strategy distinguish a rate limit
+    /// (honor `retry-after`) from a 5xx (exponential backoff) from a
+    /// network blip, instead of scraping an opaque string.
     #[error("retryable LLM call failure: {reason}")]
-    Retryable { reason: String },
+    Retryable { reason: RetryableReason },
 
     /// Permanent condition for this call shape. Retrying identically
     /// will fail identically. The caller must either change inputs
     /// (larger `max_tokens`, different schema) or abort.
     #[error("fatal LLM call failure: {reason:?}")]
     Fatal { reason: FatalReason },
+}
+
+/// Typed causes for `LlmError::Retryable`. Replaces the bare string so a
+/// retry strategy can `match` the failure class. `retry-after` is
+/// captured here (for `RateLimited`); the response's request-id header is
+/// captured onto the call span for diagnostics rather than into the enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryableReason {
+    /// HTTP 429. `retry_after` is the parsed `retry-after` header (seconds)
+    /// when present — the caller's backoff should honor it.
+    RateLimited { retry_after: Option<u64> },
+    /// HTTP 529 (Anthropic `overloaded_error`). Back off and retry.
+    Overloaded,
+    /// HTTP 5xx (and 408). `status` is the concrete code.
+    ServerError { status: u16 },
+    /// Transport-level failure before a complete HTTP response (timeout,
+    /// connect, request build). `detail` is the underlying message.
+    Network { detail: String },
+    /// A complete HTTP response whose body could not be read or parsed
+    /// (truncated read, non-JSON from a broken proxy). `detail` is the
+    /// underlying message.
+    MalformedBody { detail: String },
+}
+
+impl std::fmt::Display for RetryableReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RetryableReason::RateLimited { retry_after } => match retry_after {
+                Some(s) => write!(f, "rate limited (retry-after: {s}s)"),
+                None => write!(f, "rate limited"),
+            },
+            RetryableReason::Overloaded => write!(f, "server overloaded (HTTP 529)"),
+            RetryableReason::ServerError { status } => write!(f, "server error (HTTP {status})"),
+            RetryableReason::Network { detail } => write!(f, "network error: {detail}"),
+            RetryableReason::MalformedBody { detail } => write!(f, "malformed response body: {detail}"),
+        }
+    }
 }
 
 impl LlmError {
