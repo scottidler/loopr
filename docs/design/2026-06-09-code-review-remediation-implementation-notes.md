@@ -1562,3 +1562,249 @@ Several items in the finding were already resolved in Commit E:
 
 #### Open questions
 - None.
+
+## Phase 7: Daemon lifecycle and visibility
+
+Landing across six commits (mirrors Phases 1-6):
+- **Commit A** — JoinSet panic visibility: panic hook + drain-loop
+  JoinError logging + background pool reaper (finding 1).
+- **Commit B** — spawn-gate drain race re-check + accept-loop transient-
+  error resilience (findings 4, 5).
+- **Commit C** — corruption gate before spawn sweeps + stale-pid
+  tolerance + foreground preflight + startup-error sentinel (findings 3,
+  6, 7, 11).
+- **Commit D** — SIGKILL escalation window derived from the graceful-drain
+  budget (finding 2).
+- **Commit E** — DaemonEvent bus senders + system.status counts +
+  no-fork `daemon status` + integration-branch orphan cleanup (findings
+  8, 9, 10, 12).
+- **Commit F** — config override chain: XDG user layer + generic
+  `LOOPR_<SECTION>__<KEY>` env pass (finding 13).
+
+### Commit A — JoinSet panic visibility (finding 1)
+
+#### Design decisions
+- **Background periodic reaper, not per-spawn reaping.** The finding
+  offered "periodic/per-spawn try_join_next reaping." Per-spawn would
+  touch ~20 spawn sites across four files; a single `spawn_pool_reaper`
+  task (wakes every `POOL_REAP_INTERVAL_SECS = 30`, reaps all six pools,
+  exits on `shutdown_notify`) is one place and follows the existing
+  signal-watcher pattern. Crucially it respects the Arc-shutdown
+  discipline: `serve()` joins the reaper (with the watcher timeout) BEFORE
+  `Arc::try_unwrap`, so its `Arc<DaemonContext>` clone drops in time. A
+  long-lived clone is exactly the hazard the `serve()` doc comment warns
+  about, so the reaper is structured to release on shutdown like the
+  watcher. `serve_core` (the test path) spawns no reaper.
+- **`drain_pool` shared helper.** The six near-identical inline pool
+  drains collapsed into one `drain_pool(tasks, timeout_secs, pool)` that
+  logs non-cancelled JoinErrors on the normal-drain path and aborts the
+  remainder on timeout (aborted = Cancelled, not logged). The six pool-
+  specific `drain_*_tasks` fns keep their ordering doc comments and call
+  `drain_pool`.
+- **Panic hook chains the previous hook** and is installed in
+  `run_active_daemon` right after `telemetry::init` (so the error reaches
+  `events.log`, not the `/dev/null` stdio). Routes payload + location
+  through `tracing::error!`.
+
+#### Deviations
+- None — finding 1 explicitly lists periodic OR per-spawn; periodic chosen
+  for the reasons above.
+
+#### Tradeoffs
+- The reaper adds one always-on task and a 30s mutex-touch per pool. The
+  contention is negligible (microsecond reaps) and the bound on JoinSet
+  growth during a long multi-Work run is the payoff.
+
+#### Open questions
+- None.
+
+### Commit B — spawn-gate race + accept-loop resilience (findings 4, 5)
+
+#### Design decisions
+- **Re-check `shutting_down` under the pool lock** in all six WorkSpawner
+  shims (one `replace_all` — the lock+spawn opening is identical). This is
+  the substantive fix for "insert into an already-drained JoinSet": the
+  drain holds the same lock and `shutting_down` is set before any drain,
+  so observing it true after acquiring the lock means skip.
+- **Transient accept-error classification.** `is_transient_accept_error`
+  matches resource-pressure errnos (EMFILE/ENFILE/ENOBUFS/ENOMEM/
+  ECONNABORTED/EINTR) and the equivalent `io::ErrorKind`s; the accept arm
+  logs-and-continues with a 50ms backoff on transient, propagates only a
+  fatal listener error (EINVAL/EBADF).
+
+#### Deviations
+- **"track the shim handles" not implemented.** The finding's secondary
+  ask (tracking the outer detached `tokio::spawn` handles) is deferred:
+  the re-check-under-lock closes the actual drained-JoinSet-insert bug,
+  and an outer shim that is still parked on the lock at `try_unwrap` time
+  is already covered by the documented `try_unwrap` -> `Store::Drop`
+  fallback (a sub-millisecond window, no crash). Tracking the shim handles
+  would add a seventh pool to the carefully-ordered drain sequence for
+  marginal benefit; left as future hardening.
+
+#### Tradeoffs
+- A persistent transient condition (fd exhaustion that never clears) means
+  the accept loop spins at 50ms cadence logging each time, rather than
+  dying. That is the intended behavior — a daemon that stays up and noisy
+  beats one that dies on the first EMFILE burst.
+
+#### Open questions
+- None.
+
+### Commit C — gate ordering, stale-pid, preflight, startup diag (findings 3, 6, 7, 11)
+
+#### Design decisions
+- **`reconcile` split into scan phase / gate / spawn phase.**
+  `sweep_bundles` decomposed into `scan_bundles` (tolerant-list, surface
+  corruption, return records; no spawns) and `requeue_bundles` (consume
+  records, spawn). `reconcile` now: scan (sweep_worktrees + scan_bundles)
+  -> mirror corruption_count onto the snapshot -> corruption gate ->
+  spawn (requeue_bundles + dep promotions + Director respawn). The gate +
+  snapshot-mirror moved OUT of `build_context` into `reconcile`;
+  `build_context` just propagates the `CorruptionGate` error via `?`.
+  `reconcile` gained an `accept_corruption: bool` param.
+- **`read_pid` treats an unparseable pid as `Ok(None)` + `warn!`** rather
+  than propagating, so a SIGKILL-truncated pid file no longer bricks every
+  client command (`status`/`stop`/auto-fork) on a file the daemon owns.
+  The caller's preflight/clean path removes the stale file.
+- **Startup-error sentinel.** `daemon.startup-error` written by the
+  grandchild (in `run_grandchild`, AFTER `daemon_main`'s `sentinel::clean`
+  so it survives) on a failed boot. `wait_for_socket` reads it — both
+  fail-fast inside the poll loop and at the timeout — so the parent
+  surfaces the real reason instead of a generic socket-timeout. Added to
+  `clean()`'s sweep and to `preflight_clean` (transitively) so a stale one
+  never misleads a later boot.
+- **Foreground preflight.** `preflight_clean` made `pub(crate)` and called
+  in the `daemon start --foreground` branch (which bypasses
+  `ensure_daemon`); the alive-check above already rejected a live daemon,
+  so anything left is stale.
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- `scan_bundles` + `requeue_bundles` re-walk the same Bundle list the old
+  single `sweep_bundles` walked once, but the list is already in memory
+  (the scan returns the records the spawn phase consumes), so there is no
+  double-list — only a function-boundary split.
+
+#### Open questions
+- None.
+
+### Commit D — SIGKILL escalation window (finding 2)
+
+#### Design decisions
+- **`GRACEFUL_SHUTDOWN_BUDGET_SECS` in daemon.rs** sums the actual drain
+  constants (handler + six pools + 2x watcher join), so the budget tracks
+  the drains automatically. `kill_stale` derives its window as
+  `budget + STOP_MARGIN_SECS (15)` and prints a progress line every 5s.
+  Replaces the flat 3s window that SIGKILLed busy daemons mid-LLM-call.
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- `daemon stop` against a genuinely-wedged daemon now blocks up to ~174s
+  (budget + margin) before SIGKILL, versus 3s before. That is the point:
+  each pool drain has its own internal abort-on-timeout, so a healthy
+  daemon exits far sooner; the long window only applies to a daemon
+  ignoring SIGTERM entirely, and the 5s progress lines keep it from
+  looking hung.
+
+#### Open questions
+- None.
+
+### Commit E — DaemonEvent bus, status counts, no-fork status, branch cleanup (findings 8, 9, 10, 12)
+
+#### Design decisions
+- **DaemonEvent emission lives in `SummaryFanout`, not the
+  `transition_and_persist_*` free functions.** Those two functions are
+  generic over the sink (`S: WorkUpdateSink` / `PlanUpdateSink`) and are
+  called at 54 sites (production + tests with fake sinks), so threading an
+  event sender through them would ripple everywhere. `SummaryFanout` is
+  the single production sink threaded through every production call site;
+  it already does side-effects (summary writes) and sees the final
+  persisted record. A `with_events` constructor wires the daemon's
+  `events` broadcast sender; the test `new` constructor leaves it `None`.
+  Emits `work.blocked`/`work.terminal` and `plan.stalled`/`plan.terminal`.
+  This is the second documented sender on the bus (Phase 6 added
+  `budget.exceeded`).
+- **`daemon status` no longer auto-forks**: `DaemonCmd::Status` removed
+  from the `ensure_daemon_if_needed` arm; it falls through to
+  `daemon_status`, which prints "no daemon running" when none exists.
+- **`system.status` counts** Active plans + non-terminal works from the
+  store (degrading to 0 with a `warn!` on store-read failure);
+  `handle_status` became async.
+- **Integration-branch orphan cleanup**: a `plan.create` that fails at the
+  Plan persist after `ensure_integration_branch` created the branch now
+  best-effort `git branch -D`s it (`daemon::git::delete_integration_branch`)
+  rather than reordering (which would risk an orphan Plan record instead).
+
+#### Deviations
+- The generic `DaemonEvent { event: String, data: Value }` shape (already
+  in `ipc`) is reused rather than introducing the vision's typed
+  `DaemonEvent::Error { plan_id, work_id, reason, message }` variant. The
+  bus is string-keyed today (the `budget.exceeded` precedent); event names
+  carry the semantics and `data` carries the ids. Promoting the bus to a
+  typed enum is a larger `ipc`-crate change out of this finding's scope.
+
+#### Tradeoffs
+- Event emission on EVERY Work/Plan update checks the status and no-ops for
+  non-terminal/non-Blocked transitions — a cheap branch on the hot path,
+  cheaper than threading a sender through 54 call sites.
+
+#### Open questions
+- None.
+
+### Commit F — config override chain (finding 13)
+
+#### Design decisions
+- **Layered load: baked-in < XDG < target < env.** XDG
+  (`~/.config/loopr/loopr.yml` via a local `xdg_config_dir` helper, NOT
+  `dirs::config_dir()`) and target (`.loopr/config.yml`) are parsed to
+  `serde_yaml::Value` and deep-merged (`deep_merge`), then deserialized
+  once through the `deny_unknown_fields` `Config`. Deep-merge is required
+  because serde has no native merge and a target file that omits a key
+  must not erase the XDG layer's value.
+- **Generic env pass: `LOOPR_<SECTION>__<KEY>`.** Double-underscore `__`
+  separates nesting levels; within a segment a single `_` becomes `-` and
+  the segment lowercases. The `__` marker is REQUIRED, so `LOOPR_TARGET` /
+  `LOOPR_LOG` / `LOOPR_WORKTREE_CLEANUP_POLICY` (no `__`) are not treated
+  as field overrides and cannot trip `deny_unknown_fields`. Set into the
+  merged Value before deserialize.
+- **Test isolation via `load_guard`.** Every `Config::load` test now
+  points `$XDG_CONFIG_HOME` at a private empty tempdir (restored on drop)
+  so the suite never reads the developer's real
+  `~/.config/loopr/loopr.yml`.
+
+#### Deviations
+- **Env var scheme changed from the vision's single-`_` sketch to
+  double-underscore nesting.** The vision showed `models.primary ->
+  LOOPR_MODELS_PRIMARY`, which is ambiguous once a key itself contains a
+  hyphen (`per-run-cost-usd` -> `LOOPR_BUDGETS_PER_RUN_COST_USD` is
+  unparseable back to a path). The `__` convention (figment/config-rs
+  standard) disambiguates. vision.md amended to match (this is the `a8`
+  chain-text amendment Phase 10 will reference).
+- **CLI-flag layer deferred.** The vision chain ended in `< CLI flag`; no
+  general CLI surface for config knobs is built (only `--log-level`, a
+  telemetry concern, and the dedicated worktree-cleanup env var). vision.md
+  amended to note CLI as future.
+
+#### Tradeoffs
+- `deny_unknown_fields` applies to the merged Value, so an unknown key in
+  EITHER layer fails the whole load. That is the intended fail-loud
+  behavior (a typo or a stale config surfaces immediately), but see the
+  open question below for its interaction with a pre-existing legacy
+  global config.
+
+#### Open questions
+- **A pre-existing `~/.config/loopr/loopr.yml` from loopr v3/v4 will now
+  break v5 daemon startup.** The XDG layer reads that shared path; a v3/v4
+  config (keys like `debug`, `agents.enabled`, `validator`) hits
+  `deny_unknown_fields` and the daemon refuses to boot with an "unknown
+  field" error. This is the intended fail-loud behavior, but it is a real
+  operational gotcha for anyone upgrading in place. **Remedy:** remove or
+  migrate the stale global config (`rkvr rmrf ~/.config/loopr/loopr.yml`),
+  or populate it with v5-schema keys. Flagged for the operator; not
+  worked around in code (silently tolerating unknown fields in the XDG
+  layer would hide exactly the drift this chain is meant to surface).
