@@ -125,6 +125,9 @@ pub struct Config {
     /// `ctx.config.agents.implementer.clone()` etc.
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// Decomposition knobs (`decomposer.max-children`).
+    #[serde(default)]
+    pub decomposer: decomposer::DecomposerConfig,
     /// Integrator knobs. Validation commands and timeout are the
     /// user-facing surface; git_timeout stays internal.
     #[serde(default)]

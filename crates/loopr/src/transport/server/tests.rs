@@ -61,6 +61,7 @@ async fn ctx_for_test_with_timeouts(
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
         DirectorConfig::default(),
+        decomposer::DecomposerConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
         server_timeouts,

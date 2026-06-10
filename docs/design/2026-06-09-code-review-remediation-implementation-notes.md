@@ -855,3 +855,51 @@ Landing across commits (mirrors Phases 1-3):
 
 #### Open questions
 - None.
+
+### Commit E — decomposer validation-retry + max-children bound
+
+#### Design decisions
+- **Unified attempt loop (bullet 12).** `decompose`'s tail was rewritten
+  so a single retry covers BOTH a transient LLM error AND a post-parse
+  validation error: the first failure (either kind) re-prompts via
+  `assemble_user(goal, Some(err))` and a second failure bails. Pre-fix the
+  seven validation errors bailed immediately, never triggering the
+  retry-with-error the error machinery + design doc promised. Structured
+  as a labeled block (attempt 1) + a post-block (attempt 2) rather than a
+  real loop, since `MAX_DECOMPOSE_ATTEMPTS = 2` means exactly one retry.
+- **`parse_and_validate` extracted.** Pure parse + the seven validation
+  checks (no I/O, no transcript, no LLM); returns `(works, response)` or a
+  `Box<ValidationFailure>` carrying the typed error, the stable transcript
+  outcome label, and the pre-rendered child lines. The caller owns retry +
+  transcript writing, so the validation logic is testable in isolation and
+  reusable across both attempts.
+- **`DecomposerConfig` + `max_children` (bullet 14).** New `DecomposerConfig`
+  (the crate's own config, per its CLAUDE.md) with `max_children` (default
+  10), composed into the top-level loopr `Config` as `decomposer.*` and
+  threaded through `DaemonContext::decomposer_config` into
+  `decompose(plan, target, llm, config)`. A decomposition exceeding the
+  bound is a `TooManyChildren` validation error (new variant) checked
+  beside the zero-children floor — it goes through the same retry path.
+- **`DecomposerError::LlmFailed(Box<LlmError>)`.** Boxed the large
+  `LlmError` so `DecomposerError` (and anything carrying it) shrinks.
+- **`ValidationFailure` boxed.** `DecomposerError` still embeds the large
+  `context::PromptError`, so `parse_and_validate`'s `Result` tripped
+  `clippy::result_large_err`; the `Err` is `Box<ValidationFailure>` via a
+  `boxed` constructor.
+
+#### Deviations
+- The unified budget (2 attempts) slightly changes the old behavior: the
+  initial LLM-error retry and the (previously absent) validation retry now
+  share one budget. A validation failure on attempt 1 always retries; a
+  failure on attempt 2 always bails. Net: validation gets the "once before
+  bailing" the doc specifies; LLM-error retry is unchanged (still 2 calls
+  max).
+
+#### Tradeoffs
+- Validation-failure transcripts use the plain outcome label on BOTH the
+  retry write and the final bail write (no `_retrying` suffix, unlike the
+  LLM path's `llm_failed_retrying`). The existing transcript tests assert
+  the plain label, and the iteration number distinguishes the two blocks.
+
+#### Open questions
+- None.

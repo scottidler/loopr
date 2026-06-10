@@ -29,6 +29,7 @@ use domain::{AcceptanceCriteria, GraphError, Plan, Work, WorkGraph, WorkId};
 use llm::{LlmClient, ToolCall};
 use telemetry::transcript::{TranscriptIteration, append_iteration, decomposer_path};
 
+use crate::config::DecomposerConfig;
 use crate::error::DecomposerError;
 use crate::prompt::{assemble_system, assemble_user};
 use crate::resolve::{normalize, resolve_deps};
@@ -108,16 +109,23 @@ fn now_iso8601() -> String {
 /// - `acceptance_criteria` non-empty (LLM-provided or extracted from
 ///   content's `## Acceptance Criteria` section)
 ///
-/// On any failure, returns without side effects. The single retry
-/// has already fired if the first call failed; `DecomposerError`
-/// surfaces the final failure.
+/// On any failure, returns without side effects. A single retry covers
+/// BOTH a transient LLM error and a post-parse validation error: the
+/// first failure (LLM or validation) re-prompts with the error text
+/// interpolated into the user message, then a second failure bails.
+/// `DecomposerError` surfaces the final failure.
 #[instrument(level = "info", skip_all, fields(
     plan_id = %plan.id,
     goal_len = plan.goal.len(),
     child_count = tracing::field::Empty,
     outcome = tracing::field::Empty,
 ))]
-pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Result<Vec<Work>, DecomposerError> {
+pub async fn decompose<L: LlmClient>(
+    plan: &Plan,
+    target: &Path,
+    llm: &L,
+    config: &DecomposerConfig,
+) -> Result<Vec<Work>, DecomposerError> {
     let span = tracing::Span::current();
 
     let tree = match collect_workspace_tree(target) {
@@ -134,115 +142,260 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
 
     let plan_id_str = plan.id.as_ref().to_string();
 
-    // First LLM call. The success path runs through validation below
-    // before we have a parsed response to put in the transcript; the
-    // failure path writes its own transcript entry and returns. The
-    // retry path overwrites `iteration_used` / `user_used` so the
-    // success-path transcript carries iteration 2's prompts when the
-    // first call failed.
-    let mut iteration_used: u32 = 1;
-    let mut user_used: String = first_user.clone();
-    let started_at_initial = now_iso8601();
-    let t0_first = Instant::now();
-    let tool_call = match try_llm_once(llm, &system, &first_user).await {
-        Ok(tc) => {
-            tracing::debug!(
-                latency_ms = t0_first.elapsed().as_millis() as u64,
-                "decomposer: first LLM call ok"
-            );
-            tc
-        }
-        Err(first_err) => {
-            let first_latency = t0_first.elapsed().as_millis() as u64;
-            warn!(error = %first_err, "decompose: first LLM call failed, retrying once");
-            // Best-effort: log iteration 1's failed call before the retry.
-            write_decomposer_transcript(
-                target,
-                &plan_id_str,
-                1,
-                &system,
-                &first_user,
-                &first_err.to_string(),
-                Vec::new(),
-                "llm_failed_retrying",
-                &started_at_initial,
-                first_latency,
-            );
-            let retry_user = assemble_user(&loader, &plan.goal, Some(&first_err.to_string()))?;
-            iteration_used = 2;
-            user_used = retry_user.clone();
-            let started_at_retry = now_iso8601();
-            let t0_retry = Instant::now();
-            match try_llm_once(llm, &system, &retry_user).await {
-                Ok(tc) => {
-                    tracing::debug!(
-                        latency_ms = t0_retry.elapsed().as_millis() as u64,
-                        "decomposer: retry LLM call ok"
-                    );
-                    tc
+    // Unified attempt loop. A single retry covers BOTH a transient LLM
+    // error and a post-parse validation error (bullet 12): the first
+    // failure re-prompts with the error text interpolated into the user
+    // message via `assemble_user(goal, Some(err))`, then the second
+    // failure bails. Pre-fix the seven validation errors bailed
+    // immediately, never triggering the retry the error machinery,
+    // comments, and design doc all promised.
+    let mut user: String = first_user;
+    let mut started_at = now_iso8601();
+    let mut attempt: u32 = 1;
+
+    // Labeled block (not a loop — it runs once and either returns on
+    // success/terminal-bail or yields the error text to re-prompt with).
+    let retry_err: String = 'first_attempt: {
+        let t0 = Instant::now();
+        let llm_result = try_llm_once(llm, &system, &user).await;
+        let latency_ms = t0.elapsed().as_millis() as u64;
+
+        match llm_result {
+            Ok(tool_call) => {
+                let raw_response =
+                    serde_json::to_string_pretty(&tool_call.input).unwrap_or_else(|_| tool_call.input.to_string());
+                match parse_and_validate(&tool_call.input, plan, config.max_children) {
+                    Ok((works, response)) => {
+                        span.record("outcome", "ok");
+                        span.record("child_count", works.len());
+                        info!(child_count = works.len(), attempt, "decompose: produced works");
+                        write_decomposer_transcript(
+                            target,
+                            &plan_id_str,
+                            attempt,
+                            &system,
+                            &user,
+                            &raw_response,
+                            render_decompose_response(&response),
+                            "ok",
+                            &started_at,
+                            latency_ms,
+                        );
+                        return Ok(works);
+                    }
+                    Err(failure) => {
+                        span.record("outcome", failure.outcome);
+                        let parsed = failure.rendered.clone();
+                        if attempt >= MAX_DECOMPOSE_ATTEMPTS {
+                            warn!(outcome = failure.outcome, error = %failure.error, "decompose: validation failed after retry; bailing");
+                            write_decomposer_transcript(
+                                target,
+                                &plan_id_str,
+                                attempt,
+                                &system,
+                                &user,
+                                &raw_response,
+                                parsed,
+                                failure.outcome,
+                                &started_at,
+                                latency_ms,
+                            );
+                            return Err(failure.error);
+                        }
+                        warn!(outcome = failure.outcome, error = %failure.error, "decompose: validation failed; retrying with error in prompt");
+                        write_decomposer_transcript(
+                            target,
+                            &plan_id_str,
+                            attempt,
+                            &system,
+                            &user,
+                            &raw_response,
+                            parsed,
+                            failure.outcome,
+                            &started_at,
+                            latency_ms,
+                        );
+                        break 'first_attempt failure.error.to_string();
+                    }
                 }
-                Err(retry_err) => {
-                    let retry_latency = t0_retry.elapsed().as_millis() as u64;
+            }
+            Err(llm_err) => {
+                if attempt >= MAX_DECOMPOSE_ATTEMPTS {
                     span.record("outcome", "llm_failed");
                     write_decomposer_transcript(
                         target,
                         &plan_id_str,
-                        2,
+                        attempt,
                         &system,
-                        &retry_user,
-                        &retry_err.to_string(),
+                        &user,
+                        &llm_err.to_string(),
                         Vec::new(),
                         "llm_failed",
-                        &started_at_retry,
-                        retry_latency,
+                        &started_at,
+                        latency_ms,
                     );
-                    return Err(DecomposerError::LlmFailed(retry_err));
+                    return Err(DecomposerError::LlmFailed(Box::new(llm_err)));
                 }
+                warn!(error = %llm_err, "decompose: LLM call failed, retrying once");
+                write_decomposer_transcript(
+                    target,
+                    &plan_id_str,
+                    attempt,
+                    &system,
+                    &user,
+                    &llm_err.to_string(),
+                    Vec::new(),
+                    "llm_failed_retrying",
+                    &started_at,
+                    latency_ms,
+                );
+                break 'first_attempt llm_err.to_string();
             }
         }
     };
 
-    // The successful tool_call's input is re-serialized for the
-    // transcript regardless of whether the response parses cleanly
-    // below; raw text in the transcript is the whole point.
-    let raw_response = serde_json::to_string_pretty(&tool_call.input).unwrap_or_else(|_| tool_call.input.to_string());
-    let total_latency_ms = t0_first.elapsed().as_millis() as u64;
+    // Prepare the single retry: re-prompt with the failure interpolated.
+    attempt += 1;
+    user = assemble_user(&loader, &plan.goal, Some(&retry_err))?;
+    started_at = now_iso8601();
 
-    let response: DecomposeResponse = match serde_json::from_value::<DecomposeResponse>(tool_call.input.clone()) {
-        Ok(r) => r,
-        Err(e) => {
-            span.record("outcome", "malformed_children");
+    let t0 = Instant::now();
+    let llm_result = try_llm_once(llm, &system, &user).await;
+    let latency_ms = t0.elapsed().as_millis() as u64;
+    match llm_result {
+        Ok(tool_call) => {
+            let raw_response =
+                serde_json::to_string_pretty(&tool_call.input).unwrap_or_else(|_| tool_call.input.to_string());
+            match parse_and_validate(&tool_call.input, plan, config.max_children) {
+                Ok((works, response)) => {
+                    span.record("outcome", "ok");
+                    span.record("child_count", works.len());
+                    info!(child_count = works.len(), attempt, "decompose: produced works");
+                    write_decomposer_transcript(
+                        target,
+                        &plan_id_str,
+                        attempt,
+                        &system,
+                        &user,
+                        &raw_response,
+                        render_decompose_response(&response),
+                        "ok",
+                        &started_at,
+                        latency_ms,
+                    );
+                    Ok(works)
+                }
+                Err(failure) => {
+                    span.record("outcome", failure.outcome);
+                    let parsed = failure.rendered.clone();
+                    warn!(outcome = failure.outcome, error = %failure.error, "decompose: validation failed after retry; bailing");
+                    write_decomposer_transcript(
+                        target,
+                        &plan_id_str,
+                        attempt,
+                        &system,
+                        &user,
+                        &raw_response,
+                        parsed,
+                        failure.outcome,
+                        &started_at,
+                        latency_ms,
+                    );
+                    Err(failure.error)
+                }
+            }
+        }
+        Err(llm_err) => {
+            span.record("outcome", "llm_failed");
             write_decomposer_transcript(
                 target,
                 &plan_id_str,
-                iteration_used,
+                attempt,
                 &system,
-                &user_used,
-                &raw_response,
+                &user,
+                &llm_err.to_string(),
                 Vec::new(),
-                "malformed_children",
-                &started_at_initial,
-                total_latency_ms,
+                "llm_failed",
+                &started_at,
+                latency_ms,
             );
-            return Err(DecomposerError::MalformedChildren(e.to_string()));
+            Err(DecomposerError::LlmFailed(Box::new(llm_err)))
+        }
+    }
+}
+
+/// Maximum total `decompose` attempts (initial + one retry). The retry
+/// budget is shared across LLM errors and validation errors.
+const MAX_DECOMPOSE_ATTEMPTS: u32 = 2;
+
+/// A validation failure carrying its typed error, the stable transcript
+/// outcome label, and the parsed response (when it deserialized) for
+/// transcript rendering.
+struct ValidationFailure {
+    error: DecomposerError,
+    outcome: &'static str,
+    /// Pre-rendered child lines for the transcript (empty when the
+    /// response did not even deserialize). Stored rendered rather than
+    /// as the full `DecomposeResponse` so the `Err` variant stays small.
+    rendered: Vec<String>,
+}
+
+impl ValidationFailure {
+    /// Box the failure. `DecomposerError` embeds `context::PromptError`,
+    /// which is large, so the unboxed `Result<_, ValidationFailure>`
+    /// trips clippy's `result_large_err`. Validation failures are the
+    /// rare path, so the heap allocation is free in the common case.
+    fn boxed(error: DecomposerError, outcome: &'static str, rendered: Vec<String>) -> Box<Self> {
+        Box::new(Self {
+            error,
+            outcome,
+            rendered,
+        })
+    }
+}
+
+/// Pure parse + validation of one LLM tool-call input. No I/O, no
+/// transcripts, no LLM — the caller owns retry + transcript writing.
+/// Runs the seven post-parse checks (plus the max-children bound) in the
+/// order that yields the clearest operator-facing error, and on success
+/// returns the built `Vec<Work>` alongside the parsed response.
+fn parse_and_validate(
+    input: &serde_json::Value,
+    plan: &Plan,
+    max_children: usize,
+) -> Result<(Vec<Work>, DecomposeResponse), Box<ValidationFailure>> {
+    let response: DecomposeResponse = match serde_json::from_value::<DecomposeResponse>(input.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(ValidationFailure::boxed(
+                DecomposerError::MalformedChildren(e.to_string()),
+                "malformed_children",
+                Vec::new(),
+            ));
         }
     };
 
     if response.children.is_empty() {
-        span.record("outcome", "zero_children");
-        write_decomposer_transcript(
-            target,
-            &plan_id_str,
-            iteration_used,
-            &system,
-            &user_used,
-            &raw_response,
-            Vec::new(),
+        return Err(ValidationFailure::boxed(
+            DecomposerError::ZeroChildren(plan.id.clone()),
             "zero_children",
-            &started_at_initial,
-            total_latency_ms,
-        );
-        return Err(DecomposerError::ZeroChildren(plan.id.clone()));
+            render_decompose_response(&response),
+        ));
+    }
+
+    // Max-children bound (bullet 14): the handler spawns an Implementer
+    // per unblocked Work with no pool cap, so an oversized decomposition
+    // would fan out too many concurrent agents. Checked beside the
+    // zero-children floor.
+    if response.children.len() > max_children {
+        return Err(ValidationFailure::boxed(
+            DecomposerError::TooManyChildren {
+                count: response.children.len(),
+                max: max_children,
+            },
+            "too_many_children",
+            render_decompose_response(&response),
+        ));
     }
 
     // Empty-title check runs before normalization so we can name the
@@ -251,40 +404,22 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
     // string.
     for (idx, child) in response.children.iter().enumerate() {
         if normalize(&child.title).is_empty() {
-            span.record("outcome", "empty_title");
-            write_decomposer_transcript(
-                target,
-                &plan_id_str,
-                iteration_used,
-                &system,
-                &user_used,
-                &raw_response,
-                render_decompose_response(&response),
+            return Err(ValidationFailure::boxed(
+                DecomposerError::EmptyTitle(idx),
                 "empty_title",
-                &started_at_initial,
-                total_latency_ms,
-            );
-            return Err(DecomposerError::EmptyTitle(idx));
+                render_decompose_response(&response),
+            ));
         }
     }
 
     let normalized_titles: Vec<String> = response.children.iter().map(|c| normalize(&c.title)).collect();
     let dupes = find_duplicates(&normalized_titles);
     if !dupes.is_empty() {
-        span.record("outcome", "duplicate_titles");
-        write_decomposer_transcript(
-            target,
-            &plan_id_str,
-            iteration_used,
-            &system,
-            &user_used,
-            &raw_response,
-            render_decompose_response(&response),
+        return Err(ValidationFailure::boxed(
+            DecomposerError::DuplicateTitles(dupes),
             "duplicate_titles",
-            &started_at_initial,
-            total_latency_ms,
-        );
-        return Err(DecomposerError::DuplicateTitles(dupes));
+            render_decompose_response(&response),
+        ));
     }
 
     // Pre-mint one WorkId per child, keyed by normalized title.
@@ -293,37 +428,24 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         title_to_id.insert(title.clone(), WorkId::new());
     }
 
-    // Resolve each child's deps to sibling WorkIds. All errors collect
-    // into a single UnresolvedDeps. Resolution runs BEFORE cycle
-    // detection so unknown-sibling refs surface as UnresolvedDeps (the
-    // clearer message) and the graph below sees only real edges.
+    // Resolve each child's deps to sibling WorkIds. Resolution runs
+    // BEFORE cycle detection so unknown-sibling refs surface as
+    // UnresolvedDeps (the clearer message) and the graph sees real edges.
     let resolved_deps = match resolve_deps(&response.children, &title_to_id) {
         Ok(r) => r,
         Err(e) => {
-            span.record("outcome", "unresolved_deps");
             if let DecomposerError::UnresolvedDeps(msg) = &e {
                 warn!(unresolved = %msg, "decompose: unresolved sibling deps");
             }
-            write_decomposer_transcript(
-                target,
-                &plan_id_str,
-                iteration_used,
-                &system,
-                &user_used,
-                &raw_response,
-                render_decompose_response(&response),
+            return Err(ValidationFailure::boxed(
+                e,
                 "unresolved_deps",
-                &started_at_initial,
-                total_latency_ms,
-            );
-            return Err(e);
+                render_decompose_response(&response),
+            ));
         }
     };
 
     // Cycle detection over the resolved WorkId edges via domain::WorkGraph.
-    // On a cycle, map the offending ids back to titles (title_to_id is a
-    // strict bijection - duplicate normalized titles are rejected above)
-    // so the operator-facing message names titles, not opaque ids.
     let edges: Vec<(WorkId, Vec<WorkId>)> = normalized_titles
         .iter()
         .zip(resolved_deps.iter())
@@ -333,58 +455,33 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         let id_to_title: HashMap<&WorkId, &String> = title_to_id.iter().map(|(title, id)| (id, title)).collect();
         let cycle_desc = cycle_ids
             .iter()
-            .map(|id| {
-                id_to_title
-                    .get(id)
-                    .map(|t| t.as_str())
-                    .unwrap_or("<unknown>")
-                    .to_string()
-            })
+            .map(|id| id_to_title.get(id).map(|t| t.as_str()).unwrap_or("<unknown>").to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        span.record("outcome", "cycle");
         warn!(cycle = %cycle_desc, "decompose: dependency cycle detected");
-        write_decomposer_transcript(
-            target,
-            &plan_id_str,
-            iteration_used,
-            &system,
-            &user_used,
-            &raw_response,
-            render_decompose_response(&response),
+        return Err(ValidationFailure::boxed(
+            DecomposerError::CycleDetected(cycle_desc),
             "cycle",
-            &started_at_initial,
-            total_latency_ms,
-        );
-        return Err(DecomposerError::CycleDetected(cycle_desc));
+            render_decompose_response(&response),
+        ));
     }
 
-    // Build Works, pairing each child with its pre-minted id and
-    // resolved deps. AC falls back to markdown extraction if the LLM
-    // didn't populate `acceptance_criteria`.
+    // Build Works. AC falls back to markdown extraction if the LLM
+    // didn't populate `acceptance_criteria`. The empty-AC failing title
+    // is captured and the loop broken so the borrow of `response.children`
+    // ends before `response` is moved into the error below.
     let mut works: Vec<Work> = Vec::with_capacity(response.children.len());
+    let mut empty_ac_title: Option<String> = None;
     for ((child, norm_title), deps) in response
         .children
         .iter()
         .zip(normalized_titles.iter())
-        .zip(resolved_deps.into_iter())
+        .zip(resolved_deps)
     {
         let ac = non_empty_ac_for(child);
         if ac.is_empty() {
-            span.record("outcome", "empty_ac");
-            write_decomposer_transcript(
-                target,
-                &plan_id_str,
-                iteration_used,
-                &system,
-                &user_used,
-                &raw_response,
-                render_decompose_response(&response),
-                "empty_ac",
-                &started_at_initial,
-                total_latency_ms,
-            );
-            return Err(DecomposerError::EmptyAcceptanceCriteria(child.title.clone()));
+            empty_ac_title = Some(child.title.clone());
+            break;
         }
         let mut work = Work::new(plan.id.clone(), child.title.clone());
         work.id = title_to_id[norm_title].clone();
@@ -393,23 +490,15 @@ pub async fn decompose<L: LlmClient>(plan: &Plan, target: &Path, llm: &L) -> Res
         work.files = child.files.clone();
         works.push(work);
     }
+    if let Some(title) = empty_ac_title {
+        return Err(ValidationFailure::boxed(
+            DecomposerError::EmptyAcceptanceCriteria(title),
+            "empty_ac",
+            render_decompose_response(&response),
+        ));
+    }
 
-    span.record("outcome", "ok");
-    span.record("child_count", works.len());
-    info!(child_count = works.len(), "decompose: produced works");
-    write_decomposer_transcript(
-        target,
-        &plan_id_str,
-        iteration_used,
-        &system,
-        &user_used,
-        &raw_response,
-        render_decompose_response(&response),
-        "ok",
-        &started_at_initial,
-        total_latency_ms,
-    );
-    Ok(works)
+    Ok((works, response))
 }
 
 #[instrument(level = "debug", skip_all, fields(system_chars = system.len(), user_chars = user.len()), err)]

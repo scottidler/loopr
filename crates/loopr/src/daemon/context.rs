@@ -208,6 +208,9 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// intervals, restart cap, parse-failure cap, model, token budget).
     /// Cloned per Plan when `handle_plan_create` spawns the Director.
     pub director_config: DirectorConfig,
+    /// Decomposition knobs (`max_children`). Passed by reference into
+    /// `decomposer::decompose` on every `plan.create`.
+    pub decomposer_config: decomposer::DecomposerConfig,
     /// Intra-daemon working-tree serializer. Shared into every
     /// `IntegratorDeps` so two concurrent `integrate` calls on the same
     /// target do not race on `git checkout` / `git merge`. First gate:
@@ -328,6 +331,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         reviewer_config: ReviewerConfig,
         integrator_config: IntegratorConfig,
         director_config: DirectorConfig,
+        decomposer_config: decomposer::DecomposerConfig,
         worktree_cleanup_policy: AttemptCleanupPolicy,
         snapshot: Arc<StdMutex<ProcessSnapshot>>,
         server_timeouts: crate::transport::ServerTimeouts,
@@ -361,6 +365,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             reviewer_config,
             integrator_config,
             director_config,
+            decomposer_config,
             git_lock: Arc::new(Mutex::new(())),
             worktree_cleanup_policy,
             implementer_tasks: Mutex::new(JoinSet::new()),

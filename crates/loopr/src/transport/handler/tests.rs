@@ -62,6 +62,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
         DirectorConfig::default(),
+        decomposer::DecomposerConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
         crate::transport::ServerTimeouts::default(),

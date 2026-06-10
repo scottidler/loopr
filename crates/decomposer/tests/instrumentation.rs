@@ -15,7 +15,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
-use decomposer::decompose;
+use decomposer::{DecomposerConfig, decompose};
 use domain::Plan;
 use llm::{ScriptedLlm, ToolCall};
 
@@ -132,7 +132,7 @@ async fn decomposer_smoke_spans_decompose() {
         }),
     }));
 
-    let _works = decompose(&plan, &repo, &llm).await.unwrap();
+    let _works = decompose(&plan, &repo, &llm, &DecomposerConfig::default()).await.unwrap();
 
     let outer = cap.find("decompose").expect("decompose span");
     assert_eq!(

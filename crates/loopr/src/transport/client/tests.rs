@@ -65,6 +65,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
         ReviewerConfig::default(),
         integrator::IntegratorConfig::default(),
         DirectorConfig::default(),
+        decomposer::DecomposerConfig::default(),
         AttemptCleanupPolicy::default(),
         snapshot,
         crate::transport::ServerTimeouts::default(),

@@ -14,12 +14,24 @@ pub enum DecomposerError {
     /// The LLM call failed after the single retry. Carries the last
     /// error so callers can inspect whether it was `Retryable` (the
     /// caller may choose to loop again) or `Fatal` (bail to user).
+    /// Boxed: `LlmError` is large (its `Fatal` body can be several KiB),
+    /// and inlining it bloated every `DecomposerError` (and the
+    /// `Result<_, ValidationFailure>` carrying it) past the
+    /// large-error-variant threshold.
     #[error("LLM call failed: {0}")]
-    LlmFailed(#[from] LlmError),
+    LlmFailed(#[from] Box<LlmError>),
 
     /// The model returned `children: []`. Scope memo A+1: bail loudly.
     #[error("LLM produced zero child Works for plan {0}")]
     ZeroChildren(PlanId),
+
+    /// The model returned more children than `decomposer.max_children`
+    /// allows. The handler spawns an Implementer per unblocked Work with
+    /// no pool cap, so an oversized decomposition would fan out too many
+    /// concurrent agents; bail (after one retry) and ask for fewer,
+    /// coarser Works.
+    #[error("LLM produced {count} child Works; max-children is {max}. Decompose into at most {max} coarser Works.")]
+    TooManyChildren { count: usize, max: usize },
 
     /// One or more children named a sibling title that did not appear
     /// in the same batch. The LLM hallucinated a dependency target.

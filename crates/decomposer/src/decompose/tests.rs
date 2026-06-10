@@ -6,6 +6,7 @@ use tempfile::TempDir;
 use domain::Plan;
 use llm::{FatalReason, LlmError, ScriptedLlm, ToolCall};
 
+use crate::config::DecomposerConfig;
 use crate::error::DecomposerError;
 
 fn tool_call(input: serde_json::Value) -> ToolCall {
@@ -47,7 +48,7 @@ async fn run_decompose(
     for r in responses {
         llm.queue_tool(r);
     }
-    super::decompose(&plan, target, &llm).await
+    super::decompose(&plan, target, &llm, &DecomposerConfig::default()).await
 }
 
 #[tokio::test]
@@ -63,7 +64,7 @@ async fn happy_path_single_child_no_deps() {
             }
         ]
     }));
-    let works = run_decompose(vec![ok(response)], dir.path()).await.expect("ok");
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect("ok");
     assert_eq!(works.len(), 1);
     assert_eq!(works[0].title, "Add --version flag");
     assert_eq!(works[0].acceptance_criteria.len(), 1);
@@ -89,7 +90,7 @@ async fn happy_path_two_children_with_one_dep() {
             }
         ]
     }));
-    let works = run_decompose(vec![ok(response)], dir.path()).await.expect("ok");
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect("ok");
     assert_eq!(works.len(), 2);
     let titles: Vec<&str> = works.iter().map(|w| w.title.as_str()).collect();
     assert!(titles.contains(&"Build CLI"));
@@ -123,15 +124,63 @@ async fn retry_fires_on_first_llm_error_and_second_succeeds() {
 }
 
 #[tokio::test]
+async fn validation_error_retries_then_succeeds() {
+    // Bullet 12: a post-parse validation failure (zero children) now
+    // re-prompts with the error and the retry's valid response succeeds,
+    // instead of bailing on the first validation error.
+    let dir = TempDir::new().expect("tempdir");
+    let bad = tool_call(json!({ "children": [] }));
+    let good = tool_call(json!({
+        "children": [{ "title": "A", "content": "a", "acceptance_criteria": ["assert a"] }]
+    }));
+    let works = run_decompose(vec![ok(bad), ok(good)], dir.path())
+        .await
+        .expect("ok after validation retry");
+    assert_eq!(works.len(), 1);
+    assert_eq!(works[0].title, "A");
+}
+
+#[tokio::test]
+async fn too_many_children_errors_after_retry() {
+    // Bullet 14: a decomposition exceeding max_children is a validation
+    // error (with one retry). Use a config with max_children = 1.
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            { "title": "A", "content": "a", "acceptance_criteria": ["assert a"] },
+            { "title": "B", "content": "b", "acceptance_criteria": ["assert b"] }
+        ]
+    }));
+    let plan = fresh_plan("too many");
+    let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
+    llm.queue_tool(ok(response));
+    let config = DecomposerConfig { max_children: 1 };
+    let err = super::decompose(&plan, dir.path(), &llm, &config)
+        .await
+        .expect_err("over max-children");
+    match err {
+        DecomposerError::TooManyChildren { count, max } => {
+            assert_eq!(count, 2);
+            assert_eq!(max, 1);
+        }
+        other => panic!("expected TooManyChildren, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn retry_failure_propagates_final_error() {
     let dir = TempDir::new().expect("tempdir");
     let err = run_decompose(vec![retryable_err("first"), retryable_err("second")], dir.path())
         .await
         .expect_err("should fail after retry");
     match err {
-        DecomposerError::LlmFailed(LlmError::Retryable { reason }) => {
-            assert_eq!(reason, "second", "retry's error propagates, not first");
-        }
+        DecomposerError::LlmFailed(boxed) => match *boxed {
+            LlmError::Retryable { reason } => {
+                assert_eq!(reason, "second", "retry's error propagates, not first");
+            }
+            other => panic!("expected Retryable, got {other:?}"),
+        },
         other => panic!("expected LlmFailed(Retryable), got {other:?}"),
     }
 }
@@ -140,7 +189,7 @@ async fn retry_failure_propagates_final_error() {
 async fn zero_children_errors_zero_children() {
     let dir = TempDir::new().expect("tempdir");
     let response = tool_call(json!({"children": []}));
-    let err = run_decompose(vec![ok(response)], dir.path())
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect_err("zero children");
     assert!(matches!(err, DecomposerError::ZeroChildren(_)));
@@ -151,7 +200,7 @@ async fn malformed_tool_input_errors_malformed_children() {
     let dir = TempDir::new().expect("tempdir");
     // Valid JSON object but missing `children` field.
     let response = tool_call(json!({"not_children": []}));
-    let err = run_decompose(vec![ok(response)], dir.path())
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect_err("malformed");
     assert!(matches!(err, DecomposerError::MalformedChildren(_)), "got: {err:?}");
@@ -176,7 +225,7 @@ async fn cycle_detected_between_two_children() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response)], dir.path()).await.expect_err("cycle");
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect_err("cycle");
     assert!(matches!(err, DecomposerError::CycleDetected(_)), "got: {err:?}");
 }
 
@@ -193,7 +242,7 @@ async fn self_loop_is_cycle() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response)], dir.path())
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect_err("self-loop");
     assert!(matches!(err, DecomposerError::CycleDetected(_)), "got: {err:?}");
@@ -216,7 +265,7 @@ async fn duplicate_titles_after_normalization_errors() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response)], dir.path()).await.expect_err("dupes");
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect_err("dupes");
     match err {
         DecomposerError::DuplicateTitles(titles) => {
             assert_eq!(titles, vec!["build cli".to_string()]);
@@ -238,7 +287,7 @@ async fn unresolved_dep_errors() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response)], dir.path())
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect_err("unresolved");
     assert!(matches!(err, DecomposerError::UnresolvedDeps(_)), "got: {err:?}");
@@ -261,7 +310,7 @@ async fn empty_title_errors_empty_title_with_index() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response)], dir.path())
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect_err("empty title");
     match err {
@@ -282,7 +331,7 @@ async fn empty_ac_in_both_array_and_content_errors_empty_acceptance_criteria() {
             }
         ]
     }));
-    let err = run_decompose(vec![ok(response)], dir.path())
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
         .await
         .expect_err("empty AC");
     match err {
@@ -304,7 +353,7 @@ async fn ac_fallback_extracts_from_markdown_when_array_empty() {
             }
         ]
     }));
-    let works = run_decompose(vec![ok(response)], dir.path()).await.expect("ok");
+    let works = run_decompose(vec![ok(response.clone()), ok(response)], dir.path()).await.expect("ok");
     assert_eq!(works.len(), 1);
     assert_eq!(
         works[0].acceptance_criteria.len(),
@@ -324,8 +373,9 @@ async fn every_work_has_parent_id_equal_to_plan_id() {
     }));
     let plan = fresh_plan("roots");
     let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
-    let works = super::decompose(&plan, dir.path(), &llm).await.expect("ok");
+    let works = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default()).await.expect("ok");
     for w in &works {
         assert_eq!(w.parent_id, plan.id);
         assert_eq!(w.status, domain::WorkStatus::Pending);
@@ -365,9 +415,10 @@ async fn transcript_written_on_success() {
     }));
     let plan = fresh_plan("happy");
     let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
 
-    super::decompose(&plan, dir.path(), &llm).await.expect("ok");
+    super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default()).await.expect("ok");
 
     let path = decomposer_transcript_path(dir.path(), &plan);
     assert!(path.exists(), "transcript should exist at {}", path.display());
@@ -390,7 +441,7 @@ async fn transcript_written_with_two_iterations_on_retry() {
     llm.queue_tool(retryable_err("first call boom"));
     llm.queue_tool(ok(success));
 
-    super::decompose(&plan, dir.path(), &llm).await.expect("ok");
+    super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default()).await.expect("ok");
 
     let path = decomposer_transcript_path(dir.path(), &plan);
     let body = std::fs::read_to_string(&path).expect("read transcript");
@@ -412,9 +463,10 @@ async fn transcript_written_on_zero_children() {
     let response = tool_call(json!({"children": []}));
     let plan = fresh_plan("zero");
     let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
 
-    let err = super::decompose(&plan, dir.path(), &llm)
+    let err = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
         .await
         .expect_err("zero children rejected");
     assert!(matches!(err, DecomposerError::ZeroChildren(_)));
@@ -432,9 +484,10 @@ async fn transcript_written_on_malformed_children() {
     let response = tool_call(json!({"not_children": "wrong"}));
     let plan = fresh_plan("bad shape");
     let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
 
-    let err = super::decompose(&plan, dir.path(), &llm)
+    let err = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
         .await
         .expect_err("malformed children rejected");
     assert!(matches!(err, DecomposerError::MalformedChildren(_)));
@@ -455,9 +508,10 @@ async fn transcript_written_on_duplicate_titles() {
     }));
     let plan = fresh_plan("dups");
     let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
 
-    let err = super::decompose(&plan, dir.path(), &llm)
+    let err = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
         .await
         .expect_err("duplicate titles rejected");
     assert!(matches!(err, DecomposerError::DuplicateTitles(_)));
@@ -478,9 +532,10 @@ async fn transcript_written_on_cycle_detected() {
     }));
     let plan = fresh_plan("cyclic");
     let llm = ScriptedLlm::new();
+    llm.queue_tool(ok(response.clone()));
     llm.queue_tool(ok(response));
 
-    let err = super::decompose(&plan, dir.path(), &llm)
+    let err = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
         .await
         .expect_err("cycle rejected");
     assert!(matches!(err, DecomposerError::CycleDetected(_)));
@@ -498,7 +553,7 @@ async fn transcript_written_on_llm_failed_after_retry() {
     llm.queue_tool(retryable_err("first"));
     llm.queue_tool(schema_validation_err("second"));
 
-    let err = super::decompose(&plan, dir.path(), &llm)
+    let err = super::decompose(&plan, dir.path(), &llm, &DecomposerConfig::default())
         .await
         .expect_err("both calls failed");
     assert!(matches!(err, DecomposerError::LlmFailed(_)));

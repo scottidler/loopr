@@ -217,7 +217,7 @@ async fn decompose_and_dispatch<L>(ctx: &Arc<DaemonContext<L>>, mut plan: domain
 where
     L: LlmClient + Send + Sync + 'static,
 {
-    match decomposer::decompose(&plan, &ctx.target, &*ctx.llm).await {
+    match decomposer::decompose(&plan, &ctx.target, &*ctx.llm, &ctx.decomposer_config).await {
         Ok(works) => {
             let count = works.len();
             // F4: persist with collision re-minting. `create_many` now
