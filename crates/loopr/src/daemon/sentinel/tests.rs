@@ -37,12 +37,15 @@ fn write_pid_fails_if_already_exists_as_lock_lost() {
 }
 
 #[test]
-fn read_pid_garbage_errors() {
+fn read_pid_garbage_is_stale_not_error() {
+    // A corrupt/truncated pid file must read as "no usable pid" (Ok(None))
+    // so client commands clean it rather than bricking. Propagating the
+    // parse error would take down `daemon status`/`stop`/auto-fork on a
+    // file the daemon itself owns.
     let td = target_with_loopr_dir();
     let p = pid_path(td.path());
     fs::write(&p, b"not-a-number\n").unwrap();
-    let err = read_pid(&p).unwrap_err();
-    assert!(matches!(err, LooprError::DaemonStartup(_)), "got {err:?}");
+    assert!(read_pid(&p).unwrap().is_none(), "garbage pid must be treated as stale");
 }
 
 #[test]

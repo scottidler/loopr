@@ -30,6 +30,12 @@ pub const VERSION_FILENAME: &str = "daemon.version";
 pub const PROCESS_ID_FILENAME: &str = "daemon.process-id";
 /// Filename of the Unix domain socket.
 pub const SOCKET_FILENAME: &str = "socket";
+/// Filename of the daemon startup-error sentinel. Written by the
+/// grandchild when it fails to start (corruption gate, telemetry/store
+/// open) so the parent — whose only signal is "socket never appeared",
+/// since daemon stdio is `/dev/null` post-fork — can surface the real
+/// reason. Removed by `clean` so a stale file never misleads a later boot.
+pub const STARTUP_ERROR_FILENAME: &str = "daemon.startup-error";
 
 /// Path to `<target>/.loopr/daemon.pid`.
 pub fn pid_path(target: &Path) -> PathBuf {
@@ -51,17 +57,52 @@ pub fn socket_path(target: &Path) -> PathBuf {
     target.join(".loopr").join(SOCKET_FILENAME)
 }
 
-/// Read the PID from a pid file. `Ok(None)` means the file does not exist;
-/// `Err` is a real I/O or parse failure.
+/// Path to `<target>/.loopr/daemon.startup-error`.
+pub fn startup_error_path(target: &Path) -> PathBuf {
+    target.join(".loopr").join(STARTUP_ERROR_FILENAME)
+}
+
+/// Best-effort write of the daemon startup-error sentinel. Called by the
+/// grandchild on a failed boot AFTER `daemon_main`'s cleanup has run, so
+/// the file survives to be read by the parent. Failures are swallowed —
+/// this is a diagnostic aid, never load-bearing.
+pub fn write_startup_error(target: &Path, reason: &str) {
+    let path = startup_error_path(target);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&path, format!("{reason}\n"));
+}
+
+/// Read the daemon startup-error sentinel. `None` if absent or unreadable.
+pub fn read_startup_error(target: &Path) -> Option<String> {
+    fs::read_to_string(startup_error_path(target))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Read the PID from a pid file. `Ok(None)` means "no usable pid": either
+/// the file does not exist OR its contents are unparseable. A corrupt /
+/// truncated pid file (e.g. a SIGKILL mid-write) is treated as
+/// stale-and-clean rather than a hard error — propagating the parse error
+/// would brick EVERY client command (`daemon status`, `stop`, auto-fork)
+/// on a file the daemon itself owns. The parse failure is logged at `warn!`
+/// so the corruption is visible; the caller's preflight/clean path then
+/// removes the stale sentinel. `Err` is reserved for genuine I/O failures.
 pub fn read_pid(pid_file: &Path) -> Result<Option<u32>, LooprError> {
     match fs::read_to_string(pid_file) {
-        Ok(s) => {
-            let trimmed = s.trim();
-            trimmed
-                .parse::<u32>()
-                .map(Some)
-                .map_err(|e| LooprError::DaemonStartup(format!("bad pid in {}: {e}", pid_file.display())))
-        }
+        Ok(s) => match s.trim().parse::<u32>() {
+            Ok(pid) => Ok(Some(pid)),
+            Err(e) => {
+                tracing::warn!(
+                    path = %pid_file.display(),
+                    error = %e,
+                    "unparseable pid file; treating as stale (will be cleaned)"
+                );
+                Ok(None)
+            }
+        },
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(LooprError::DaemonStartup(format!("read {}: {e}", pid_file.display()))),
     }
@@ -218,6 +259,7 @@ pub fn clean(target: &Path) {
         version_path(target),
         process_id_path(target),
         socket_path(target),
+        startup_error_path(target),
     ] {
         let _ = fs::remove_file(&path);
     }

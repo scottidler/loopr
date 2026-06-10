@@ -82,6 +82,13 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                     "daemon already running at pid {pid}; use `loopr daemon stop` first"
                 )));
             }
+            // Clean stale sentinel state before claiming the pid file.
+            // The background fork path does this in `ensure_daemon`, but the
+            // foreground branch bypasses `ensure_daemon` and would otherwise
+            // hit an opaque `LockLost` from a stale pid file left by a
+            // SIGKILLed predecessor. The alive-check above already rejected
+            // a LIVE daemon, so anything left here is stale.
+            daemon::preflight_clean(&effective);
             // Foreground daemon: this process IS the daemon. No fork. Run
             // daemon_main directly so its own telemetry init is the only
             // subscriber installation on this process.

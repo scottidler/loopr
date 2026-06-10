@@ -35,7 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agents::{DirectorDeps, DirectorError, run_director};
-use domain::{BundleStatus, FailureReason, PlanStatus, WorkStatus};
+use domain::{Bundle, BundleStatus, FailureReason, PlanStatus, WorkStatus};
 use futures_util::FutureExt;
 use llm::LlmClient;
 use store::Store;
@@ -85,18 +85,57 @@ fn log_corruption(record_kind: &'static str, corruption: &[store::CorruptionEntr
     }
 }
 
+/// Daemon-boot reconcile. Two distinct phases with the corruption gate
+/// between them, so a corrupt store never has reviewers/integrators/
+/// Directors spawned against it (the pre-fix order ran every sweep first
+/// and only then checked the gate):
+///
+/// 1. **Scan phase** — `sweep_worktrees` (surfaces malformed Work rows +
+///    worktree hygiene) and `scan_bundles` (surfaces malformed Bundle
+///    rows, returns the parsed Bundle records). NO task spawns.
+/// 2. **Corruption gate** — mirror the count onto the snapshot, then
+///    refuse to proceed (return `CorruptionGate`) unless
+///    `accept_corruption`.
+/// 3. **Spawn phase** — `requeue_bundles` (consumes the already-scanned
+///    Bundles), `sweep_dep_promotions`, `startup_reconcile_directors`.
+///    Runs BEFORE `accept_loop` binds, so no handler races the spawns.
 #[tracing::instrument(name = "daemon.reconcile", level = "info", skip_all, fields(target = %ctx.target.display()), err)]
-pub async fn reconcile<L>(ctx: &Arc<DaemonContext<L>>) -> Result<ReconcileReport, LooprError>
+pub async fn reconcile<L>(ctx: &Arc<DaemonContext<L>>, accept_corruption: bool) -> Result<ReconcileReport, LooprError>
 where
     L: LlmClient + Send + Sync + 'static,
 {
+    // ---- Scan phase (no task spawns) ----
     let mut report = sweep_worktrees(&ctx.target, &ctx.store).await?;
+    let bundles = scan_bundles(&ctx.store, &mut report).await;
 
-    // Stage 8 wiring capstone: Bundle-FSM sweep. Re-enqueue Bundles
-    // stranded at intermediate statuses for the correct next stage.
-    // Runs AFTER worktree hygiene and BEFORE `accept_loop` binds, so no
-    // handler can race with the spawned tasks.
-    sweep_bundles(ctx, &mut report).await?;
+    // Mirror reconcile's corruption_count onto the per-process snapshot so
+    // the digest records the boot's corruption tally even on the
+    // `--accept-corruption` path. Done in both branches below.
+    if let Ok(mut snap) = ctx.snapshot.lock() {
+        snap.corruption_count = u32::try_from(report.corruption_count).unwrap_or(u32::MAX);
+    }
+
+    // ---- Corruption gate: BEFORE any spawn sweep ----
+    // The pre-fix code spawned reviewers/integrators/Directors in
+    // `reconcile` and only gated afterward in `build_context`, so a
+    // corrupt store still got a live pipeline pointed at it. Gate here,
+    // between scan and spawn. See `docs/design/2026-04-25-tier1-cleanup.md`
+    // "Daemon-boot policy on corruption".
+    if report.corruption_count > 0 {
+        if accept_corruption {
+            tracing::warn!(
+                count = report.corruption_count,
+                "starting with corrupt records skipped (--accept-corruption)"
+            );
+        } else {
+            return Err(LooprError::CorruptionGate {
+                count: report.corruption_count,
+            });
+        }
+    }
+
+    // ---- Spawn phase ----
+    requeue_bundles(ctx, bundles, &mut report).await;
 
     // Dep gate: crash-recovery promotion sweep. For each Active Plan,
     // promote any Pending Works whose deps are now all Done. This closes
@@ -271,22 +310,33 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
 /// in-place here (not inside `spawn_integrator_for_bundle`) because the
 /// Integrator's pre-flight rejects anything that is not already at
 /// `Accepted` or `Integrating`.
-async fn sweep_bundles<L>(ctx: &Arc<DaemonContext<L>>, report: &mut ReconcileReport) -> Result<(), LooprError>
-where
-    L: LlmClient + Send + Sync + 'static,
-{
-    let bundles = match ctx.store.bundles().list_tolerant(&[]).await {
+/// Scan phase of the Bundle sweep: tolerant-list the Bundle JSONL,
+/// surface malformed rows as `corruption_count`, and return the parsed
+/// records for `requeue_bundles` to act on. NO task spawns — this runs
+/// before the corruption gate. An empty Vec on list failure (already
+/// logged) means the spawn phase no-ops.
+async fn scan_bundles(store: &Store, report: &mut ReconcileReport) -> Vec<Bundle> {
+    match store.bundles().list_tolerant(&[]).await {
         Ok(result) => {
             log_corruption("bundle", &result.corruption);
             report.corruption_count += result.corruption.len();
             result.records
         }
         Err(e) => {
-            tracing::warn!(error = %e, "sweep_bundles: bundles().list_tolerant() failed; skipping sweep");
-            return Ok(());
+            tracing::warn!(error = %e, "scan_bundles: bundles().list_tolerant() failed; skipping bundle sweep");
+            Vec::new()
         }
-    };
+    }
+}
 
+/// Spawn phase of the Bundle sweep: re-enqueue Bundles stranded at
+/// intermediate statuses for the correct next stage. Consumes the records
+/// `scan_bundles` returned (so the corruption gate has already run on
+/// them). Runs BEFORE `accept_loop` binds, so no handler races the spawns.
+async fn requeue_bundles<L>(ctx: &Arc<DaemonContext<L>>, bundles: Vec<Bundle>, report: &mut ReconcileReport)
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     for bundle in bundles {
         match bundle.status {
             BundleStatus::Proposed | BundleStatus::Triaged => {
@@ -332,7 +382,6 @@ where
             }
         }
     }
-    Ok(())
 }
 
 /// Crash-recovery dep promotion sweep. For each Active Plan, calls

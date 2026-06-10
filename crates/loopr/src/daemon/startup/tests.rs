@@ -286,7 +286,8 @@ async fn sweep_bundles_redrives_stranded_and_counts_terminal_on_cold_boot() {
     }
 
     let mut report = ReconcileReport::default();
-    sweep_bundles(&ctx, &mut report).await.unwrap();
+    let bundles = scan_bundles(&ctx.store, &mut report).await;
+    requeue_bundles(&ctx, bundles, &mut report).await;
 
     assert_eq!(report.reviewers_requeued, 1, "Triaged bundle re-driven to reviewer");
     assert_eq!(

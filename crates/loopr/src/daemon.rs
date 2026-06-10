@@ -366,18 +366,32 @@ fn wait_for_socket(target: &Path) -> Result<(), LooprError> {
         if socket.exists() {
             return Ok(());
         }
+        // Fail fast (and with the real reason) if the grandchild recorded a
+        // startup failure. `preflight_clean` removed any stale file before
+        // the fork, so a present sentinel is from THIS boot.
+        if let Some(reason) = sentinel::read_startup_error(target) {
+            return Err(LooprError::DaemonStartup(format!("daemon failed to start: {reason}")));
+        }
         std::thread::sleep(Duration::from_millis(crate::transport::POLL_INTERVAL_MS));
     }
+    // Timed out with no startup-error sentinel — surface whatever the
+    // grandchild may have recorded right at the deadline, else the generic
+    // socket-never-appeared message.
+    let suffix = sentinel::read_startup_error(target)
+        .map(|r| format!("; daemon reported: {r}"))
+        .unwrap_or_default();
     Err(LooprError::DaemonStartup(format!(
-        "socket never appeared at {}",
+        "socket never appeared at {}{suffix}",
         socket.display()
     )))
 }
 
-/// Best-effort cleanup of stale sentinel files before `ensure_daemon`
-/// tries to claim them. Failures are swallowed; the real authority is
-/// the atomic `write_pid` that follows.
-fn preflight_clean(target: &Path) {
+/// Best-effort cleanup of stale sentinel files before a daemon tries to
+/// claim them. Failures are swallowed; the real authority is the atomic
+/// `write_pid` that follows. Called by `ensure_daemon` (background fork)
+/// and by the foreground `daemon start --foreground` branch in `lib::run`
+/// (which IS the daemon and does not go through `ensure_daemon`).
+pub(crate) fn preflight_clean(target: &Path) {
     let pid_file = sentinel::pid_path(target);
     if let Ok(Some(pid)) = sentinel::read_pid(&pid_file) {
         if !sentinel::is_daemon_alive(pid) {
@@ -398,22 +412,32 @@ fn run_grandchild(target: PathBuf, accept_corruption: bool) -> ! {
         Ok(rt) => rt,
         Err(_) => process::exit(1),
     };
-    let exit_code = match rt.block_on(daemon_main(target, accept_corruption)) {
+    let exit_code = match rt.block_on(daemon_main(target.clone(), accept_corruption)) {
         Ok(()) => 0,
         Err(LooprError::LockLost) => {
             // Another grandchild won the pid-file race. Silent exit(0);
-            // DO NOT call sentinel::clean - the winner's files must stay
-            // intact.
+            // DO NOT call sentinel::clean or write a startup-error - the
+            // winner's files must stay intact.
             0
         }
         Err(LooprError::CorruptionGate { count }) => {
             // Daemon refused to start because reconcile surfaced corrupt
             // JSONL rows. Stable non-zero exit code lets scripts detect
-            // the gate-trip without parsing stderr.
-            eprintln!("daemon: refusing to start ({count} corrupt record(s))");
+            // the gate-trip without parsing stderr. The startup-error
+            // sentinel surfaces the reason to the parent (whose stdio
+            // sees nothing post-fork). Written AFTER daemon_main's own
+            // sentinel::clean so it survives.
+            let reason = format!("refusing to start: {count} corrupt record(s)");
+            sentinel::write_startup_error(&target, &reason);
+            eprintln!("daemon: {reason}");
             CORRUPTION_GATE_EXIT_CODE
         }
-        Err(_) => 1,
+        Err(e) => {
+            let reason = format!("startup failed: {e}");
+            sentinel::write_startup_error(&target, &reason);
+            eprintln!("daemon: {reason}");
+            1
+        }
     };
     process::exit(exit_code);
 }
@@ -728,10 +752,13 @@ where
         "daemon.started"
     );
 
-    // Hygiene sweep: clean up worktrees left behind by a previous daemon
-    // crash, log orphans. Runs BEFORE the accept loop binds so no
-    // reactor session can race with this pass.
-    let report = startup::reconcile(&ctx).await?;
+    // Hygiene sweep + corruption gate + pipeline-resume sweeps. The
+    // corruption gate now lives INSIDE `reconcile`, between its scan phase
+    // and its spawn phase, so a corrupt store never has reviewers /
+    // integrators / Directors spawned against it. The snapshot
+    // corruption-count mirror is also done inside `reconcile`. A gated
+    // boot surfaces here as `LooprError::CorruptionGate` via `?`.
+    let report = startup::reconcile(&ctx, accept_corruption).await?;
     tracing::info!(
         cleaned = report.cleaned,
         orphans = report.orphans_logged,
@@ -740,34 +767,6 @@ where
         corruption_count = report.corruption_count,
         "daemon.startup.reconcile.complete"
     );
-
-    // Mirror reconcile's corruption_count onto the per-process
-    // ProcessSnapshot so the per-process digest records the boot's
-    // corruption tally even when the operator passed
-    // `--accept-corruption`.
-    if let Ok(mut snap) = ctx.snapshot.lock() {
-        snap.corruption_count = u32::try_from(report.corruption_count).unwrap_or(u32::MAX);
-    }
-
-    // Post-sweep corruption gate. Runs between `reconcile` returning and
-    // any IPC listener binding (which happens later in `serve_core`).
-    // Without `--accept-corruption`, refuse to bring up the daemon if
-    // any JSONL row was skipped during the sweep — see
-    // `docs/design/2026-04-25-tier1-cleanup.md` "Daemon-boot policy on
-    // corruption" for the rationale (skip-and-refuse-to-listen by
-    // default; `--accept-corruption` flips to warn-and-proceed).
-    if report.corruption_count > 0 {
-        if accept_corruption {
-            tracing::warn!(
-                count = report.corruption_count,
-                "starting with corrupt records skipped (--accept-corruption)"
-            );
-        } else {
-            return Err(LooprError::CorruptionGate {
-                count: report.corruption_count,
-            });
-        }
-    }
 
     Ok(ctx)
 }
