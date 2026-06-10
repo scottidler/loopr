@@ -7,7 +7,7 @@
 //! composition so `loopr` never re-derives stage-specific defaults.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -170,28 +170,64 @@ pub struct Config {
 }
 
 impl Config {
-    /// Load from `<target>/.loopr/config.yml`. Missing file yields
-    /// `Default::default()` so Stage 6's "no config, just env vars"
-    /// path works out of the box. Parse errors surface as
-    /// `LooprError::DaemonStartup`.
+    /// Load the composed config with the layered precedence
+    /// **baked-in < XDG user < target < env** (CLI flags for config knobs
+    /// remain future work — only `--log-level` and the worktree-cleanup
+    /// override exist today, applied by their own callers/passes).
     ///
-    /// After deserializing, env-var overrides are applied so operators can
-    /// tweak policy without editing the config file. Precedence at this
-    /// layer is **ENV > config > default**; the CLI override (`--worktree-
-    /// cleanup`) is higher-precedence and applied by the caller after load.
-    /// The full precedence is **CLI > ENV > config > default** per the
-    /// design doc.
+    /// - **baked-in:** every field's `Default`.
+    /// - **XDG user:** `$XDG_CONFIG_HOME/loopr/loopr.yml` (or
+    ///   `~/.config/loopr/loopr.yml`), via the `xdg_config_dir` helper —
+    ///   NOT `dirs::config_dir()`, which ignores `$XDG_CONFIG_HOME` on macOS.
+    /// - **target:** `<target>/.loopr/config.yml`.
+    /// - **env:** generic `LOOPR_<SECTION>__<KEY>` overrides plus the
+    ///   dedicated `LOOPR_WORKTREE_CLEANUP_POLICY`.
+    ///
+    /// XDG and target are deep-merged as YAML `Value`s (serde has no native
+    /// deep-merge), so a key set only in the XDG layer survives a target
+    /// file that omits it. Missing files at every layer yield
+    /// `Default::default()`. Parse / deserialize errors surface as
+    /// `LooprError::DaemonStartup`.
     pub fn load(target: &Path) -> Result<Self, LooprError> {
-        let path = target.join(CONFIG_SUBPATH);
-        let mut config: Self = if path.exists() {
-            let body = fs::read_to_string(&path)
-                .map_err(|e| LooprError::DaemonStartup(format!("read {}: {e}", path.display())))?;
-            serde_yaml::from_str(&body)
-                .map_err(|e| LooprError::DaemonStartup(format!("parse {}: {e}", path.display())))?
+        let mut merged = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        let mut have_layer = false;
+
+        // XDG user layer (lowest file layer).
+        if let Some(xdg_path) = xdg_config_file()
+            && xdg_path.exists()
+        {
+            let body = fs::read_to_string(&xdg_path)
+                .map_err(|e| LooprError::DaemonStartup(format!("read {}: {e}", xdg_path.display())))?;
+            let value: serde_yaml::Value = serde_yaml::from_str(&body)
+                .map_err(|e| LooprError::DaemonStartup(format!("parse {}: {e}", xdg_path.display())))?;
+            deep_merge(&mut merged, value);
+            have_layer = true;
+        }
+
+        // Target layer (overrides XDG).
+        let target_path = target.join(CONFIG_SUBPATH);
+        if target_path.exists() {
+            let body = fs::read_to_string(&target_path)
+                .map_err(|e| LooprError::DaemonStartup(format!("read {}: {e}", target_path.display())))?;
+            let value: serde_yaml::Value = serde_yaml::from_str(&body)
+                .map_err(|e| LooprError::DaemonStartup(format!("parse {}: {e}", target_path.display())))?;
+            deep_merge(&mut merged, value);
+            have_layer = true;
+        }
+
+        // Generic env layer (overrides both files): LOOPR_<SECTION>__<KEY>.
+        let env_applied = apply_env_overrides(&mut merged);
+
+        let mut config: Self = if have_layer || env_applied {
+            serde_yaml::from_value(merged)
+                .map_err(|e| LooprError::DaemonStartup(format!("config deserialize: {e}")))?
         } else {
             Self::default()
         };
 
+        // Dedicated worktree-cleanup env override (back-compat; also
+        // expressible as `LOOPR_WORKTREE__CLEANUP_POLICY` via the generic
+        // pass above).
         if let Ok(value) = std::env::var(WORKTREE_CLEANUP_ENV) {
             let parsed: worktree::AttemptCleanupPolicy = serde_yaml::from_str(value.trim())
                 .map_err(|e| LooprError::DaemonStartup(format!("invalid {WORKTREE_CLEANUP_ENV}={value:?}: {e}")))?;
@@ -216,6 +252,111 @@ impl Config {
 
 /// Environment variable that overrides the worktree cleanup policy.
 pub const WORKTREE_CLEANUP_ENV: &str = "LOOPR_WORKTREE_CLEANUP_POLICY";
+
+/// XDG config dir, honoring `$XDG_CONFIG_HOME` and falling back to
+/// `$HOME/.config`. NOT `dirs::config_dir()` — that ignores
+/// `$XDG_CONFIG_HOME` on macOS (returns `~/Library/Application Support`),
+/// so config an operator drops in `~/.config` would be silently never
+/// found (per `rules/rust.md` "Platform paths").
+fn xdg_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(path);
+        }
+    }
+    dirs::home_dir().map(|h| h.join(".config"))
+}
+
+/// Path to the XDG user config file: `<xdg-config>/loopr/loopr.yml`.
+fn xdg_config_file() -> Option<PathBuf> {
+    xdg_config_dir().map(|d| d.join("loopr").join("loopr.yml"))
+}
+
+/// Deep-merge `overlay` into `base`: mappings merge key-by-key
+/// (recursively); scalars and sequences are replaced wholesale by the
+/// overlay. Used to layer the target config over the XDG user config so a
+/// key present only in the lower layer survives an upper layer that omits
+/// it (serde_yaml has no native deep-merge).
+fn deep_merge(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
+    match (base, overlay) {
+        (serde_yaml::Value::Mapping(b), serde_yaml::Value::Mapping(o)) => {
+            for (k, ov) in o {
+                match b.get_mut(&k) {
+                    Some(bv) => deep_merge(bv, ov),
+                    None => {
+                        b.insert(k, ov);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+/// Set `val` at the nested `path` inside `root`, creating intermediate
+/// mappings as needed. Used by the generic env-override pass.
+fn set_at_path(root: &mut serde_yaml::Value, path: &[String], val: serde_yaml::Value) {
+    let Some((head, rest)) = path.split_first() else {
+        return;
+    };
+    if !root.is_mapping() {
+        *root = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    let serde_yaml::Value::Mapping(map) = root else {
+        return;
+    };
+    let key = serde_yaml::Value::String(head.clone());
+    if rest.is_empty() {
+        map.insert(key, val);
+        return;
+    }
+    if !map.get(&key).map(serde_yaml::Value::is_mapping).unwrap_or(false) {
+        map.insert(key.clone(), serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    }
+    if let Some(child) = map.get_mut(&key) {
+        set_at_path(child, rest, val);
+    }
+}
+
+/// Apply generic `LOOPR_<SECTION>__<KEY>` environment overrides onto the
+/// merged config `Value`. The double-underscore `__` separates nesting
+/// levels; within each segment a single `_` becomes `-` (kebab) and the
+/// segment is lowercased, matching the config's serde key naming. Examples:
+/// `LOOPR_LLM__MODEL` -> `llm.model`,
+/// `LOOPR_BUDGETS__PER_RUN_COST_USD` -> `budgets.per-run-cost-usd`,
+/// `LOOPR_TRANSPORT__CLIENT_REQUEST_SECS` -> `transport.client-request-secs`.
+///
+/// The `__` marker is required: `LOOPR_*` vars without it (e.g.
+/// `LOOPR_TARGET`, `LOOPR_WORKTREE_CLEANUP_POLICY`, `LOOPR_LOG`) are NOT
+/// config-field overrides and are skipped. Values are parsed as YAML
+/// scalars (so `30` is an int, `true` a bool), falling back to a string.
+/// An override naming an unknown field surfaces later as a `deny_unknown_
+/// fields` deserialize error — a loud signal for a typo, not a silent drop.
+/// Returns whether any override was applied.
+fn apply_env_overrides(value: &mut serde_yaml::Value) -> bool {
+    let mut applied = false;
+    for (k, v) in std::env::vars() {
+        let Some(rest) = k.strip_prefix("LOOPR_") else {
+            continue;
+        };
+        if !rest.contains("__") {
+            continue;
+        }
+        let path: Vec<String> = rest
+            .split("__")
+            .map(|seg| seg.to_ascii_lowercase().replace('_', "-"))
+            .collect();
+        if path.iter().any(String::is_empty) {
+            continue;
+        }
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&v).unwrap_or_else(|_| serde_yaml::Value::String(v.clone()));
+        set_at_path(value, &path, parsed);
+        applied = true;
+    }
+    applied
+}
 
 /// Resolve the API key for the configured LLM. Env-only in Stage 6:
 /// reads the env var named by `config.llm.api_key_env`. When the env

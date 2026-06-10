@@ -1,19 +1,59 @@
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
 use tempfile::TempDir;
 use worktree::AttemptCleanupPolicy;
 
 use super::{Config, PLACEHOLDER_API_KEY, WORKTREE_CLEANUP_ENV, resolve_api_key};
 
-// All Config::load calls read LOOPR_WORKTREE_CLEANUP_POLICY from the
-// process env. Since env vars are process-global, any test that calls
-// Config::load must hold this lock so it doesn't see a value injected
-// by a concurrently-running env-mutation test.
+// All Config::load calls touch process-global env (the generic
+// LOOPR_*__* pass + LOOPR_WORKTREE_CLEANUP_POLICY) AND read the XDG user
+// config under $XDG_CONFIG_HOME. Both are process-global, so every
+// Config::load test must serialize behind this lock AND isolate
+// $XDG_CONFIG_HOME to a private empty tempdir (else it would read the
+// developer's real ~/.config/loopr/loopr.yml). `load_guard()` does both.
 static LOAD_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Serializes Config::load tests and points $XDG_CONFIG_HOME at a private
+/// empty tempdir so the XDG layer reads nothing (or only what the test
+/// writes via `xdg_config_path`). Restores the prior value on drop.
+struct LoadGuard {
+    _lock: MutexGuard<'static, ()>,
+    xdg_tmp: TempDir,
+    prior_xdg: Option<String>,
+}
+
+impl LoadGuard {
+    /// Path where a test can plant an XDG-layer config file.
+    fn xdg_config_path(&self) -> PathBuf {
+        self.xdg_tmp.path().join("loopr").join("loopr.yml")
+    }
+}
+
+impl Drop for LoadGuard {
+    fn drop(&mut self) {
+        match &self.prior_xdg {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+    }
+}
+
+fn load_guard() -> LoadGuard {
+    let lock = LOAD_MUTEX.lock().unwrap();
+    let prior_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+    let xdg_tmp = TempDir::new().expect("xdg tempdir");
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", xdg_tmp.path()) };
+    LoadGuard {
+        _lock: lock,
+        xdg_tmp,
+        prior_xdg,
+    }
+}
 
 #[test]
 fn config_load_missing_file_returns_default() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let cfg = Config::load(dir.path()).expect("load");
     assert_eq!(cfg.llm.model, "claude-sonnet-4-6");
@@ -23,7 +63,7 @@ fn config_load_missing_file_returns_default() {
 
 #[test]
 fn config_load_parses_llm_section() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
@@ -47,7 +87,7 @@ llm:
 
 #[test]
 fn config_load_unknown_field_rejected() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
@@ -96,7 +136,7 @@ fn resolve_api_key_falls_back_to_placeholder_when_unset() {
 
 #[test]
 fn config_load_parses_tools_section() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
@@ -120,7 +160,7 @@ tools:
 
 #[test]
 fn config_tools_default_is_required_sandbox() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let cfg = Config::load(dir.path()).expect("load");
     assert_eq!(cfg.tools.sandbox, tools::SandboxMode::Required);
@@ -128,7 +168,7 @@ fn config_tools_default_is_required_sandbox() {
 
 #[test]
 fn config_worktree_default_is_on_work_terminal() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let cfg = Config::load(dir.path()).expect("load");
     assert_eq!(cfg.worktree.cleanup_policy, AttemptCleanupPolicy::OnWorkTerminal);
@@ -136,7 +176,7 @@ fn config_worktree_default_is_on_work_terminal() {
 
 #[test]
 fn config_worktree_parses_from_yml() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir");
@@ -152,7 +192,7 @@ fn config_worktree_parses_from_yml() {
 
 #[test]
 fn env_overrides_config_for_worktree_cleanup() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir");
@@ -172,7 +212,7 @@ fn env_overrides_config_for_worktree_cleanup() {
 
 #[test]
 fn config_transport_default_values() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let cfg = Config::load(dir.path()).expect("load");
     assert_eq!(cfg.transport.client_request_secs, 10);
@@ -183,7 +223,7 @@ fn config_transport_default_values() {
 
 #[test]
 fn config_transport_round_trip_yaml() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir");
@@ -211,7 +251,7 @@ transport:
 
 #[test]
 fn config_transport_unknown_field_rejected() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir");
@@ -228,7 +268,7 @@ transport:
 
 #[test]
 fn model_tiers_default_resolves_role_models_to_concrete_ids() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let cfg = Config::load(dir.path()).expect("load");
     // Defaults are already concrete; resolution is a no-op identity.
@@ -238,7 +278,7 @@ fn model_tiers_default_resolves_role_models_to_concrete_ids() {
 
 #[test]
 fn model_tiers_resolve_role_references_after_load() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
@@ -267,7 +307,7 @@ agents:
 
 #[test]
 fn model_tiers_literal_model_id_survives_resolution() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
@@ -286,7 +326,7 @@ llm:
 
 #[test]
 fn budgets_default_to_unlimited() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let cfg = Config::load(dir.path()).expect("load");
     assert_eq!(cfg.budgets.per_run_cost_usd, None);
@@ -295,7 +335,7 @@ fn budgets_default_to_unlimited() {
 
 #[test]
 fn budgets_parse_from_yaml() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
     let loopr_dir = dir.path().join(".loopr");
     std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
@@ -312,7 +352,7 @@ budgets:
 
 #[test]
 fn env_invalid_value_errors_cleanly() {
-    let _g = LOAD_MUTEX.lock().unwrap();
+    let _g = load_guard();
     let dir = TempDir::new().expect("tempdir");
 
     unsafe { std::env::set_var(WORKTREE_CLEANUP_ENV, "not-a-valid-policy") };
@@ -328,4 +368,101 @@ fn env_invalid_value_errors_cleanly() {
         msg.contains("LOOPR_WORKTREE_CLEANUP_POLICY"),
         "error must name the env var"
     );
+}
+
+#[test]
+fn xdg_layer_applied_when_no_target_file() {
+    // A key set only in the XDG user layer reaches the loaded config even
+    // when the target has no .loopr/config.yml.
+    let g = load_guard();
+    let xdg_path = g.xdg_config_path();
+    std::fs::create_dir_all(xdg_path.parent().unwrap()).expect("mkdir xdg");
+    std::fs::write(&xdg_path, "transport:\n  client-request-secs: 42\n").expect("write xdg");
+
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.transport.client_request_secs, 42, "XDG layer must apply");
+}
+
+#[test]
+fn target_layer_deep_merges_over_xdg() {
+    // XDG sets two transport keys; the target overrides one and adds a
+    // budgets section. Deep-merge must keep the XDG-only key while the
+    // target wins on the shared key.
+    let g = load_guard();
+    let xdg_path = g.xdg_config_path();
+    std::fs::create_dir_all(xdg_path.parent().unwrap()).expect("mkdir xdg");
+    std::fs::write(
+        &xdg_path,
+        "transport:\n  client-request-secs: 11\n  server-idle-secs: 99\n",
+    )
+    .expect("write xdg");
+
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    std::fs::write(
+        loopr_dir.join("config.yml"),
+        "transport:\n  client-request-secs: 22\nbudgets:\n  per-run-cost-usd: 5.0\n",
+    )
+    .expect("write target");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.transport.client_request_secs, 22, "target overrides XDG");
+    assert_eq!(cfg.transport.server_idle_secs, 99, "XDG-only key survives merge");
+    assert_eq!(cfg.budgets.per_run_cost_usd, Some(5.0), "target-only section applies");
+}
+
+#[test]
+fn generic_env_override_beats_files() {
+    // LOOPR_<SECTION>__<KEY> overrides both file layers, with `__` for
+    // nesting and `_`->`-` within a segment.
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    std::fs::write(loopr_dir.join("config.yml"), "transport:\n  client-request-secs: 10\n").expect("write");
+
+    unsafe { std::env::set_var("LOOPR_TRANSPORT__CLIENT_REQUEST_SECS", "77") };
+    unsafe { std::env::set_var("LOOPR_BUDGETS__PER_RUN_COST_USD", "3.5") };
+    let result = Config::load(dir.path());
+    unsafe { std::env::remove_var("LOOPR_TRANSPORT__CLIENT_REQUEST_SECS") };
+    unsafe { std::env::remove_var("LOOPR_BUDGETS__PER_RUN_COST_USD") };
+
+    let cfg = result.expect("load");
+    assert_eq!(cfg.transport.client_request_secs, 77, "env overrides file");
+    assert_eq!(cfg.budgets.per_run_cost_usd, Some(3.5), "env sets nested numeric");
+}
+
+#[test]
+fn generic_env_override_works_with_no_files() {
+    // An env override alone (no XDG, no target file) still produces a
+    // valid config (other fields fall back to defaults).
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+
+    unsafe { std::env::set_var("LOOPR_TRANSPORT__SERVER_WRITE_SECS", "4") };
+    let result = Config::load(dir.path());
+    unsafe { std::env::remove_var("LOOPR_TRANSPORT__SERVER_WRITE_SECS") };
+
+    let cfg = result.expect("load");
+    assert_eq!(cfg.transport.server_write_secs, 4);
+    // Untouched field keeps its default.
+    assert_eq!(cfg.transport.client_request_secs, 10);
+}
+
+#[test]
+fn loopr_env_without_nesting_marker_is_ignored() {
+    // A LOOPR_* var without the `__` marker (e.g. LOOPR_TARGET) is not a
+    // config-field override and must not corrupt the config or trip
+    // deny_unknown_fields.
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+
+    unsafe { std::env::set_var("LOOPR_TARGET", "/some/where") };
+    let result = Config::load(dir.path());
+    unsafe { std::env::remove_var("LOOPR_TARGET") };
+
+    let cfg = result.expect("LOOPR_TARGET must be ignored by the generic pass");
+    assert_eq!(cfg.transport.client_request_secs, 10, "defaults intact");
 }

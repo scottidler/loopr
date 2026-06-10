@@ -489,14 +489,15 @@ Append-only `.loopr/costs.jsonl`, one line per LLM call:
 
 For all config knobs (not just API keys), resolved in this order (later wins):
 
-**baked-in defaults < XDG user config (`~/.config/loopr/loopr.yml`) < target config (`.loopr/config.yml`) < environment variable < CLI flag.**
+**baked-in defaults < XDG user config (`~/.config/loopr/loopr.yml`) < target config (`.loopr/config.yml`) < environment variable.**
 
-The target config sits above the XDG user config: repo-specific overrides trump user-wide defaults. Env and CLI still trump everything for one-shot invocations.
+The target config sits above the XDG user config: repo-specific overrides trump user-wide defaults. Env trumps everything for one-shot invocations. XDG and target are deep-merged as YAML before deserialization, so a key set only in the XDG layer survives a target file that omits it.
+
+*Implemented as of the Phase 7 code-review remediation (`a8`). A **CLI-flag layer for config knobs is deferred** — only `--log-level` (telemetry, not a `Config` field) and the dedicated `LOOPR_WORKTREE_CLEANUP_POLICY` env override exist today; a general `--<key>` surface is future work.*
 
 Naming transformation:
 - Config keys: `lowercase-separated-by-hyphens` in YAML.
-- Env vars: `LOOPR_` prefix + `ALL_CAPS` + `-` → `_` (`log-level` → `LOOPR_LOG_LEVEL`, `models.primary` → `LOOPR_MODELS_PRIMARY`).
-- CLI flags: same as the YAML key (`--log-level`).
+- Env vars: `LOOPR_<SECTION>__<KEY>` — the `LOOPR_` prefix, then `ALL_CAPS` segments separated by **double underscore** (`__`) for each nesting level; within a segment a single `_` becomes `-` (kebab) to rebuild a multi-word key. Examples: `LOOPR_LLM__MODEL` → `llm.model`, `LOOPR_MODELS__PRIMARY` → `models.primary`, `LOOPR_BUDGETS__PER_RUN_COST_USD` → `budgets.per-run-cost-usd`, `LOOPR_TRANSPORT__CLIENT_REQUEST_SECS` → `transport.client-request-secs`. The `__` marker is required (a bare `LOOPR_*` without it — `LOOPR_TARGET`, `LOOPR_LOG`, `LOOPR_WORKTREE_CLEANUP_POLICY` — is not a generic config-field override). The double-underscore nesting replaces the earlier single-`_` `LOOPR_MODELS_PRIMARY` sketch, which was ambiguous once a key itself contained a hyphen (`per-run-cost-usd`).
 
 **Why the `LOOPR_` prefix** (reversing an earlier no-prefix decision after Architect Round 3): loopr spawns subprocesses via `tools` (cargo, npm, bash, ...). Any env var present in loopr's process is inherited by the child unless explicitly scrubbed. A bare `LOG_LEVEL=trace` intended for loopr would leak into every subprocess and affect build behavior non-reproducibly; `PORT` or similar generic names are worse. The `LOOPR_` prefix namespaces loopr's knobs away from the universe of env vars that spawned subprocesses might care about.
 
@@ -658,7 +659,7 @@ Kept sparse on purpose. Only questions that block first-gate work. Decisions mad
 - **Target-repo state:** single top-level `.loopr/` with `.loopr/taskstore/` (committed truth) and everything else transient (excluded via `.git/info/exclude`).
 - **Prompts:** handlebars-rust, `.pmt` files, themed layout under `.loopr/prompts/` populated from `include_dir!()`, partials for SSOT, **three-layer override resolution** (target → XDG user → baked-in). See "Prompts" section.
 - **Error model:** closed typed `ToolError` enum; typed `FailureReason` + companion `error: String` on records; `catch_unwind` at every agent task; closed RPC enum serializing to JSON-RPC wire codes; dual user-surface (stderr for one-shot, `DaemonEvent::Error` stream for long-running). See "Error Model" section.
-- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: baked-in < XDG < `.loopr/config.yml` < env var < CLI flag; env vars use a `LOOPR_` prefix + `ALL_CAPS` to avoid polluting spawned subprocess environments. See "Models and Budgets" section.
+- **Models and budgets:** tiered `models:` block; floating config, pinned telemetry; per-Work + per-run caps, soft pause only; `.loopr/costs.jsonl`. Config override chain: baked-in < XDG < `.loopr/config.yml` < env var (CLI-flag layer for config knobs deferred, `a8`); env vars use a `LOOPR_<SECTION>__<KEY>` form (double-underscore nesting) to avoid polluting spawned subprocess environments. See "Models and Budgets" section.
 - **Git posture:** user's git identity, user's signing config, rich `Loopr-*` trailers (no `Co-Authored-By: Claude`), never push, `loopr/plan-<id>` and `loopr/wk-<id>` branch prefixes. See "Git Posture" section.
 - **Security:** three-lane model (`Local`/`Net`/`Heavy`) verbatim from v4; base denylist of footguns + tighten-only target overrides; **sandbox posture as a `security.sandbox: required | preferred | off` knob**, defaulting to `required`, explicit downgrade required to run unsandboxed. See "Security" section.
 - **Crate restructure (Architect rounds 1+2+3):** `runtime` junk-drawer split into `store`/`llm`/`tools`/`worktree`. `domain` stripped to records+FSM only (source-level; transitive purity pending taskstore-traits). `integrator` dep graph enforces no-LLM rule at Cargo level. `context` extracted as a shared prompt-assembly crate (Round 3 fix: `decomposer` and `agents` both call LLMs; they share `context` instead of duplicating). `tools` stripped of `domain` dep (IDs flow via spans from `telemetry`, not via typed struct fields). Workspace is 13 crates. See "Crate Layout".
