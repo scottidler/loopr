@@ -117,6 +117,7 @@ fn extend_from_adds_target_patterns() {
     let cfg = crate::config::ToolsConfig {
         sandbox: crate::sandbox::SandboxMode::default(),
         path_deny_patterns: Vec::new(),
+        lane_overrides: Default::default(),
         bash_denylist_extend: vec![crate::config::DenyEntryConfig {
             tokens: vec!["./deploy.sh".into()],
             reason: "deploys are a human action".into(),
@@ -133,6 +134,7 @@ fn extend_from_prefix_pattern() {
     let cfg = crate::config::ToolsConfig {
         sandbox: crate::sandbox::SandboxMode::default(),
         path_deny_patterns: Vec::new(),
+        lane_overrides: Default::default(),
         bash_denylist_extend: vec![crate::config::DenyEntryConfig {
             tokens: vec!["./deploy-*".into()],
             reason: "deploy-prefixed scripts are blocked".into(),

@@ -20,6 +20,65 @@ fn initial_slots_match_policies() {
 }
 
 #[test]
+fn lane_override_tightens_slots_and_timeouts() {
+    // Finding 13: a target may reduce slots/timeouts below the defaults.
+    let cfg = crate::config::ToolsConfig {
+        lane_overrides: crate::config::LaneOverrides {
+            local: crate::config::LaneTighten {
+                slots: Some(3),
+                default_timeout_secs: Some(5),
+                max_timeout_secs: Some(10),
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = LaneRouter::with_config(SandboxMode::Off, &cfg).unwrap();
+    assert_eq!(r.available_slots(Lane::Local), 3);
+    let p = r.policy(Lane::Local).unwrap();
+    assert_eq!(p.default_timeout_secs, 5);
+    assert_eq!(p.max_timeout_secs, 10);
+}
+
+#[test]
+fn lane_override_cannot_widen_past_defaults() {
+    // Tighten-only: an attempt to RAISE slots/timeouts is clamped at the
+    // built-in defaults.
+    let cfg = crate::config::ToolsConfig {
+        lane_overrides: crate::config::LaneOverrides {
+            heavy: crate::config::LaneTighten {
+                slots: Some(99),
+                default_timeout_secs: Some(99_999),
+                max_timeout_secs: Some(99_999),
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = LaneRouter::with_config(SandboxMode::Off, &cfg).unwrap();
+    assert_eq!(r.available_slots(Lane::Heavy), 1, "slots clamped at default");
+    let p = r.policy(Lane::Heavy).unwrap();
+    assert_eq!(p.default_timeout_secs, 600);
+    assert_eq!(p.max_timeout_secs, 1800);
+}
+
+#[test]
+fn lane_override_zero_slots_floors_at_one() {
+    let cfg = crate::config::ToolsConfig {
+        lane_overrides: crate::config::LaneOverrides {
+            net: crate::config::LaneTighten {
+                slots: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = LaneRouter::with_config(SandboxMode::Off, &cfg).unwrap();
+    assert_eq!(r.available_slots(Lane::Net), 1, "0 slots floored to 1 to avoid deadlock");
+}
+
+#[test]
 fn required_without_bwrap_errors() {
     // This test only runs meaningfully when bwrap is NOT functional.
     // On CI machines with bwrap, the Required path succeeds and we skip.

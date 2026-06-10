@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, instrument, warn};
 
+use crate::config::{LaneTighten, ToolsConfig};
 use crate::env::scrub_command;
 use crate::error::ToolError;
 use crate::lane::{Lane, LanePolicy};
@@ -38,6 +39,13 @@ impl LaneRouter {
     /// - `Preferred` + no bwrap => warn + continue unsandboxed.
     /// - `Off` => skip detection entirely (quiet).
     pub fn new(sandbox: SandboxMode) -> Result<Self, RouterInitError> {
+        Self::with_config(sandbox, &ToolsConfig::default())
+    }
+
+    /// Construct with target-supplied tighten-only lane overrides
+    /// (Phase-5 finding 13). The sandbox posture enforcement is identical to
+    /// `new`; only the per-lane slot/timeout policies differ.
+    pub fn with_config(sandbox: SandboxMode, cfg: &ToolsConfig) -> Result<Self, RouterInitError> {
         let bwrap_functional = match sandbox {
             SandboxMode::Off => false,
             _ => detect_bwrap_functional(),
@@ -51,16 +59,16 @@ impl LaneRouter {
             }
             _ => {}
         }
-        Ok(Self::build(sandbox, bwrap_functional))
+        Ok(Self::build(sandbox, bwrap_functional, cfg))
     }
 
-    fn build(sandbox: SandboxMode, bwrap_functional: bool) -> Self {
+    fn build(sandbox: SandboxMode, bwrap_functional: bool, cfg: &ToolsConfig) -> Self {
         let policies = HashMap::from([
-            (Lane::Local, LanePolicy::local()),
-            (Lane::Net, LanePolicy::net()),
-            (Lane::Heavy, LanePolicy::heavy()),
+            (Lane::Local, tighten(LanePolicy::local(), &cfg.lane_overrides.local)),
+            (Lane::Net, tighten(LanePolicy::net(), &cfg.lane_overrides.net)),
+            (Lane::Heavy, tighten(LanePolicy::heavy(), &cfg.lane_overrides.heavy)),
         ]);
-        let semaphores = policies
+        let semaphores: HashMap<Lane, Arc<Semaphore>> = policies
             .iter()
             .map(|(lane, policy)| (*lane, Arc::new(Semaphore::new(policy.max_slots))))
             .collect();
@@ -68,9 +76,9 @@ impl LaneRouter {
         info!(
             ?sandbox,
             bwrap_functional,
-            local_slots = LanePolicy::local().max_slots,
-            net_slots = LanePolicy::net().max_slots,
-            heavy_slots = LanePolicy::heavy().max_slots,
+            local_slots = policies[&Lane::Local].max_slots,
+            net_slots = policies[&Lane::Net].max_slots,
+            heavy_slots = policies[&Lane::Heavy].max_slots,
             "LaneRouter initialized"
         );
 
@@ -175,6 +183,25 @@ impl LaneRouter {
         debug!(?lane, "router spawn released slot");
 
         result
+    }
+}
+
+/// Apply a target's tighten-only override to a base lane policy. Each knob
+/// is clamped to be no looser than the built-in default (`min`); slots floor
+/// at 1 so a misconfigured `slots: 0` can't deadlock the lane. A `None` knob
+/// keeps the default.
+fn tighten(base: LanePolicy, ov: &LaneTighten) -> LanePolicy {
+    LanePolicy {
+        max_slots: ov.slots.map(|s| s.min(base.max_slots).max(1)).unwrap_or(base.max_slots),
+        default_timeout_secs: ov
+            .default_timeout_secs
+            .map(|t| t.min(base.default_timeout_secs))
+            .unwrap_or(base.default_timeout_secs),
+        max_timeout_secs: ov
+            .max_timeout_secs
+            .map(|t| t.min(base.max_timeout_secs))
+            .unwrap_or(base.max_timeout_secs),
+        ..base
     }
 }
 

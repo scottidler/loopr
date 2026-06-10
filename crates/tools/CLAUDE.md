@@ -13,7 +13,11 @@ The subprocess-execution and capability-exposure layer. Owns the `Tool` trait, b
 - Sandbox detection + the `required|preferred|off` posture logic (per vision.md "Security" section)
 - Bash denylist (rm -rf /, sudo *, curl | sh, git push, gh repo delete) + target-level extensions
 - Tool schema export: tools can produce their schema for prompt rendering (consumed by `agents::ContextBuilder`)
-- Config: `ToolsConfig` composed into the top-level `Config` by `loopr`
+- Config: `ToolsConfig` composed into the top-level `Config` by `loopr`. Includes per-lane **tighten-only** overrides (`lane-overrides.{local,net,heavy}.{slots,default-timeout-secs,max-timeout-secs}`): a target's `.loopr/config.yml` may REDUCE a lane's slots/timeouts below the built-in `LanePolicy` defaults but never raise them — `LaneRouter::with_config` clamps each value with `min(default)` (slots floor at 1). Honors the vision's "tighten-only target overrides" rule.
+
+## Timeout is an output flag, not an error
+
+A subprocess timeout does NOT surface as a `ToolError` variant. The spawn layer kills the process group and returns `Ok(SpawnResult { timed_out: true, .. })` carrying whatever partial stdout/stderr was captured before the kill. Callers (and the Bash tool's `Output`) inspect `timed_out` and act on the partial output; there is deliberately no `ToolError::Timeout` to match. This was a dead variant (never constructed) until Phase 5 removed it.
 
 ## Out of scope
 

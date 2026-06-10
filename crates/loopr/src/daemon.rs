@@ -601,7 +601,7 @@ where
     // message so the client sees the recovery path (install bubblewrap, or
     // downgrade `.loopr/config.yml tools.sandbox` to `preferred`).
     let sandbox = config.tools.sandbox;
-    let router = Arc::new(LaneRouter::new(sandbox).map_err(|e| {
+    let router = Arc::new(LaneRouter::with_config(sandbox, &config.tools).map_err(|e| {
         LooprError::DaemonStartup(format!(
             "tool lane router: {e}. Install bubblewrap (`apt install bubblewrap`) or set \
              `.loopr/config.yml`: `tools: {{ sandbox: preferred }}`."

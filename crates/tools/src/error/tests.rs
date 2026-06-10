@@ -18,15 +18,6 @@ fn display_bash_denied() {
 }
 
 #[test]
-fn display_timeout() {
-    let e = ToolError::Timeout {
-        tool: "bash",
-        timeout_secs: 60,
-    };
-    assert_eq!(format!("{e}"), "timed out after 60s: bash");
-}
-
-#[test]
 fn display_lane_closed() {
     let e = ToolError::LaneClosed(Lane::Heavy);
     assert_eq!(format!("{e}"), "lane semaphore closed: Heavy");

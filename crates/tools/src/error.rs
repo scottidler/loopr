@@ -20,9 +20,11 @@ pub enum ToolError {
     #[error("path denied: {0}")]
     PathDenied(String),
 
-    #[error("timed out after {timeout_secs}s: {tool}")]
-    Timeout { tool: &'static str, timeout_secs: u64 },
-
+    // NOTE (Phase-5 finding 14): there is no `Timeout` variant. A subprocess
+    // timeout is NOT an error - it surfaces as `SpawnResult.timed_out: true`
+    // inside an `Ok`, so callers inspect the flag (and the partial output)
+    // rather than matching an error variant. See `crates/tools/CLAUDE.md`
+    // "Timeout is an output flag, not an error".
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
 

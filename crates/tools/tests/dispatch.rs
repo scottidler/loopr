@@ -278,6 +278,7 @@ async fn target_extension_denylist_fires_through_dispatch() {
     let cfg = ToolsConfig {
         sandbox: SandboxMode::Off,
         path_deny_patterns: Vec::new(),
+        lane_overrides: Default::default(),
         bash_denylist_extend: vec![DenyEntryConfig {
             tokens: vec!["./deploy.sh".into()],
             reason: "deploys are a human action".into(),

@@ -1105,3 +1105,30 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+### Commit D — tools config/error (findings 13, 14)
+
+#### Design decisions
+- **Per-lane tighten-only overrides (finding 13).** New `LaneOverrides` /
+  `LaneTighten` config structs on `ToolsConfig`
+  (`lane-overrides.{local,net,heavy}.{slots,default-timeout-secs,
+  max-timeout-secs}`), all `Option`. A new `LaneRouter::with_config(sandbox,
+  cfg)` (production path; `new` delegates with a default config) clamps each
+  override with `min(default)` (slots also floor at 1) via a `tighten` free
+  fn, so a target can only narrow a lane, never widen it. Threaded from the
+  daemon (`LaneRouter::with_config(sandbox, &config.tools)`).
+- **`ToolError::Timeout` deleted (finding 14).** The variant was never
+  constructed — timeouts surface as `SpawnResult.timed_out: true` inside an
+  `Ok`. Removed the variant + its `display_timeout` test; documented the
+  timeout-as-output-flag contract in `crates/tools/CLAUDE.md`.
+
+#### Deviations
+- None.
+
+#### Tradeoffs
+- The `tighten` clamp lives in `router.rs` (which already imports `config`)
+  rather than as a method on `LanePolicy` in `lane.rs`, keeping `lane.rs`
+  free of a `config` dependency (it currently imports nothing internal).
+
+#### Open questions
+- None.
