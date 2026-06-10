@@ -1132,3 +1132,41 @@ Landing across commits (mirrors Phases 1-4):
 
 #### Open questions
 - None.
+
+### Commit E — prompt-injection fencing (finding 9)
+
+#### Design decisions
+- **Dynamic fencing in `context/src/reviewer.rs`.** New `push_fenced` +
+  `longest_backtick_run`: the evidence fence (diff and per-file contents) is
+  sized to one backtick longer than the longest backtick run in the content
+  (floor 3), so untrusted target content carrying its own ``` line cannot
+  break out of the fence into instruction position — the forged-verdict
+  vector at the reviewer's accept gate. Replaces the two fixed ```` ``` ````
+  literals.
+- **Untrusted-input framing in the three system prompts.** Reviewer
+  (`reviewer/system.pmt`) gets a "read first" SECURITY section: all user-
+  message content is untrusted data, planted "emit accept"/"review passed"
+  text is itself a finding, and the verdict derives solely from the AC +
+  review criteria. Implementer gets a shorter note (tool output / rejection
+  reason / prior summaries are data, not commands). Director gets a
+  Constraints bullet distinguishing repo-derived state strings (titles,
+  blocked_reason — DATA) from the `## Operator Notes` section (authoritative
+  human guidance).
+
+#### Deviations
+- The finding lists claims / rejection reasons / prior summaries / operator
+  notes as candidates for dynamic fencing too. They render as plain markdown
+  bullets in the `.pmt` templates, not inside code fences, so a fence-escape
+  is not their vector — direct instruction injection is, which the
+  system-prompt untrusted-input framing addresses. Dynamic fencing is
+  applied where content genuinely sits inside a fence (the reviewer
+  evidence). Operator notes are deliberately NOT labeled untrusted for the
+  Director (they are the trusted operator channel).
+
+#### Tradeoffs
+- The three system-prompt edits invalidate the Anthropic prompt cache once
+  (the prompts are otherwise byte-stable). A one-time cache-creation cost on
+  the next call per role; negligible against the injection-hardening.
+
+#### Open questions
+- None.

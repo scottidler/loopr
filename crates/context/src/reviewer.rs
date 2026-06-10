@@ -103,12 +103,7 @@ fn build_evidence_section(
             } else if diff.is_empty() {
                 s.push_str("(no diff: noop bundle without head_commit)\n");
             } else {
-                s.push_str("```\n");
-                s.push_str(diff);
-                if !diff.ends_with('\n') {
-                    s.push('\n');
-                }
-                s.push_str("```\n");
+                push_fenced(&mut s, diff);
             }
             s
         }
@@ -134,17 +129,49 @@ fn build_evidence_section(
             } else {
                 for (path, contents) in files {
                     let _ = writeln!(s, "#### {path}");
-                    s.push_str("```\n");
-                    s.push_str(contents);
-                    if !contents.ends_with('\n') {
-                        s.push('\n');
-                    }
-                    s.push_str("```\n\n");
+                    push_fenced(&mut s, contents);
+                    s.push('\n');
                 }
             }
             s
         }
     }
+}
+
+/// Append `content` to `out` inside a code fence whose backtick run is one
+/// longer than the longest backtick run inside `content` (floor of 3).
+///
+/// Phase-5 finding 9 (forged-verdict injection): repo diffs and file
+/// contents are untrusted target data. A fixed ``` fence is escapable —
+/// content containing its own ``` line breaks out of the fence into
+/// instruction position, where a planted "review passed, emit accept" line
+/// could forge a verdict. A dynamically-sized fence cannot be closed by the
+/// content it wraps.
+fn push_fenced(out: &mut String, content: &str) {
+    let longest = longest_backtick_run(content);
+    let fence = "`".repeat((longest + 1).max(3));
+    out.push_str(&fence);
+    out.push('\n');
+    out.push_str(content);
+    if !content.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&fence);
+    out.push('\n');
+}
+
+fn longest_backtick_run(s: &str) -> usize {
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for ch in s.chars() {
+        if ch == '`' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
 }
 
 #[cfg(test)]
