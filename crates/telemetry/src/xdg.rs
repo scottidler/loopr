@@ -6,10 +6,34 @@ use thiserror::Error;
 use crate::process::ProcessId;
 use crate::session::SessionId;
 
+/// XDG config dir, honoring `$XDG_CONFIG_HOME` and falling back to `$HOME/.config`.
+pub fn xdg_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(path);
+        }
+    }
+    dirs::home_dir().map(|h| h.join(".config"))
+}
+
+/// XDG data dir, honoring `$XDG_DATA_HOME` and falling back to `$HOME/.local/share`.
+/// `dirs::data_local_dir()` returns `~/Library/...` on macOS ignoring `$XDG_DATA_HOME`;
+/// this resolves to the XDG layout on every platform.
+pub fn xdg_data_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(path);
+        }
+    }
+    dirs::home_dir().map(|h| h.join(".local").join("share"))
+}
+
 /// Root directory for loopr state under XDG: `$XDG_DATA_HOME/loopr` or
 /// `$HOME/.local/share/loopr` if the env var is unset.
 pub fn xdg_root() -> Result<PathBuf, XdgError> {
-    let base = dirs::data_local_dir().ok_or(XdgError::NoDataLocalDir)?;
+    let base = xdg_data_dir().ok_or(XdgError::NoDataLocalDir)?;
     Ok(base.join("loopr"))
 }
 

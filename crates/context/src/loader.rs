@@ -98,12 +98,12 @@ impl PromptLoader {
 
     /// Construct a loader for a target repository, resolving the
     /// project layer to `<target>/.loopr/prompts/` and the user layer
-    /// to `dirs::config_dir()/loopr/prompts/`. Either layer is
+    /// to `telemetry::xdg_config_dir()/loopr/prompts/`. Either layer is
     /// included only if its directory exists; the baked layer is
     /// always available.
     pub fn for_target(target: &Path) -> Result<Self, PromptError> {
         let target_root = Some(target.join(".loopr").join("prompts"));
-        let user_root = dirs::config_dir().map(|p| p.join("loopr").join("prompts"));
+        let user_root = telemetry::xdg_config_dir().map(|p| p.join("loopr").join("prompts"));
         Self::new(target_root, user_root)
     }
 

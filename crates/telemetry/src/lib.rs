@@ -40,7 +40,7 @@ pub use slug::{TargetSlugError, target_slug};
 pub use subscriber::{
     Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, TestSubscriberGuard, init, init_for_test,
 };
-pub use xdg::{XdgError, session_dir, session_run_dir, session_target_dir, xdg_root};
+pub use xdg::{XdgError, session_dir, session_run_dir, session_target_dir, xdg_config_dir, xdg_data_dir, xdg_root};
 
 /// True if `s` is safe to use as a single on-disk path segment: non-empty,
 /// no path separators, no parent-traversal, no leading dot, no NUL.

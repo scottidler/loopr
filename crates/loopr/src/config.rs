@@ -177,8 +177,8 @@ impl Config {
     ///
     /// - **baked-in:** every field's `Default`.
     /// - **XDG user:** `$XDG_CONFIG_HOME/loopr/loopr.yml` (or
-    ///   `~/.config/loopr/loopr.yml`), via the `xdg_config_dir` helper —
-    ///   NOT `dirs::config_dir()`, which ignores `$XDG_CONFIG_HOME` on macOS.
+    ///   `~/.config/loopr/loopr.yml`), via the `telemetry::xdg_config_dir`
+    ///   helper, NOT `dirs::config_dir()`, which ignores `$XDG_CONFIG_HOME` on macOS.
     /// - **target:** `<target>/.loopr/config.yml`.
     /// - **env:** generic `LOOPR_<SECTION>__<KEY>` overrides plus the
     ///   dedicated `LOOPR_WORKTREE_CLEANUP_POLICY`.
@@ -290,24 +290,12 @@ impl Config {
 /// Environment variable that overrides the worktree cleanup policy.
 pub const WORKTREE_CLEANUP_ENV: &str = "LOOPR_WORKTREE_CLEANUP_POLICY";
 
-/// XDG config dir, honoring `$XDG_CONFIG_HOME` and falling back to
-/// `$HOME/.config`. NOT `dirs::config_dir()` — that ignores
-/// `$XDG_CONFIG_HOME` on macOS (returns `~/Library/Application Support`),
-/// so config an operator drops in `~/.config` would be silently never
-/// found (per `rules/rust.md` "Platform paths").
-fn xdg_config_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        let path = PathBuf::from(dir);
-        if path.is_absolute() {
-            return Some(path);
-        }
-    }
-    dirs::home_dir().map(|h| h.join(".config"))
-}
-
 /// Path to the XDG user config file: `<xdg-config>/loopr/loopr.yml`.
+/// Uses the shared `telemetry::xdg_config_dir` helper (honors
+/// `$XDG_CONFIG_HOME`, falls back to `$HOME/.config`), NOT
+/// `dirs::config_dir()` which ignores `$XDG_CONFIG_HOME` on macOS.
 fn xdg_config_file() -> Option<PathBuf> {
-    xdg_config_dir().map(|d| d.join("loopr").join("loopr.yml"))
+    telemetry::xdg_config_dir().map(|d| d.join("loopr").join("loopr.yml"))
 }
 
 /// Deep-merge `overlay` into `base`: mappings merge key-by-key
