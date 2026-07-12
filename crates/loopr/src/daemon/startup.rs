@@ -18,8 +18,11 @@
 //!    non-loopr branches (humans may have created their own worktrees that
 //!    happen to live under this root).
 //! 3. Look up the `Work` in TaskStore. Missing record → log orphan.
-//! 4. If `Work.status.is_terminal()` → `cleanup_at` the worktree and, if
-//!    status is `Done`, `delete_branch` as belt-and-suspenders.
+//! 4. If `Work.status.is_terminal()` → `cleanup_at` the worktree and
+//!    `delete_branch` for every terminal status (`Done`, `Superseded`,
+//!    `Abandoned` — Phase 19 of `docs/design/2026-07-11-verified-swarm.md`
+//!    extended this off the `Done`-only gate), as belt-and-suspenders
+//!    behind the live reap in `daemon::context::reap`.
 //! 5. Otherwise: log "surviving attempt" and leave alone — the next reactor
 //!    session (Stage 7) will deal with it.
 //!
@@ -35,7 +38,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agents::{DirectorDeps, DirectorError, run_director};
-use domain::{Bundle, BundleStatus, FailureReason, PlanStatus, Role, TargetKind, WorkStatus};
+use domain::{Bundle, BundleStatus, FailureReason, PlanStatus, Role, TargetKind};
 use futures_util::FutureExt;
 use llm::LlmClient;
 use store::Store;
@@ -242,10 +245,16 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
                 if work.status.is_terminal() {
                     worktree::cleanup_at(target, &info.path)
                         .map_err(|e| LooprError::DaemonStartup(format!("cleanup_at: {e}")))?;
-                    if matches!(work.status, WorkStatus::Done) {
-                        worktree::delete_branch(target, &info.branch)
-                            .map_err(|e| LooprError::DaemonStartup(format!("delete_branch: {e}")))?;
-                    }
+                    // Phase 19 (verified-swarm): delete the branch for every
+                    // terminal status, not only `Done`. `Superseded` and
+                    // `Abandoned` Works (e.g. an IntegrationFailed Bundle
+                    // that the Director eventually gave up on) leave a dead
+                    // `loopr/wk-*` branch behind exactly like a merged one
+                    // does; `delete_branch` is idempotent on a branch that
+                    // was already removed (belt-and-suspenders for the live
+                    // reap this phase adds at `context::reap`).
+                    worktree::delete_branch(target, &info.branch)
+                        .map_err(|e| LooprError::DaemonStartup(format!("delete_branch: {e}")))?;
                     tracing::info!(
                         work_id = %work_id,
                         seq,

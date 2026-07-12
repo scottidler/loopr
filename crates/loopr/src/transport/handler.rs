@@ -1001,6 +1001,15 @@ where
         "work.override: persisted"
     );
 
+    // Phase 19 (verified-swarm): an operator override can itself land the
+    // Work on a terminal status (e.g. `loopr work override <id> --status
+    // abandoned` on a Work stuck `Blocked` after an `IntegrationFailed`
+    // Bundle) -- reap its warm worktree + branch now instead of waiting on
+    // the next daemon restart's reconcile sweep. No-op (guarded inside) for
+    // every non-terminal target, including this handler's own `Ready` retry
+    // and `Blocked` abort edges.
+    crate::daemon::context::reap_terminal_work_worktree(&ctx.target, &work.id, work.status).await;
+
     // Retry path: a Blocked -> Ready override re-dispatches the Implementer.
     if prior_status == domain::WorkStatus::Blocked
         && target_status == domain::WorkStatus::Ready

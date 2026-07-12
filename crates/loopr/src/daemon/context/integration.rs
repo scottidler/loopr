@@ -155,6 +155,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     error!(error = %e, "Integrated -> Done transition failed after Tick persisted");
                     return;
                 }
+                // Phase 19: the Work just landed Done -- its Phase 10 warm
+                // worktree (retained through review) has no further reason
+                // to survive. Reap it now instead of leaving it on disk
+                // until the next daemon restart's reconcile sweep.
+                super::reap_terminal_work_worktree(&self.target, &work.id, work.status).await;
                 // Dep gate: promote any Pending siblings whose deps are
                 // now all Done. Best-effort; failure is already logged
                 // inside promote_unblocked_siblings.

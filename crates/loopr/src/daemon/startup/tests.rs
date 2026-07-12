@@ -117,6 +117,50 @@ async fn reconcile_cleans_terminal_done_worktree_and_deletes_branch() {
     );
 }
 
+/// Phase 19 (`docs/design/2026-07-11-verified-swarm.md`): break-to-prove
+/// the "not only Done" extension. Before this phase, `sweep_worktrees`
+/// removed the worktree dir for ANY terminal status but only deleted the
+/// git branch when `status == Done` — an `Abandoned` Work (e.g. the
+/// Director giving up on a Work stuck in `Blocked` after an
+/// `IntegrationFailed` Bundle) left a dead `loopr/wk-*` branch behind
+/// forever. This asserts the branch is now gone too.
+#[tokio::test]
+async fn reconcile_deletes_branch_for_abandoned_not_only_done() {
+    let (_tmp, repo, store) = setup().await;
+    let sha = resolve_head(&repo);
+    let wt_root = repo.join(".loopr").join("worktrees");
+
+    let wt = worktree::Worktree::create(&repo, &wt_root, domain::WorkId::new(), &sha).unwrap();
+    let work_id = wt.work_id().clone();
+    let branch = wt.branch().to_string();
+    let path = wt.path().to_path_buf();
+    std::mem::forget(wt);
+
+    let plan_id = PlanId::new();
+    let mut work = Work::new(plan_id, "title".into());
+    work.id = work_id.clone();
+    // Test-only shortcut (direct field set, bypassing `Work::transition`),
+    // matching the pattern already used for the Done case above.
+    work.status = WorkStatus::Abandoned;
+    store.works().create(work).await.unwrap();
+
+    let report = sweep_worktrees(&repo, &store).await.unwrap();
+    assert_eq!(report.cleaned, 1, "terminal Abandoned worktree should be cleaned");
+
+    assert!(!path.exists(), "Abandoned worktree dir should be gone");
+
+    let out = std::process::Command::new("git")
+        .current_dir(&repo)
+        .env("LC_ALL", "C")
+        .args(["branch", "--list", &branch])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "Abandoned → branch should ALSO be deleted, not just Done"
+    );
+}
+
 #[tokio::test]
 async fn reconcile_carries_forward_non_terminal_worktree() {
     let (_tmp, repo, store) = setup().await;

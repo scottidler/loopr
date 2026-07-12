@@ -84,8 +84,10 @@ fn under_worktrees_root(path: &Path) -> bool {
 
 /// Delete a `loopr/wk-*` branch. Called by the integrator after a Tick
 /// publishes (the Bundle's commits have landed on the integration branch),
-/// and by reconcile for terminal `Done` Works as belt-and-suspenders.
-/// Idempotent on missing.
+/// by `loopr`'s live post-transition reap the instant a Work lands on a
+/// terminal status (Phase 19), and by reconcile for any terminal Work
+/// (`Done`, `Superseded`, `Abandoned`) as belt-and-suspenders. Idempotent
+/// on missing.
 #[instrument(
     name = "worktree.delete_branch",
     level = "info",

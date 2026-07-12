@@ -257,6 +257,12 @@ where
                     // strand until the next daemon restart's reconcile.
                     block_dependent_siblings(Arc::clone(&ctx), work.parent_id.clone(), work.id.clone(), work.status)
                         .await;
+                    // Phase 19: the Work just landed on a terminal-failed
+                    // status (an IntegrationFailed-caused Blocked Work that
+                    // the Director gave up on, or an operator abandon) --
+                    // reap its warm worktree + branch now rather than
+                    // waiting on the next daemon restart's reconcile sweep.
+                    super::reap_terminal_work_worktree(&ctx.target, &work.id, work.status).await;
                 }
             });
         });

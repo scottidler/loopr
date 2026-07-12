@@ -120,6 +120,23 @@ pub async fn spawn_test_daemon<L>(llm: L) -> Result<TestDaemon<L>, LooprError>
 where
     L: LlmClient + Send + Sync + 'static,
 {
+    spawn_test_daemon_with_config(llm, |_config| {}).await
+}
+
+/// Same as [`spawn_test_daemon`], but `customize` gets a mutable reference
+/// to the harness's baseline `Config` (sandbox off, tight Director
+/// polling, validation opted out) before it is used to build the
+/// `DaemonContext`. Lets a test opt back INTO a knob the shared baseline
+/// disables by default (e.g. Phase 19's failure-reaping e2e, which needs
+/// `integrator.require_validation` + `validation_commands` to force an
+/// `IntegrationFailed` Bundle) without hand-rolling the rest of the setup.
+pub async fn spawn_test_daemon_with_config<L>(
+    llm: L,
+    customize: impl FnOnce(&mut Config),
+) -> Result<TestDaemon<L>, LooprError>
+where
+    L: LlmClient + Send + Sync + 'static,
+{
     let tempdir = TempDir::new().expect("tempdir");
     init_git_repo(tempdir.path());
 
@@ -141,8 +158,11 @@ where
     // Phase 12 (validation-by-default): this shared harness is not
     // exercising validation semantics, so every daemon it spawns opts
     // out of the require-validation-by-default startup gate. Tests that
-    // DO want to exercise validation build their own `Config` directly.
+    // DO want to exercise validation build their own `Config` directly
+    // (or use `customize` above to opt back in).
     config.integrator.require_validation = false;
+
+    customize(&mut config);
 
     // Tests boot with a clean target, so the corruption gate is a no-op
     // by default (no JSONL exists yet). Pass `false` to keep the

@@ -1814,5 +1814,12 @@ pub use spawner::DaemonSpawner;
 // shadowing the external `integrator` crate inside this module.
 mod integration;
 
+// Phase 19 (verified-swarm): live worktree + branch reaping the instant a
+// Work lands on a terminal status. Split out for the same per-file-limit
+// reason as `spawner.rs` / `integration.rs`; re-exported so `integration.rs`
+// and `spawner.rs` (its module siblings) can call it via `super::`.
+mod reap;
+pub(crate) use reap::reap_terminal_work_worktree;
+
 #[cfg(test)]
 mod tests;
