@@ -122,6 +122,8 @@ id_type!(WorkId, "wk");
 id_type!(BundleId, "bd");
 id_type!(TickId, "tk");
 id_type!(NoteId, "nt");
+id_type!(CheckRunId, "cr");
+id_type!(ReviewId, "rv");
 
 #[cfg(test)]
 mod tests;

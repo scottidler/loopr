@@ -3,17 +3,21 @@
 //! persistence engine.
 
 mod bundles;
+mod checks;
 mod error;
 mod notes;
 mod plans;
+mod reviews;
 mod store;
 mod ticks;
 mod works;
 
 pub use bundles::{BundleUpdateError, BundleUpdateSink, BundlesStore};
+pub use checks::CheckRunsStore;
 pub use error::StoreError;
 pub use notes::NotesStore;
 pub use plans::{PlanUpdateError, PlanUpdateSink, PlansStore};
+pub use reviews::ReviewsStore;
 pub use store::{STORE_VERSION, Store, TASKSTORE_SUBPATH};
 pub use ticks::TicksStore;
 pub use works::{WorkUpdateError, WorkUpdateSink, WorksStore};

@@ -5,9 +5,11 @@ use tokio::sync::Mutex;
 use tracing::{instrument, warn};
 
 use crate::bundles::BundlesStore;
+use crate::checks::CheckRunsStore;
 use crate::error::StoreError;
 use crate::notes::NotesStore;
 use crate::plans::PlansStore;
+use crate::reviews::ReviewsStore;
 use crate::ticks::TicksStore;
 use crate::works::WorksStore;
 
@@ -199,6 +201,21 @@ impl Store {
     /// monotonic `None -> Some` transition.
     pub fn notes(&self) -> NotesStore<'_> {
         NotesStore::new(&self.inner)
+    }
+
+    /// Typed accessor for `CheckRun` records. Borrowed, zero-cost handle.
+    /// No write lock: CheckRuns are immutable evidence (create/get/list
+    /// only), so there is no read-check-write path to serialize.
+    pub fn check_runs(&self) -> CheckRunsStore<'_> {
+        CheckRunsStore::new(&self.inner)
+    }
+
+    /// Typed accessor for `Review` records. Borrowed, zero-cost handle.
+    /// No write lock: reviews are append-only history (one row per round,
+    /// create/get/list only), so there is no read-check-write path to
+    /// serialize.
+    pub fn reviews(&self) -> ReviewsStore<'_> {
+        ReviewsStore::new(&self.inner)
     }
 
     /// Install taskstore's git hooks under `.git/hooks/`. Idempotent;
