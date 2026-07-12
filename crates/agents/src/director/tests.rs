@@ -1412,3 +1412,7 @@ async fn run_director_repeated_override_promotes_mode_to_conservative() {
 // grace) live in the `operator` submodule to keep this file under the
 // 1500-line bloat-task cap.
 mod operator;
+
+// Phase 2 restart-budget-reset regression lives in its own submodule,
+// same reason (keeps this file under the bloat-task cap).
+mod restart;

@@ -716,11 +716,20 @@ where
         match result {
             Ok(()) => return Ok(()),
             Err(DirectorError::NeedHelp(reason)) => return Err(DirectorError::NeedHelp(reason)),
-            Err(e) if restart < max_restarts => {
+            Err(e) if restart < max_restarts || iterations_completed >= HEALTHY_ITERS_BEFORE_RESTART_RESET => {
                 // Bullet 7: reset the restart budget when the failed
                 // session ran healthily for a while — a long-lived Plan
                 // must not accumulate restarts across unrelated transient
                 // blips and die on the Nth-ever one.
+                //
+                // Phase 2 fix: the reset must fire on the FINAL-restart arm
+                // too. The guard above is an `||`, not a bare
+                // `restart < max_restarts`: even when the budget is already
+                // exhausted (`restart == max_restarts`), a session that ran
+                // healthily for `HEALTHY_ITERS_BEFORE_RESTART_RESET`
+                // iterations before this failure still earns a fresh
+                // budget instead of terminating on this, its
+                // `max_restarts + 1`-th-ever transient blip.
                 if iterations_completed >= HEALTHY_ITERS_BEFORE_RESTART_RESET {
                     debug!(plan_id = %plan_id, iterations_completed, "director: healthy run; resetting restart budget");
                     restart = 0;
@@ -964,13 +973,22 @@ impl DirectorSession {
         //     error does not lose the note's content.
         let unread_notes = deps.store.list_unread_notes_for_plan(plan_id).await?;
         let unread_note_ids: Vec<NoteId> = unread_notes.iter().map(|n| n.id.clone()).collect();
+        // Phase 2 fix (bullet: operator-note loss): only the notes that are
+        // actually RENDERED into this iteration's prompt may be marked read.
+        // A note skipped by the render cap was never seen by the LLM; marking
+        // it read anyway would drop it forever (it never re-renders on a
+        // later iteration once "read"). `rendered_note_ids` starts as the
+        // full unread set and is narrowed to the rendered tail below when
+        // the cap trips.
+        let mut rendered_note_ids: Vec<NoteId> = unread_note_ids.clone();
         if !unread_notes.is_empty() {
             // Cap rendered notes at OPERATOR_NOTES_RENDER_CAP (bullet 11):
             // render the newest N (the tail of the oldest-first list) plus
             // a marker for the remainder, so a Plan that accumulated many
-            // notes cannot blow the prompt budget. ALL unread notes are
-            // still marked read after the round-trip (unread_note_ids
-            // above is the full set) — the cap is render-only.
+            // notes cannot blow the prompt budget. Only the rendered tail
+            // is marked read after the round-trip; notes beyond the cap
+            // stay unread so they render (and get marked read) on a later
+            // iteration once the queue drains below the cap.
             let total = unread_notes.len();
             if total > OPERATOR_NOTES_RENDER_CAP {
                 let skipped = total - OPERATOR_NOTES_RENDER_CAP;
@@ -979,6 +997,7 @@ impl DirectorSession {
                 )];
                 rendered.extend(unread_notes.iter().skip(skipped).map(|n| n.message.clone()));
                 state.operator_notes = rendered;
+                rendered_note_ids = unread_notes.iter().skip(skipped).map(|n| n.id.clone()).collect();
             } else {
                 state.operator_notes = unread_notes.iter().map(|n| n.message.clone()).collect();
             }
@@ -1057,13 +1076,13 @@ impl DirectorSession {
                     // — a re-read on the next iteration is benign
                     // (the body just re-renders), so we never let
                     // taskstore hiccups drop the iteration.
-                    if !unread_note_ids.is_empty()
-                        && let Err(e) = deps.store.mark_notes_read(&unread_note_ids).await
+                    if !rendered_note_ids.is_empty()
+                        && let Err(e) = deps.store.mark_notes_read(&rendered_note_ids).await
                     {
                         warn!(
                             plan_id = %plan_id,
                             iteration,
-                            note_count = unread_note_ids.len(),
+                            note_count = rendered_note_ids.len(),
                             error = %e,
                             "director: mark_notes_read failed; notes will re-render next iteration"
                         );

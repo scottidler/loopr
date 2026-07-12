@@ -146,6 +146,62 @@ async fn unread_note_marked_read_after_render() {
     );
 }
 
+/// Phase 2 regression (break-to-prove): `OPERATOR_NOTES_RENDER_CAP`
+/// caps the RENDERED notes at the newest 8, but pre-fix code marked
+/// read the FULL unread-note-id list regardless of the cap — the 1
+/// note beyond the cap was never seen by the LLM yet got marked read
+/// anyway, silently dropping it forever. 9 unread notes -> exactly 8
+/// (the newest) are rendered AND marked read; the 1 oldest note stays
+/// unread so it renders (and gets marked read) once the queue drains
+/// below the cap.
+#[tokio::test]
+async fn nine_unread_notes_renders_and_reads_only_the_newest_eight() {
+    let plan_id = PlanId::new();
+    let pending = make_work(plan_id.clone(), "wk-pending", WorkStatus::Pending);
+    let store = FakeStore::with(vec![pending], vec![]);
+
+    let mut notes = Vec::new();
+    for i in 0..9 {
+        notes.push(OperatorNote::new(
+            plan_id.clone(),
+            "operator".into(),
+            format!("note-{i}"),
+        ));
+    }
+    let oldest_note_id = notes[0].id.clone();
+    *store.notes.lock().unwrap() = notes;
+
+    let llm = FakeLlm::repeating(json!([{ "action": "done", "summary": "ok" }]).to_string());
+    let spawner = Arc::new(RecordingSpawner::default());
+    let deps = make_deps(llm, store, spawner.clone(), fast_config(), Arc::new(Notify::new()));
+
+    let mut session = DirectorSession::new(plan_id.clone(), &deps.config);
+    session.run_once(&deps).await.expect("run_once Ok");
+
+    let notes = deps.store.notes.lock().unwrap();
+    let unread: Vec<_> = notes.iter().filter(|n| n.is_unread()).collect();
+    assert_eq!(
+        unread.len(),
+        1,
+        "exactly 1 of 9 notes must remain unread (beyond the render cap); got {}",
+        unread.len()
+    );
+    assert_eq!(
+        unread[0].id, oldest_note_id,
+        "the still-unread note must be the OLDEST (skipped, never-rendered) one"
+    );
+    let read_count = notes.iter().filter(|n| !n.is_unread()).count();
+    assert_eq!(read_count, 8, "exactly 8 notes (the rendered ones) must be marked read");
+    drop(notes);
+
+    let prompts = deps.llm.last_user_messages();
+    let last_prompt = prompts.last().expect("at least one LLM call");
+    assert!(
+        last_prompt.contains("1 older operator note(s) omitted"),
+        "prompt must carry the omitted-count marker: {last_prompt}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 10: NeedsOperator -> Stalled grace
 // ---------------------------------------------------------------------------
