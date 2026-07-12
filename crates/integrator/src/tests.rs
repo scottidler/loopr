@@ -391,7 +391,7 @@ async fn preflight_plan_bundle_mismatch() {
     let plan_b = Plan::new("b".to_string());
     // Work belongs to plan_a but we call integrate with plan_b.
     let mut work = Work::new(plan_a.id.clone(), "w".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["done".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["done".to_string()]);
     let b = accepted_bundle(work.id.clone());
     let deps = IntegratorDeps {
         works: FakeWorks::new().with(work.clone()),

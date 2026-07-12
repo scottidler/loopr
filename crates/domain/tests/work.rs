@@ -20,23 +20,37 @@ fn ac_default_is_empty() {
 
 #[test]
 fn ac_len_matches_inner() {
-    let ac = AcceptanceCriteria(vec!["a".into(), "b".into(), "c".into()]);
+    let ac = AcceptanceCriteria::from_texts(vec!["a".into(), "b".into(), "c".into()]);
     assert_eq!(ac.len(), 3);
     assert!(!ac.is_empty());
 }
 
 #[test]
-fn ac_serde_transparent_wire_form() {
-    // #[serde(transparent)] means the wire form is a bare JSON array,
-    // not the default tuple-struct `[["a","b"]]` form.
-    let ac = AcceptanceCriteria(vec!["first".into(), "second".into()]);
+fn ac_serde_structured_wire_form() {
+    // Phase 8: the wire form is now a bare JSON array of `{id,text}`
+    // objects (was a bare string array pre-Phase-8). `from_texts` mints
+    // sequential 1-based ids. This inverts the old
+    // `ac_serde_transparent_wire_form` assertion by name.
+    let ac = AcceptanceCriteria::from_texts(vec!["first".into(), "second".into()]);
     let json = serde_json::to_string(&ac).unwrap();
-    assert_eq!(json, r#"["first","second"]"#);
+    assert_eq!(json, r#"[{"id":1,"text":"first"},{"id":2,"text":"second"}]"#);
+}
+
+#[test]
+fn ac_serde_backcompat_old_string_array() {
+    // Break-to-prove back-compat: a pre-Phase-8 `works.jsonl` stored the
+    // criteria as a bare string array. That exact on-disk shape MUST still
+    // load, its entries becoming Criteria with sequential 1-based ids.
+    let old = r#"["first","second"]"#;
+    let ac: AcceptanceCriteria = serde_json::from_str(old).unwrap();
+    let expect = AcceptanceCriteria::from_texts(vec!["first".into(), "second".into()]);
+    assert_eq!(ac, expect);
+    assert_eq!(ac.iter().map(|c| c.id).collect::<Vec<_>>(), vec![1, 2]);
 }
 
 #[test]
 fn ac_serde_roundtrip() {
-    let ac = AcceptanceCriteria(vec!["a".into(), "b".into()]);
+    let ac = AcceptanceCriteria::from_texts(vec!["a".into(), "b".into()]);
     let json = serde_json::to_string(&ac).unwrap();
     let back: AcceptanceCriteria = serde_json::from_str(&json).unwrap();
     assert_eq!(ac, back);
@@ -44,7 +58,7 @@ fn ac_serde_roundtrip() {
 
 #[test]
 fn ac_unicode_roundtrip() {
-    let ac = AcceptanceCriteria(vec!["emoji: \u{1f389}".into(), "\u{65e5}\u{672c}\u{8a9e}".into()]);
+    let ac = AcceptanceCriteria::from_texts(vec!["emoji: \u{1f389}".into(), "\u{65e5}\u{672c}\u{8a9e}".into()]);
     let json = serde_json::to_string(&ac).unwrap();
     let back: AcceptanceCriteria = serde_json::from_str(&json).unwrap();
     assert_eq!(ac, back);
@@ -155,6 +169,29 @@ fn work_serde_accepts_minimal_json() {
     assert_eq!(w.acceptance_criteria.len(), 0);
     assert_eq!(w.attempt_count, 0);
     assert_eq!(w.session_failure_count, 0);
+}
+
+#[test]
+fn work_serde_backcompat_old_string_criteria() {
+    // Break-to-prove: a full `works.jsonl` row written before Phase 8
+    // stored `acceptance_criteria` as a bare string array. The whole Work
+    // MUST still deserialize, its criteria becoming `{id,text}` with
+    // sequential 1-based ids.
+    let old_row = r#"{
+        "id": "wk-abc12",
+        "parent_id": "pl-xyz34",
+        "updated_at": 1700000000000,
+        "created_at": 1700000000000,
+        "title": "t",
+        "status": "pending",
+        "acceptance_criteria": ["module exists", "tests pass"]
+    }"#;
+    let w: Work = serde_json::from_str(old_row).unwrap();
+    assert_eq!(w.acceptance_criteria.len(), 2);
+    let ids: Vec<u32> = w.acceptance_criteria.iter().map(|c| c.id).collect();
+    assert_eq!(ids, vec![1, 2]);
+    let texts: Vec<&str> = w.acceptance_criteria.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, vec!["module exists", "tests pass"]);
 }
 
 #[test]

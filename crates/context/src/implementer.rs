@@ -81,7 +81,7 @@ struct ImplementerSystemCtx<'a> {
 
 #[derive(Serialize)]
 struct AcCtx<'a> {
-    n: usize,
+    n: u32,
     text: &'a str,
 }
 
@@ -148,12 +148,10 @@ impl ContextBuilder for InlineContextBuilder {
 
         let acceptance_criteria: Vec<AcCtx> = work
             .acceptance_criteria
-            .0
             .iter()
-            .enumerate()
-            .map(|(i, ac)| AcCtx {
-                n: i + 1,
-                text: ac.as_str(),
+            .map(|c| AcCtx {
+                n: c.id,
+                text: c.text.as_str(),
             })
             .collect();
         let prior_iterations: Vec<PriorIterationCtx> = history

@@ -38,7 +38,7 @@ async fn seed_plan_and_work(store: &Store) -> Work {
     let plan = Plan::new("retry-budget".to_string());
     store.plans().create(plan.clone()).await.unwrap();
     let mut work = Work::new(plan.id.clone(), "wk-test".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["does the thing".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["does the thing".to_string()]);
     store.works().create(work.clone()).await.unwrap();
     work
 }

@@ -32,7 +32,7 @@ use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
-use domain::{Bundle, BundleStatus, ReviewIssue, Role, Verdict, Work};
+use domain::{Bundle, BundleStatus, CriterionResult, CriterionStatus, ReviewIssue, Role, Verdict, Work};
 use llm::{LlmClient, Message};
 use store::{BundleUpdateError, BundleUpdateSink};
 use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
@@ -179,11 +179,18 @@ where
     )
     .await?;
 
-    // Phase 5 (events-only): synthesize per-AC results from the parsed
-    // Verdict + Work's acceptance_criteria, then emit one
-    // `reviewer.ac` debug event per AC plus a roll-up info event.
-    // Verdict is unchanged; per-AC data lives in events.log only.
-    emit_ac_events(&verdict, work, &bundle.id, &deps.path_deny_patterns);
+    // Phase 8: synthesize one `CriterionResult` per acceptance criterion
+    // from the parsed Verdict (keyed on the criterion's stable id), emit
+    // the per-criterion + roll-up events, and hold the results. The
+    // Verdict itself is unchanged. Persisting these onto the Review record
+    // is Phase 11; this phase produces/returns them and logs the count.
+    let criteria_results = evaluate_and_emit_criteria(&verdict, work, &bundle.id, &deps.path_deny_patterns);
+    debug!(
+        bundle_id = %bundle.id,
+        work_id = %work.id,
+        criteria_count = criteria_results.len(),
+        "reviewer: criterion results produced (Review persist deferred to Phase 11)"
+    );
 
     // Best-effort transcript write. Reviewer is single-turn (modulo
     // parse-retry sub-loop, which we collapse to "the verdict that
@@ -406,109 +413,76 @@ fn truncate_for_error(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: per-AC observability (events-only)
+// Phase 8: per-criterion results keyed on criterion id + events
 // ---------------------------------------------------------------------------
 
-/// Synthesized per-AC result for events.log emission. Not persisted;
-/// not part of the `Verdict` shape.
-struct AcResult<'a> {
-    criterion: &'a str,
-    status: &'static str,
-    evidence: String,
-}
-
-/// Emit one `reviewer.ac` debug event per AC plus a roll-up info
-/// event with the four counts. Synthesized from the `Verdict` +
-/// `Work.acceptance_criteria` because today's reviewer prompt does
-/// not enumerate per-AC outcomes in a structured form. Per-AC info
-/// is observability, not a domain record.
+/// Synthesize one `CriterionResult` per acceptance criterion from the
+/// parsed `Verdict`, emit one `reviewer.ac` debug event per criterion
+/// (keyed on the criterion's stable `id`) plus a roll-up info event, and
+/// return the results.
 ///
-/// Status mapping:
-/// - `Accept` -> every AC: `verified`.
-/// - `ChangeRequested` -> ACs whose text appears in any reason's
-///   `message` are `failed` (with the reason's location/message as
-///   evidence); the rest are `not_applicable` (we can't tell from
-///   the freeform output whether they were verified or skipped).
-/// - `Reject` -> every AC: `not_applicable` (the rejection reason
-///   is at the verdict level, not per-AC).
-fn emit_ac_events(verdict: &Verdict, work: &Work, bundle_id: &domain::BundleId, path_deny_patterns: &[String]) {
-    let acs: &[String] = &work.acceptance_criteria.0;
-    if acs.is_empty() {
-        // No ACs declared; skip the per-AC events. The Verdict-level
+/// Phase 8 change: results are keyed on `Criterion::id`, NOT on a fuzzy
+/// word-match of the criterion text against the freeform review reasons
+/// (that heuristic — `issue_mentions_criterion` — was dropped). Until the
+/// Reviewer prompt enumerates per-criterion outcomes structurally
+/// (Phase 10), the verdict maps coarsely:
+/// - `Accept` -> every criterion `Met`.
+/// - `ChangeRequested` -> every criterion `Unmet`, carrying the verdict
+///   `summary` as evidence.
+/// - `Reject` -> every criterion `Unmet`, carrying the `reason` as evidence.
+///
+/// The returned `Vec<CriterionResult>` is what Phase 11 persists onto the
+/// `Review` record; this phase produces them and surfaces them in events.
+fn evaluate_and_emit_criteria(
+    verdict: &Verdict,
+    work: &Work,
+    bundle_id: &domain::BundleId,
+    path_deny_patterns: &[String],
+) -> Vec<CriterionResult> {
+    if work.acceptance_criteria.is_empty() {
+        // No criteria declared; nothing to evaluate. The verdict-level
         // accept/reject decision still drives the FSM.
-        return;
+        return Vec::new();
     }
 
-    let results: Vec<AcResult<'_>> = match verdict {
-        Verdict::Accept { .. } => acs
-            .iter()
-            .map(|c| AcResult {
-                criterion: c.as_str(),
-                status: "verified",
-                evidence: String::new(),
-            })
-            .collect(),
-        Verdict::ChangeRequested { reasons, .. } => acs
-            .iter()
-            .map(|c| {
-                let lower = c.to_lowercase();
-                let matching: Vec<&ReviewIssue> =
-                    reasons.iter().filter(|r| issue_mentions_criterion(r, &lower)).collect();
-                if matching.is_empty() {
-                    AcResult {
-                        criterion: c.as_str(),
-                        status: "not_applicable",
-                        evidence: String::new(),
-                    }
-                } else {
-                    let evidence = matching
-                        .iter()
-                        .map(|r| {
-                            let location = match r.line {
-                                Some(l) => format!("{}:{}", r.file, l),
-                                None => r.file.clone(),
-                            };
-                            format!("{location}: {}", r.message)
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    AcResult {
-                        criterion: c.as_str(),
-                        status: "failed",
-                        evidence,
-                    }
-                }
-            })
-            .collect(),
-        Verdict::Reject { .. } => acs
-            .iter()
-            .map(|c| AcResult {
-                criterion: c.as_str(),
-                status: "not_applicable",
-                evidence: String::new(),
-            })
-            .collect(),
+    let (status, evidence) = match verdict {
+        Verdict::Accept { .. } => (CriterionStatus::Met, None),
+        Verdict::ChangeRequested { summary, .. } => (CriterionStatus::Unmet, Some(summary.clone())),
+        Verdict::Reject { reason } => (CriterionStatus::Unmet, Some(reason.clone())),
     };
 
-    let mut verified = 0u64;
-    let mut failed = 0u64;
-    let mut skipped = 0u64;
-    for r in &results {
-        let evidence_redacted = telemetry::transcript::redact_paths(&r.evidence, path_deny_patterns);
+    let results: Vec<CriterionResult> = work
+        .acceptance_criteria
+        .iter()
+        .map(|c| CriterionResult {
+            criterion_id: c.id,
+            status,
+            evidence: evidence.clone(),
+        })
+        .collect();
+
+    let mut met = 0u64;
+    let mut unmet = 0u64;
+    for (criterion, result) in work.acceptance_criteria.iter().zip(results.iter()) {
+        let status_str = match result.status {
+            CriterionStatus::Met => "met",
+            CriterionStatus::Unmet => "unmet",
+        };
+        let evidence_display = result.evidence.as_deref().unwrap_or("");
+        let evidence_redacted = telemetry::transcript::redact_paths(evidence_display, path_deny_patterns);
         debug!(
             target: "reviewer.ac",
             bundle_id = %bundle_id,
             work_id = %work.id,
-            criterion = %r.criterion,
-            status = r.status,
+            criterion_id = criterion.id,
+            criterion = %criterion.text,
+            status = status_str,
             evidence = %evidence_redacted,
             "reviewer: ac evaluated"
         );
-        match r.status {
-            "verified" => verified += 1,
-            "failed" => failed += 1,
-            "not_applicable" | "skipped" => skipped += 1,
-            _ => {}
+        match result.status {
+            CriterionStatus::Met => met += 1,
+            CriterionStatus::Unmet => unmet += 1,
         }
     }
 
@@ -516,26 +490,12 @@ fn emit_ac_events(verdict: &Verdict, work: &Work, bundle_id: &domain::BundleId, 
         bundle_id = %bundle_id,
         work_id = %work.id,
         ac_count = results.len(),
-        ac_verified = verified,
-        ac_skipped = skipped,
-        ac_failed = failed,
+        ac_met = met,
+        ac_unmet = unmet,
         "reviewer: ac roll-up"
     );
-}
 
-/// Heuristic match: a `ReviewIssue` "mentions" an AC if any
-/// whitespace-delimited word of length >= 4 from the AC's lowercase
-/// form appears in the issue's lowercase `message`. Length floor
-/// rules out filler (`is`, `the`, `and`); whole-word match avoids
-/// "test" matching "fastest". This is best-effort — the whole point
-/// of synthesizing AC results is that the LLM's response doesn't
-/// structure them, so the mapping is necessarily fuzzy.
-fn issue_mentions_criterion(issue: &ReviewIssue, criterion_lower: &str) -> bool {
-    let message_lower = issue.message.to_lowercase();
-    criterion_lower
-        .split_whitespace()
-        .filter(|w| w.len() >= 4)
-        .any(|w| message_lower.contains(w))
+    results
 }
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ async fn cold_boot_respawns_director_for_active_plan() {
         let store = Store::open(&target).await.unwrap();
         let plan = Plan::new("active-cold-boot".to_string());
         let mut work = Work::new(plan.id.clone(), "wk-1".to_string());
-        work.acceptance_criteria = AcceptanceCriteria(vec!["assert it works".to_string()]);
+        work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["assert it works".to_string()]);
         store.plans().create(plan).await.unwrap();
         store.works().create(work).await.unwrap();
         store.close().await.unwrap();
@@ -182,7 +182,7 @@ async fn convergence_retry_exhaustion_stalls_plan_and_skips_on_restart() {
         let mut work = Work::new(plan.id.clone(), "wk-stuck".to_string());
         work.status = WorkStatus::Blocked;
         work.attempt_count = 99;
-        work.acceptance_criteria = AcceptanceCriteria(vec!["fix it".to_string()]);
+        work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["fix it".to_string()]);
         let work_id_s = work.id.to_string();
         store.works().create(work).await.unwrap();
         store.close().await.unwrap();

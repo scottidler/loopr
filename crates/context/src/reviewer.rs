@@ -28,7 +28,7 @@ pub(crate) struct ReviewerBundleCtx<'a> {
 pub(crate) struct ReviewerUserCtx<'a> {
     pub(crate) work_title: &'a str,
     pub(crate) work_id: String,
-    pub(crate) acceptance_criteria: &'a [String],
+    pub(crate) acceptance_criteria: Vec<&'a str>,
     /// Per-Work allowed-files scope (`work.files`). Rendered so the reviewer
     /// can enforce the "out-of-scope file modifications" criterion against
     /// the actual scope (Phase-5 finding 10). Empty = no restriction.
@@ -75,7 +75,7 @@ pub(crate) fn build_reviewer_user_ctx<'a>(
     ReviewerUserCtx {
         work_title: work.title.as_str(),
         work_id: work.id.to_string(),
-        acceptance_criteria: work.acceptance_criteria.0.as_slice(),
+        acceptance_criteria: work.acceptance_criteria.iter().map(|c| c.text.as_str()).collect(),
         allowed_files: work.files.as_slice(),
         bundle: ReviewerBundleCtx {
             id: bundle.id.to_string(),

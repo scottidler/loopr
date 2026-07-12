@@ -78,7 +78,7 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     let plan = domain::Plan::new("integration plan".to_string());
     store.plans().create(plan.clone()).await.unwrap();
     let mut work = Work::new(plan.id.clone(), "ship a noop bundle".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["work completes".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["work completes".to_string()]);
     store.works().create(work.clone()).await.unwrap();
 
     // Worktree for the Implementer.

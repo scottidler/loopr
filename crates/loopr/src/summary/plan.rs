@@ -102,7 +102,7 @@ mod tests {
         let mut w = Work::new(parent.clone(), format!("title {id}"));
         w.id = domain::WorkId::from_str(id).unwrap();
         w.status = status;
-        w.acceptance_criteria = AcceptanceCriteria(vec!["x".to_string()]);
+        w.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["x".to_string()]);
         w
     }
 

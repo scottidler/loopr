@@ -33,8 +33,8 @@ pub fn render_work(work: &Work) -> String {
     if work.acceptance_criteria.is_empty() {
         s.push_str("(none specified)\n");
     } else {
-        for (i, ac) in work.acceptance_criteria.0.iter().enumerate() {
-            let _ = writeln!(s, "{}. {}", i + 1, ac);
+        for ac in work.acceptance_criteria.iter() {
+            let _ = writeln!(s, "{}. {}", ac.id, ac.text);
         }
     }
     s.push('\n');
@@ -85,7 +85,7 @@ mod tests {
     fn sample_work() -> Work {
         let mut w = Work::new(PlanId::from_str("pl-abc").unwrap(), "ship feature X".to_string());
         w.id = domain::WorkId::from_str("wk-xyz").unwrap();
-        w.acceptance_criteria = AcceptanceCriteria(vec!["X works".to_string(), "tests pass".to_string()]);
+        w.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["X works".to_string(), "tests pass".to_string()]);
         w.attempt_count = 2;
         w.status = WorkStatus::Done;
         w

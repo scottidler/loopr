@@ -529,7 +529,10 @@ fn parse_and_validate(
         let mut work = Work::new(plan.id.clone(), child.title.clone());
         work.id = title_to_id[norm_title].clone();
         work.dependencies = deps;
-        work.acceptance_criteria = AcceptanceCriteria(ac);
+        // Mint stable per-criterion ids at decompose time (Phase 8):
+        // `from_texts` assigns sequential 1-based ids the Reviewer keys its
+        // `CriterionResult`s on downstream.
+        work.acceptance_criteria = AcceptanceCriteria::from_texts(ac);
         work.files = child.files.clone();
         works.push(work);
     }

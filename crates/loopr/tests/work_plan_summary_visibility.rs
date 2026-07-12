@@ -64,7 +64,7 @@ async fn work_terminal_summary_emits_on_done_transition() {
     store.plans().create(plan.clone()).await.unwrap();
 
     let mut work = Work::new(plan.id.clone(), "do thing".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["thing done".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["thing done".to_string()]);
     store.works().create(work.clone()).await.unwrap();
 
     {
@@ -118,10 +118,10 @@ async fn plan_terminal_summary_emits_on_complete_transition() {
     store.plans().create(plan.clone()).await.unwrap();
 
     let mut work_a = Work::new(plan.id.clone(), "a".to_string());
-    work_a.acceptance_criteria = AcceptanceCriteria(vec!["a done".to_string()]);
+    work_a.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["a done".to_string()]);
     store.works().create(work_a.clone()).await.unwrap();
     let mut work_b = Work::new(plan.id.clone(), "b".to_string());
-    work_b.acceptance_criteria = AcceptanceCriteria(vec!["b done".to_string()]);
+    work_b.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["b done".to_string()]);
     store.works().create(work_b.clone()).await.unwrap();
 
     // Drive both Works to Done before transitioning the Plan, so the

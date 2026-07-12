@@ -90,8 +90,8 @@ async fn reviewer_emits_per_ac_events_on_accept() {
     store.plans().create(plan.clone()).await.unwrap();
 
     let mut work = Work::new(plan.id.clone(), "add hello + world".to_string());
-    // Three ACs so the roll-up has all three counted as `verified` on Accept.
-    work.acceptance_criteria = AcceptanceCriteria(vec![
+    // Three criteria so the roll-up has all three counted as `met` on Accept.
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec![
         "hello returns 42".to_string(),
         "world returns 7".to_string(),
         "tests pass".to_string(),
@@ -143,19 +143,31 @@ async fn reviewer_emits_per_ac_events_on_accept() {
         messages,
     );
 
-    // Each AC event must surface criterion + status.
+    // Phase 8: each per-criterion event keys on the criterion's stable
+    // `criterion_id` (not a fuzzy word-match) and carries a Met/Unmet status.
     for ev in &ac_events {
         let fields = ev.get("fields").expect("event has fields");
-        assert!(fields.get("criterion").is_some(), "missing criterion: {ev}");
+        assert!(fields.get("criterion_id").is_some(), "missing criterion_id: {ev}");
         assert!(fields.get("status").is_some(), "missing status: {ev}");
         assert_eq!(
             fields.get("status").and_then(|v| v.as_str()),
-            Some("verified"),
-            "Accept verdict -> all ACs verified, got: {ev}"
+            Some("met"),
+            "Accept verdict -> all criteria met, got: {ev}"
         );
     }
 
-    // Roll-up event with the four counts.
+    // The three emitted criterion_ids are the minted sequential ids 1,2,3.
+    let ids: BTreeSet<u64> = ac_events
+        .iter()
+        .filter_map(|ev| {
+            ev.get("fields")
+                .and_then(|f| f.get("criterion_id"))
+                .and_then(|v| v.as_u64())
+        })
+        .collect();
+    assert_eq!(ids, BTreeSet::from([1, 2, 3]), "criterion_ids must be the minted 1,2,3");
+
+    // Roll-up event with the Met/Unmet counts.
     let rollup = events
         .iter()
         .find(|ev| {
@@ -164,13 +176,16 @@ async fn reviewer_emits_per_ac_events_on_accept() {
         .expect("expected `reviewer: ac roll-up` event");
     let f = rollup.get("fields").expect("roll-up fields");
     assert_eq!(f.get("ac_count").and_then(|v| v.as_u64()), Some(3));
-    assert_eq!(f.get("ac_verified").and_then(|v| v.as_u64()), Some(3));
-    assert_eq!(f.get("ac_failed").and_then(|v| v.as_u64()), Some(0));
-    assert_eq!(f.get("ac_skipped").and_then(|v| v.as_u64()), Some(0));
+    assert_eq!(f.get("ac_met").and_then(|v| v.as_u64()), Some(3));
+    assert_eq!(f.get("ac_unmet").and_then(|v| v.as_u64()), Some(0));
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reviewer_emits_per_ac_events_on_change_requested_with_matching_reason() {
+async fn reviewer_marks_all_criteria_unmet_on_change_requested() {
+    // Phase 8 inverts `reviewer_emits_per_ac_events_on_change_requested_with_matching_reason`:
+    // the reviewer no longer fuzzy-matches reason words against criterion
+    // text. A ChangeRequested verdict marks EVERY criterion Unmet, keyed on
+    // criterion id — no per-reason substring attribution.
     let log_dir = TempDir::new().unwrap();
     let (_dir, repo_path, sha) = init_repo_with_commit();
 
@@ -179,9 +194,9 @@ async fn reviewer_emits_per_ac_events_on_change_requested_with_matching_reason()
     store.plans().create(plan.clone()).await.unwrap();
 
     let mut work = Work::new(plan.id.clone(), "add hello + world".to_string());
-    // Two ACs; the LLM's reason will mention "hello" so AC #1 maps to
-    // `failed`. AC #2 won't match any reason -> `not_applicable`.
-    work.acceptance_criteria = AcceptanceCriteria(vec![
+    // Two criteria; a ChangeRequested verdict marks both Unmet regardless
+    // of which reason words appear.
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec![
         "hello returns 42 reliably".to_string(),
         "documentation covers both functions".to_string(),
     ]);
@@ -232,14 +247,27 @@ async fn reviewer_emits_per_ac_events_on_change_requested_with_matching_reason()
     let f = rollup.get("fields").expect("roll-up fields");
     assert_eq!(f.get("ac_count").and_then(|v| v.as_u64()), Some(2));
     assert_eq!(
-        f.get("ac_failed").and_then(|v| v.as_u64()),
-        Some(1),
-        "ac #1 mentions `hello`"
+        f.get("ac_unmet").and_then(|v| v.as_u64()),
+        Some(2),
+        "ChangeRequested -> every criterion Unmet"
     );
-    assert_eq!(
-        f.get("ac_skipped").and_then(|v| v.as_u64()),
-        Some(1),
-        "ac #2 has no matching reason word"
-    );
-    assert_eq!(f.get("ac_verified").and_then(|v| v.as_u64()), Some(0));
+    assert_eq!(f.get("ac_met").and_then(|v| v.as_u64()), Some(0));
+
+    // Every per-criterion event keys on criterion_id with status "unmet".
+    let ac_events: Vec<&Value> = events
+        .iter()
+        .filter(|ev| {
+            ev.get("fields").and_then(|f| f.get("message")).and_then(|v| v.as_str()) == Some("reviewer: ac evaluated")
+        })
+        .collect();
+    assert_eq!(ac_events.len(), 2);
+    for ev in &ac_events {
+        let fields = ev.get("fields").expect("event has fields");
+        assert!(fields.get("criterion_id").is_some(), "missing criterion_id: {ev}");
+        assert_eq!(
+            fields.get("status").and_then(|v| v.as_str()),
+            Some("unmet"),
+            "ChangeRequested -> criterion unmet, got: {ev}"
+        );
+    }
 }

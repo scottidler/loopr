@@ -22,7 +22,7 @@ async fn fresh_store_with_plan() -> (TempDir, Store, Plan) {
 
 fn sample_work(parent: &Plan, title: &str) -> Work {
     let mut w = Work::new(parent.id.clone(), title.to_string());
-    w.acceptance_criteria = AcceptanceCriteria(vec![format!("assert {title} works")]);
+    w.acceptance_criteria = AcceptanceCriteria::from_texts(vec![format!("assert {title} works")]);
     w
 }
 
@@ -103,7 +103,7 @@ async fn create_same_id_twice_returns_already_exists() {
         status: WorkStatus::Pending,
         dependencies: vec![],
         files: vec![],
-        acceptance_criteria: AcceptanceCriteria(vec!["assert nope".to_string()]),
+        acceptance_criteria: AcceptanceCriteria::from_texts(vec!["assert nope".to_string()]),
         attempt_count: 0,
         session_failure_count: 0,
         blocked_reason: None,

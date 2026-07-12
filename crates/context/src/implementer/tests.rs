@@ -11,7 +11,7 @@ use super::InlineContextBuilder;
 
 fn sample_work() -> Work {
     let mut w = Work::new(PlanId::new(), "add --version flag".to_string());
-    w.acceptance_criteria = AcceptanceCriteria(vec![
+    w.acceptance_criteria = AcceptanceCriteria::from_texts(vec![
         "cli parses --version".to_string(),
         "prints GIT_DESCRIBE output".to_string(),
     ]);

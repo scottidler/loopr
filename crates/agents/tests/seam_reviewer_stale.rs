@@ -79,7 +79,7 @@ async fn reviewer_propagates_store_stale() {
     let plan = domain::Plan::new("stale propagation plan".to_string());
     store.plans().create(plan.clone()).await.unwrap();
     let mut work = Work::new(plan.id.clone(), "add hello()".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["hello returns 42".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["hello returns 42".to_string()]);
     store.works().create(work.clone()).await.unwrap();
 
     let mut bundle = Bundle::new(

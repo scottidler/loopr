@@ -94,7 +94,7 @@ fn context_smoke_spans_implementer_and_reviewer() {
 
     let plan = Plan::new("instrumentation".to_string());
     let mut work = Work::new(plan.id.clone(), "deliver feature".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["it ships".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["it ships".to_string()]);
 
     let builder = InlineContextBuilder::new();
     let _ = builder

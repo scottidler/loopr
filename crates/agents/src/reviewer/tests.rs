@@ -135,7 +135,7 @@ fn git_capture(path: &Path, args: &[&str]) -> String {
 
 fn sample_work() -> Work {
     let mut w = Work::new(PlanId::new(), "add module".to_string());
-    w.acceptance_criteria = AcceptanceCriteria(vec!["module exists".to_string()]);
+    w.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["module exists".to_string()]);
     w
 }
 

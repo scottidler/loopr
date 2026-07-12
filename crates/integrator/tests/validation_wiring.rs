@@ -67,7 +67,7 @@ async fn setup(plan: &Plan) -> (TempDir, Store, PathBuf) {
 
 fn sample_work(plan: &Plan) -> Work {
     let mut w = Work::new(plan.id.clone(), "implement feature".to_string());
-    w.acceptance_criteria = AcceptanceCriteria(vec!["feature works".to_string()]);
+    w.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["feature works".to_string()]);
     w
 }
 

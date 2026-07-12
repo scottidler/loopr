@@ -92,11 +92,11 @@ async fn structural_conflict_two_bundles_touching_readme() {
     // Two Works, two Bundles, each touching README.md with different
     // content.
     let mut work_a = Work::new(plan.id.clone(), "feature A".to_string());
-    work_a.acceptance_criteria = AcceptanceCriteria(vec!["a works".to_string()]);
+    work_a.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["a works".to_string()]);
     store.works().create(work_a.clone()).await.unwrap();
 
     let mut work_b = Work::new(plan.id.clone(), "feature B".to_string());
-    work_b.acceptance_criteria = AcceptanceCriteria(vec!["b works".to_string()]);
+    work_b.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["b works".to_string()]);
     store.works().create(work_b.clone()).await.unwrap();
 
     let branch_a = format!("loopr/wk-{}", work_a.id);

@@ -163,7 +163,7 @@ async fn integrator_smoke_spans_happy_path() {
     let store = Store::open(&repo).await.unwrap();
     store.plans().create(plan.clone()).await.unwrap();
     let mut work = Work::new(plan.id.clone(), "ship feature X".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["X works".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["X works".to_string()]);
     store.works().create(work.clone()).await.unwrap();
 
     let branch = format!("loopr/wk-{}", work.id);

@@ -23,7 +23,7 @@ mod work;
 
 pub use bundle::{Bundle, BundleStatus};
 pub use check::CheckRun;
-pub use criteria::AcceptanceCriteria;
+pub use criteria::{AcceptanceCriteria, Criterion};
 pub use failure::FailureReason;
 pub use fsm::{FsmError, FsmErrorKind, TargetKind, Transition};
 pub use graph::{GraphError, WorkGraph};

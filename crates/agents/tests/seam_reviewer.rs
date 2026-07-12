@@ -68,7 +68,7 @@ async fn full_roundtrip_accept_verdict_persists_reviewed_bundle() {
     let plan = domain::Plan::new("seam reviewer plan".to_string());
     store.plans().create(plan.clone()).await.unwrap();
     let mut work = Work::new(plan.id.clone(), "add hello()".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["hello returns 42".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["hello returns 42".to_string()]);
     store.works().create(work.clone()).await.unwrap();
 
     let mut bundle = Bundle::new(
@@ -133,7 +133,7 @@ async fn change_requested_verdict_persists_rejected_bundle() {
     let plan = domain::Plan::new("plan".to_string());
     store.plans().create(plan.clone()).await.unwrap();
     let mut work = Work::new(plan.id.clone(), "add hello()".to_string());
-    work.acceptance_criteria = AcceptanceCriteria(vec!["hello returns 99".to_string()]);
+    work.acceptance_criteria = AcceptanceCriteria::from_texts(vec!["hello returns 99".to_string()]);
     store.works().create(work.clone()).await.unwrap();
 
     let mut bundle = Bundle::new(
