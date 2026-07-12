@@ -14,7 +14,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tokio::process::Command;
-use tracing::{Span, debug, info, instrument, warn};
+use tracing::{Instrument, Span, debug, info, instrument, warn};
 
 use domain::{Bundle, Work};
 use tools::{BashDenylist, LaneRouter, SandboxMode, ToolContext};
@@ -767,20 +767,27 @@ impl ToolExecutor for RealTools {
             tool_name = tool_name,
             working_dir = %working_dir.display(),
         );
-        let _enter = span.enter();
-        let ctx = ToolContext {
-            working_dir: working_dir.to_path_buf(),
-            router: self.router.clone(),
-            sandbox: self.sandbox,
-            path_deny_patterns: self.path_deny_patterns.clone(),
-            bash_denylist: self.bash_denylist.clone(),
-            persist_base: self.persist_base.clone(),
-            invocation_id: Some(uuid::Uuid::now_v7()),
-        };
-        let value = tools::dispatch(tool_name, input.clone(), &ctx)
-            .await
-            .map_err(|e| DispatchError::Tool(e.to_string()))?;
-        Ok(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
+        // Never hold a span `Entered` guard across `.await` (serializes /
+        // can deadlock tokio, and mis-attributes spans once the task is
+        // stolen by another worker). Attach the span to the future with
+        // `.instrument(span)` instead.
+        async move {
+            let ctx = ToolContext {
+                working_dir: working_dir.to_path_buf(),
+                router: self.router.clone(),
+                sandbox: self.sandbox,
+                path_deny_patterns: self.path_deny_patterns.clone(),
+                bash_denylist: self.bash_denylist.clone(),
+                persist_base: self.persist_base.clone(),
+                invocation_id: Some(uuid::Uuid::now_v7()),
+            };
+            let value = tools::dispatch(tool_name, input.clone(), &ctx)
+                .await
+                .map_err(|e| DispatchError::Tool(e.to_string()))?;
+            Ok(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
+        }
+        .instrument(span)
+        .await
     }
 }
 

@@ -380,7 +380,20 @@ pub fn ensure_daemon_if_needed(target: &Path) -> Result<(), LooprError> {
 /// the socket appeared, not to actually connect.
 fn wait_for_socket(target: &Path) -> Result<(), LooprError> {
     let socket = sentinel::socket_path(target);
-    let deadline = std::time::Instant::now() + Duration::from_secs(crate::transport::START_TIMEOUT_SECS);
+    // Honor the operator-tunable client-connect budget (defaults to the
+    // daemon startup budget), not a hard 3s: this parent poll sits on the
+    // same fork path a client takes, so a slow crash-recovery reconcile
+    // must not trip it. Best-effort config load; a broken config falls
+    // back to the default budget (the daemon's own startup surfaces the
+    // config error strictly).
+    let wait = match crate::config::Config::load(target) {
+        Ok(cfg) => Duration::from_secs(cfg.transport.client_connect_secs),
+        Err(e) => {
+            tracing::warn!(error = %e, "config load failed; using default client connect budget");
+            Duration::from_secs(crate::config::DEFAULT_STARTUP_BUDGET_SECS)
+        }
+    };
+    let deadline = std::time::Instant::now() + wait;
     while std::time::Instant::now() < deadline {
         if socket.exists() {
             return Ok(());

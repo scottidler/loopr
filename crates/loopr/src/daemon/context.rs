@@ -479,18 +479,28 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Cleanup honors `AttemptCleanupPolicy`. The worktree's branch is
     /// always retained regardless of cleanup policy (vision.md:135 —
     /// Stage 8 Integrator will merge it).
-    #[tracing::instrument(level = "info", skip_all, fields(work_id = %work.id, session_id = %self.session_id))]
     #[instrument(
         name = "daemon.spawn_implementer_for_work",
         level = "info",
         skip_all,
-        fields(work_id = %work.id, work_status = ?work.status),
+        fields(work_id = %work.id, work_status = ?work.status, session_id = %self.session_id),
     )]
     pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
         // Phase 2 sidecar-map insert. Guard is dropped on every exit
         // (panic or normal return), so `WorkSpawner::list_running_work_ids`
         // observes the live set even across abrupt panics.
         let _id_guard = ScopedIdGuard::new(Arc::clone(&self.implementer_work_ids), work.id.clone());
+
+        // Shutdown drain guard: a spawn that slipped past a caller's
+        // pre-spawn check (e.g. `promote_unblocked_siblings`) after the
+        // signal landed must not do work into an already-drained pool.
+        // Mirrors `spawn_reviewer_for_bundle` / `spawn_integrator_for_bundle`
+        // so no in-flight body outlives the drain and strands an
+        // `Arc<DaemonContext>` clone against `Arc::try_unwrap`.
+        if self.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+            debug!("shutdown in progress; skipping implementer spawn");
+            return;
+        }
 
         // Budget soft pause (vision Budgets): if the per-run cost cap is
         // exhausted, do not spawn. The Work stays Pending (no FSM advance
@@ -760,12 +770,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// will never drain. Per `CLAUDE.md` agents crate rule, every
     /// orchestration decision (triage, verdict routing, next-stage spawn)
     /// lives here, not in `agents::reviewer`.
-    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id))]
     #[instrument(
         name = "daemon.spawn_reviewer_for_bundle",
         level = "info",
         skip_all,
-        fields(bundle_id = %bundle.id, work_id = %bundle.work_id, bundle_status = ?bundle.status),
+        fields(bundle_id = %bundle.id, work_id = %bundle.work_id, bundle_status = ?bundle.status, session_id = %self.session_id),
     )]
     pub async fn spawn_reviewer_for_bundle(self: Arc<Self>, mut bundle: Bundle) {
         // Phase 2 sidecar-map insert; mirrors `spawn_implementer_for_work`.
@@ -1058,6 +1067,19 @@ pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
                 .into_iter()
                 .filter(|w| w.status == WorkStatus::Pending && ready.contains(&w.id))
                 .collect();
+            // Pre-spawn drain guard: this runs as the continuation of an
+            // integrator completing (`Integrated -> Done` promotes siblings).
+            // If a shutdown signal landed while that integrator ran, the
+            // implementer pool may already be draining; spawning into it
+            // would strand an `Arc<DaemonContext>` clone and defeat the
+            // shutdown `Arc::try_unwrap`. Skip promotion entirely, and the
+            // pool drain then returns cleanly. The `shutting_down` guard at
+            // the top of `spawn_implementer_for_work` is the belt to this
+            // suspenders (covers the check-then-spawn race under the lock).
+            if ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+                debug!("shutdown in progress; skipping sibling promotion");
+                return;
+            }
             let promoted = pending_ready.len();
             for work in pending_ready {
                 let mut tasks = ctx.implementer_tasks.lock().await;

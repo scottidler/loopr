@@ -197,6 +197,7 @@ async fn client_request_times_out_against_silent_server() {
 
     let timeouts = crate::transport::ClientTimeouts {
         request: Duration::from_millis(150),
+        connect_wait: Duration::from_secs(3),
     };
     let mut client = IpcClient::connect(&socket, timeouts).await.unwrap();
 
@@ -218,4 +219,85 @@ async fn client_request_times_out_against_silent_server() {
     );
 
     server.abort();
+}
+
+/// Phase 5 startup wait: a daemon running a crash-recovery reconcile binds
+/// its socket only after `build_context` returns. That can exceed the
+/// retired hard 3s client cap, which spuriously failed the connect. The
+/// wait now defaults to the daemon startup budget (60s).
+///
+/// Break-to-prove is self-contained: the first connect uses a 3s
+/// `connect_wait` (the old hard cap) and MUST give up before the slow bind;
+/// the second uses the new default budget and MUST wait it out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_connect_waits_out_slow_reconcile() {
+    use crate::transport::connect_or_wait_with_timeouts;
+
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join(".loopr").join("socket");
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let socket_bg = socket.clone();
+
+    // Slower than the retired 3s cap, well under the 60s default budget.
+    const SLOW_BIND_MS: u64 = 4_500;
+    let server = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(SLOW_BIND_MS)).await;
+        let listener = bind_listener(&socket_bg).unwrap();
+        // Hold the listener alive so the client's connect succeeds.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        drop(listener);
+    });
+
+    // Old hard 3s cap: gives up before the daemon binds.
+    let short = crate::transport::ClientTimeouts {
+        request: Duration::from_millis(200),
+        connect_wait: Duration::from_secs(3),
+    };
+    let early = connect_or_wait_with_timeouts(td.path(), short).await;
+    assert!(
+        early.is_err(),
+        "a 3s wait must give up before a {SLOW_BIND_MS}ms reconcile binds the socket"
+    );
+
+    // New default budget: waits out the slow reconcile and connects.
+    // (`IpcClient` is not `Debug`, so assert on the discriminant, not `{:?}`.)
+    let ok = connect_or_wait_with_timeouts(td.path(), crate::transport::ClientTimeouts::default()).await;
+    assert!(
+        ok.is_ok(),
+        "default connect budget must outlast a slow reconcile (connect error: {:?})",
+        ok.err()
+    );
+
+    server.abort();
+}
+
+/// Phase 5: while waiting for the socket, the client polls the daemon's
+/// startup-error sentinel so a genuine boot failure surfaces immediately
+/// with its real reason, instead of the client burning the full 60s budget
+/// and reporting a generic "socket never appeared".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_connect_surfaces_startup_error_sentinel() {
+    use crate::transport::connect_or_wait_with_timeouts;
+
+    let td = TempDir::new().unwrap();
+    std::fs::create_dir_all(td.path().join(".loopr")).unwrap();
+    // Simulate the grandchild recording a fatal startup failure.
+    crate::daemon::sentinel::write_startup_error(td.path(), "refusing to start: 2 corrupt record(s)");
+
+    let start = std::time::Instant::now();
+    // `IpcClient` is not `Debug`, so `unwrap_err()` won't compile; match instead.
+    let err = match connect_or_wait_with_timeouts(td.path(), crate::transport::ClientTimeouts::default()).await {
+        Ok(_) => panic!("connect must fail fast on a startup-error sentinel, not succeed"),
+        Err(e) => e,
+    };
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "sentinel must be observed promptly, not after the full 60s budget: took {elapsed:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("corrupt record"),
+        "should carry the sentinel reason: {msg}"
+    );
 }

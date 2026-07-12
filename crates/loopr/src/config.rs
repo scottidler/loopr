@@ -69,6 +69,15 @@ impl IntegratorSection {
     }
 }
 
+/// Default startup budget, in seconds, shared by `daemon-startup-secs`
+/// (how long the grandchild may take to `build_context` + bind) and the
+/// client socket-wait `client-connect-secs`. Tying them means a client
+/// waits at least as long as the daemon is allowed to spend on a slow
+/// crash-recovery reconcile before its socket appears — the client-side
+/// wait was a hard 3s, which spuriously failed connects against a daemon
+/// still reconciling (Phase 5 fix).
+pub const DEFAULT_STARTUP_BUDGET_SECS: u64 = 60;
+
 /// IPC transport timeouts. Bounds every place where the daemon, its
 /// per-connection handlers, or a short-lived client could otherwise wait
 /// forever on a peer or on disk. See
@@ -96,6 +105,13 @@ pub struct TransportSection {
     /// excludes install). Beyond this, the grandchild exits with
     /// `LooprError::DaemonStartup` rather than orphaning. Default: 60s.
     pub daemon_startup_secs: u64,
+
+    /// Ceiling on the client's socket-wait poll while a freshly-forked
+    /// daemon binds its socket — `connect_or_wait_with_timeouts` and the
+    /// fork parent's `wait_for_socket`. Defaults to the daemon startup
+    /// budget so a client does not give up before a slow-reconcile daemon
+    /// has bound its socket. Was a hard 3s (Phase 5 fix). Default: 60s.
+    pub client_connect_secs: u64,
 }
 
 impl Default for TransportSection {
@@ -104,7 +120,8 @@ impl Default for TransportSection {
             client_request_secs: 10,
             server_idle_secs: 15,
             server_write_secs: 10,
-            daemon_startup_secs: 60,
+            daemon_startup_secs: DEFAULT_STARTUP_BUDGET_SECS,
+            client_connect_secs: DEFAULT_STARTUP_BUDGET_SECS,
         }
     }
 }

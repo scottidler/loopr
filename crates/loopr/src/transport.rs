@@ -31,12 +31,18 @@ use crate::error::LooprError;
 pub struct ClientTimeouts {
     /// Wall-clock cap on `request_impl` (send + response loop).
     pub request: Duration,
+    /// Ceiling on the socket-wait poll in `connect_or_wait_with_timeouts`
+    /// before giving up on a not-yet-bound daemon. Defaults to the daemon
+    /// startup budget (was a hard 3s that failed connects against a daemon
+    /// still running a slow crash-recovery reconcile).
+    pub connect_wait: Duration,
 }
 
 impl From<&TransportSection> for ClientTimeouts {
     fn from(t: &TransportSection) -> Self {
         Self {
             request: Duration::from_secs(t.client_request_secs),
+            connect_wait: Duration::from_secs(t.client_connect_secs),
         }
     }
 }
@@ -81,11 +87,6 @@ impl Default for ServerTimeouts {
 /// in the Stage 4 design doc.
 pub const POLL_INTERVAL_MS: u64 = 100;
 
-/// Ceiling on how long `connect_or_wait` will poll before giving up and
-/// returning `LooprError::DaemonStartup`. v4 value; matches the design
-/// doc's `START_TIMEOUT_SECS`.
-pub const START_TIMEOUT_SECS: u64 = 3;
-
 /// Connect to the daemon at `<target>/.loopr/socket` using the
 /// no-config-file defaults from `TransportSection::default()`. Short-
 /// lived CLI invocations call this; commands that want operator-tunable
@@ -95,20 +96,33 @@ pub async fn connect_or_wait(target: &Path) -> Result<IpcClient, LooprError> {
 }
 
 /// Connect with explicit `ClientTimeouts`. Polls for the socket up to
-/// `START_TIMEOUT_SECS` at `POLL_INTERVAL_MS` cadence; by the time any
+/// `timeouts.connect_wait` at `POLL_INTERVAL_MS` cadence; by the time any
 /// async code runs, `lib::run`'s pre-telemetry hoist has already
 /// decided whether to fork a daemon, so this function only needs to
 /// wait for the grandchild's `bind`. It never forks: that authority
 /// lives in `daemon::ensure_daemon[_if_needed]`.
+///
+/// The wait defaults to the daemon startup budget (60s), not a hard 3s:
+/// a daemon running a slow crash-recovery reconcile binds its socket only
+/// after `build_context` returns, and a 3s client cap gave up first. While
+/// waiting we poll the daemon's startup-error sentinel so a genuine boot
+/// failure (gated corruption, config error) surfaces immediately with its
+/// real reason instead of the client polling to the full deadline.
 #[tracing::instrument(name = "client.connect_or_wait", level = "debug", skip_all, fields(target = %target.display()), err)]
 pub async fn connect_or_wait_with_timeouts(target: &Path, timeouts: ClientTimeouts) -> Result<IpcClient, LooprError> {
     let socket = sentinel::socket_path(target);
-    let deadline = Instant::now() + Duration::from_secs(START_TIMEOUT_SECS);
+    let deadline = Instant::now() + timeouts.connect_wait;
     loop {
         let err = match IpcClient::connect(&socket, timeouts).await {
             Ok(client) => return Ok(client),
             Err(e) => e,
         };
+        // Fail fast (with the real reason) if the grandchild recorded a
+        // fatal startup failure. `preflight_clean` removes any stale
+        // sentinel before the fork, so a present one is from this boot.
+        if let Some(reason) = sentinel::read_startup_error(target) {
+            return Err(LooprError::DaemonStartup(format!("daemon failed to start: {reason}")));
+        }
         if Instant::now() > deadline {
             // Carry the most recent connect failure into the timeout message
             // so the operator sees WHY (ENOENT vs ECONNREFUSED vs perms),

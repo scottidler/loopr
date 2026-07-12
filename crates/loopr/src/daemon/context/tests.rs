@@ -105,3 +105,184 @@ fn panic_message_handles_opaque_payload() {
     let payload = std::panic::catch_unwind(|| std::panic::panic_any(42u32)).expect_err("should panic");
     assert_eq!(super::panic_message(&*payload), "<non-string panic payload>");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5: shutdown drain guards + single-span hygiene.
+// ---------------------------------------------------------------------------
+
+mod shutdown {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use agents::{DirectorConfig, ImplementerConfig, ReviewerConfig};
+    use context::InlineContextBuilder;
+    use domain::{Plan, Work, WorkStatus};
+    use llm::{AnthropicClient, LlmConfig};
+    use serde_json::Value;
+    use store::Store;
+    use telemetry::{ProcessId, SessionId};
+    use tempfile::TempDir;
+    use tools::{BashDenylist, LaneRouter, SandboxMode};
+    use worktree::AttemptCleanupPolicy;
+
+    use crate::daemon::DaemonContext;
+    use crate::daemon::context::promote_unblocked_siblings;
+
+    fn dummy_llm() -> Arc<AnthropicClient> {
+        let cfg = LlmConfig {
+            api_base_url: "http://127.0.0.1:1".to_string(),
+            ..LlmConfig::default()
+        };
+        Arc::new(AnthropicClient::new(cfg, "test-key".to_string()).unwrap())
+    }
+
+    async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
+        let store = Store::open(&target).await.unwrap();
+        let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
+        let bash_denylist = Arc::new(BashDenylist::with_base());
+        let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+            "test-stub-model",
+        )));
+        Arc::new(DaemonContext::new(
+            target,
+            SessionId::parse("20260419-000000").unwrap(),
+            "-test-target".to_string(),
+            ProcessId::parse("pc-test01").unwrap(),
+            std::process::id(),
+            store,
+            dummy_llm(),
+            router,
+            bash_denylist,
+            Vec::new(),
+            SandboxMode::Off,
+            Arc::new(InlineContextBuilder::new()),
+            ImplementerConfig::default(),
+            ReviewerConfig::default(),
+            integrator::IntegratorConfig::default(),
+            DirectorConfig::default(),
+            decomposer::DecomposerConfig::default(),
+            AttemptCleanupPolicy::default(),
+            snapshot,
+            crate::transport::ServerTimeouts::default(),
+            None,
+        ))
+    }
+
+    fn read_events(run_dir: &Path) -> Vec<Value> {
+        let body = std::fs::read_to_string(run_dir.join("events.log")).expect("read events.log");
+        body.lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l).expect("parse JSONL"))
+            .collect()
+    }
+
+    /// Names of every span in scope for `event` (the `spans` array plus the
+    /// `span` current-span object), as the JSON fmt layer serializes them.
+    fn span_names(event: &Value) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(spans) = event.get("spans").and_then(Value::as_array) {
+            for s in spans {
+                if let Some(n) = s.get("name").and_then(Value::as_str) {
+                    names.push(n.to_string());
+                }
+            }
+        }
+        names
+    }
+
+    /// The integrator's post-`Done` continuation (`promote_unblocked_siblings`)
+    /// must NOT spawn an implementer into an already-draining pool once the
+    /// shutdown signal has landed. Break-to-prove: without the pre-spawn
+    /// guard the sibling is spawned, the JoinSet is non-empty, and the
+    /// leaked task strands an `Arc<DaemonContext>` clone so `try_unwrap`
+    /// fails.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_skips_spawn_during_shutdown_and_arc_unwraps() {
+        let td = TempDir::new().unwrap();
+        let ctx = ctx_for_test(td.path().to_path_buf()).await;
+
+        // Plan with two siblings: w1 Done, w2 Pending depending on w1 — so
+        // w2 is dep-unblocked and would normally be promoted+spawned.
+        let plan = Plan::new("shutdown-drain".to_string());
+        ctx.store.plans().create(plan.clone()).await.unwrap();
+        let mut w1 = Work::new(plan.id.clone(), "w1".to_string());
+        w1.status = WorkStatus::Done;
+        let mut w2 = Work::new(plan.id.clone(), "w2".to_string());
+        w2.dependencies = vec![w1.id.clone()];
+        ctx.store.works().create(w1).await.unwrap();
+        ctx.store.works().create(w2).await.unwrap();
+
+        // Signal has landed: the daemon is winding down.
+        ctx.shutting_down.store(true, Ordering::Relaxed);
+
+        promote_unblocked_siblings(Arc::clone(&ctx), plan.id.clone()).await;
+
+        assert!(
+            ctx.implementer_tasks.lock().await.is_empty(),
+            "no implementer may be spawned into a draining pool during shutdown"
+        );
+
+        // Sole remaining reference: the daemon can reclaim the Store.
+        assert!(
+            Arc::try_unwrap(ctx).is_ok(),
+            "a leaked spawn would strand an Arc<DaemonContext> clone"
+        );
+    }
+
+    /// `spawn_implementer_for_work` carries exactly ONE
+    /// `daemon.spawn_implementer_for_work` span (the duplicate default-named
+    /// `#[tracing::instrument]` was removed). Break-to-prove: with the
+    /// duplicate attribute present the entry event is wrapped by a second
+    /// span named `spawn_implementer_for_work`, tripping the zero-assertion.
+    ///
+    /// Driven through the shutdown guard so the body no-ops immediately
+    /// (emitting its debug event inside the span) without needing a git
+    /// worktree or an LLM round-trip.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_implementer_emits_single_span() {
+        let run_dir = TempDir::new().unwrap();
+        let td = TempDir::new().unwrap();
+        {
+            let _guard = telemetry::init_for_test(run_dir.path(), "debug").expect("init_for_test");
+            let ctx = ctx_for_test(td.path().to_path_buf()).await;
+            let plan = Plan::new("span-hygiene".to_string());
+            let work = Work::new(plan.id.clone(), "w1".to_string());
+
+            ctx.shutting_down.store(true, Ordering::Relaxed);
+            // Spawn into a JoinSet exactly as production does: this boxes the
+            // recursive spawn-chain future (implementer -> reviewer ->
+            // integrator -> promote -> implementer) behind a tokio task, so
+            // the compiler never has to lay out the fully-inlined future
+            // (a direct `.await` here overflows the type-layout depth). On a
+            // current-thread runtime the task is polled on this same thread,
+            // so the thread-local test subscriber still captures its events.
+            let mut set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+            set.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
+            while set.join_next().await.is_some() {}
+        }
+
+        let events = read_events(run_dir.path());
+        let entry = events
+            .iter()
+            .find(|ev| {
+                ev.get("fields").and_then(|f| f.get("message")).and_then(Value::as_str)
+                    == Some("shutdown in progress; skipping implementer spawn")
+            })
+            .expect("the shutdown-skip debug event must be captured");
+
+        let names = span_names(entry);
+        let named = names
+            .iter()
+            .filter(|n| *n == "daemon.spawn_implementer_for_work")
+            .count();
+        assert_eq!(
+            named, 1,
+            "exactly one daemon.spawn_implementer span per spawn; got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "spawn_implementer_for_work"),
+            "the duplicate default-named instrument span must be gone; got {names:?}"
+        );
+    }
+}

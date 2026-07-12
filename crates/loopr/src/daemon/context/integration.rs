@@ -30,12 +30,11 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     ///
     /// Shutdown-aware: shutdown_notify cuts the backoff sleep so a Ctrl-C
     /// during a retry does not block the daemon for 12.6s.
-    #[tracing::instrument(level = "info", skip_all, fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id))]
     #[instrument(
         name = "daemon.spawn_integrator_for_bundle",
         level = "info",
         skip_all,
-        fields(bundle_id = %bundle.id, work_id = %bundle.work_id),
+        fields(bundle_id = %bundle.id, work_id = %bundle.work_id, session_id = %self.session_id),
     )]
     pub async fn spawn_integrator_for_bundle(self: Arc<Self>, bundle: Bundle) {
         // Phase 2 sidecar-map insert; mirrors the implementer/reviewer wrappers.
