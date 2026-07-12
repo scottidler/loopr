@@ -212,6 +212,9 @@ async fn reap_all_pools<L: LlmClient + Send + Sync + 'static>(ctx: &Arc<DaemonCo
         let mut tasks = pool.lock().await;
         reap_finished(&mut tasks, name);
     }
+    // Phase 18: prune the keyed abort-handle map alongside the JoinSet reap,
+    // so finished Implementers' `AbortHandle`s do not accumulate.
+    ctx.prune_finished_abort_handles();
 }
 
 /// Spawn the background pool reaper. Wakes every `POOL_REAP_INTERVAL_SECS`

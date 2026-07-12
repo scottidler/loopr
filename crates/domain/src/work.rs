@@ -72,6 +72,15 @@ use crate::{FsmError, Role, Transition};
         InProgress => InReview by (Reactor),
         InReview   => Ready    by (Reactor),
         InReview   => Blocked  by (Reactor),
+        // Phase 18 (verified-swarm): operator abort of an in-flight Work.
+        // `InProgress -> Blocked` is an authored transition for
+        // (Reactor, Implementer) but NOT the Director role the operator
+        // intervention verbs run under (`plan.override` precedent). Per
+        // the Phase 9 discipline ("the fix is an explicit override table
+        // entry in domain, never a store-level bypass flag"), the abort
+        // edge is added here so `work.override --status blocked` under
+        // `Role::Director` validates at the store chokepoint.
+        InProgress => Blocked  by (Director),
     ),
 )]
 pub enum WorkStatus {

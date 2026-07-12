@@ -40,6 +40,13 @@ pub enum FailureReason {
     /// startup reconcile sweep against a non-terminal carried-forward
     /// worktree.
     CrashInterrupted,
+    /// An operator aborted an in-flight Work via the `work.override`
+    /// intervention verb (`InProgress -> Blocked`). The daemon fires the
+    /// Work's `AbortHandle` (cancelling the task and reaping its
+    /// subprocess tree) and stamps this discriminant so the Blocked row
+    /// is distinguishable from an agent- or crash-driven block. Phase 18
+    /// of `docs/design/2026-07-11-verified-swarm.md`.
+    OperatorAbort,
     /// Anything not covered above; carries the detail inline.
     Other(String),
 }

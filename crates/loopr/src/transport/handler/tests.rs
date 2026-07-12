@@ -1356,3 +1356,148 @@ fn remint_work_batch_remaps_ids_and_dependency_edges() {
         "c's deps -> a's and b's new ids"
     );
 }
+
+// --- work.override (Phase 18 of verified-swarm) ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn work_override_abort_inprogress_fires_handle_and_stamps_operator_abort() {
+    let (_td, ctx) = stub_ctx().await;
+    // Seed a parent Plan + an InProgress Work.
+    let plan = domain::Plan::new("abort-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+    let mut work = domain::Work::new(plan_id.clone(), "in-flight".to_string());
+    work.status = domain::WorkStatus::InProgress;
+    let work_id = work.id.clone();
+    ctx.store.works().create(work).await.unwrap();
+
+    // Register a live "implementer" task under the Work id so the abort
+    // path has a handle to fire (stand-in for a real spawn_implementer).
+    let live = tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    });
+    ctx.implementer_abort_handles
+        .lock()
+        .unwrap()
+        .insert(work_id.clone(), live.abort_handle());
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 80,
+        method: "work.override".into(),
+        params: serde_json::json!({
+            "work_id": work_id.to_string(),
+            "target_status": "blocked",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "abort override must succeed: {:?}", resp.error);
+    let result: ipc::WorkOverrideResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(result.work.status, domain::WorkStatus::Blocked);
+    assert_eq!(result.work.failure_reason, Some(domain::FailureReason::OperatorAbort));
+
+    // Persisted Work carries the operator-abort discriminant.
+    let after = ctx.store.works().get(&work_id).await.unwrap();
+    assert_eq!(after.status, domain::WorkStatus::Blocked);
+    assert_eq!(after.failure_reason, Some(domain::FailureReason::OperatorAbort));
+
+    // The abort handle was consumed (removed) and the live task cancelled.
+    assert!(
+        !ctx.implementer_abort_handles.lock().unwrap().contains_key(&work_id),
+        "abort handle must be removed after firing"
+    );
+    let mut cancelled = false;
+    for _ in 0..200 {
+        if live.is_finished() {
+            cancelled = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(cancelled, "aborted implementer task must be cancelled");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn work_override_blocked_to_ready_redispatches() {
+    let (_td, ctx) = stub_ctx().await;
+    let plan = domain::Plan::new("retry-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+    let mut work = domain::Work::new(plan_id.clone(), "stuck".to_string());
+    work.status = domain::WorkStatus::Blocked;
+    let work_id = work.id.clone();
+    ctx.store.works().create(work).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 81,
+        method: "work.override".into(),
+        params: serde_json::json!({
+            "work_id": work_id.to_string(),
+            "target_status": "ready",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "retry override must succeed: {:?}", resp.error);
+    let result: ipc::WorkOverrideResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(result.work.status, domain::WorkStatus::Ready);
+
+    // Re-dispatch: `spawn_implementer_registered` ran, registering an abort
+    // handle under the Work id (the deterministic, synchronous evidence a
+    // fresh Implementer was dispatched for the now-Ready Work).
+    assert!(
+        ctx.implementer_abort_handles.lock().unwrap().contains_key(&work_id),
+        "Blocked -> Ready override must re-dispatch an Implementer (abort handle registered)"
+    );
+
+    // Quiesce the background implementer (it fails fast against the dead
+    // 127.0.0.1:1 endpoint regardless; this just skips its guarded body).
+    ctx.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn work_override_nonexistent_work_yields_not_found() {
+    let (_td, ctx) = stub_ctx().await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 82,
+        method: "work.override".into(),
+        params: serde_json::json!({ "work_id": "wk-zzzzz", "target_status": "ready" }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(matches!(resp.error, Some(RpcError::NotFound(_))));
+}
+
+// --- plan.override --to abandoned (Phase 18 of verified-swarm) ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_override_active_to_abandoned_reaches_terminal() {
+    let (_td, ctx) = stub_ctx().await;
+    let plan = domain::Plan::new("abandon-target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 83,
+        method: "plan.override".into(),
+        params: serde_json::json!({
+            "plan_id": plan_id.to_string(),
+            "target_status": "abandoned",
+        }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "abandon override must succeed: {:?}", resp.error);
+    let result: ipc::PlanOverrideResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(result.plan.status, domain::PlanStatus::Abandoned);
+    // Abandoned is terminal, which is what makes the Director loop exit on
+    // its next iteration (existing terminal-status stop condition).
+    assert!(
+        result.plan.status.is_terminal(),
+        "Abandoned must be terminal so the Director exits"
+    );
+    let after = ctx.store.plans().get(&plan_id).await.unwrap();
+    assert_eq!(after.status, domain::PlanStatus::Abandoned);
+}

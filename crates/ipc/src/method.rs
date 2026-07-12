@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
 
-use domain::Plan;
+use domain::{Plan, Work};
 
 use crate::envelope::DaemonRequest;
 use crate::error::RpcError;
@@ -33,6 +33,16 @@ pub enum MethodName {
     /// same verb in the future.
     #[strum(serialize = "plan.override")]
     PlanOverride,
+    /// Operator-issued FSM override on a single Work. Phase 18 of
+    /// `docs/design/2026-07-11-verified-swarm.md`. Two practical edges:
+    /// `Blocked -> Ready` (retry a stuck Work; the daemon re-dispatches an
+    /// Implementer) and `InProgress -> Blocked` (abort an in-flight Work;
+    /// the daemon fires the Work's `AbortHandle`, reaping its subprocess
+    /// tree, and stamps `FailureReason::OperatorAbort`). Runs under
+    /// `Role::Director` — the operator/human override role, mirroring
+    /// `plan.override`.
+    #[strum(serialize = "work.override")]
+    WorkOverride,
     /// Read the Director's per-iteration status snapshot for a Plan.
     /// Phase 2 follow-ups (Item 3) of
     /// `docs/design/2026-05-12-director-phase-2-followups.md`. Returns
@@ -71,6 +81,7 @@ pub enum Method {
     RecordGet(RecordGetParams),
     DirectorChat(DirectorChatParams),
     PlanOverride(PlanOverrideParams),
+    WorkOverride(WorkOverrideParams),
     DirectorStatus(DirectorStatusParams),
     BudgetReset,
     EventsSubscribe,
@@ -141,6 +152,30 @@ pub struct PlanOverrideParams {
 #[serde(deny_unknown_fields)]
 pub struct PlanOverrideResult {
     pub plan: Plan,
+}
+
+/// `work.override` request. The operator nominates a target FSM status for
+/// a single Work; the daemon runs the override under `Role::Director`.
+/// Phase 18 of `docs/design/2026-07-11-verified-swarm.md`. The two edges
+/// the daemon acts on specially are `Blocked -> Ready` (re-dispatch) and
+/// `InProgress -> Blocked` (abort + reap).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkOverrideParams {
+    /// Target Work id; the daemon validates existence before the FSM call.
+    pub work_id: String,
+    /// Target Work status, lowercase string matching `WorkStatus`'s
+    /// `Display` impl (e.g. `"ready"`, `"blocked"`).
+    pub target_status: String,
+}
+
+/// `work.override` response: the updated Work record post-transition.
+/// `Work` does not implement `PartialEq`/`Eq`; wire round-trip is asserted
+/// via byte stability in the seam tests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkOverrideResult {
+    pub work: Work,
 }
 
 /// `director.status` request: name the Plan whose Director snapshot
@@ -228,6 +263,11 @@ impl TryFrom<&DaemonRequest> for Method {
                 let params: PlanOverrideParams =
                     serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
                 Ok(Method::PlanOverride(params))
+            }
+            MethodName::WorkOverride => {
+                let params: WorkOverrideParams =
+                    serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+                Ok(Method::WorkOverride(params))
             }
             MethodName::DirectorStatus => {
                 let params: DirectorStatusParams =

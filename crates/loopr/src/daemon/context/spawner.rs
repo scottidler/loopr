@@ -249,9 +249,7 @@ where
                     && work.status == WorkStatus::Ready
                     && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    let task_ctx = Arc::clone(&ctx);
-                    let mut tasks = ctx.implementer_tasks.lock().await;
-                    tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                    ctx.spawn_implementer_registered(work).await;
                 } else if persisted && matches!(work.status, WorkStatus::Abandoned | WorkStatus::Superseded) {
                     // F7: a Director override that terminalizes the Work
                     // (Abandoned/Superseded) at runtime must block its
@@ -315,9 +313,7 @@ where
                     debug!(work_id = %work_id, status = ?work.status, "assign_work: not eligible; skipping");
                     return;
                 }
-                let task_ctx = Arc::clone(&ctx);
-                let mut tasks = ctx.implementer_tasks.lock().await;
-                tasks.spawn(task_ctx.spawn_implementer_for_work(work));
+                ctx.spawn_implementer_registered(work).await;
             });
         });
     }

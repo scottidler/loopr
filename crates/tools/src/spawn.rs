@@ -103,11 +103,32 @@ pub async fn spawn_with_process_group(
         });
     }
 
+    // Cancellation-safe reaping (panel must-fix #5): set `kill_on_drop` so a
+    // dropped `Child` (the future being aborted mid-tool-call, e.g. an
+    // operator `work.override` abort) SIGKILLs the DIRECT child instead of
+    // orphaning it. `kill_on_drop` alone only reaps the direct child; the
+    // process-group reaper below closes the gap for grandchildren the child
+    // forked under its own `setsid()` group. Contrast `integrator/validation.rs`,
+    // which already set this on its own spawn path — the tools path did not,
+    // so a task abort mid-build left the whole subprocess tree running.
+    cmd.kill_on_drop(true);
+
     let start = Instant::now();
     let mut child = cmd.spawn()?;
     let child_pid = child
         .id()
         .ok_or_else(|| std::io::Error::other("spawned child reported no PID"))? as i32;
+
+    // Armed drop-guard: if this future is dropped before it reaches its
+    // normal return (task abort / cancellation), tear down the ENTIRE
+    // process group so no grandchild survives. `kill_on_drop` on `child`
+    // handles the direct child; this handles everything `setsid()` grouped
+    // under it. Declared AFTER `child` so it drops BEFORE `child` (locals
+    // drop in reverse declaration order): the group SIGKILL lands first,
+    // then `child`'s `kill_on_drop` reaps the (already-dead) leader zombie.
+    // Disarmed on the normal completion path once the child has been waited
+    // and the pipes drained.
+    let mut reaper = ProcessGroupReaper::new(child_pid, kill_strategy);
 
     debug!(
         child_pid,
@@ -203,6 +224,11 @@ pub async fn spawn_with_process_group(
         truncate_inline(&mut combined_out_inline, persisted_path.as_deref());
     }
 
+    // Normal completion: the child has exited and its pipes are drained
+    // (or the timeout path already killed the group). Disarm the reaper so
+    // scope exit does not send a redundant SIGKILL to an already-dead group.
+    reaper.disarm();
+
     Ok(SpawnResult {
         stdout: stdout_out,
         stderr: stderr_out,
@@ -213,6 +239,69 @@ pub async fn spawn_with_process_group(
         persisted_output_path: persisted_path,
         truncated: overflow,
     })
+}
+
+/// Drop-guard that reaps the spawned child's entire process group when the
+/// spawn future is dropped before completing (task abort / cancellation).
+///
+/// Why this exists (panel must-fix #5): `kill_on_drop(true)` on the tokio
+/// `Command` only kills the DIRECT child. A tool like `cargo build` or
+/// `bash -c 'sleep 30 & ...'` forks grandchildren that survive the direct
+/// kill. Because the child was `setsid()`'d into its own process group
+/// (pgid == child_pid), `killpg(child_pid, SIGKILL)` reaches every
+/// descendant in one call — the same authoritative move `force_kill_group`
+/// uses on the drain-timeout path. Without this, an aborted `work.override`
+/// would leave an orphaned build running against the worktree.
+struct ProcessGroupReaper {
+    child_pid: i32,
+    strategy: KillStrategy,
+    armed: bool,
+}
+
+impl ProcessGroupReaper {
+    fn new(child_pid: i32, strategy: KillStrategy) -> Self {
+        Self {
+            child_pid,
+            strategy,
+            armed: true,
+        }
+    }
+
+    /// Called on the normal completion path: the child has already exited,
+    /// so no group teardown is needed on scope exit.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProcessGroupReaper {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Only reachable on an abort/cancel (or an early `?` return before
+        // disarm). For `Pgid`, SIGKILL the whole group so grandchildren die
+        // with the leader. For `BwrapChild`, the `Child`'s own
+        // `kill_on_drop` SIGKILLs bwrap's outer PID and its
+        // `--die-with-parent` PID namespace cascades the kill to every
+        // descendant — `killpg` on bwrap's pgid does NOT reliably cross the
+        // namespace boundary, so there is nothing reliable to target here.
+        match self.strategy {
+            KillStrategy::Pgid => {
+                debug!(
+                    child_pid = self.child_pid,
+                    "spawn future dropped; reaping process group"
+                );
+                force_kill_group(self.child_pid, self.strategy);
+            }
+            KillStrategy::BwrapChild => {
+                debug!(
+                    child_pid = self.child_pid,
+                    "spawn future dropped; bwrap kill_on_drop + die-with-parent reaps namespace"
+                );
+            }
+        }
+    }
 }
 
 fn spawn_stdout_reader(

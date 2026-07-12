@@ -769,6 +769,55 @@ fn plan_override_unknown_field_is_rejected() {
     );
 }
 
+// --- work.override (Phase 18 of verified-swarm) ---
+
+#[test]
+fn method_name_work_override_wire_form() {
+    let name: &'static str = crate::method::MethodName::WorkOverride.into();
+    assert_eq!(name, "work.override");
+}
+
+#[test]
+fn method_try_from_work_override() {
+    let req = DaemonRequest {
+        id: 31,
+        method: "work.override".into(),
+        params: json!({ "work_id": "wk-stuck", "target_status": "ready" }),
+    };
+    assert_eq!(
+        Method::try_from(&req).unwrap(),
+        Method::WorkOverride(crate::method::WorkOverrideParams {
+            work_id: "wk-stuck".to_string(),
+            target_status: "ready".to_string(),
+        })
+    );
+}
+
+#[test]
+fn work_override_unknown_field_is_rejected() {
+    let req = DaemonRequest {
+        id: 32,
+        method: "work.override".into(),
+        params: json!({ "work_id": "wk-x", "target_status": "blocked", "extra": "nope" }),
+    };
+    let err = Method::try_from(&req).unwrap_err();
+    assert!(
+        matches!(err, RpcError::InvalidParams(_)),
+        "deny_unknown_fields must reject extras: {err:?}"
+    );
+}
+
+#[test]
+fn work_override_params_round_trip() {
+    let params = crate::method::WorkOverrideParams {
+        work_id: "wk-abc12".to_string(),
+        target_status: "blocked".to_string(),
+    };
+    let bytes = serde_json::to_string(&params).unwrap();
+    let back: crate::method::WorkOverrideParams = serde_json::from_str(&bytes).unwrap();
+    assert_eq!(params, back);
+}
+
 // --- director.status (Phase 2 follow-ups, Item 3) ---
 
 #[test]

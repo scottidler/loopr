@@ -16,7 +16,7 @@ use ipc::{
     DirectorChatParams, DirectorChatResult, DirectorStatusParams, DirectorStatusResult, DirectorStatusSnapshot,
     HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult, PlanOverrideParams,
     PlanOverrideResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
-    RpcError, StatusResult, TickSummary, WorkSummary,
+    RpcError, StatusResult, TickSummary, WorkOverrideParams, WorkOverrideResult, WorkSummary,
 };
 use llm::LlmClient;
 use store::StoreError;
@@ -83,6 +83,7 @@ where
         Method::RecordGet(params) => handle_record_get(req.id, params, ctx).await,
         Method::DirectorChat(params) => handle_director_chat(req.id, params, ctx).await,
         Method::PlanOverride(params) => handle_plan_override(req.id, params, ctx).await,
+        Method::WorkOverride(params) => handle_work_override(req.id, params, ctx).await,
         Method::DirectorStatus(params) => handle_director_status(req.id, params, ctx).await,
         Method::BudgetReset => handle_budget_reset(req.id, ctx),
         // `events.subscribe` is a LONG-LIVED stream intercepted in
@@ -432,12 +433,9 @@ where
                 held = held_count,
                 "plan.create decomposed + persisted"
             );
-            let mut tasks = ctx.implementer_tasks.lock().await;
             for work in unblocked {
-                let task_ctx = Arc::clone(ctx);
-                tasks.spawn(task_ctx.spawn_implementer_for_work(work.clone()));
+                ctx.spawn_implementer_registered(work.clone()).await;
             }
-            drop(tasks);
             spawn_director_for_plan(ctx, plan.id.clone()).await;
         }
         Err(e) => {
@@ -895,6 +893,153 @@ where
     }
 }
 
+/// Handle `work.override`. The operator nominates a target status for a
+/// single Work; the daemon runs `override_status(target, Role::Director)`
+/// at the store chokepoint. Two edges get special daemon action:
+///
+/// - `InProgress -> Blocked` (ABORT): fire the Work's `AbortHandle` so the
+///   in-flight Implementer task is cancelled and its subprocess tree
+///   reaped (kill_on_drop + process-group kill in the tools spawn path),
+///   then stamp `FailureReason::OperatorAbort` on the record. The
+///   post-abort Work goes `Blocked` and the Director is woken for recovery.
+/// - `Blocked -> Ready` (RETRY): re-dispatch an Implementer so the Work
+///   does not sit `Ready` until an unrelated sibling completion triggers
+///   `promote_unblocked_siblings`.
+///
+/// Phase 18 of `docs/design/2026-07-11-verified-swarm.md`.
+#[instrument(
+    name = "ipc.work_override",
+    level = "info",
+    skip_all,
+    fields(request_id = id, work_id = %params.work_id, target_status = %params.target_status),
+)]
+async fn handle_work_override<L>(id: u64, params: WorkOverrideParams, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse
+where
+    L: LlmClient + Send + Sync + 'static,
+{
+    use std::str::FromStr;
+    let work_id = match domain::WorkId::from_str(&params.work_id) {
+        Ok(w) => w,
+        Err(_) => {
+            return DaemonResponse::err(
+                id,
+                RpcError::InvalidParams(format!("work_id parse failed: {}", params.work_id)),
+            );
+        }
+    };
+    let target_status = match parse_work_status(&params.target_status) {
+        Ok(s) => s,
+        Err(e) => {
+            return DaemonResponse::err(id, RpcError::InvalidParams(e));
+        }
+    };
+
+    let mut work = match ctx.store.works().get(&work_id).await {
+        Ok(w) => w,
+        Err(e) => {
+            warn!(request_id = id, work_id = %work_id, error = %e, "work.override: work not found");
+            return DaemonResponse::err(id, map_store_error(e));
+        }
+    };
+    let prior_status = work.status;
+
+    // Abort path: an operator aborting an in-flight Work. Fire the keyed
+    // `AbortHandle` FIRST so the Implementer task is cancelled and its
+    // subprocess tree reaped before we stamp the record — the cancelled
+    // task will not run its own Blocked-transition arm, so the handler owns
+    // the terminalizing write. A missing handle (reconcile-surfaced
+    // InProgress with no live task) is benign: we still override to Blocked.
+    let is_abort = prior_status == domain::WorkStatus::InProgress && target_status == domain::WorkStatus::Blocked;
+    if is_abort {
+        let handle = ctx
+            .implementer_abort_handles
+            .lock()
+            .ok()
+            .and_then(|mut m| m.remove(&work_id));
+        match handle {
+            Some(h) => {
+                h.abort();
+                info!(request_id = id, work_id = %work_id, "work.override: fired implementer AbortHandle");
+            }
+            None => {
+                info!(
+                    request_id = id, work_id = %work_id,
+                    "work.override: no live implementer task; overriding to Blocked without abort"
+                );
+            }
+        }
+        work.failure_reason = Some(domain::FailureReason::OperatorAbort);
+        work.blocked_reason = Some("operator abort via work.override".to_string());
+    }
+
+    if let Err(e) = crate::daemon::context::transition_and_persist_work(
+        &*ctx.summary_fanout,
+        &mut work,
+        target_status,
+        domain::Role::Director,
+        true, // override
+        &ctx.snapshot,
+    )
+    .await
+    {
+        warn!(
+            request_id = id,
+            work_id = %work_id,
+            from = %prior_status,
+            to = %target_status,
+            error = %e,
+            "work.override: FSM/persist failed"
+        );
+        return DaemonResponse::err(id, RpcError::InvalidRequest(format!("work override failed: {e}")));
+    }
+
+    info!(
+        request_id = id,
+        work_id = %work_id,
+        from = %prior_status,
+        to = %target_status,
+        "work.override: persisted"
+    );
+
+    // Retry path: a Blocked -> Ready override re-dispatches the Implementer.
+    if prior_status == domain::WorkStatus::Blocked
+        && target_status == domain::WorkStatus::Ready
+        && !ctx.shutting_down.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        ctx.spawn_implementer_registered(work.clone()).await;
+    }
+
+    // Abort landed the Work at Blocked: wake the Director so recovery runs
+    // now instead of waiting out its idle poll.
+    if is_abort && work.status == domain::WorkStatus::Blocked {
+        ctx.wake_director(&work.parent_id).await;
+    }
+
+    let result = WorkOverrideResult { work };
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize work.override: {e}"))),
+    }
+}
+
+/// Parse a lowercase Work status string into the typed `WorkStatus` enum.
+/// Mirrors the closed set in `domain::WorkStatus`'s `Display` impl.
+fn parse_work_status(s: &str) -> Result<domain::WorkStatus, String> {
+    match s {
+        "draft" => Ok(domain::WorkStatus::Draft),
+        "pending" => Ok(domain::WorkStatus::Pending),
+        "ready" => Ok(domain::WorkStatus::Ready),
+        "inprogress" => Ok(domain::WorkStatus::InProgress),
+        "blocked" => Ok(domain::WorkStatus::Blocked),
+        "inreview" => Ok(domain::WorkStatus::InReview),
+        "integrated" => Ok(domain::WorkStatus::Integrated),
+        "done" => Ok(domain::WorkStatus::Done),
+        "superseded" => Ok(domain::WorkStatus::Superseded),
+        "abandoned" => Ok(domain::WorkStatus::Abandoned),
+        other => Err(format!("unknown work status: {other}")),
+    }
+}
+
 /// Handle `director.status`: look up the Plan, then read the per-Plan
 /// snapshot the Director task wrote at the end of its last iteration.
 /// `snapshot: None` is the "no live Director" wire form (Plan is
@@ -974,6 +1119,10 @@ fn parse_plan_status(s: &str) -> Result<domain::PlanStatus, String> {
         "active" => Ok(domain::PlanStatus::Active),
         "complete" => Ok(domain::PlanStatus::Complete),
         "stalled" => Ok(domain::PlanStatus::Stalled),
+        // Phase 18: kill a Plan outright (terminal; the Director exits).
+        // Reachable FSM edges: `Active -> Abandoned` (Reactor, Director)
+        // and `Stalled -> Abandoned` (Director override).
+        "abandoned" => Ok(domain::PlanStatus::Abandoned),
         other => Err(format!("unknown plan status: {other}")),
     }
 }

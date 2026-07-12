@@ -8,6 +8,7 @@ fn unit_variants_round_trip_kebab_case() {
         (FailureReason::AcUnmet, "\"ac-unmet\""),
         (FailureReason::Panic, "\"panic\""),
         (FailureReason::CrashInterrupted, "\"crash-interrupted\""),
+        (FailureReason::OperatorAbort, "\"operator-abort\""),
     ] {
         let json = serde_json::to_string(&reason).unwrap();
         assert_eq!(json, tag);

@@ -115,9 +115,12 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                 .map_err(|e| LooprError::DaemonStartup(format!("runtime build: {e}")))?;
             return rt.block_on(daemon::daemon_main(effective, *accept_corruption));
         }
-        Command::Plan { .. } | Command::Director { .. } => {
+        Command::Plan { .. } | Command::Work { .. } | Command::Director { .. } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
+            // `work override` (Phase 18) aborts/retries an in-flight Work,
+            // which only the running daemon can act on, so it ensures a
+            // daemon the same way `plan override` does.
             //
             // `daemon status` is deliberately NOT in this arm: a read-only
             // status query must not auto-fork a daemon (a read becoming a
@@ -220,6 +223,9 @@ fn dispatch(
         Command::Plan { cmd } => match cmd {
             cli::PlanCmd::Create { goal } => plan_create_command(target, goal, output_format),
             cli::PlanCmd::Override { plan_id, to } => plan_override_command(target, plan_id, to, output_format),
+        },
+        Command::Work { cmd } => match cmd {
+            cli::WorkCmd::Override { work_id, status } => work_override_command(target, work_id, status, output_format),
         },
         Command::Plans => commands::list::run(target, output_format, ipc::RecordKind::Plan),
         Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),
@@ -372,6 +378,38 @@ fn plan_override_command(
     let fmt = output::Format::resolve(output_format);
     let rendered =
         output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render plan.override: {e}")))?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `loopr work override <work-id> --status <target>` body. Phase 18 of
+/// `docs/design/2026-07-11-verified-swarm.md`: operator FSM override on a
+/// single Work. `--status ready` retries a Blocked Work; `--status
+/// blocked` aborts an InProgress Work (the daemon cancels its Implementer
+/// task and reaps the subprocess tree). The daemon performs the FSM check
+/// + persist + any re-dispatch/abort side effect; this is a thin IPC
+/// client.
+#[tracing::instrument(
+    name = "client.work_override_command",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), work_id = %work_id, status = status.as_str(), subcommand = "work-override"),
+    err,
+)]
+fn work_override_command(
+    target: &Path,
+    work_id: String,
+    status: cli::WorkOverrideTo,
+    output_format: Option<output::Format>,
+) -> Result<(), LooprError> {
+    let params = ipc::WorkOverrideParams {
+        work_id,
+        target_status: status.as_str().to_string(),
+    };
+    let result: ipc::WorkOverrideResult = transport::ipc_call(target, ipc::MethodName::WorkOverride, &params)?;
+    let fmt = output::Format::resolve(output_format);
+    let rendered =
+        output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render work.override: {e}")))?;
     println!("{rendered}");
     Ok(())
 }

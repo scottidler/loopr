@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, broadcast};
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -274,6 +274,18 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     /// `WorkSpawner` trait's sync `list_running_*_ids` methods do not
     /// need an async bridge.
     pub implementer_work_ids: Arc<StdRwLock<HashMap<WorkId, ()>>>,
+    /// Phase 18 (verified-swarm): keyed cancellation handles for live
+    /// Implementer tasks, indexed by `WorkId`. A `JoinSet` has no
+    /// per-task abort-by-key, so the daemon records each Implementer's
+    /// `AbortHandle` at spawn (`spawn_implementer_registered`, holding
+    /// this lock across the `JoinSet::spawn` + insert). The
+    /// `work.override` handler fires the handle to abort an in-flight
+    /// Work (`InProgress -> Blocked`); the spawn future's drop-path reaper
+    /// then tears down the subprocess tree. Entries are pruned when their
+    /// task finishes (`prune_finished_abort_handles`, called by the pool
+    /// reaper). `std::sync::Mutex`: every access is a short, non-async
+    /// insert/remove/prune, never held across an `.await`.
+    pub implementer_abort_handles: Arc<StdMutex<HashMap<WorkId, AbortHandle>>>,
     /// Phase 2 sidecar map: live Reviewer tasks indexed by `BundleId`.
     pub reviewer_bundle_ids: Arc<StdRwLock<HashMap<BundleId, ()>>>,
     /// Phase 2 sidecar map: live Integrator tasks indexed by `BundleId`.
@@ -406,6 +418,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             work_spawner_tasks: Mutex::new(JoinSet::new()),
             plan_create_tasks: Mutex::new(JoinSet::new()),
             implementer_work_ids: Arc::new(StdRwLock::new(HashMap::new())),
+            implementer_abort_handles: Arc::new(StdMutex::new(HashMap::new())),
             reviewer_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             integrator_bundle_ids: Arc::new(StdRwLock::new(HashMap::new())),
             operator_notifies: Arc::new(RwLock::new(HashMap::new())),
@@ -496,6 +509,48 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
     /// Stage 7's implementer design doc consumes this helper; Phase 4 wires
     /// it up so the `tools` crate has a live caller even before the agent
     /// loop lands.
+    /// Spawn an Implementer task into `implementer_tasks` AND register its
+    /// `AbortHandle` under the Work's id, so the `work.override` operator
+    /// verb can abort that specific in-flight Work (`InProgress ->
+    /// Blocked`). Phase 18 of `docs/design/2026-07-11-verified-swarm.md`.
+    ///
+    /// The JoinSet lock is held across the `spawn` + the abort-map insert
+    /// so the handle is registered before the task can finish and try to
+    /// prune itself — the pool reaper's `prune_finished_abort_handles`
+    /// removes finished entries, so a task that completes before an
+    /// operator aborts leaves at most one stale (harmless, no-op-on-fire)
+    /// handle until the next reap. Every `implementer_tasks.spawn` site
+    /// routes through here so no dispatch escapes keyed cancellation.
+    pub async fn spawn_implementer_registered(self: &Arc<Self>, work: Work) {
+        let wid = work.id.clone();
+        let mut tasks = self.implementer_tasks.lock().await;
+        let handle = tasks.spawn(Arc::clone(self).spawn_implementer_for_work(work));
+        match self.implementer_abort_handles.lock() {
+            Ok(mut m) => {
+                m.insert(wid, handle);
+            }
+            Err(_) => {
+                warn!(work_id = %wid, "implementer_abort_handles poisoned; abort handle not registered");
+            }
+        }
+    }
+
+    /// Drop `AbortHandle` entries whose Implementer task has finished, so
+    /// the keyed-cancellation map does not grow unbounded across a long
+    /// run. Called by the background pool reaper (`reap_all_pools`) on the
+    /// same cadence it reaps finished JoinSet tasks. `is_finished()` is the
+    /// race-free liveness signal: a just-inserted handle for a task that
+    /// already completed reads finished and is pruned next sweep, so the
+    /// insert-then-finish ordering never leaks. Firing a finished handle is
+    /// a harmless no-op, so a between-sweeps stale entry costs nothing but
+    /// a map slot.
+    pub fn prune_finished_abort_handles(&self) {
+        match self.implementer_abort_handles.lock() {
+            Ok(mut m) => m.retain(|_, handle| !handle.is_finished()),
+            Err(_) => warn!("implementer_abort_handles poisoned; skipping prune"),
+        }
+    }
+
     /// Drive one Work through the Implementer loop inside its own
     /// worktree, persisting the resulting Bundle (happy path) or
     /// transitioning the Work record to `Blocked` (error path).
@@ -1329,8 +1384,7 @@ pub(crate) fn promote_unblocked_siblings<L: LlmClient + Send + Sync + 'static>(
             }
             let promoted = pending_ready.len();
             for work in pending_ready {
-                let mut tasks = ctx.implementer_tasks.lock().await;
-                tasks.spawn(Arc::clone(&ctx).spawn_implementer_for_work(work));
+                ctx.spawn_implementer_registered(work).await;
             }
             info!(promoted, "promote_unblocked_siblings: done");
         }

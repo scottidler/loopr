@@ -200,3 +200,66 @@ fn truncate_inline_multibyte_overflow_does_not_panic() {
     // The truncated prefix must remain valid UTF-8 (no broken codepoint).
     assert!(std::str::from_utf8(s.as_bytes()).is_ok());
 }
+
+/// `kill(pid, 0)`: `0` => the process (or a zombie) still exists; `-1` with
+/// `ESRCH` => it is gone. Used to assert the reaped subprocess tree is dead.
+fn pid_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_reaps_subprocess_tree_no_surviving_pid() {
+    // Panel must-fix #5: aborting a spawn future mid-tool-call must reap the
+    // ENTIRE subprocess tree, not just the direct child. Break-to-prove:
+    // without `kill_on_drop(true)` + the process-group reaper, the dropped
+    // tokio `Child` is merely detached and the grandchild `sleep` survives
+    // the abort, leaving its pid alive here.
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("child.pid");
+    let pidfile_str = pidfile.display().to_string();
+
+    // `sleep 300 &` is a GRANDCHILD (child of the spawned sh), living in the
+    // sh's `setsid()` process group; its pid is recorded to the pidfile. The
+    // foreground `wait` parks the spawn future on `child.wait().await` so the
+    // abort lands mid-flight, exercising the drop-path reaper.
+    let script = format!("sleep 300 & echo $! > '{pidfile_str}'; wait");
+    let cmd = sh_command(&script, dir.path());
+
+    let handle = tokio::spawn(async move {
+        let _ = spawn_with_process_group(cmd, 60, KillStrategy::Pgid, PersistConfig::default()).await;
+    });
+
+    // Wait for the grandchild to record its pid (bounded so a hang fails fast).
+    let mut pid = None;
+    for _ in 0..200 {
+        if let Ok(s) = std::fs::read_to_string(&pidfile)
+            && let Ok(p) = s.trim().parse::<i32>()
+        {
+            pid = Some(p);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pid = pid.expect("grandchild never recorded its pid");
+    assert!(pid_alive(pid), "grandchild should be alive before abort");
+
+    // Abort the task while it is parked on `child.wait()`; the reaper must
+    // SIGKILL the whole process group (leader sh + grandchild sleep).
+    handle.abort();
+    let _ = handle.await;
+
+    // Poll for the pid to vanish (SIGKILL delivery + init reaping the orphan).
+    let mut gone = false;
+    for _ in 0..250 {
+        if !pid_alive(pid) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        gone,
+        "subprocess tree survived abort: grandchild pid {pid} still alive \
+         (kill_on_drop + process-group reap failed)"
+    );
+}

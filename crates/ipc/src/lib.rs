@@ -45,6 +45,7 @@ pub use method::{
     BudgetResetResult, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DirectorChatParams, DirectorChatResult, DirectorStatusParams,
     DirectorStatusResult, DirectorStatusSnapshot, HandshakeParams, HandshakeResult, Method, MethodName,
     PlanCreateParams, PlanCreateResult, PlanOverrideParams, PlanOverrideResult, PlanRollup, StatusResult,
+    WorkOverrideParams, WorkOverrideResult,
 };
 pub use records::{
     BundleSummary, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,

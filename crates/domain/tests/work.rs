@@ -596,6 +596,32 @@ fn override_inreview_ready_by_reactor() {
     assert_eq!(w.status, WorkStatus::Ready);
 }
 
+#[test]
+fn override_inprogress_blocked_by_director_is_operator_abort_edge() {
+    // Phase 18: operator abort. `InProgress -> Blocked` is an authored
+    // transition for (Reactor, Implementer) but NOT Director, so the
+    // operator's Director-role abort must land on the new override edge.
+    let mut w = work_in(WorkStatus::InProgress);
+    let result = w.override_status(WorkStatus::Blocked, Role::Director).unwrap();
+    assert_eq!(result, Transition::Override);
+    assert_eq!(w.status, WorkStatus::Blocked);
+}
+
+#[test]
+fn override_inprogress_blocked_wrong_role_rejects() {
+    // Break-to-prove the guard: the abort edge is Director-only. A
+    // Reviewer trying the same override has neither an authored
+    // transition nor an override entry, so it must be rejected.
+    let mut w = work_in(WorkStatus::InProgress);
+    let err = w.override_status(WorkStatus::Blocked, Role::Reviewer).unwrap_err();
+    assert!(
+        err.kind == FsmErrorKind::NoTransition || err.kind == FsmErrorKind::RoleNotAuthorized,
+        "unexpected kind: {:?}",
+        err.kind
+    );
+    assert_eq!(w.status, WorkStatus::InProgress);
+}
+
 // ---------------------------------------------------------------------------
 // Unchanged + is_terminal
 // ---------------------------------------------------------------------------

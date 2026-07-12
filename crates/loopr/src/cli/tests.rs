@@ -67,6 +67,43 @@ fn test_cli_parses_plan_override_to_rejects_unknown_status() {
 }
 
 #[test]
+fn test_cli_parses_plan_override_to_abandoned() {
+    // Phase 18: `--to abandoned` (kill a Plan outright) must now parse.
+    let cli = Cli::parse_from(["loopr", "plan", "override", "pl-abc12", "--to", "Abandoned"]);
+    match cli.command.unwrap() {
+        Command::Plan {
+            cmd: crate::cli::PlanCmd::Override { to, .. },
+        } => assert_eq!(to, PlanOverrideTo::Abandoned),
+        _ => panic!("expected Plan::Override"),
+    }
+}
+
+#[test]
+fn test_cli_parses_work_override() {
+    let cli = Cli::parse_from(["loopr", "work", "override", "wk-abc12", "--status", "Blocked"]);
+    match cli.command.unwrap() {
+        Command::Work {
+            cmd: crate::cli::WorkCmd::Override { work_id, status },
+        } => {
+            assert_eq!(work_id, "wk-abc12");
+            assert_eq!(status, WorkOverrideTo::Blocked);
+        }
+        _ => panic!("expected Work::Override"),
+    }
+}
+
+#[test]
+fn test_cli_parses_work_override_status_rejects_unknown() {
+    // Only the two operator edges (ready|blocked) are valid; a pipeline-
+    // internal status like `inreview` must be rejected at parse time.
+    let res = Cli::try_parse_from(["loopr", "work", "override", "wk-abc12", "--status", "inreview"]);
+    assert!(
+        res.is_err(),
+        "non-operator --status value must be rejected at parse time"
+    );
+}
+
+#[test]
 fn test_cli_parses_output_uppercase_is_case_insensitive() {
     use crate::output::Format;
     let cli = Cli::parse_from(["loopr", "--output", "JSON", "plans"]);

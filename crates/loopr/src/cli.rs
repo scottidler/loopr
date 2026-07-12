@@ -78,6 +78,16 @@ pub enum Command {
         cmd: PlanCmd,
     },
 
+    /// Work lifecycle (override). Phase 18 of
+    /// `docs/design/2026-07-11-verified-swarm.md` introduced
+    /// `override` for operator intervention on a single Work: retry a
+    /// stuck Work (`--status ready`) or abort an in-flight one
+    /// (`--status blocked`).
+    Work {
+        #[command(subcommand)]
+        cmd: WorkCmd,
+    },
+
     /// List all Plans in the target's taskstore.
     Plans,
 
@@ -155,6 +165,9 @@ impl Command {
                 PlanCmd::Create { .. } => "plan-create",
                 PlanCmd::Override { .. } => "plan-override",
             },
+            Command::Work { cmd } => match cmd {
+                WorkCmd::Override { .. } => "work-override",
+            },
             Command::Plans => "plans",
             Command::Works => "works",
             Command::Bundles => "bundles",
@@ -214,10 +227,11 @@ pub enum PlanCmd {
 /// Operator-permitted Plan override targets. Mirrors the closed set the
 /// daemon's `parse_plan_status` accepts; a `ValueEnum` (not a bare
 /// `String`) so clap rejects typos at parse time and `--to` is
-/// case-insensitive. `Abandoned`/`Superseded` are reachable as FSM edges
-/// but the daemon's override RPC does not parse them today, so they are
-/// intentionally absent here (their addition is a daemon-surface change,
-/// not a Phase 8 CLI concern).
+/// case-insensitive. `Abandoned` was added in Phase 18 of
+/// `docs/design/2026-07-11-verified-swarm.md` (kill a Plan outright,
+/// terminal; the Director exits). `Superseded` stays absent (no operator
+/// use case: supersession is a Director/Reactor decision, not a manual
+/// intervention).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "lower")]
 pub enum PlanOverrideTo {
@@ -225,6 +239,7 @@ pub enum PlanOverrideTo {
     Active,
     Complete,
     Stalled,
+    Abandoned,
 }
 
 impl PlanOverrideTo {
@@ -236,6 +251,51 @@ impl PlanOverrideTo {
             PlanOverrideTo::Active => "active",
             PlanOverrideTo::Complete => "complete",
             PlanOverrideTo::Stalled => "stalled",
+            PlanOverrideTo::Abandoned => "abandoned",
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorkCmd {
+    /// Operator FSM override on a single Work. Phase 18 of
+    /// `docs/design/2026-07-11-verified-swarm.md`. Two practical uses:
+    /// `--status ready` retries a stuck (Blocked) Work by re-dispatching
+    /// an Implementer, and `--status blocked` aborts an in-flight
+    /// (InProgress) Work -- the daemon cancels its Implementer task,
+    /// reaps the subprocess tree, and records the block as an operator
+    /// abort.
+    Override {
+        /// Target Work id, e.g. `wk-abc12`.
+        work_id: String,
+        /// Target status. Case-insensitive, so `--status Blocked` (what
+        /// `show` displays) and `--status blocked` both parse.
+        #[arg(long = "status", ignore_case = true)]
+        status: WorkOverrideTo,
+    },
+}
+
+/// Operator-permitted Work override targets. Mirrors the closed set the
+/// daemon's `parse_work_status` accepts for operator intervention; a
+/// `ValueEnum` so clap rejects typos at parse time and `--status` is
+/// case-insensitive. Only the two intervention edges are exposed: `Ready`
+/// (retry a Blocked Work) and `Blocked` (abort an InProgress Work). Other
+/// `WorkStatus` values are pipeline-internal and not operator-driven.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum WorkOverrideTo {
+    Ready,
+    Blocked,
+}
+
+impl WorkOverrideTo {
+    /// Canonical lowercase status string sent to the daemon's
+    /// `work.override` RPC (`WorkOverrideParams::target_status`), matching
+    /// `WorkStatus`'s `Display` impl.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkOverrideTo::Ready => "ready",
+            WorkOverrideTo::Blocked => "blocked",
         }
     }
 }
