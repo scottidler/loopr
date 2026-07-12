@@ -526,11 +526,55 @@ async fn handle_record_get<L: LlmClient + Send + Sync + 'static>(
             );
         }
     };
-    match serde_json::to_value(&result) {
-        Ok(v) => DaemonResponse::ok(id, v),
-        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize record.get: {e}"))),
+    let value = match serde_json::to_value(&result) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(id, RpcError::Internal(format!("serialize record.get: {e}"))),
+    };
+    // Length-check BEFORE send: `record.get` returns one full record
+    // (unlike `record.list`, which already projects into byte-bounded
+    // summaries — see that handler's doc comment), so an outsized field
+    // on a single record can produce a line over `ipc::MAX_LINE_BYTES`.
+    // Left unchecked, the encode-time `LinesCodec` rejection surfaces at
+    // `transport/server.rs`'s response-send site as a generic "response
+    // send failed" and drops the connection; checking here instead
+    // returns a typed, recoverable `RpcError` and the connection
+    // survives to serve the client's next request.
+    let encoded_len = match serde_json::to_string(&value) {
+        Ok(s) => s.len(),
+        Err(e) => return DaemonResponse::err(id, RpcError::Internal(format!("serialize record.get: {e}"))),
+    };
+    if encoded_len > RECORD_GET_MAX_RESULT_BYTES {
+        warn!(
+            request_id = id,
+            record_id = %params.id,
+            encoded_len,
+            limit = RECORD_GET_MAX_RESULT_BYTES,
+            "record.get result exceeds frame size budget"
+        );
+        return DaemonResponse::err(
+            id,
+            RpcError::PayloadTooLarge(format!(
+                "record {} serializes to {encoded_len} bytes, over the {RECORD_GET_MAX_RESULT_BYTES}-byte \
+                 record.get budget (frame cap {} bytes)",
+                params.id,
+                ipc::MAX_LINE_BYTES
+            )),
+        );
     }
+    DaemonResponse::ok(id, value)
 }
+
+/// Safety margin `record.get` reserves below `ipc::MAX_LINE_BYTES` for the
+/// `DaemonResponse` envelope (`{"id":...,"result":...}` wrapping) around
+/// the record payload, so a record that just barely fits on its own still
+/// fits once framed. `record.list` does not need an equivalent const: it
+/// already projects into summaries kept well under the cap by construction
+/// (see `handle_record_list`'s doc comment).
+const RECORD_GET_ENVELOPE_MARGIN_BYTES: usize = 4096;
+
+/// Byte ceiling on a single `record.get` result payload (the serialized
+/// `RecordResult`, before the `DaemonResponse` envelope is added).
+const RECORD_GET_MAX_RESULT_BYTES: usize = ipc::MAX_LINE_BYTES - RECORD_GET_ENVELOPE_MARGIN_BYTES;
 
 /// Handle `director.chat`: persist an operator message as an
 /// `OperatorNote` routed to the named Plan's Director task. Phase 8
@@ -871,6 +915,9 @@ fn map_store_error(err: StoreError) -> RpcError {
         StoreError::Closed => RpcError::Internal("store closed (shutting down)".to_string()),
         StoreError::VersionMismatch { found, expected } => {
             RpcError::Internal(format!("store version mismatch: on-disk={found}, expected={expected}"))
+        }
+        StoreError::UnparseableVersion { raw } => {
+            RpcError::Internal(format!("store .version file is not a valid version number: {raw:?}"))
         }
         StoreError::Serde(msg) => RpcError::Internal(format!("store serde: {msg}")),
         StoreError::Stale { expected, actual } => {

@@ -75,6 +75,9 @@ pub enum IntegrationError {
     #[error("fsm transition rejected: {0}")]
     Transition(String),
 
+    #[error("tick construction failed: {0}")]
+    TickConstruction(#[from] domain::TickError),
+
     #[error("validation command failed: `{command}` exited {exit_code:?}\n{log}")]
     ValidationFailed {
         command: String,

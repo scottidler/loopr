@@ -39,6 +39,34 @@ pub struct Tick {
     pub merge_commits: Vec<String>,
 }
 
+/// Construction error for `Tick::new`.
+///
+/// Hand-rolled `Display` + `std::error::Error` to match `domain`'s
+/// existing `FsmError`/`GraphError` style (`crate::fsm`, `crate::graph`);
+/// `domain` has no `thiserror` dependency and this type does not add one.
+#[derive(Debug)]
+pub enum TickError {
+    /// The 1:1 index relationship between `bundles` and `merge_commits`
+    /// (`bundles[i]` was merged at `merge_commits[i]`) does not hold.
+    /// Previously a `debug_assert_eq!` (a release-build no-op panic
+    /// trap); promoted to a typed, always-checked error so a wiring bug
+    /// surfaces as a handleable `Result`, not a debug-only panic.
+    LengthMismatch { bundles: usize, merge_commits: usize },
+}
+
+impl std::fmt::Display for TickError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TickError::LengthMismatch { bundles, merge_commits } => write!(
+                f,
+                "Tick::new: bundles/merge_commits length mismatch ({bundles} != {merge_commits})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TickError {}
+
 impl Tick {
     /// New Tick: fresh TickId, created_at = updated_at = now.
     ///
@@ -46,28 +74,29 @@ impl Tick {
     /// commit path with the merge outcomes produced by Phase 2. The
     /// Integrator is responsible for ensuring `bundles.len() ==
     /// merge_commits.len()` and that the 1:1 index order is
-    /// preserved.
+    /// preserved; this constructor enforces it as a typed `Result`
+    /// rather than trusting the caller.
     pub fn new(
         plan_id: PlanId,
         bundles: Vec<BundleId>,
         branch: String,
         sha: String,
         merge_commits: Vec<String>,
-    ) -> Self {
+    ) -> Result<Self, TickError> {
         // The 1:1 index relationship between `bundles` and
         // `merge_commits` is the Integrator's documented contract
-        // (`bundles[i]` was merged at `merge_commits[i]`). Assert it in
-        // debug builds so a wiring bug surfaces at construction rather
-        // than as a silent off-by-one in audit queries.
-        debug_assert_eq!(
-            bundles.len(),
-            merge_commits.len(),
-            "Tick::new: bundles/merge_commits length mismatch ({} != {})",
-            bundles.len(),
-            merge_commits.len(),
-        );
+        // (`bundles[i]` was merged at `merge_commits[i]`). Checked in
+        // every build (not just debug) so a wiring bug surfaces as a
+        // typed error at construction rather than a silent off-by-one
+        // in audit queries or a debug-only panic.
+        if bundles.len() != merge_commits.len() {
+            return Err(TickError::LengthMismatch {
+                bundles: bundles.len(),
+                merge_commits: merge_commits.len(),
+            });
+        }
         let now = now_millis();
-        Self {
+        Ok(Self {
             id: TickId::new(),
             plan_id,
             updated_at: now,
@@ -76,6 +105,6 @@ impl Tick {
             sha,
             bundles,
             merge_commits,
-        }
+        })
     }
 }

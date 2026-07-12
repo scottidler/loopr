@@ -31,6 +31,8 @@ pub enum RpcError {
     PreconditionFailed(String),
     #[error("protocol version mismatch: {0}")]
     ProtocolVersionMismatch(String),
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(String),
 
     // Forward-compat: codes the current enum doesn't recognize
     #[error("rpc error {code}: {message}")]
@@ -51,6 +53,7 @@ impl RpcError {
     pub const CODE_POOL_EXHAUSTED: i32 = -32004;
     pub const CODE_PRECONDITION_FAILED: i32 = -32005;
     pub const CODE_PROTOCOL_VERSION_MISMATCH: i32 = -32006;
+    pub const CODE_PAYLOAD_TOO_LARGE: i32 = -32007;
 
     pub fn code(&self) -> i32 {
         match self {
@@ -66,6 +69,7 @@ impl RpcError {
             RpcError::PoolExhausted(_) => Self::CODE_POOL_EXHAUSTED,
             RpcError::PreconditionFailed(_) => Self::CODE_PRECONDITION_FAILED,
             RpcError::ProtocolVersionMismatch(_) => Self::CODE_PROTOCOL_VERSION_MISMATCH,
+            RpcError::PayloadTooLarge(_) => Self::CODE_PAYLOAD_TOO_LARGE,
             RpcError::Unknown { code, .. } => *code,
         }
     }
@@ -83,7 +87,8 @@ impl RpcError {
             | RpcError::ValidationRequired(m)
             | RpcError::PoolExhausted(m)
             | RpcError::PreconditionFailed(m)
-            | RpcError::ProtocolVersionMismatch(m) => m.clone(),
+            | RpcError::ProtocolVersionMismatch(m)
+            | RpcError::PayloadTooLarge(m) => m.clone(),
             RpcError::Unknown { message, .. } => message.clone(),
         }
     }
@@ -123,6 +128,7 @@ impl From<RpcErrorWire> for RpcError {
             RpcError::CODE_POOL_EXHAUSTED => RpcError::PoolExhausted(w.message),
             RpcError::CODE_PRECONDITION_FAILED => RpcError::PreconditionFailed(w.message),
             RpcError::CODE_PROTOCOL_VERSION_MISMATCH => RpcError::ProtocolVersionMismatch(w.message),
+            RpcError::CODE_PAYLOAD_TOO_LARGE => RpcError::PayloadTooLarge(w.message),
             other => RpcError::Unknown {
                 code: other,
                 message: w.message,

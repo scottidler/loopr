@@ -4,7 +4,7 @@
 //! external consumer. `Tick` has no FSM, so coverage is constructor,
 //! serde posture, and `Record` trait impl.
 
-use domain::{BundleId, PlanId, Tick};
+use domain::{BundleId, PlanId, Tick, TickError};
 use taskstore_traits::{IndexValue, Record};
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,8 @@ fn tick_new_preserves_plan_id() {
         "loopr/plan-xxx".to_string(),
         "abc123".to_string(),
         vec!["def456".to_string()],
-    );
+    )
+    .unwrap();
     assert_eq!(tick.plan_id, pid);
 }
 
@@ -33,7 +34,8 @@ fn tick_new_preserves_branch_and_sha_and_bundles() {
         "loopr/plan-abc".to_string(),
         "deadbeef".to_string(),
         vec!["cafebabe".to_string()],
-    );
+    )
+    .unwrap();
     assert_eq!(tick.branch, "loopr/plan-abc");
     assert_eq!(tick.sha, "deadbeef");
     assert_eq!(tick.bundles, vec![bid]);
@@ -42,7 +44,7 @@ fn tick_new_preserves_branch_and_sha_and_bundles() {
 
 #[test]
 fn tick_new_id_has_tk_prefix() {
-    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]);
+    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]).unwrap();
     assert!(
         tick.id.as_ref().starts_with("tk-"),
         "TickId must be tk-prefixed: {}",
@@ -52,14 +54,14 @@ fn tick_new_id_has_tk_prefix() {
 
 #[test]
 fn tick_new_created_at_equals_updated_at() {
-    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]);
+    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]).unwrap();
     assert_eq!(tick.created_at, tick.updated_at);
 }
 
 #[test]
 fn tick_new_distinct_calls_produce_distinct_ids() {
-    let a = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]);
-    let b = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]);
+    let a = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]).unwrap();
+    let b = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]).unwrap();
     assert_ne!(a.id, b.id);
 }
 
@@ -74,7 +76,8 @@ fn tick_new_allows_empty_bundles_and_commits() {
         "loopr/plan-x".to_string(),
         "sha".to_string(),
         vec![],
-    );
+    )
+    .unwrap();
     assert!(tick.bundles.is_empty());
     assert!(tick.merge_commits.is_empty());
 }
@@ -92,24 +95,34 @@ fn tick_new_supports_multiple_bundles_and_commits() {
         "loopr/plan-x".to_string(),
         "sha3".to_string(),
         vec!["sha1".to_string(), "sha2".to_string()],
-    );
+    )
+    .unwrap();
     assert_eq!(tick.bundles, vec![b1, b2]);
     assert_eq!(tick.merge_commits.len(), 2);
 }
 
 #[test]
-#[should_panic(expected = "bundles/merge_commits length mismatch")]
-fn tick_new_debug_asserts_length_parity() {
-    // Phase 3 F12: the 1:1 bundles<->merge_commits contract is checked
-    // by a debug_assert_eq in Tick::new. Tests run in debug, so a
-    // mismatched-length construction must panic.
-    let _ = Tick::new(
+fn tick_new_rejects_length_mismatch() {
+    // Phase 6 F6 (2026-07-11-verified-swarm): the 1:1 bundles<->merge_commits
+    // contract used to be a `debug_assert_eq!` — a release-build no-op that
+    // silently constructed a corrupt Tick outside debug builds. It is now a
+    // typed `Result`, checked unconditionally. This test inverts the prior
+    // `tick_new_debug_asserts_length_parity` (`#[should_panic]`) pin: a
+    // mismatched-length construction must return `Err`, not panic.
+    let err = Tick::new(
         PlanId::new(),
         vec![BundleId::new(), BundleId::new()],
         "loopr/plan-x".to_string(),
         "sha".to_string(),
         vec!["only-one-commit".to_string()],
-    );
+    )
+    .unwrap_err();
+    match err {
+        TickError::LengthMismatch { bundles, merge_commits } => {
+            assert_eq!(bundles, 2);
+            assert_eq!(merge_commits, 1);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +137,8 @@ fn tick_serde_roundtrip_json() {
         "loopr/plan-abc".to_string(),
         "deadbeef".to_string(),
         vec!["cafebabe".to_string()],
-    );
+    )
+    .unwrap();
     let json = serde_json::to_string(&tick).unwrap();
     let back: Tick = serde_json::from_str(&json).unwrap();
     assert_eq!(tick.id, back.id);
@@ -160,13 +174,13 @@ fn tick_serde_rejects_unknown_fields() {
 
 #[test]
 fn tick_record_id_matches_as_ref() {
-    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]);
+    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]).unwrap();
     assert_eq!(<Tick as Record>::id(&tick), tick.id.as_ref());
 }
 
 #[test]
 fn tick_record_updated_at_matches_field() {
-    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]);
+    let tick = Tick::new(PlanId::new(), vec![], String::new(), String::new(), vec![]).unwrap();
     assert_eq!(<Tick as Record>::updated_at(&tick), tick.updated_at);
 }
 
@@ -178,7 +192,7 @@ fn tick_record_collection_name() {
 #[test]
 fn tick_record_indexed_fields_one_entry() {
     let pid = PlanId::new();
-    let tick = Tick::new(pid.clone(), vec![], String::new(), String::new(), vec![]);
+    let tick = Tick::new(pid.clone(), vec![], String::new(), String::new(), vec![]).unwrap();
     let fields = tick.indexed_fields();
     assert_eq!(fields.len(), 1, "exactly one indexed field expected (plan_id)");
     assert_eq!(

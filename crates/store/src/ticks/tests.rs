@@ -30,6 +30,7 @@ fn fresh_tick(plan_id: PlanId, bundles: Vec<BundleId>) -> Tick {
         "abc123".to_string(),
         merge_commits,
     )
+    .expect("fresh_tick: bundles/merge_commits are constructed 1:1")
 }
 
 #[tokio::test]

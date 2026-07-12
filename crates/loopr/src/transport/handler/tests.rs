@@ -902,6 +902,55 @@ async fn record_get_nonexistent_id_yields_not_found() {
     }
 }
 
+/// Phase 6 F6 (2026-07-11-verified-swarm): a `record.get` result that
+/// serializes over the frame budget must be caught BEFORE the response
+/// is handed to the wire codec, and surfaced as a typed
+/// `RpcError::PayloadTooLarge` rather than a dropped connection. This
+/// exercises `handle_record_get`'s length check directly; the
+/// server-level round-trip proving the underlying connection survives
+/// lives in `transport::server::tests::record_get_oversized_result_yields_typed_error_connection_survives`.
+#[tokio::test]
+async fn record_get_oversized_result_yields_payload_too_large() {
+    let (_td, ctx) = stub_ctx().await;
+    // `RECORD_GET_MAX_RESULT_BYTES` is `ipc::MAX_LINE_BYTES` minus a small
+    // envelope margin; a goal string well past that guarantees the
+    // serialized `RecordResult::Plan` alone exceeds the budget.
+    let huge_goal = "x".repeat(ipc::MAX_LINE_BYTES);
+    let plan = domain::Plan::new(huge_goal);
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 90,
+        method: "record.get".into(),
+        params: serde_json::json!({ "id": plan_id.to_string() }),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert_eq!(resp.id, 90);
+    match resp.error {
+        Some(RpcError::PayloadTooLarge(msg)) => {
+            assert!(msg.contains(plan_id.as_ref()), "expected record id in error: {msg}");
+        }
+        other => panic!("expected PayloadTooLarge, got {other:?}"),
+    }
+
+    // The connection-survives contract at the handler layer: dispatching
+    // again on the same context/handshake state (what one live connection
+    // does across requests) must still work normally.
+    let follow_up = DaemonRequest {
+        id: 91,
+        method: "system.status".into(),
+        params: serde_json::Value::Null,
+    };
+    let resp = dispatch(&follow_up, &mut state, &ctx).await;
+    assert_eq!(resp.id, 91);
+    assert!(
+        resp.error.is_none(),
+        "dispatch must keep working after PayloadTooLarge: {resp:?}"
+    );
+}
+
 #[test]
 fn map_store_error_maps_each_variant() {
     use store::StoreError;
@@ -930,6 +979,10 @@ fn map_store_error_maps_each_variant() {
     ));
     assert!(matches!(
         super::map_store_error(StoreError::VersionMismatch { found: 2, expected: 1 }),
+        RpcError::Internal(_)
+    ));
+    assert!(matches!(
+        super::map_store_error(StoreError::UnparseableVersion { raw: "nope".into() }),
         RpcError::Internal(_)
     ));
     assert!(matches!(

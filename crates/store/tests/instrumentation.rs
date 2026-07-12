@@ -125,7 +125,8 @@ async fn store_smoke_spans_each_collection() {
         "integration".to_string(),
         "abc1234".to_string(),
         vec!["abc1234".to_string()],
-    );
+    )
+    .unwrap();
     store.ticks().create(tick.clone()).await.unwrap();
     let _ = store.ticks().get(&tick.id).await.unwrap();
     let _ = store.ticks().list_by_plan_id(&plan.id).await.unwrap();

@@ -294,6 +294,75 @@ async fn oversize_line_closes_connection_daemon_stays_up() {
     timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
 
+// Phase 6 F6 (2026-07-11-verified-swarm): an oversized `record.get` result
+// (over `handler::RECORD_GET_MAX_RESULT_BYTES`) must be caught before the
+// response line is handed to `LinesCodec`, and surfaced as a typed
+// `RpcError::PayloadTooLarge` on the SAME connection — unlike the oversize
+// *inbound* line above (`oversize_line_closes_connection_daemon_stays_up`,
+// which the daemon can only detect at the codec layer and must disconnect),
+// an oversized *outbound* result is caught in the handler with the record id
+// still known, so the connection does not need to be dropped at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn record_get_oversized_result_yields_typed_error_connection_survives() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
+
+    // Seed a Plan whose `goal` alone guarantees the serialized
+    // `RecordResult::Plan` blows the `record.get` byte budget.
+    let huge_goal = "x".repeat(ipc::MAX_LINE_BYTES);
+    let plan = domain::Plan::new(huge_goal);
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan).await.unwrap();
+
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+
+    let get_req = DaemonRequest {
+        id: 2,
+        method: "record.get".into(),
+        params: serde_json::json!({ "id": plan_id.to_string() }),
+    };
+    framed.send(serde_json::to_string(&get_req).unwrap()).await.unwrap();
+    let line = timeout(Duration::from_secs(2), framed.next())
+        .await
+        .expect("record.get response must not hang")
+        .expect("connection must not close on oversized result")
+        .unwrap();
+    let resp: DaemonResponse = serde_json::from_str(&line).unwrap();
+    assert_eq!(resp.id, 2);
+    match resp.error {
+        Some(ipc::RpcError::PayloadTooLarge(_)) => {}
+        other => panic!("expected PayloadTooLarge, got {other:?}"),
+    }
+
+    // The connection survives: a follow-up request on the SAME framed
+    // stream must still round-trip normally.
+    let status = DaemonRequest {
+        id: 3,
+        method: "system.status".into(),
+        params: serde_json::Value::Null,
+    };
+    framed.send(serde_json::to_string(&status).unwrap()).await.unwrap();
+    let line = timeout(Duration::from_secs(2), framed.next())
+        .await
+        .expect("status response must not hang")
+        .expect("connection must still be open after PayloadTooLarge")
+        .unwrap();
+    let resp: DaemonResponse = serde_json::from_str(&line).unwrap();
+    assert_eq!(resp.id, 3);
+    assert!(resp.error.is_none(), "status after PayloadTooLarge: {resp:?}");
+
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
 /// Phase 3 read-side idle timeout: a client that completes the handshake
 /// then sits silent must be dropped after `server_idle` elapses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

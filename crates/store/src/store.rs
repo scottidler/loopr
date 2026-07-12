@@ -2,7 +2,7 @@ use std::path::Path;
 
 use taskstore_async::{AsyncStore, OpenOptions};
 use tokio::sync::Mutex;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::bundles::BundlesStore;
 use crate::error::StoreError;
@@ -67,6 +67,29 @@ pub struct Store {
     tick_lock: Mutex<()>,
 }
 
+/// Close a just-opened `AsyncStore` before surfacing an open-time
+/// validation error (a `.version` mismatch or unparseable file). Without
+/// this, `Store::open`'s early `return Err(..)` drops `inner` implicitly:
+/// `AsyncStore`'s writer-thread handle then joins synchronously in its
+/// `Drop` impl on whatever thread is unwinding this call, instead of via
+/// the async-safe `close()` path documented on `Store::close`. Calling
+/// `close()` explicitly makes the teardown deterministic and async-safe
+/// regardless of which thread `Store::open`'s caller runs on.
+///
+/// A failure to close is logged, not propagated: the original open-time
+/// error is what the caller needs to act on, and a close-time error here
+/// is already a shutdown-path edge case with nothing left to retry.
+async fn close_on_open_err(inner: AsyncStore, err: StoreError) -> StoreError {
+    if let Err(close_err) = inner.close().await {
+        warn!(
+            open_error = %err,
+            close_error = %close_err,
+            "failed to close store after open-time validation error"
+        );
+    }
+    err
+}
+
 impl Store {
     /// Open the store rooted at the given target directory. The on-disk
     /// location is `<target>/.loopr/taskstore/` (see `TASKSTORE_SUBPATH`).
@@ -93,22 +116,41 @@ impl Store {
         let version_path = path.join(".version");
         match std::fs::read_to_string(&version_path) {
             Ok(raw) => {
-                let found: u32 = raw.trim().parse().map_err(|_| StoreError::VersionMismatch {
-                    found: 0,
-                    expected: STORE_VERSION,
-                })?;
-                if found != STORE_VERSION {
-                    return Err(StoreError::VersionMismatch {
-                        found,
-                        expected: STORE_VERSION,
-                    });
+                let trimmed = raw.trim();
+                match trimmed.parse::<u32>() {
+                    Ok(found) if found == STORE_VERSION => {}
+                    Ok(found) => {
+                        return Err(close_on_open_err(
+                            inner,
+                            StoreError::VersionMismatch {
+                                found,
+                                expected: STORE_VERSION,
+                            },
+                        )
+                        .await);
+                    }
+                    Err(_) => {
+                        return Err(close_on_open_err(
+                            inner,
+                            StoreError::UnparseableVersion {
+                                raw: trimmed.to_string(),
+                            },
+                        )
+                        .await);
+                    }
                 }
             }
             // `open_at` guarantees the file exists post-open; a missing
             // file here is unexpected but not corrupting — taskstore owns
             // write-if-absent, so treat absence as "fresh, trust the open."
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(StoreError::Io(format!("reading {}: {e}", version_path.display()))),
+            Err(e) => {
+                return Err(close_on_open_err(
+                    inner,
+                    StoreError::Io(format!("reading {}: {e}", version_path.display())),
+                )
+                .await);
+            }
         }
         Ok(Self {
             inner,

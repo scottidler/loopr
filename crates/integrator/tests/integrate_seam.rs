@@ -436,7 +436,8 @@ async fn crash_recovery_a_merge_landed_tick_landed_merged_write_lost() {
         integ.clone(),
         sha.clone(),
         vec![sha.clone()],
-    );
+    )
+    .unwrap();
     let _ = store.ticks().create(pre_existing_tick.clone()).await.unwrap();
 
     // Check out main so integrate does its own checkout.
@@ -1001,7 +1002,8 @@ async fn multi_bundle_partial_crash_reentry_finishes_remaining_merged() {
         integ.clone(),
         merge2.clone(),
         vec![merge1.clone(), merge2.clone()],
-    );
+    )
+    .unwrap();
     let _ = store.ticks().create(prior_tick.clone()).await.unwrap();
 
     // Re-enter with the FULL slice and allow_multi_bundle = true.

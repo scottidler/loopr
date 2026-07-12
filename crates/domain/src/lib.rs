@@ -28,6 +28,6 @@ pub use id::{BundleId, NoteId, PlanId, TickId, WorkId, generate_id, now_millis};
 pub use note::OperatorNote;
 pub use plan::{Plan, PlanStatus};
 pub use role::Role;
-pub use tick::Tick;
+pub use tick::{Tick, TickError};
 pub use verdict::{ReviewIssue, Severity, Verdict};
 pub use work::{Work, WorkStatus};

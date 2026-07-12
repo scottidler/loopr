@@ -27,6 +27,14 @@ pub enum StoreError {
     #[error("store version mismatch: on-disk={found}, expected={expected}")]
     VersionMismatch { found: u32, expected: u32 },
 
+    /// On-disk `.version` exists but is not a parseable `u32`. Distinct
+    /// from `VersionMismatch` (which compares two valid version numbers)
+    /// so callers/logs see the raw, un-parseable content rather than a
+    /// synthesized `found: 0` that could be confused with a real version
+    /// 0 store. Raised by `Store::open` alongside `VersionMismatch`.
+    #[error("store .version file is not a valid version number: {raw:?}")]
+    UnparseableVersion { raw: String },
+
     #[error("serde failure at store boundary: {0}")]
     Serde(String),
 

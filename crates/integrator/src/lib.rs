@@ -541,7 +541,7 @@ where
         integ_branch,
         sha,
         outcomes.iter().map(|(_, o)| o.sha()).collect(),
-    );
+    )?;
     let tick = match deps.ticks.create(tick).await {
         Ok(t) => t,
         Err(StoreError::DuplicateTick { tick_id, .. }) => {
