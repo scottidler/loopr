@@ -19,7 +19,7 @@ tracing.workspace = true
 trait-variant.workspace = true
 thiserror = "2.0.18"
 serde = { workspace = true, features = ["derive"] }
-tokio = { version = "1.52.1", features = ["process", "fs", "macros", "rt"] }
+tokio = { version = "1.52.1", features = ["process", "fs", "macros", "rt", "time"] }
 uuid = { version = "1.23.1", features = ["v7"] }
 
 [dev-dependencies]

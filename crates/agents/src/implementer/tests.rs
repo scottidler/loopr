@@ -387,3 +387,18 @@ fn over_work_budget_at_or_over_cap_returns_reason() {
     assert!(reason.contains("per-Work cost cap"), "got: {reason}");
     assert!(super::over_work_budget(Some(0.50), 600_000).is_some(), "over cap trips");
 }
+
+#[test]
+fn over_work_budget_negative_cap_does_not_instantly_trip() {
+    // Break-to-prove the cast fix: the old `(cap * 1e6) as u64` saturated a
+    // negative cap to 0 micros, so `spent >= 0` was ALWAYS true and every
+    // Work escalated on its first call. The guarded cast must not false-trip.
+    assert_eq!(super::over_work_budget(Some(-1.0), 0), None);
+    assert_eq!(super::over_work_budget(Some(-1.0), u64::MAX), None);
+}
+
+#[test]
+fn over_work_budget_nan_cap_does_not_trip() {
+    // NaN * 1e6 as u64 also saturates to 0 under the old code; guard it too.
+    assert_eq!(super::over_work_budget(Some(f64::NAN), u64::MAX), None);
+}

@@ -9,11 +9,12 @@ mod dispatch;
 mod implementer;
 mod lifeguard;
 mod parse;
+mod retry;
 mod reviewer;
 pub mod scope;
 
 pub use action::AgentAction;
-pub use config::{AgentsConfig, DirectorConfig, ImplementerConfig, ReviewerConfig};
+pub use config::{AgentsConfig, ConfigError, DirectorConfig, ImplementerConfig, ReviewerConfig};
 pub use director::{
     ActionFingerprint, DirectorAction, DirectorDeps, DirectorError, DirectorMode, DirectorPatternTracker,
     DirectorStatusMap, DirectorStatusSnapshot, DirectorStore, PatternConfig, PatternObservation, WorkSpawner,
@@ -24,6 +25,7 @@ pub use dispatch::{ActionResult, CommitContext, DispatchError, RealTools, ToolEx
 pub use implementer::{BundleSink, BundleSinkError, Deps, ImplementerError, run_implementer};
 pub use lifeguard::{Decision, Lifeguard, canonical_hash};
 pub use parse::{ParseError, parse_actions, parse_one};
+pub use retry::{RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS, RetryPolicy, with_llm_retry};
 pub use reviewer::{
     ParseError as ReviewerParseError, ReviewerDeps, ReviewerError, VERIFICATION_CAP, git_show, parse_verdict,
     read_file_contents, render_issue_summary, run_reviewer, strip_commit_header, truncate_diff,

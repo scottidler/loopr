@@ -56,6 +56,7 @@ use store::StoreError;
 use crate::config::DirectorConfig;
 use crate::lifeguard::{Decision, Lifeguard};
 use crate::parse::{bracket_start_positions, extract_array_substring_from, strip_markdown_fences};
+use crate::retry::{RetryPolicy, with_llm_retry};
 
 /// LLM-emitted instruction. Serialized as `{"action": "<kind>", ...}`.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -1046,10 +1047,11 @@ impl DirectorSession {
         // binding) and counts only THIS iteration's parse-retry turns.
         let mut requeries_used: u32 = 0;
         let actions: Vec<DirectorAction> = loop {
-            let (raw, _usage) = deps
-                .llm
-                .complete_free(&assembled.system_prompt, &messages, Some(deps.config.model.as_str()))
-                .await?;
+            let (raw, _usage) = with_llm_retry(&RetryPolicy::default(), || {
+                deps.llm
+                    .complete_free(&assembled.system_prompt, &messages, Some(deps.config.model.as_str()))
+            })
+            .await?;
             match parse_director_actions(&raw) {
                 Ok(parsed) => {
                     self.lifeguard.reset_parse_failures();

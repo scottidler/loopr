@@ -48,7 +48,14 @@ impl CostSink {
     /// Append one cost line for a completed (or billed-but-failed) call.
     /// Best-effort: a write failure logs `warn!` and is swallowed — cost
     /// audit must never break the call path.
-    fn append(&self, usage: &Usage) {
+    ///
+    /// The JSON line is built inline (cheap, and `CallContext::current()`
+    /// must be read on THIS task — the task-local is not visible from the
+    /// blocking pool). The blocking file open + write is moved off the async
+    /// worker via `spawn_blocking`, so a slow/synced `.loopr/` disk can't
+    /// stall the tokio runtime mid-LLM-call. The handle is awaited so the
+    /// write completes (and its outcome is logged) before the call returns.
+    async fn append(&self, usage: &Usage) {
         let cc = CallContext::current();
         let model = usage.model.as_deref().unwrap_or("unknown");
         let micros = cost_micros(
@@ -73,15 +80,21 @@ impl CostSink {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "cost_usd": cost_usd,
-        });
-        match OpenOptions::new().create(true).append(true).open(&self.path) {
-            Ok(mut f) => {
-                if let Err(e) = writeln!(f, "{line}") {
-                    tracing::warn!(path = %self.path.display(), error = %e, "costs.jsonl append failed");
-                }
+        })
+        .to_string();
+        let path = self.path.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
+            writeln!(f, "{line}")
+        })
+        .await;
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(path = %self.path.display(), error = %e, "costs.jsonl append failed");
             }
             Err(e) => {
-                tracing::warn!(path = %self.path.display(), error = %e, "costs.jsonl open failed");
+                tracing::warn!(path = %self.path.display(), error = %e, "costs.jsonl append task join failed");
             }
         }
     }
@@ -118,10 +131,13 @@ impl<L> MeteredLlmClient<L> {
     }
 
     /// Record one call's usage into the snapshot and the cost ledger.
-    fn meter(&self, usage: &Usage) {
+    /// Async because the cost-ledger append hops onto `spawn_blocking`;
+    /// the snapshot record stays a synchronous `Mutex` lock (no `.await`
+    /// held across it — see `record`).
+    async fn meter(&self, usage: &Usage) {
         record(&self.snapshot, usage);
         if let Some(sink) = &self.costs {
-            sink.append(usage);
+            sink.append(usage).await;
         }
     }
 }
@@ -136,7 +152,7 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
     ) -> Result<(ToolCall, Usage), LlmError> {
         match self.inner.complete_with_tool(system, user, tool, model).await {
             Ok((tc, usage)) => {
-                self.meter(&usage);
+                self.meter(&usage).await;
                 Ok((tc, usage))
             }
             Err(e) => {
@@ -145,7 +161,7 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
                 // success path; record their usage so the expensive
                 // failures reach the cost counters (Phase 1 remediation).
                 if let Some(usage) = e.billed_usage() {
-                    self.meter(usage);
+                    self.meter(usage).await;
                 }
                 Err(e)
             }
@@ -160,12 +176,12 @@ impl<L: LlmClient + Send + Sync> LlmClient for MeteredLlmClient<L> {
     ) -> Result<(String, Usage), LlmError> {
         match self.inner.complete_free(system, messages, model).await {
             Ok((raw, usage)) => {
-                self.meter(&usage);
+                self.meter(&usage).await;
                 Ok((raw, usage))
             }
             Err(e) => {
                 if let Some(usage) = e.billed_usage() {
-                    self.meter(usage);
+                    self.meter(usage).await;
                 }
                 Err(e)
             }

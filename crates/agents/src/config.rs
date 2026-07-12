@@ -10,6 +10,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::director::PatternConfig;
 
+/// Typed rejection for an invalid agent config value. Returned by the
+/// `validate` methods so the caller (the daemon's config-load path) can fail
+/// closed with a named cause instead of silently accepting a value that would
+/// misbehave downstream (a negative/NaN cost cap saturates the `f64 -> u64`
+/// cast to 0 and escalates every Work instantly).
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum ConfigError {
+    /// `per_work_cost_cap_usd` was present but not a non-negative finite
+    /// number. Carries the offending value for the error message.
+    #[error("per-work cost cap must be a non-negative finite dollar amount, got {0}")]
+    InvalidCostCap(f64),
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct ImplementerConfig {
@@ -54,6 +67,22 @@ pub struct ImplementerConfig {
     /// so the budget config stays in one place.
     #[serde(skip)]
     pub per_work_cost_cap_usd: Option<f64>,
+}
+
+impl ImplementerConfig {
+    /// Validate the overlaid budget knob at config-load time. `loopr` sets
+    /// `per_work_cost_cap_usd` from `budgets.per-work-cost-usd` when it builds
+    /// the daemon context; a negative or NaN cap is a config error, not a
+    /// per-Work runtime surprise. `None` (unlimited) and any non-negative
+    /// finite value pass.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(cap) = self.per_work_cost_cap_usd
+            && (!cap.is_finite() || cap < 0.0)
+        {
+            return Err(ConfigError::InvalidCostCap(cap));
+        }
+        Ok(())
+    }
 }
 
 impl Default for ImplementerConfig {
@@ -206,3 +235,6 @@ pub struct AgentsConfig {
     pub reviewer: ReviewerConfig,
     pub director: DirectorConfig,
 }
+
+#[cfg(test)]
+mod tests;

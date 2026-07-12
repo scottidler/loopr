@@ -30,12 +30,18 @@ use crate::config::ImplementerConfig;
 use crate::dispatch::{ActionResult, CommitContext, DispatchError, ToolExecutor, dispatch_action};
 use crate::lifeguard::{Decision, Lifeguard};
 use crate::parse::{parse_actions, parse_one};
+use crate::retry::{RetryPolicy, with_llm_retry};
 
 /// Render a multi-line LLM-visible note when the partition filter
 /// dropped paths from a commit / propose. The note restates the Work's
 /// scope so the agent can decide whether to re-edit in scope or emit
 /// `need_help`. Empty `dropped` is the no-op caller's responsibility:
 /// this returns a non-empty string only when there's something to say.
+/// Micro-dollars per U.S. dollar: the fixed-point scale the per-Work cost
+/// counters accumulate in (`work_cost_micros`). Named so the dollar<->micros
+/// conversion isn't a bare `1e6` literal at every arithmetic site.
+const MICROS_PER_USD: f64 = 1_000_000.0;
+
 /// If a per-Work cost cap is configured and `spent_micros` has reached
 /// it, return the escalation reason; otherwise `None`. The per-Work
 /// budget brake (vision Budgets): an implementer that has spent more than
@@ -43,11 +49,21 @@ use crate::parse::{parse_actions, parse_one};
 /// continuing to burn tokens against it.
 fn over_work_budget(cap_usd: Option<f64>, spent_micros: u64) -> Option<String> {
     let cap = cap_usd?;
-    let cap_micros = (cap * 1_000_000.0) as u64;
+    // Guard the float->int cast. `ImplementerConfig::validate` rejects a
+    // negative/NaN cap at config load, but the cast itself is a footgun:
+    // `(-1.0 * 1e6) as u64` and `(NAN * 1e6) as u64` both saturate to 0,
+    // which would make EVERY Work look instantly over budget and escalate
+    // on its first LLM call. If a bad value ever slips past validation,
+    // fail closed against the false-positive: treat it as "no cap".
+    if !cap.is_finite() || cap < 0.0 {
+        warn!(cap, "invalid per-Work cost cap reached over_work_budget; ignoring");
+        return None;
+    }
+    let cap_micros = (cap * MICROS_PER_USD).round() as u64;
     (spent_micros >= cap_micros).then(|| {
         format!(
             "per-Work cost cap ${cap:.2} exceeded (spent ${:.2})",
-            spent_micros as f64 / 1_000_000.0
+            spent_micros as f64 / MICROS_PER_USD
         )
     })
 }
@@ -263,10 +279,10 @@ where
         // outer iteration, counts exactly THIS iteration's parse retries.
         let mut requeries_used: u32 = 0;
         let actions = loop {
-            let (raw, usage) = deps
-                .llm
-                .complete_free(&assembled.system_prompt, &messages, None)
-                .await?;
+            let (raw, usage) = with_llm_retry(&RetryPolicy::default(), || {
+                deps.llm.complete_free(&assembled.system_prompt, &messages, None)
+            })
+            .await?;
             if usage.model.is_some() {
                 last_response_model = usage.model.clone();
             }
@@ -449,10 +465,10 @@ where
                     messages.push(Message::user(format!(
                         "action failed: {err_msg}. Return one corrected JSON action (single object, not array)."
                     )));
-                    let (corrected_raw, usage) = deps
-                        .llm
-                        .complete_free(&assembled.system_prompt, &messages, None)
-                        .await?;
+                    let (corrected_raw, usage) = with_llm_retry(&RetryPolicy::default(), || {
+                        deps.llm.complete_free(&assembled.system_prompt, &messages, None)
+                    })
+                    .await?;
                     if usage.model.is_some() {
                         last_response_model = usage.model.clone();
                     }
