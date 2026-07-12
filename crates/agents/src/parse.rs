@@ -56,10 +56,18 @@ pub fn parse_actions(raw: &str) -> Result<Vec<AgentAction>, ParseError> {
     // substring parsing cleanly as `Vec<AgentAction>` wins. A single
     // `[` position is not enough: prose like "The result [is good]:
     // [...]" has a bracket-balanced non-array before the real one.
+    //
+    // `normalize_action_key` is re-applied per candidate (not just to
+    // the whole `stripped` body above): when the whole response fails
+    // to parse as JSON (because of surrounding prose), the earlier
+    // whole-body normalization was a no-op, so any legacy `"action"`
+    // key in the isolated candidate still needs renaming here, once
+    // it is standalone valid JSON.
     let mut last_serde_err: Option<String> = None;
     for start in bracket_start_positions(&normalized) {
         if let Some(candidate) = extract_array_substring_from(&normalized, start) {
-            match serde_json::from_str::<Vec<AgentAction>>(candidate) {
+            let candidate = normalize_action_key(candidate);
+            match serde_json::from_str::<Vec<AgentAction>>(&candidate) {
                 Ok(actions) => {
                     let result = finalize(actions);
                     if let Ok(ref a) = result {
@@ -80,7 +88,7 @@ pub fn parse_actions(raw: &str) -> Result<Vec<AgentAction>, ParseError> {
     Err(ParseError::NoArrayFound)
 }
 
-fn bracket_start_positions(input: &str) -> impl Iterator<Item = usize> + '_ {
+pub(crate) fn bracket_start_positions(input: &str) -> impl Iterator<Item = usize> + '_ {
     input
         .char_indices()
         .filter_map(|(i, c)| if c == '[' { Some(i) } else { None })
@@ -109,7 +117,7 @@ fn finalize(actions: Vec<AgentAction>) -> Result<Vec<AgentAction>, ParseError> {
 /// Strip ``` ```json ... ``` ``` and ``` ``` ... ``` ``` fences, if
 /// present, returning the inner content trimmed of surrounding
 /// whitespace. A fence-less input is returned as-is (trimmed).
-fn strip_markdown_fences(raw: &str) -> &str {
+pub(crate) fn strip_markdown_fences(raw: &str) -> &str {
     let trimmed = raw.trim();
     if let Some(rest) = trimmed.strip_prefix("```json") {
         let rest = rest.trim_start_matches(char::is_whitespace);
@@ -126,23 +134,64 @@ fn strip_markdown_fences(raw: &str) -> &str {
     trimmed
 }
 
-/// Replace `"action":` occurrences with `"type":`. The LLM sometimes
-/// emits the v3 key name; serde's tag discriminator expects `type`.
-/// Naive string replace is safe here: `"action":` is not a common
-/// substring inside tool-input JSON (tool inputs carry keys like
-/// `command`, `path`, etc., and any inline string that happens to
-/// contain `"action":` as substring would be inside a quoted
-/// string, which a future improvement could protect with a proper
-/// JSON-aware rewriter).
+/// Rename the legacy `"action"` discriminator key to `"type"` on the
+/// top-level action object(s) only. The LLM sometimes emits the v3 key
+/// name; serde's tag discriminator expects `type`.
+///
+/// JSON-aware, not a blind string replace: `input` is parsed to a
+/// `serde_json::Value` and only each top-level object's own `"action"`
+/// key is renamed (an array of action objects, or a single action
+/// object). Nested content is never touched, so a `run_tool` action
+/// whose `input` writes a file containing the literal text `"action":`
+/// (e.g. this very module's own doc comments, or any JSON/code the
+/// implementer is writing) survives byte-for-byte. A prior blind
+/// `input.replace("\"action\":", "\"type\":")` corrupted exactly that
+/// case: every occurrence of the substring anywhere in the response,
+/// including inside quoted file content, was rewritten.
+///
+/// Returns `input` unchanged (as an owned `String`) when it does not
+/// parse as JSON at all - e.g. the model wrapped the array in prose.
+/// Callers that later isolate a JSON substring via balanced-bracket
+/// extraction (see `bracket_start_positions` / `extract_array_substring_from`)
+/// re-apply this function to that substring, where it will parse
+/// cleanly once isolated from the surrounding prose.
 fn normalize_action_key(input: &str) -> String {
-    input.replace("\"action\":", "\"type\":")
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(input) else {
+        return input.to_string();
+    };
+    rename_top_level_action_keys(&mut value);
+    serde_json::to_string(&value).unwrap_or_else(|_| input.to_string())
+}
+
+/// Rename `"action"` -> `"type"` on the object itself, or on every
+/// object in a top-level array. Never descends into nested objects or
+/// arrays (tool-input payloads), which may legitimately carry
+/// unrelated `action`/`type` keys of their own.
+fn rename_top_level_action_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(v) = map.remove("action") {
+                map.insert("type".to_string(), v);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if let serde_json::Value::Object(map) = item
+                    && let Some(v) = map.remove("action")
+                {
+                    map.insert("type".to_string(), v);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Locate the first well-balanced `[ ... ]` substring starting at
 /// byte offset `start`. Scans character-by-character, tracking
 /// bracket depth and ignoring brackets inside string literals.
 /// Returns the substring (including outer brackets) on success.
-fn extract_array_substring_from(input: &str, start: usize) -> Option<&str> {
+pub(crate) fn extract_array_substring_from(input: &str, start: usize) -> Option<&str> {
     let bytes = input.as_bytes();
     if start >= bytes.len() || bytes[start] != b'[' {
         return None;

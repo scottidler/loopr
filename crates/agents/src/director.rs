@@ -55,6 +55,7 @@ use store::StoreError;
 
 use crate::config::DirectorConfig;
 use crate::lifeguard::{Decision, Lifeguard};
+use crate::parse::{bracket_start_positions, extract_array_substring_from, strip_markdown_fences};
 
 /// LLM-emitted instruction. Serialized as `{"action": "<kind>", ...}`.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -368,10 +369,16 @@ where
 }
 
 /// Parse the LLM response into a `Vec<DirectorAction>`.
+///
+/// Mirrors `parse_actions`' pipeline (`crate::parse`): strip markdown
+/// code fences, try direct deserialization (array shape, then single-
+/// object shape), then fall back to balanced-bracket scanning to
+/// locate a JSON array embedded in prose the model added around the
+/// response.
 #[instrument(level = "debug", skip_all, fields(response_len = response.len()), err)]
 pub fn parse_director_actions(response: &str) -> Result<Vec<DirectorAction>, DirectorError> {
-    let trimmed = response.trim();
-    if trimmed.is_empty() {
+    let stripped = strip_markdown_fences(response);
+    if stripped.is_empty() {
         return Err(DirectorError::Parse("empty response".to_string()));
     }
     // Capture the FIRST (array-shape) parse error instead of re-parsing a
@@ -379,13 +386,26 @@ pub fn parse_director_actions(response: &str) -> Result<Vec<DirectorAction>, Dir
     // canonical contract, so its error is the most informative to feed
     // back to the LLM. The single-object fallback is a tolerance, not the
     // primary shape.
-    let array_err = match serde_json::from_str::<Vec<DirectorAction>>(trimmed) {
+    let array_err = match serde_json::from_str::<Vec<DirectorAction>>(stripped) {
         Ok(actions) => return Ok(actions),
         Err(e) => e,
     };
-    if let Ok(action) = serde_json::from_str::<DirectorAction>(trimmed) {
+    if let Ok(action) = serde_json::from_str::<DirectorAction>(stripped) {
         return Ok(vec![action]);
     }
+
+    // Scan every `[` position in order; first that yields a balanced
+    // substring parsing cleanly as `Vec<DirectorAction>` wins. Same
+    // rationale as `parse_actions`: `rfind(']')` would greedily capture
+    // any trailing `]` in surrounding prose.
+    for start in bracket_start_positions(stripped) {
+        if let Some(candidate) = extract_array_substring_from(stripped, start)
+            && let Ok(actions) = serde_json::from_str::<Vec<DirectorAction>>(candidate)
+        {
+            return Ok(actions);
+        }
+    }
+
     Err(DirectorError::Parse(array_err.to_string()))
 }
 

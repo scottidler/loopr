@@ -57,6 +57,40 @@ fn normalizes_action_key_to_type() {
 }
 
 #[test]
+fn run_tool_input_field_named_action_survives_intact() {
+    // Regression: normalize_action_key must rename ONLY the top-level
+    // discriminator, never a same-named key nested inside a tool's
+    // own input payload. Plenty of real tools take a parameter
+    // literally named `action` (docker, kubectl, a generic REST-call
+    // tool); a naive `"action":` -> `"type":` string replace over the
+    // WHOLE response silently renamed that nested field too,
+    // corrupting the tool call the implementer actually intended to
+    // run (this is the "corrupts any file the implementer writes"
+    // bug: a write_file-style tool whose own input schema carries an
+    // `action` field would lose it the same way).
+    let input = serde_json::json!([{
+        "type": "run_tool",
+        "tool": "docker",
+        "input": { "action": "restart", "container": "web" }
+    }])
+    .to_string();
+    let actions = parse_actions(&input).unwrap();
+    assert_eq!(actions.len(), 1);
+    match &actions[0] {
+        AgentAction::RunTool { tool, input } => {
+            assert_eq!(tool, "docker");
+            assert_eq!(input["action"], "restart");
+            assert_eq!(input["container"], "web");
+            assert!(
+                input.get("type").is_none(),
+                "nested `action` key must not be renamed to `type`"
+            );
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
 fn extracts_array_from_surrounding_prose() {
     let input = r#"Sure! Here's what I'll do: [{"type":"done","message":"ok"}] - let me know if you want changes."#;
     let actions = parse_actions(input).unwrap();

@@ -142,6 +142,56 @@ fn parse_empty_response_errors() {
 }
 
 #[test]
+fn parse_actions_wrapped_in_json_fence() {
+    // Regression: parse_director_actions previously had no fence-strip,
+    // unlike parse_actions/parse_verdict. A response wrapped in a
+    // ```json fence - the same shape every other agent's LLM response
+    // is wrapped in - failed to parse.
+    let resp = format!(
+        "```json\n{}\n```",
+        json!([{ "action": "accept_bundle", "bundle_id": "bd-001" }])
+    );
+    let actions = parse_director_actions(&resp).expect("parse");
+    assert_eq!(
+        actions,
+        vec![DirectorAction::AcceptBundle {
+            bundle_id: "bd-001".to_string()
+        }]
+    );
+}
+
+#[test]
+fn parse_actions_wrapped_in_bare_fence() {
+    let resp = format!("```\n{}\n```", json!([{ "action": "done", "summary": "ok" }]));
+    let actions = parse_director_actions(&resp).expect("parse");
+    assert_eq!(
+        actions,
+        vec![DirectorAction::Done {
+            summary: "ok".to_string()
+        }]
+    );
+}
+
+#[test]
+fn parse_actions_extracted_from_surrounding_prose() {
+    // Regression: parse_director_actions previously had no
+    // balanced-bracket extraction fallback, unlike parse_actions. A
+    // response with prose the model "helpfully" added around the JSON
+    // array failed to parse.
+    let resp = format!(
+        "Sure! Here's what I'll do: {} - let me know if that works.",
+        json!([{ "action": "done", "summary": "ok" }])
+    );
+    let actions = parse_director_actions(&resp).expect("parse");
+    assert_eq!(
+        actions,
+        vec![DirectorAction::Done {
+            summary: "ok".to_string()
+        }]
+    );
+}
+
+#[test]
 fn director_config_default_values() {
     let cfg = crate::config::DirectorConfig::default();
     assert_eq!(cfg.poll_interval_secs, 5);
