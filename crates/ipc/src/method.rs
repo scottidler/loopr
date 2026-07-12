@@ -49,6 +49,17 @@ pub enum MethodName {
     /// Takes no params.
     #[strum(serialize = "budget.reset")]
     BudgetReset,
+    /// Subscribe to the daemon's live `DaemonEvent` stream. Phase 17 of
+    /// `docs/design/2026-07-11-verified-swarm.md`. Unlike every other
+    /// method this is LONG-LIVED: the daemon acks once, then streams
+    /// event frames (plus periodic [`crate::WatchFrame::Heartbeat`]
+    /// keepalives and, on broadcast lag, a typed
+    /// [`crate::WatchFrame::Gap`] marker) until the client disconnects or
+    /// the daemon shuts down. The server-side handling path is distinct
+    /// from the one-shot request/response dispatch and is EXEMPT from the
+    /// read-idle timeout. Takes no params (a live tail replays nothing).
+    #[strum(serialize = "events.subscribe")]
+    EventsSubscribe,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +73,7 @@ pub enum Method {
     PlanOverride(PlanOverrideParams),
     DirectorStatus(DirectorStatusParams),
     BudgetReset,
+    EventsSubscribe,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +239,12 @@ impl TryFrom<&DaemonRequest> for Method {
                     return Err(RpcError::InvalidParams("budget.reset takes no params".into()));
                 }
                 Ok(Method::BudgetReset)
+            }
+            MethodName::EventsSubscribe => {
+                if !req.params.is_null() && !matches!(&req.params, serde_json::Value::Object(m) if m.is_empty()) {
+                    return Err(RpcError::InvalidParams("events.subscribe takes no params".into()));
+                }
+                Ok(Method::EventsSubscribe)
             }
         }
     }

@@ -102,6 +102,20 @@ pub enum Command {
         cmd: DaemonCmd,
     },
 
+    /// Stream the daemon's live event feed, one line per event
+    /// (work/bundle/plan transitions, budget events, director mode
+    /// changes). Long-lived: runs until the daemon shuts down or you
+    /// interrupt it (ctrl-c). Phase 17 of
+    /// `docs/design/2026-07-11-verified-swarm.md`. Does NOT fork a daemon:
+    /// with no daemon running it prints "no daemon running" and exits.
+    Watch {
+        /// Restrict the stream to a single Plan's events. Events without a
+        /// Plan scope (e.g. process-wide budget events) always pass
+        /// through. Omit to watch every Plan.
+        #[arg(long = "plan", value_name = "PLAN_ID")]
+        plan: Option<String>,
+    },
+
     /// Inspect run logs.
     Logs {
         #[command(subcommand)]
@@ -151,6 +165,7 @@ impl Command {
                 DaemonCmd::Stop => "daemon-stop",
                 DaemonCmd::Status => "daemon-status",
             },
+            Command::Watch { .. } => "watch",
             Command::Logs { cmd } => match cmd {
                 LogsCmd::Tail { .. } => "logs-tail",
                 LogsCmd::Runs => "logs-runs",

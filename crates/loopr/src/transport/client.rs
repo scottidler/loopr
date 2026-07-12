@@ -13,9 +13,11 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LinesCodec};
 
+use std::ops::ControlFlow;
+
 use ipc::{
     DaemonEvent, DaemonRequest, DaemonResponse, HandshakeParams, HandshakeResult, IpcMessage, MethodName,
-    PROTOCOL_VERSION, decode_line,
+    PROTOCOL_VERSION, WatchFrame, decode_line,
 };
 
 use crate::error::LooprError;
@@ -108,6 +110,92 @@ impl IpcClient {
         params: serde_json::Value,
     ) -> Result<(DaemonResponse, Vec<DaemonEvent>), LooprError> {
         self.request_impl(method, params).await
+    }
+
+    /// Open a long-lived subscription to the daemon's live event stream
+    /// (Phase 17 of `docs/design/2026-07-11-verified-swarm.md`). Sends
+    /// `events.subscribe`, awaits the one-shot ack, then reads frames
+    /// forever, invoking `on_frame` for each classified [`WatchFrame`]
+    /// (real events, heartbeats, and gap markers).
+    ///
+    /// This does NOT use `request_impl`'s wall-clock cap: a subscription is
+    /// long-lived by design. It returns `Ok(())` when the daemon closes the
+    /// stream (shutdown / EOF) or when `on_frame` returns
+    /// `ControlFlow::Break`; `Err` only on a wire/codec failure.
+    ///
+    /// The caller is responsible for racing this against a cancellation
+    /// signal (e.g. `tokio::signal::ctrl_c`); dropping the `IpcClient`
+    /// closes the socket, which the daemon observes and uses to tear down
+    /// its server-side subscription (no leaked forwarder).
+    pub async fn subscribe_events<F>(&mut self, mut on_frame: F) -> Result<(), LooprError>
+    where
+        F: FnMut(WatchFrame) -> ControlFlow<()>,
+    {
+        let id = self.next_id;
+        self.next_id += 1;
+        let method: &'static str = MethodName::EventsSubscribe.into();
+        let req = DaemonRequest {
+            id,
+            method: method.to_string(),
+            params: serde_json::Value::Null,
+        };
+        let line =
+            serde_json::to_string(&req).map_err(|e| LooprError::ClientIo(format!("serialize subscribe: {e}")))?;
+        self.framed
+            .send(line)
+            .await
+            .map_err(|e| LooprError::ClientIo(format!("send subscribe: {e}")))?;
+
+        // Read until the ack (Response whose id matches). Any event frames
+        // that interleave before the ack are forwarded, not dropped.
+        loop {
+            let line = match self.framed.next().await {
+                Some(Ok(line)) => line,
+                Some(Err(e)) => return Err(LooprError::ClientIo(format!("codec error: {e}"))),
+                None => return Ok(()), // daemon closed before ack
+            };
+            let msg = decode_line(line.as_bytes()).map_err(|e| LooprError::ClientIo(format!("decode: {e}")))?;
+            match msg {
+                IpcMessage::Response(resp) if resp.id == id => {
+                    if let Some(err) = resp.error {
+                        return Err(LooprError::Rpc(err));
+                    }
+                    break; // subscription live
+                }
+                IpcMessage::Response(other) => {
+                    return Err(LooprError::ClientIo(format!(
+                        "subscribe: response id mismatch: expected {id}, got {}",
+                        other.id
+                    )));
+                }
+                IpcMessage::Event(ev) => {
+                    if on_frame(WatchFrame::classify(ev)).is_break() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Live tail: read frames until the daemon closes the stream or the
+        // caller signals stop.
+        loop {
+            let line = match self.framed.next().await {
+                Some(Ok(line)) => line,
+                Some(Err(e)) => return Err(LooprError::ClientIo(format!("codec error: {e}"))),
+                None => return Ok(()), // daemon shut down / closed the stream
+            };
+            let msg = decode_line(line.as_bytes()).map_err(|e| LooprError::ClientIo(format!("decode: {e}")))?;
+            match msg {
+                IpcMessage::Event(ev) => {
+                    if on_frame(WatchFrame::classify(ev)).is_break() {
+                        return Ok(());
+                    }
+                }
+                // A subscribe stream carries only events after the ack; a
+                // stray response is unexpected but non-fatal — skip it.
+                IpcMessage::Response(_) => {}
+            }
+        }
     }
 
     async fn request_impl(

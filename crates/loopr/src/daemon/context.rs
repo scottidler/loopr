@@ -56,9 +56,15 @@ pub const INTEGRATOR_BACKOFF: &[Duration] = &[
     Duration::from_secs(5),
 ];
 
-/// Capacity of the daemon's event broadcast channel. Stage 4 never sends
-/// on it; the capacity is future-proofing for Stage 7+. v4 value.
-pub const EVENTS_CAPACITY: usize = 64;
+/// Capacity of the daemon's event broadcast channel. Sized for a slow
+/// `loopr watch` terminal (Phase 17 of
+/// `docs/design/2026-07-11-verified-swarm.md`): a human-driven consumer
+/// that pauses to read a burst must not force the daemon's broadcast ring
+/// to drop events (and trip the gap marker) under normal activity. When a
+/// consumer genuinely falls this far behind, the subscribe path still
+/// surfaces a typed gap marker rather than silently losing events. Bumped
+/// from the v4 value of 64.
+pub const EVENTS_CAPACITY: usize = 1024;
 
 /// Extract a human-readable message from a caught panic payload. The
 /// standard library boxes panic payloads as `&str` (the common

@@ -26,6 +26,7 @@ mod error;
 mod frame;
 mod method;
 mod records;
+mod stream;
 
 /// Maximum bytes per NDJSON line, enforced by [`decode_line`] /
 /// [`decode_request_line`]. Matches v3/v4 and the value wired to
@@ -49,6 +50,7 @@ pub use records::{
     BundleSummary, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
     TickSummary, WorkSummary,
 };
+pub use stream::{STREAM_GAP_EVENT, STREAM_HEARTBEAT_EVENT, WatchFrame};
 
 #[cfg(test)]
 mod tests;

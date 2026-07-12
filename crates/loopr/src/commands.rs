@@ -15,3 +15,4 @@ pub mod init;
 pub mod list;
 pub mod sessions;
 pub mod show;
+pub mod watch;

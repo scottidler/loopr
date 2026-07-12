@@ -374,6 +374,7 @@ async fn server_idle_drops_silent_client() {
     let timeouts = crate::transport::ServerTimeouts {
         idle: Duration::from_millis(150),
         write: Duration::from_secs(10),
+        heartbeat: Duration::from_secs(60),
     };
     let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
     let ctx_server = ctx.clone();
@@ -406,6 +407,7 @@ async fn server_idle_does_not_reset_on_broadcast() {
     let timeouts = crate::transport::ServerTimeouts {
         idle: Duration::from_millis(200),
         write: Duration::from_secs(10),
+        heartbeat: Duration::from_secs(60),
     };
     let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
     let ctx_server = ctx.clone();
@@ -467,6 +469,7 @@ async fn server_write_timeout_drops_stalled_reader() {
     let timeouts = crate::transport::ServerTimeouts {
         idle: Duration::from_secs(60), // not under test here
         write: Duration::from_millis(200),
+        heartbeat: Duration::from_secs(60),
     };
     let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
     let ctx_server = ctx.clone();
@@ -514,6 +517,264 @@ async fn server_write_timeout_drops_stalled_reader() {
     ctx.shutting_down.store(true, Ordering::Relaxed);
     ctx.shutdown_notify.notify_waiters();
     timeout(Duration::from_secs(5), server).await.unwrap().unwrap().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17 (2026-07-11-verified-swarm): events.subscribe long-lived stream.
+// ---------------------------------------------------------------------------
+
+/// Send `events.subscribe` and read the one-shot ack, leaving the stream
+/// live. Returns after the ack; subsequent frames are event/heartbeat/gap.
+async fn subscribe(framed: &mut Framed<UnixStream, LinesCodec>) {
+    let req = DaemonRequest {
+        id: 2,
+        method: "events.subscribe".into(),
+        params: serde_json::Value::Null,
+    };
+    framed.send(serde_json::to_string(&req).unwrap()).await.unwrap();
+    let line = timeout(Duration::from_secs(2), framed.next())
+        .await
+        .expect("subscribe ack must not hang")
+        .expect("connection must stay open after subscribe")
+        .unwrap();
+    let resp: DaemonResponse = serde_json::from_str(&line).unwrap();
+    assert_eq!(resp.id, 2);
+    assert!(resp.error.is_none(), "subscribe ack error: {resp:?}");
+}
+
+/// Read one stream frame and classify it as a typed `WatchFrame`.
+async fn next_frame(framed: &mut Framed<UnixStream, LinesCodec>) -> Option<ipc::WatchFrame> {
+    let line = timeout(Duration::from_secs(2), framed.next()).await.ok()??.ok()?;
+    let ev: ipc::DaemonEvent = serde_json::from_str(&line).unwrap();
+    Some(ipc::WatchFrame::classify(ev))
+}
+
+/// The Lagged -> gap-marker mapping is exercised against a REAL
+/// `broadcast::error::RecvError::Lagged`, deterministically (no wall-clock
+/// race). Break-to-prove: change the Lagged arm in `event_recv_to_action`
+/// to `Stop`/swallow and this fails.
+#[tokio::test]
+async fn lagged_recv_maps_to_typed_gap_marker() {
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<ipc::DaemonEvent>(2);
+    // Overflow the capacity-2 ring so the next recv() lags.
+    for i in 0..5u64 {
+        let _ = tx.send(ipc::DaemonEvent {
+            event: "test.tick".into(),
+            data: serde_json::json!({ "i": i }),
+        });
+    }
+    let res = rx.recv().await;
+    assert!(
+        matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))),
+        "precondition: recv must lag after ring overflow"
+    );
+    match event_recv_to_action(res) {
+        StreamAction::Send(ev) => {
+            // A typed gap marker carrying a nonzero dropped count — never
+            // silence, never Stop.
+            match ipc::WatchFrame::classify(ev) {
+                ipc::WatchFrame::Gap { dropped } => assert!(dropped >= 1, "gap must report dropped >= 1"),
+                other => panic!("expected a gap frame, got {other:?}"),
+            }
+        }
+        StreamAction::Stop => panic!("Lagged must NOT stop the stream; it must emit a visible gap marker"),
+    }
+}
+
+/// A subscriber that sits silent MUST NOT be dropped by the read-idle
+/// timeout (it is exempt), and MUST receive periodic heartbeats. We set a
+/// SHORT idle budget and an even shorter heartbeat, then prove several
+/// heartbeats arrive over a window that far exceeds the idle budget — with
+/// no disconnect. Sub-second: no literal 60s wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_stream_is_idle_exempt_and_heartbeats() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let timeouts = crate::transport::ServerTimeouts {
+        idle: Duration::from_millis(100), // would kill a normal silent client fast
+        write: Duration::from_secs(10),
+        heartbeat: Duration::from_millis(40),
+    };
+    let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+    subscribe(&mut framed).await;
+
+    // Collect heartbeats until we've seen 3. Three heartbeats at 40ms
+    // cadence span ~120ms > the 100ms idle budget, so reaching 3 without a
+    // disconnect proves the subscribe path is idle-exempt.
+    let mut heartbeats = 0u32;
+    while heartbeats < 3 {
+        match next_frame(&mut framed).await {
+            Some(ipc::WatchFrame::Heartbeat) => heartbeats += 1,
+            Some(other) => panic!("unexpected frame on a silent stream: {other:?}"),
+            None => panic!("subscribe stream was closed (idle timeout leaked into the exempt path?)"),
+        }
+    }
+    assert!(heartbeats >= 3, "expected >= 3 heartbeats, got {heartbeats}");
+
+    drop(framed);
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// A full plan lifecycle broadcast AFTER subscribe renders IN ORDER on the
+/// stream. Heartbeat is set long so only real events appear in the window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_stream_renders_events_in_order() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let timeouts = crate::transport::ServerTimeouts {
+        idle: Duration::from_secs(60),
+        write: Duration::from_secs(10),
+        heartbeat: Duration::from_secs(60), // no heartbeats in this short window
+    };
+    let ctx = ctx_for_test_with_timeouts(td.path().to_path_buf(), timeouts).await;
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+    subscribe(&mut framed).await;
+
+    // The server's receiver exists by the time the ack is read (it is
+    // created before the ack send), so events sent now are captured.
+    let sequence = [
+        (
+            "work.terminal",
+            serde_json::json!({ "work_id": "wk-00001", "plan_id": "pl-abc12", "status": "Done" }),
+        ),
+        (
+            "work.terminal",
+            serde_json::json!({ "work_id": "wk-00002", "plan_id": "pl-abc12", "status": "Done" }),
+        ),
+        (
+            "plan.terminal",
+            serde_json::json!({ "plan_id": "pl-abc12", "status": "Complete" }),
+        ),
+    ];
+    for (name, data) in &sequence {
+        ctx.events
+            .send(ipc::DaemonEvent {
+                event: (*name).into(),
+                data: data.clone(),
+            })
+            .unwrap();
+    }
+
+    let mut got = Vec::new();
+    while got.len() < sequence.len() {
+        match next_frame(&mut framed).await {
+            Some(ipc::WatchFrame::Event(ev)) => got.push(ev),
+            Some(other) => panic!("unexpected non-event frame: {other:?}"),
+            None => panic!("stream closed before all events arrived"),
+        }
+    }
+    assert_eq!(got[0].event, "work.terminal");
+    assert_eq!(got[0].data["work_id"], "wk-00001");
+    assert_eq!(got[1].data["work_id"], "wk-00002");
+    assert_eq!(got[2].event, "plan.terminal");
+
+    drop(framed);
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// Killing the client tears down the server-side subscription cleanly: the
+/// broadcast receiver count returns to zero (both the handler's outer
+/// receiver and the stream's live-tail receiver are dropped) — no orphaned
+/// forwarder task holds a receiver open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_disconnect_tears_down_subscription_no_orphan() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
+    assert_eq!(ctx.events.receiver_count(), 0, "no receivers before any client");
+
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    complete_handshake(&mut framed).await;
+    subscribe(&mut framed).await;
+
+    // Subscription is live: at least one server-side receiver exists.
+    let mut live = false;
+    for _ in 0..100 {
+        if ctx.events.receiver_count() >= 1 {
+            live = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(live, "server-side subscription receiver never appeared");
+
+    // Kill the client. The server must observe EOF, exit serve_event_stream,
+    // and drop its receiver(s) — receiver_count returns to zero.
+    drop(framed);
+    let mut torn_down = false;
+    for _ in 0..150 {
+        if ctx.events.receiver_count() == 0 {
+            torn_down = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        torn_down,
+        "server-side subscription leaked (receiver_count never returned to 0)"
+    );
+
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+}
+
+/// A pre-handshake `events.subscribe` is rejected (protocol violation) and
+/// the connection closes — a subscribe stream must not open before the
+/// handshake completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_before_handshake_is_rejected() {
+    let td = TempDir::new().unwrap();
+    let socket = td.path().join("socket");
+    let listener = bind_listener(&socket).unwrap();
+    let ctx = ctx_for_test(td.path().to_path_buf()).await;
+    let ctx_server = ctx.clone();
+    let server = tokio::spawn(async move { accept_loop(listener, ctx_server).await });
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(ipc::MAX_LINE_BYTES));
+    let req = DaemonRequest {
+        id: 1,
+        method: "events.subscribe".into(),
+        params: serde_json::Value::Null,
+    };
+    framed.send(serde_json::to_string(&req).unwrap()).await.unwrap();
+    let line = timeout(Duration::from_secs(2), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let resp: DaemonResponse = serde_json::from_str(&line).unwrap();
+    assert!(resp.error.is_some(), "pre-handshake subscribe must be rejected");
+    // Connection then closes.
+    let next = timeout(Duration::from_secs(2), framed.next()).await.unwrap();
+    assert!(next.is_none(), "connection must close after pre-handshake subscribe");
+
+    ctx.shutting_down.store(true, Ordering::Relaxed);
+    ctx.shutdown_notify.notify_waiters();
+    timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
 }
 
 #[test]

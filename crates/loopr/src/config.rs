@@ -116,6 +116,15 @@ impl IntegratorSection {
 /// still reconciling (Phase 5 fix).
 pub const DEFAULT_STARTUP_BUDGET_SECS: u64 = 60;
 
+/// Default cadence, in seconds, for the keepalive frames the daemon sends
+/// on a long-lived `events.subscribe` stream (`loopr watch`). Phase 17 of
+/// `docs/design/2026-07-11-verified-swarm.md`. Chosen well below the
+/// `server-idle-secs` read-idle budget so a subscribe stream (which is
+/// exempt from that budget anyway) still proves liveness frequently and a
+/// dropped client socket is detected promptly (the heartbeat write fails,
+/// tearing down the server-side subscription).
+pub const DEFAULT_SERVER_HEARTBEAT_SECS: u64 = 5;
+
 /// IPC transport timeouts. Bounds every place where the daemon, its
 /// per-connection handlers, or a short-lived client could otherwise wait
 /// forever on a peer or on disk. See
@@ -150,6 +159,12 @@ pub struct TransportSection {
     /// budget so a client does not give up before a slow-reconcile daemon
     /// has bound its socket. Was a hard 3s (Phase 5 fix). Default: 60s.
     pub client_connect_secs: u64,
+
+    /// Cadence, in seconds, of the keepalive frames the daemon sends on a
+    /// long-lived `events.subscribe` stream (`loopr watch`). Phase 17 of
+    /// `docs/design/2026-07-11-verified-swarm.md`. Default: 5s
+    /// (`DEFAULT_SERVER_HEARTBEAT_SECS`).
+    pub server_heartbeat_secs: u64,
 }
 
 impl Default for TransportSection {
@@ -160,6 +175,7 @@ impl Default for TransportSection {
             server_write_secs: 10,
             daemon_startup_secs: DEFAULT_STARTUP_BUDGET_SECS,
             client_connect_secs: DEFAULT_STARTUP_BUDGET_SECS,
+            server_heartbeat_secs: DEFAULT_SERVER_HEARTBEAT_SECS,
         }
     }
 }

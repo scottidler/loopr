@@ -85,6 +85,22 @@ where
         Method::PlanOverride(params) => handle_plan_override(req.id, params, ctx).await,
         Method::DirectorStatus(params) => handle_director_status(req.id, params, ctx).await,
         Method::BudgetReset => handle_budget_reset(req.id, ctx),
+        // `events.subscribe` is a LONG-LIVED stream intercepted in
+        // `transport::server::handle_client` BEFORE it reaches this
+        // one-shot dispatcher (see `serve_event_stream`). Reaching this arm
+        // means a caller routed the stream method through the
+        // request/response path, which cannot carry a stream — reject it
+        // loudly rather than pretend to serve it.
+        Method::EventsSubscribe => {
+            warn!(
+                request_id = req.id,
+                "events.subscribe routed through one-shot dispatch; must be served as a stream"
+            );
+            DaemonResponse::err(
+                req.id,
+                RpcError::InvalidRequest("events.subscribe is a streaming method; open it as a subscription".into()),
+            )
+        }
     }
 }
 

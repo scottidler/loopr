@@ -1000,3 +1000,79 @@ fn status_result_round_trip_with_plan_rollups() {
     let after: StatusResult = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(after, before);
 }
+
+// --- Phase 17 (2026-07-11-verified-swarm): events.subscribe + WatchFrame ---
+
+#[test]
+fn method_try_from_events_subscribe_no_params() {
+    let req = DaemonRequest {
+        id: 7,
+        method: "events.subscribe".into(),
+        params: json!(null),
+    };
+    assert_eq!(Method::try_from(&req).unwrap(), Method::EventsSubscribe);
+}
+
+#[test]
+fn method_try_from_events_subscribe_empty_object() {
+    let req = DaemonRequest {
+        id: 7,
+        method: "events.subscribe".into(),
+        params: json!({}),
+    };
+    assert_eq!(Method::try_from(&req).unwrap(), Method::EventsSubscribe);
+}
+
+#[test]
+fn method_try_from_events_subscribe_rejects_params() {
+    let req = DaemonRequest {
+        id: 7,
+        method: "events.subscribe".into(),
+        params: json!({"plan": "pl-abc12"}),
+    };
+    match Method::try_from(&req) {
+        Err(RpcError::InvalidParams(_)) => {}
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn watch_frame_heartbeat_round_trips_through_classify() {
+    let wire = crate::WatchFrame::heartbeat_event();
+    assert_eq!(wire.event, crate::STREAM_HEARTBEAT_EVENT);
+    assert_eq!(crate::WatchFrame::classify(wire), crate::WatchFrame::Heartbeat);
+}
+
+#[test]
+fn watch_frame_gap_carries_dropped_count() {
+    let wire = crate::WatchFrame::gap_event(42);
+    assert_eq!(wire.event, crate::STREAM_GAP_EVENT);
+    // The gap marker is a TYPED variant carrying the dropped count, not a
+    // magic string the client re-parses ad hoc.
+    assert_eq!(
+        crate::WatchFrame::classify(wire),
+        crate::WatchFrame::Gap { dropped: 42 }
+    );
+}
+
+#[test]
+fn watch_frame_classifies_real_event_as_event() {
+    let ev = DaemonEvent {
+        event: "work.terminal".into(),
+        data: json!({"work_id": "wk-abc12", "plan_id": "pl-abc12", "status": "Done"}),
+    };
+    assert_eq!(crate::WatchFrame::classify(ev.clone()), crate::WatchFrame::Event(ev));
+}
+
+#[test]
+fn watch_frame_gap_wire_bytes_stable() {
+    // The gap frame goes over the wire as a plain DaemonEvent envelope, so
+    // the client's existing decode path handles it with no new codec.
+    let wire = crate::WatchFrame::gap_event(3);
+    let bytes = serde_json::to_string(&wire).unwrap();
+    let decoded: DaemonEvent = serde_json::from_str(&bytes).unwrap();
+    assert_eq!(
+        crate::WatchFrame::classify(decoded),
+        crate::WatchFrame::Gap { dropped: 3 }
+    );
+}

@@ -20,7 +20,7 @@ use tokio::time::timeout;
 use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 use tracing::{Instrument, info, warn};
 
-use ipc::{DaemonResponse, RpcError, decode_request_line};
+use ipc::{DaemonEvent, DaemonResponse, MethodName, RpcError, WatchFrame, decode_request_line};
 
 use llm::LlmClient;
 
@@ -222,6 +222,18 @@ where
                                 peer = "client",
                                 "request received"
                             );
+                            // `events.subscribe` is a LONG-LIVED stream, not a
+                            // one-shot request/response. Intercept it before
+                            // `handler::dispatch` (which can only return a single
+                            // `DaemonResponse`) and hand the connection to the
+                            // dedicated stream server, which is exempt from the
+                            // read-idle timeout and owns the socket until the
+                            // client disconnects or the daemon shuts down.
+                            let subscribe_wire: &'static str = MethodName::EventsSubscribe.into();
+                            if req.method == subscribe_wire {
+                                serve_event_stream(&mut framed, &ctx, state, req.id, server_write).await;
+                                return;
+                            }
                             let response = handler::dispatch(&req, &mut state, &ctx).await;
                             let close_after = is_protocol_version_mismatch(&response);
                             let line_out = match serde_json::to_string(&response) {
@@ -324,6 +336,161 @@ where
 
 fn is_protocol_version_mismatch(resp: &DaemonResponse) -> bool {
     matches!(&resp.error, Some(RpcError::ProtocolVersionMismatch(_)))
+}
+
+/// Decision for one `event_rx.recv()` result on an `events.subscribe`
+/// stream. Extracted so the broadcast-lag -> gap-marker mapping is unit
+/// testable against a real `RecvError::Lagged` without a wall-clock race.
+enum StreamAction {
+    /// Forward this wire frame to the client.
+    Send(DaemonEvent),
+    /// The broadcast channel closed (daemon shutting down); end the stream.
+    Stop,
+}
+
+/// Map a broadcast `recv()` outcome to a stream action. A `Lagged(n)` is
+/// NEVER swallowed: it becomes a typed gap marker carrying the dropped
+/// count so the client renders a VISIBLE discontinuity instead of silence.
+fn event_recv_to_action(res: Result<DaemonEvent, broadcast::error::RecvError>) -> StreamAction {
+    match res {
+        Ok(ev) => StreamAction::Send(ev),
+        Err(broadcast::error::RecvError::Lagged(dropped)) => StreamAction::Send(WatchFrame::gap_event(dropped)),
+        Err(broadcast::error::RecvError::Closed) => StreamAction::Stop,
+    }
+}
+
+/// Serialize `event` and write it with the bounded write timeout. Returns
+/// `false` when the write failed or timed out (the caller tears the
+/// subscription down). A serialize failure is logged and skipped (`true`),
+/// matching the one-shot event-forward path in `handle_client`.
+async fn write_event_frame(
+    framed: &mut Framed<UnixStream, LinesCodec>,
+    event: &DaemonEvent,
+    server_write: Duration,
+) -> bool {
+    let line = match serde_json::to_string(event) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("subscribe: frame serialize failed: {e}; dropping");
+            return true;
+        }
+    };
+    match timeout(server_write, framed.send(line)).await {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) => false,
+        Err(_elapsed) => {
+            warn!(
+                server_write_secs = server_write.as_secs(),
+                "subscribe: server write timeout exceeded; tearing down subscription"
+            );
+            false
+        }
+    }
+}
+
+/// Serve a long-lived `events.subscribe` stream on `framed` (Phase 17 of
+/// `docs/design/2026-07-11-verified-swarm.md`).
+///
+/// This path is deliberately DIFFERENT from the one-shot request/response
+/// loop in `handle_client`:
+///
+/// - **Read-idle exempt.** It never arms the read-idle `Sleep`, so a
+///   subscriber that sits quietly for far longer than `server-idle-secs`
+///   is NOT dropped. That is the whole point of `loopr watch`.
+/// - **Heartbeats.** It writes a typed keepalive frame every
+///   `server_timeouts.heartbeat`, so a live-but-quiet daemon still proves
+///   liveness and — crucially — a dropped client socket is detected
+///   promptly (the heartbeat write fails, tearing the subscription down
+///   with no leaked forwarder).
+/// - **Live tail.** It re-subscribes to the broadcast bus HERE, so nothing
+///   buffered between connect and subscribe replays: the stream is
+///   live-only by construction.
+/// - **Gap marker.** On broadcast lag it emits a typed
+///   [`WatchFrame::Gap`], never silence.
+///
+/// Returns (and the caller returns from `handle_client`, dropping both
+/// broadcast receivers) on client disconnect, a failed write, or shutdown.
+async fn serve_event_stream<L>(
+    framed: &mut Framed<UnixStream, LinesCodec>,
+    ctx: &Arc<DaemonContext<L>>,
+    state: HandshakeState,
+    ack_id: u64,
+    server_write: Duration,
+) where
+    L: LlmClient + Send + Sync + 'static,
+{
+    // Handshake gate (Stage 3 contract): subscribing before the handshake
+    // is a protocol violation. A well-behaved client always handshakes
+    // first, so we reject and close rather than keeping the connection.
+    if matches!(state, HandshakeState::Pending) {
+        warn!("events.subscribe before handshake; closing connection");
+        let resp = DaemonResponse::err(
+            ack_id,
+            RpcError::InvalidRequest("handshake required before: events.subscribe".to_string()),
+        );
+        if let Ok(s) = serde_json::to_string(&resp) {
+            let _ = timeout(server_write, framed.send(s)).await;
+        }
+        return;
+    }
+
+    // Live tail: fresh subscription at subscribe-time so nothing buffered
+    // before this point replays.
+    let mut event_rx = ctx.events.subscribe();
+
+    // Ack the subscribe request so the client knows the stream is live and
+    // can start rendering.
+    let ack = DaemonResponse::ok(ack_id, serde_json::json!({ "subscribed": true }));
+    match serde_json::to_string(&ack) {
+        Ok(s) => match timeout(server_write, framed.send(s)).await {
+            Ok(Ok(())) => {}
+            _ => return,
+        },
+        Err(e) => {
+            warn!("subscribe ack serialize failed: {e}; closing connection");
+            return;
+        }
+    }
+
+    info!("events.subscribe: live stream opened");
+
+    let mut heartbeat = tokio::time::interval(ctx.server_timeouts.heartbeat);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // `interval`'s first tick fires immediately; consume it so the first
+    // heartbeat is one interval out rather than instantaneous.
+    heartbeat.tick().await;
+
+    loop {
+        // Fast loop-top shutdown check (same reason as `handle_client`).
+        if ctx.shutting_down.load(Ordering::Relaxed) {
+            return;
+        }
+        tokio::select! {
+            biased;
+            _ = ctx.shutdown_notify.notified() => return,
+            // Detect client disconnect promptly. A subscribe-stream client
+            // sends nothing further; `None` (EOF) or an error means it is
+            // gone -> tear the subscription down. Stray input is ignored.
+            incoming = framed.next() => match incoming {
+                None => return,
+                Some(Err(_)) => return,
+                Some(Ok(_)) => continue,
+            },
+            _ = heartbeat.tick() => {
+                if !write_event_frame(framed, &WatchFrame::heartbeat_event(), server_write).await {
+                    return;
+                }
+            }
+            event = event_rx.recv() => match event_recv_to_action(event) {
+                StreamAction::Send(ev) => {
+                    if !write_event_frame(framed, &ev, server_write).await {
+                        return;
+                    }
+                }
+                StreamAction::Stop => return,
+            },
+        }
+    }
 }
 
 #[cfg(test)]

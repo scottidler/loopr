@@ -61,10 +61,17 @@ impl Default for ClientTimeouts {
 pub struct ServerTimeouts {
     /// Wall-clock cap on read silence inside `handle_client`. Reset only
     /// on real client traffic from `framed.next()`; broadcasts do not reset.
+    /// The long-lived `events.subscribe` stream is EXEMPT from this budget
+    /// (it never arms the idle `Sleep`); see `server::serve_event_stream`.
     pub idle: Duration,
     /// Wall-clock cap on each `framed.send(...).await` inside
     /// `handle_client` (response-write and event-broadcast-write).
     pub write: Duration,
+    /// Cadence of keepalive frames on an `events.subscribe` stream. Phase
+    /// 17 of `docs/design/2026-07-11-verified-swarm.md`. Held here (not a
+    /// bare const) so tests can inject a short interval and drive several
+    /// heartbeats without a multi-second wall-clock wait.
+    pub heartbeat: Duration,
 }
 
 impl From<&TransportSection> for ServerTimeouts {
@@ -72,6 +79,7 @@ impl From<&TransportSection> for ServerTimeouts {
         Self {
             idle: Duration::from_secs(t.server_idle_secs),
             write: Duration::from_secs(t.server_write_secs),
+            heartbeat: Duration::from_secs(t.server_heartbeat_secs),
         }
     }
 }

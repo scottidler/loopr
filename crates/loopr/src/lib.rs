@@ -238,6 +238,7 @@ fn dispatch(
             DaemonCmd::Stop => daemon_stop(target),
             DaemonCmd::Status => daemon_status(target, output_format),
         },
+        Command::Watch { plan } => commands::watch::run(target, plan),
         Command::Logs { cmd } => match cmd {
             // `logs tail` excludes the caller's own process dir (whose
             // `loopr.log` is currently receiving this invocation's own
