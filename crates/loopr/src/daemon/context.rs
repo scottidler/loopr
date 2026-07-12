@@ -21,7 +21,8 @@ use uuid::Uuid;
 
 use agents::{
     CheckRunner, Deps, DirectorConfig, DirectorStatusSnapshot, ImplementerConfig, ImplementerError,
-    ProductionCheckRunner, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError, run_implementer, run_reviewer,
+    ProductionCheckRunner, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError, render_review_feedback,
+    run_implementer, run_reviewer,
 };
 use context::{InlineContextBuilder, StateSummary};
 use domain::{
@@ -595,17 +596,39 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         let tool_schemas = ::tools::all_schemas();
 
         // F8/bullet 8: thread the most-recent Rejected Bundle's reviewer
-        // verification into the retry Implementer's StateSummary so it
-        // learns WHY the prior bundle was rejected. Pre-fix this was
-        // hardcoded `StateSummary::default()`, severing the doom-loop
-        // feedback channel that exists end-to-end except this one wire.
+        // feedback into the retry Implementer's StateSummary so it learns WHY
+        // the prior bundle was rejected. Pre-fix this was hardcoded
+        // `StateSummary::default()`, severing the doom-loop feedback channel.
+        //
+        // Phase 11: the feedback is assembled from the persisted `Review`'s
+        // STRUCTURED reasons (capped), not the one-line `Bundle.verification`
+        // string. The full Review stays on disk; the prompt gets the issue
+        // list. Fall back to the verification one-liner only when no Review is
+        // on record (pre-Phase-11 rows or a crash between the two writes).
         let rejected_bundle_reason = match self.store.bundles().list_by_work_id(&work.id).await {
-            Ok(bundles) => bundles
-                .into_iter()
-                .filter(|b| b.status == BundleStatus::Rejected)
-                .max_by_key(|b| b.updated_at)
-                .map(|b| b.verification)
-                .filter(|v| !v.trim().is_empty()),
+            Ok(bundles) => {
+                let latest_rejected = bundles
+                    .into_iter()
+                    .filter(|b| b.status == BundleStatus::Rejected)
+                    .max_by_key(|b| b.updated_at);
+                match latest_rejected {
+                    Some(b) => match self.store.reviews().list_by_bundle(&b.id).await {
+                        Ok(reviews) => reviews
+                            .iter()
+                            .max_by_key(|r| r.round)
+                            .and_then(render_review_feedback)
+                            .or_else(|| Some(b.verification.clone()).filter(|v| !v.trim().is_empty())),
+                        Err(e) => {
+                            warn!(
+                                error = %e, work_id = %work.id, bundle_id = %b.id,
+                                "review feedback lookup failed; falling back to verification string"
+                            );
+                            Some(b.verification).filter(|v| !v.trim().is_empty())
+                        }
+                    },
+                    None => None,
+                }
+            }
             Err(e) => {
                 warn!(error = %e, work_id = %work.id, "rejected-bundle feedback lookup failed; retrying without it");
                 None

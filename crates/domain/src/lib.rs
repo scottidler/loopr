@@ -30,7 +30,7 @@ pub use graph::{GraphError, WorkGraph};
 pub use id::{BundleId, CheckRunId, NoteId, PlanId, ReviewId, TickId, WorkId, generate_id, now_millis};
 pub use note::OperatorNote;
 pub use plan::{Plan, PlanStatus};
-pub use review::{CriterionResult, CriterionStatus, Review};
+pub use review::{AcceptDecision, CriterionResult, CriterionStatus, Review, decide_accept, verdict_kind};
 pub use role::Role;
 pub use tick::{Tick, TickError};
 pub use verdict::{ReviewIssue, Severity, Verdict};

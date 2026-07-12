@@ -168,11 +168,20 @@ pub struct WorkLine {
 }
 
 /// One Bundle row in a `DirectorState`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BundleLine {
     pub id: String,
     pub work_id: String,
     pub status: String,
+    /// Phase 11 accept-gate evidence for a `Reviewed` bundle: the latest
+    /// persisted Review's verdict + red-check count, or an explicit
+    /// evidence-broken flag when no valid Review exists. Empty for
+    /// non-Reviewed bundles (nothing to render). Computed at the
+    /// `agents::build_director_state` seam via `domain::decide_accept` — the
+    /// SAME source of truth the accept-site code gate reads — so the Director
+    /// sees exactly what the gate will enforce. Rendered verbatim after the
+    /// status in the Director user prompt.
+    pub evidence: String,
 }
 
 /// Query passed to `build_for_researcher`.

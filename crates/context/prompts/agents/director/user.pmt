@@ -16,7 +16,7 @@
 ### Bundles (use accept_bundle for any in `Reviewed`)
 
 {{#each bundles}}
-- **{{id}}** for work {{work_id}}: {{status}}
+- **{{id}}** for work {{work_id}}: {{status}}{{#if evidence}} -- {{evidence}}{{/if}}
 {{/each}}
 {{#unless bundles}}
 (no bundles)

@@ -35,11 +35,11 @@ use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
 use domain::{
-    Bundle, BundleStatus, CheckRun, CriterionResult, CriterionStatus, ReviewIssue, Role, Severity, TargetKind, Verdict,
-    Work,
+    Bundle, BundleStatus, CheckRun, CheckRunId, CriterionResult, CriterionStatus, Review, ReviewIssue, Role, Severity,
+    TargetKind, Verdict, Work, verdict_kind,
 };
 use llm::{LlmClient, Message};
-use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink};
+use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink, ReviewSink};
 use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
 
 use crate::check::CheckRunner;
@@ -87,6 +87,30 @@ pub enum ReviewerError {
     /// Persisting a `CheckRun` record failed.
     #[error("check-run persist failed: {0}")]
     CheckPersist(String),
+    /// Persisting the `Review` record failed (Phase 11).
+    #[error("review persist failed: {0}")]
+    ReviewPersist(String),
+}
+
+/// The one-line human summary carried on the persisted `Review` (mirrors the
+/// verdict's own text). Accept/ChangeRequested carry `summary`; Reject carries
+/// its `reason`.
+fn verdict_summary(verdict: &Verdict) -> String {
+    match verdict {
+        Verdict::Accept { summary } => summary.clone(),
+        Verdict::ChangeRequested { summary, .. } => summary.clone(),
+        Verdict::Reject { reason } => reason.clone(),
+    }
+}
+
+/// The structured per-issue reasons persisted on the `Review`. Only a
+/// `ChangeRequested` verdict carries a non-empty set; Accept and Reject
+/// persist an empty Vec (a Reject's rationale lives in `summary`).
+fn verdict_reasons(verdict: &Verdict) -> Vec<ReviewIssue> {
+    match verdict {
+        Verdict::ChangeRequested { reasons, .. } => reasons.clone(),
+        Verdict::Accept { .. } | Verdict::Reject { .. } => Vec::new(),
+    }
 }
 
 /// Parse failure shape for `parse_verdict`. The re-prompt message in
@@ -108,7 +132,7 @@ pub enum ParseError {
 pub struct ReviewerDeps<L, S, C>
 where
     L: LlmClient,
-    S: BundleUpdateSink + CheckRunSink,
+    S: BundleUpdateSink + CheckRunSink + ReviewSink,
     C: ContextBuilder,
 {
     pub llm: L,
@@ -168,7 +192,7 @@ pub async fn run_reviewer<L, S, C>(
 ) -> Result<Verdict, ReviewerError>
 where
     L: LlmClient,
-    S: BundleUpdateSink + CheckRunSink,
+    S: BundleUpdateSink + CheckRunSink + ReviewSink,
     C: ContextBuilder,
 {
     info!(
@@ -187,7 +211,7 @@ where
     // aborts here (env problem -> Blocked, no LLM). Otherwise every command's
     // outcome is persisted as a `CheckRun` and the red set is carried to the
     // code-gate below.
-    let (check_evidence, red_checks) = run_bundle_checks(deps, bundle, work).await?;
+    let (check_evidence, red_checks, check_run_ids) = run_bundle_checks(deps, bundle, work).await?;
 
     let (diff, noop_files) = match bundle.head_commit.as_deref() {
         Some(head) => {
@@ -225,7 +249,7 @@ where
         format!("{base_user}\n\n{check_evidence}")
     };
 
-    let verdict = call_llm_with_retry(&deps.llm, &deps.config, &assembled.system_prompt, &user_text).await?;
+    let (verdict, model) = call_llm_with_retry(&deps.llm, &deps.config, &assembled.system_prompt, &user_text).await?;
 
     // Phase 10 code-gate: an LLM `Accept` while ANY check is red is overridden
     // to `ChangeRequested` BEFORE the FSM transition, with a synthesized
@@ -236,13 +260,44 @@ where
     // Phase 8: synthesize one `CriterionResult` per acceptance criterion
     // from the (post-code-gate) Verdict, keyed on the criterion's stable id,
     // emit the per-criterion + roll-up events, and hold the results.
-    // Persisting these onto the Review record is Phase 11.
     let criteria_results = evaluate_and_emit_criteria(&verdict, work, &bundle.id, &deps.path_deny_patterns);
-    debug!(
+
+    // Phase 11: persist the Review record BEFORE the Bundle transition. Round
+    // is `prior review count for this bundle + 1` (append-only history, no
+    // dedup). A crash between this persist and the Bundle transition below is
+    // benign: the reconcile sweep re-reviews and appends a fresh round. The
+    // record links the CheckRuns this round weighed, carries the structured
+    // reasons (fed back to a retry Implementer), the per-criterion results, and
+    // the concrete model the provider echoed.
+    let round = match deps.store.list_reviews_by_bundle(&bundle.id).await {
+        Ok(prior) => prior.len() as u32 + 1,
+        Err(e) => {
+            warn!(error = %e, bundle_id = %bundle.id, "reviewer: prior-review count failed; defaulting round to 1");
+            1
+        }
+    };
+    let mut review = Review::new(
+        bundle.id.clone(),
+        round,
+        verdict.clone(),
+        verdict_summary(&verdict),
+        verdict_reasons(&verdict),
+        check_run_ids,
+        model.unwrap_or_default(),
+    );
+    review.criteria = criteria_results;
+    let review_id = deps
+        .store
+        .create_review(review)
+        .await
+        .map_err(|e| ReviewerError::ReviewPersist(e.to_string()))?;
+    info!(
         bundle_id = %bundle.id,
         work_id = %work.id,
-        criteria_count = criteria_results.len(),
-        "reviewer: criterion results produced (Review persist deferred to Phase 11)"
+        review_id = %review_id,
+        round,
+        verdict = verdict_kind(&verdict),
+        "reviewer: Review record persisted"
     );
 
     // Best-effort transcript write. Reviewer is single-turn (modulo
@@ -311,14 +366,14 @@ async fn run_bundle_checks<L, S, C>(
     deps: &ReviewerDeps<L, S, C>,
     bundle: &Bundle,
     work: &Work,
-) -> Result<(String, Vec<RedCheck>), ReviewerError>
+) -> Result<(String, Vec<RedCheck>, Vec<CheckRunId>), ReviewerError>
 where
     L: LlmClient,
-    S: BundleUpdateSink + CheckRunSink,
+    S: BundleUpdateSink + CheckRunSink + ReviewSink,
     C: ContextBuilder,
 {
     if deps.config.check_commands.is_empty() {
-        return Ok((String::new(), Vec::new()));
+        return Ok((String::new(), Vec::new(), Vec::new()));
     }
 
     let outcomes = deps
@@ -345,7 +400,10 @@ where
     }
 
     // Every command spawned cleanly: persist evidence and partition red/green.
+    // Collect the persisted CheckRun ids so the Review record (Phase 11) can
+    // reference exactly the runs this round weighed.
     let mut red_checks = Vec::new();
+    let mut check_run_ids = Vec::new();
     for outcome in &outcomes {
         let tail = tail_capped(&outcome.combined_output, CHECK_EXCERPT_CAP);
         let excerpt = if deps.ephemeral_checkout {
@@ -364,10 +422,12 @@ where
             Role::Reviewer,
             outcome.duration_ms,
         );
-        deps.store
+        let check_run_id = deps
+            .store
             .create_check_run(record)
             .await
             .map_err(|e| ReviewerError::CheckPersist(e.to_string()))?;
+        check_run_ids.push(check_run_id);
         if outcome.is_red() {
             red_checks.push(RedCheck {
                 command: outcome.command.clone(),
@@ -386,7 +446,7 @@ where
         ephemeral = deps.ephemeral_checkout,
         "reviewer: executed checks complete"
     );
-    Ok((evidence, red_checks))
+    Ok((evidence, red_checks, check_run_ids))
 }
 
 /// Deterministic accept gate: an `Accept` verdict is overridden to
@@ -503,21 +563,23 @@ async fn call_llm_with_retry<L>(
     config: &ReviewerConfig,
     system_prompt: &str,
     user_message: &str,
-) -> Result<Verdict, ReviewerError>
+) -> Result<(Verdict, Option<String>), ReviewerError>
 where
     L: LlmClient,
 {
     let mut messages = vec![Message::user(user_message.to_string())];
     let mut requeries: u32 = 0;
     loop {
-        let (raw, _usage) = with_llm_retry(&RetryPolicy::default(), || {
+        let (raw, usage) = with_llm_retry(&RetryPolicy::default(), || {
             llm.complete_free(system_prompt, &messages, None)
         })
         .await?;
         match parse_verdict(&raw) {
             Ok(v) => {
                 debug!(requeries, "reviewer verdict parsed");
-                return Ok(v);
+                // The concrete model the provider echoed on the successful
+                // call is persisted on the Review record (pinning audit).
+                return Ok((v, usage.model));
             }
             Err(e) => {
                 requeries += 1;
@@ -764,6 +826,57 @@ fn render_verification(verdict: &Verdict) -> String {
         Verdict::ChangeRequested { summary, reasons } => render_issue_summary(summary, reasons),
         Verdict::Reject { reason } => format!("Rejected: {reason}"),
     }
+}
+
+/// Maximum number of structured reasons rendered into a retry Implementer's
+/// feedback (`StateSummary.rejected_bundle_reason`). The full set stays on the
+/// persisted `Review` record; the prompt shows the first N with an omission
+/// marker so a pathological review can't blow up the context.
+pub const REJECTION_REASONS_CAP: usize = 20;
+
+/// Render a persisted `Review`'s STRUCTURED feedback for a retry Implementer's
+/// prompt (Phase 11). Uses the Review's `summary` + structured `reasons` — NOT
+/// the one-line `Bundle.verification` string — so the Implementer sees the
+/// issues the Reviewer raised, one by one. The reason list is capped at
+/// `REJECTION_REASONS_CAP` with an omission marker; the full record stays on
+/// disk. Returns `None` when the Review carries no usable feedback (empty
+/// summary and no reasons), letting the caller fall through to no feedback.
+pub fn render_review_feedback(review: &Review) -> Option<String> {
+    use std::fmt::Write;
+
+    let summary = review.summary.trim();
+    if summary.is_empty() && review.reasons.is_empty() {
+        return None;
+    }
+    let mut out = if summary.is_empty() {
+        format!("Reviewer requested changes (round {})", review.round)
+    } else {
+        format!("Reviewer requested changes (round {}): {summary}", review.round)
+    };
+    let shown = review.reasons.len().min(REJECTION_REASONS_CAP);
+    for issue in review.reasons.iter().take(shown) {
+        let severity = match issue.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+        };
+        let location = match issue.line {
+            Some(l) => format!("{}:{l}", issue.file),
+            None => issue.file.clone(),
+        };
+        let _ = write!(out, "\n  [{severity}] {location}: {}", issue.message);
+        if let Some(sug) = &issue.suggestion {
+            let _ = write!(out, " (suggestion: {sug})");
+        }
+    }
+    if review.reasons.len() > shown {
+        let _ = write!(
+            out,
+            "\n  [... {} more reason(s) omitted; full detail in reviews.jsonl]",
+            review.reasons.len() - shown
+        );
+    }
+    Some(out)
 }
 
 /// Render a `ChangeRequested` as a compact multi-line string for

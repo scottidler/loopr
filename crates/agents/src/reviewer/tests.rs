@@ -8,12 +8,12 @@ use tempfile::TempDir;
 
 use context::InlineContextBuilder;
 use domain::{
-    AcceptanceCriteria, Bundle, BundleStatus, CheckRun, CheckRunId, PlanId, ReviewIssue, Role, Severity, TargetKind,
-    Verdict, Work, WorkId,
+    AcceptanceCriteria, Bundle, BundleStatus, CheckRun, CheckRunId, PlanId, Review, ReviewId, ReviewIssue, Role,
+    Severity, TargetKind, Verdict, Work, WorkId,
 };
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 
-use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink, StoreError};
+use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink, ReviewSink, StoreError};
 use tools::{LaneRouter, SandboxMode};
 
 use super::{
@@ -160,6 +160,7 @@ struct CollectingSink {
     persisted: Mutex<Vec<(Bundle, i64)>>,
     stale_once: Mutex<bool>,
     check_runs: Mutex<Vec<CheckRun>>,
+    reviews: Mutex<Vec<Review>>,
 }
 
 impl CheckRunSink for CollectingSink {
@@ -167,6 +168,25 @@ impl CheckRunSink for CollectingSink {
         let id = check_run.id.clone();
         self.check_runs.lock().unwrap().push(check_run);
         Ok(id)
+    }
+}
+
+impl ReviewSink for CollectingSink {
+    async fn create_review(&self, review: Review) -> Result<ReviewId, StoreError> {
+        let id = review.id.clone();
+        self.reviews.lock().unwrap().push(review);
+        Ok(id)
+    }
+
+    async fn list_reviews_by_bundle(&self, bundle_id: &domain::BundleId) -> Result<Vec<Review>, StoreError> {
+        Ok(self
+            .reviews
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| &r.bundle_id == bundle_id)
+            .cloned()
+            .collect())
     }
 }
 
@@ -244,7 +264,7 @@ fn triaged_bundle(work_id: WorkId, head_commit: Option<&str>, paths: Vec<String>
     b
 }
 
-fn make_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink>(
+fn make_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink + ReviewSink>(
     llm: L,
     store: S,
     target: PathBuf,
@@ -268,7 +288,7 @@ fn make_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink>(
 
 /// Build deps with an explicit checkout path and real check runner for the
 /// Phase 10 executed-check tests.
-fn make_checked_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink>(
+fn make_checked_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink + ReviewSink>(
     llm: L,
     store: S,
     target: PathBuf,
@@ -798,6 +818,197 @@ async fn noop_bundle_reads_file_contents_from_checkout_not_target() {
     assert!(
         sent.contains(MARKER),
         "reviewer prompt must contain the checkout-only file contents (read from checkout, not target)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11: Review record persistence + round numbering + criteria
+// ---------------------------------------------------------------------------
+
+use domain::CriterionStatus;
+
+use super::render_review_feedback;
+
+#[tokio::test]
+async fn run_reviewer_persists_review_round_1_with_criteria() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let work = sample_work(); // one AC: "module exists" (id 1)
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    let llm = FakeLlm::new(vec![r#"{"kind":"accept","summary":"LGTM"}"#.to_string()]);
+    let deps = make_deps(llm, CollectingSink::default(), repo, ReviewerConfig::default());
+
+    run_reviewer(&bundle, &work, &deps).await.unwrap();
+
+    let reviews = deps.store.reviews.lock().unwrap();
+    assert_eq!(reviews.len(), 1, "exactly one Review row per review round");
+    let rv = &reviews[0];
+    assert_eq!(rv.bundle_id, bundle.id);
+    assert_eq!(rv.round, 1, "first review round is 1");
+    assert!(matches!(rv.verdict, Verdict::Accept { .. }));
+    assert_eq!(rv.criteria.len(), 1, "one CriterionResult per acceptance criterion");
+    assert_eq!(rv.criteria[0].criterion_id, 1);
+    assert_eq!(rv.criteria[0].status, CriterionStatus::Met, "Accept -> criterion Met");
+}
+
+#[tokio::test]
+async fn re_review_appends_new_round_no_dedup() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    // Same bundle reviewed twice (run_reviewer transitions a CLONE, so the
+    // caller's Triaged bundle is reusable). Round must advance 1 -> 2.
+    let llm = FakeLlm::repeating(r#"{"kind":"accept","summary":"ok"}"#.to_string());
+    let deps = make_deps(llm, CollectingSink::default(), repo, ReviewerConfig::default());
+
+    run_reviewer(&bundle, &work, &deps).await.unwrap();
+    run_reviewer(&bundle, &work, &deps).await.unwrap();
+
+    let reviews = deps.store.reviews.lock().unwrap();
+    assert_eq!(reviews.len(), 2, "append-only history: one row per round, no dedup");
+    let mut rounds: Vec<u32> = reviews.iter().map(|r| r.round).collect();
+    rounds.sort_unstable();
+    assert_eq!(rounds, vec![1, 2], "rounds are the contiguous 1..N sequence");
+}
+
+#[tokio::test]
+async fn change_requested_review_persists_structured_reasons() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    let llm = FakeLlm::new(vec![
+        r#"{"kind":"change_requested","summary":"needs work","reasons":[{"severity":"error","file":"src.rs","line":3,"message":"missing module"}]}"#.to_string(),
+    ]);
+    let deps = make_deps(llm, CollectingSink::default(), repo, ReviewerConfig::default());
+
+    run_reviewer(&bundle, &work, &deps).await.unwrap();
+
+    let reviews = deps.store.reviews.lock().unwrap();
+    let rv = &reviews[0];
+    assert!(matches!(rv.verdict, Verdict::ChangeRequested { .. }));
+    assert_eq!(rv.reasons.len(), 1, "structured reasons persisted on the Review");
+    assert_eq!(rv.reasons[0].message, "missing module");
+    assert_eq!(
+        rv.criteria[0].status,
+        CriterionStatus::Unmet,
+        "ChangeRequested -> criterion Unmet"
+    );
+}
+
+#[tokio::test]
+async fn code_gated_accept_persists_change_requested_review_linking_check_runs() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let checkout = TempDir::new().unwrap();
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    // LLM says accept, but a red check overrides to change_requested; the
+    // persisted Review must reflect the code-gated verdict AND link the CheckRun.
+    let llm = FakeLlm::new(vec![r#"{"kind":"accept","summary":"looks great"}"#.to_string()]);
+    let config = ReviewerConfig {
+        check_commands: vec!["false".to_string()],
+        ..ReviewerConfig::default()
+    };
+    let deps = make_checked_deps(
+        llm,
+        CollectingSink::default(),
+        repo,
+        checkout.path().to_path_buf(),
+        config,
+        real_check_runner(),
+    );
+
+    run_reviewer(&bundle, &work, &deps).await.unwrap();
+
+    let reviews = deps.store.reviews.lock().unwrap();
+    let rv = &reviews[0];
+    assert!(
+        matches!(rv.verdict, Verdict::ChangeRequested { .. }),
+        "code-gated Accept persists as ChangeRequested"
+    );
+    assert_eq!(rv.check_run_ids.len(), 1, "the Review links the CheckRun it weighed");
+}
+
+#[test]
+fn render_review_feedback_uses_structured_reasons_not_verification_string() {
+    let rv = Review::new(
+        domain::BundleId::new(),
+        2,
+        Verdict::ChangeRequested {
+            summary: "address the issues".to_string(),
+            reasons: vec![ReviewIssue {
+                severity: Severity::Error,
+                file: "src/lib.rs".to_string(),
+                line: Some(42),
+                message: "unused import".to_string(),
+                suggestion: Some("remove it".to_string()),
+            }],
+        },
+        "address the issues".to_string(),
+        vec![ReviewIssue {
+            severity: Severity::Error,
+            file: "src/lib.rs".to_string(),
+            line: Some(42),
+            message: "unused import".to_string(),
+            suggestion: Some("remove it".to_string()),
+        }],
+        Vec::new(),
+        "m".to_string(),
+    );
+    let out = render_review_feedback(&rv).expect("feedback for a review with reasons");
+    assert!(out.contains("round 2"));
+    assert!(out.contains("address the issues"));
+    assert!(out.contains("src/lib.rs:42"), "structured location rendered: {out}");
+    assert!(out.contains("unused import"));
+    assert!(out.contains("suggestion: remove it"));
+}
+
+#[test]
+fn render_review_feedback_none_when_empty() {
+    let rv = Review::new(
+        domain::BundleId::new(),
+        1,
+        Verdict::Accept { summary: String::new() },
+        String::new(),
+        Vec::new(),
+        Vec::new(),
+        "m".to_string(),
+    );
+    assert!(
+        render_review_feedback(&rv).is_none(),
+        "no summary and no reasons -> no feedback"
+    );
+}
+
+#[test]
+fn render_review_feedback_caps_reason_count() {
+    let reasons: Vec<ReviewIssue> = (0..(super::REJECTION_REASONS_CAP + 5))
+        .map(|i| ReviewIssue {
+            severity: Severity::Error,
+            file: format!("f{i}.rs"),
+            line: None,
+            message: format!("issue {i}"),
+            suggestion: None,
+        })
+        .collect();
+    let rv = Review::new(
+        domain::BundleId::new(),
+        1,
+        Verdict::ChangeRequested {
+            summary: "many".to_string(),
+            reasons: reasons.clone(),
+        },
+        "many".to_string(),
+        reasons,
+        Vec::new(),
+        "m".to_string(),
+    );
+    let out = render_review_feedback(&rv).unwrap();
+    assert!(
+        out.contains("more reason(s) omitted"),
+        "capped render marks omission: {out}"
     );
 }
 

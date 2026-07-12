@@ -17,6 +17,49 @@ use domain::{BundleId, Review, ReviewId};
 
 use crate::error::StoreError;
 
+/// Narrow write+read sink for `Review` evidence, mirroring `CheckRunSink`.
+/// Reviews are append-only history (one row per round, never mutated), so
+/// this is create + list only — no OCC, no update. `run_reviewer` (Phase 11)
+/// persists one `Review` per round through `create_review` after computing
+/// the round via `list_reviews_by_bundle`. The `&B` / `Arc<B>` forwarding
+/// impls let a caller pass a borrowed sink (the daemon injects
+/// `&*self.summary_fanout`).
+#[trait_variant::make(Send)]
+pub trait ReviewSink: Send + Sync {
+    async fn create_review(&self, review: Review) -> Result<ReviewId, StoreError>;
+    async fn list_reviews_by_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError>;
+}
+
+impl ReviewSink for crate::Store {
+    async fn create_review(&self, review: Review) -> Result<ReviewId, StoreError> {
+        self.reviews().create(review).await
+    }
+
+    async fn list_reviews_by_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        self.reviews().list_by_bundle(bundle_id).await
+    }
+}
+
+impl<B: ReviewSink + ?Sized> ReviewSink for &B {
+    async fn create_review(&self, review: Review) -> Result<ReviewId, StoreError> {
+        (*self).create_review(review).await
+    }
+
+    async fn list_reviews_by_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        (*self).list_reviews_by_bundle(bundle_id).await
+    }
+}
+
+impl<B: ReviewSink + ?Sized> ReviewSink for std::sync::Arc<B> {
+    async fn create_review(&self, review: Review) -> Result<ReviewId, StoreError> {
+        (**self).create_review(review).await
+    }
+
+    async fn list_reviews_by_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        (**self).list_reviews_by_bundle(bundle_id).await
+    }
+}
+
 pub struct ReviewsStore<'a> {
     inner: &'a AsyncStore,
 }

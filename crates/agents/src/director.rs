@@ -47,8 +47,8 @@ use tracing::{debug, info, instrument, warn};
 
 use context::{ContextBuilder, ContextError, DirectorState as CtxDirectorState};
 use domain::{
-    Bundle, BundleId, BundleStatus, NoteId, OperatorNote, Plan, PlanId, PlanStatus, Role, Work, WorkId, WorkStatus,
-    now_millis,
+    Bundle, BundleId, BundleStatus, CheckRun, NoteId, OperatorNote, Plan, PlanId, PlanStatus, Review, Role, Work,
+    WorkId, WorkStatus, decide_accept, now_millis,
 };
 use llm::{LlmClient, Message};
 use store::StoreError;
@@ -204,6 +204,15 @@ pub trait DirectorStore: Send + Sync + 'static {
     /// marking after a successful LLM call ensures the note has been
     /// observed before its `read_at` is stamped.
     async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError>;
+    /// Phase 11: the persisted Review rounds for a Bundle. Used by
+    /// `build_director_state` to render the accept-gate evidence per Reviewed
+    /// bundle (last verdict kind + red-check count), reading the SAME records
+    /// the accept-site code gate reads.
+    async fn list_reviews_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError>;
+    /// Phase 11: the persisted CheckRuns for a Bundle. Paired with
+    /// `list_reviews_for_bundle` so `decide_accept` can count red referenced
+    /// checks for the Director summary.
+    async fn list_check_runs_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<CheckRun>, StoreError>;
 }
 
 /// `DirectorStore` impl on `store::Store`. `list_bundles_for_plan` walks
@@ -251,6 +260,14 @@ impl DirectorStore for store::Store {
     async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError> {
         self.notes().mark_read(note_ids, now_millis()).await
     }
+
+    async fn list_reviews_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        self.reviews().list_by_bundle(bundle_id).await
+    }
+
+    async fn list_check_runs_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<CheckRun>, StoreError> {
+        self.check_runs().list_by_bundle(bundle_id).await
+    }
 }
 
 /// Forwarding `DirectorStore` impl for `Arc<S>`. Mirrors the pattern used
@@ -284,6 +301,14 @@ impl<S: DirectorStore + ?Sized> DirectorStore for Arc<S> {
 
     async fn mark_notes_read(&self, note_ids: &[NoteId]) -> Result<(), StoreError> {
         (**self).mark_notes_read(note_ids).await
+    }
+
+    async fn list_reviews_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        (**self).list_reviews_for_bundle(bundle_id).await
+    }
+
+    async fn list_check_runs_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<CheckRun>, StoreError> {
+        (**self).list_check_runs_for_bundle(bundle_id).await
     }
 }
 
@@ -499,14 +524,27 @@ pub async fn build_director_state<S: DirectorStore>(
             attempt_count: w.attempt_count,
         })
         .collect();
-    let bundle_lines = bundles
-        .iter()
-        .map(|b| context::BundleLine {
+    // Phase 11: enrich each `Reviewed` bundle with accept-gate evidence (last
+    // verdict kind + red-check count, or an evidence-broken flag). The Director
+    // reads the SAME `decide_accept` verdict the accept-site code gate enforces,
+    // so what it sees is exactly what the gate will do. Non-Reviewed bundles
+    // carry no evidence (empty string; nothing to render).
+    let mut bundle_lines = Vec::with_capacity(bundles.len());
+    for b in &bundles {
+        let evidence = if b.status == BundleStatus::Reviewed {
+            let reviews = store.list_reviews_for_bundle(&b.id).await?;
+            let check_runs = store.list_check_runs_for_bundle(&b.id).await?;
+            decide_accept(&reviews, &check_runs).evidence_label()
+        } else {
+            String::new()
+        };
+        bundle_lines.push(context::BundleLine {
             id: b.id.to_string(),
             work_id: b.work_id.to_string(),
             status: bundle_status_str(b.status).to_string(),
-        })
-        .collect();
+            evidence,
+        });
+    }
 
     Ok(CtxDirectorState {
         plan_id: plan_id.to_string(),

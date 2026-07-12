@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use derive::Record;
 
 use crate::id::{BundleId, CheckRunId, ReviewId, now_millis};
-use crate::{ReviewIssue, Verdict};
+use crate::{CheckRun, ReviewIssue, Verdict};
 
 /// Per-criterion outcome for one acceptance criterion in a review round.
 ///
@@ -126,6 +126,130 @@ impl Review {
             check_run_ids,
             model,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic accept gate (Phase 11)
+// ---------------------------------------------------------------------------
+
+/// Outcome of the deterministic accept-gate evidence check (Phase 11 of
+/// `docs/design/2026-07-11-verified-swarm.md`).
+///
+/// Computed purely from the persisted `Review` history + `CheckRun` evidence
+/// for a Bundle. The daemon's accept site (`spawner.rs`) and the Director
+/// state summary (`agents::build_director_state`) both read it, so the gate
+/// and the operator see the SAME verdict from one source of truth.
+///
+/// **Fail-closed:** only `Accept` permits `Reviewed -> Accepted`. Every other
+/// variant refuses — missing evidence, an ambiguous (stale) round chain, a
+/// non-accept latest verdict, or an accept that references red checks. The
+/// prompt is not the gate; this decision is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcceptDecision {
+    /// Latest `Review` is `Accept`, its `round` matches the append-only
+    /// history length, and zero referenced `CheckRun`s are red -> accept
+    /// permitted.
+    Accept { round: u32 },
+    /// No `Review` persisted for the Bundle -> refuse (evidence missing).
+    NoReview,
+    /// The latest `Review`'s `round` does not equal the number of persisted
+    /// rounds (the append-only 1..N chain is broken / ambiguous) -> refuse
+    /// (evidence stale). This is the "round mismatch" case.
+    Stale { latest_round: u32, review_count: u32 },
+    /// The latest `Review` is not an `Accept` -> refuse.
+    NotAccept { verdict_kind: &'static str, round: u32 },
+    /// The latest `Review` is `Accept` but references red (nonzero-exit)
+    /// `CheckRun`s -> refuse. The Phase 10 code-gate should have prevented
+    /// this at review time; refusing here is defense-in-depth.
+    RedChecks { count: u32, round: u32 },
+}
+
+impl AcceptDecision {
+    /// Only `Accept` permits the `Reviewed -> Accepted` transition.
+    pub fn is_accept(&self) -> bool {
+        matches!(self, AcceptDecision::Accept { .. })
+    }
+
+    /// Short human-readable evidence label. Rendered into the Director state
+    /// summary per Reviewed bundle and into the accept-site warn log, so the
+    /// operator and the gate log agree on why an accept was (or was not)
+    /// permitted.
+    pub fn evidence_label(&self) -> String {
+        match self {
+            AcceptDecision::Accept { round } => {
+                format!("review round {round}: accept, 0 red checks (accept-eligible)")
+            }
+            AcceptDecision::NoReview => "NO REVIEW EVIDENCE on record -- accept refused by the gate".to_string(),
+            AcceptDecision::Stale {
+                latest_round,
+                review_count,
+            } => format!(
+                "STALE REVIEW EVIDENCE (latest round {latest_round} != {review_count} rounds on record) -- accept refused"
+            ),
+            AcceptDecision::NotAccept { verdict_kind, round } => {
+                format!("review round {round}: {verdict_kind} -- accept refused")
+            }
+            AcceptDecision::RedChecks { count, round } => {
+                format!("review round {round}: accept over {count} red check(s) -- accept refused")
+            }
+        }
+    }
+}
+
+/// Return the wire discriminator string for a `Verdict` kind (matches the
+/// serde `rename_all = "snake_case"` tag). Used by the accept-gate and the
+/// Director summary to name the latest verdict without deconstructing the
+/// tagged enum at every call site.
+pub fn verdict_kind(verdict: &Verdict) -> &'static str {
+    match verdict {
+        Verdict::Accept { .. } => "accept",
+        Verdict::ChangeRequested { .. } => "change_requested",
+        Verdict::Reject { .. } => "reject",
+    }
+}
+
+/// Deterministic accept-gate decision for a Bundle, computed purely from its
+/// persisted `Review` history and `CheckRun` evidence (Phase 11).
+///
+/// The latest round wins (`max` by `round`). The append-only history must be a
+/// contiguous 1..N chain, so the latest round must equal the review count; a
+/// mismatch is treated as ambiguous/stale evidence and refused. Only an
+/// `Accept` latest verdict with zero red referenced CheckRuns permits the
+/// accept. Everything else fails closed.
+pub fn decide_accept(reviews: &[Review], check_runs: &[CheckRun]) -> AcceptDecision {
+    if reviews.is_empty() {
+        return AcceptDecision::NoReview;
+    }
+    let review_count = reviews.len() as u32;
+    // Latest round wins. In a clean append-only history rounds are the unique
+    // sequence 1..N, so the max round equals the count; the check below rejects
+    // any history where that invariant is broken.
+    let latest = reviews
+        .iter()
+        .max_by_key(|r| r.round)
+        .expect("reviews is non-empty (checked above)");
+    if latest.round != review_count {
+        return AcceptDecision::Stale {
+            latest_round: latest.round,
+            review_count,
+        };
+    }
+    let red = latest
+        .check_run_ids
+        .iter()
+        .filter(|id| check_runs.iter().any(|c| c.id == **id && c.exit_code != 0))
+        .count() as u32;
+    match &latest.verdict {
+        Verdict::Accept { .. } if red == 0 => AcceptDecision::Accept { round: latest.round },
+        Verdict::Accept { .. } => AcceptDecision::RedChecks {
+            count: red,
+            round: latest.round,
+        },
+        other => AcceptDecision::NotAccept {
+            verdict_kind: verdict_kind(other),
+            round: latest.round,
+        },
     }
 }
 

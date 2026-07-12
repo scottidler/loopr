@@ -255,6 +255,7 @@ fn sample_director_state(mode: &str) -> DirectorState {
             id: "bd-1".to_string(),
             work_id: "wk-1".to_string(),
             status: "Reviewed".to_string(),
+            ..Default::default()
         }],
         blocked_reason: None,
         operator_notes: Vec::new(),

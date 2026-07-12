@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use agents::WorkSpawner;
-use domain::{BundleId, BundleStatus, Role, TargetKind, WorkId, WorkStatus};
+use domain::{BundleId, BundleStatus, Role, TargetKind, WorkId, WorkStatus, decide_accept};
 use llm::LlmClient;
 use tracing::{debug, info, warn};
 
@@ -103,6 +103,41 @@ where
                         return;
                     }
                 }
+                // Phase 11 deterministic accept gate (panel must-fix #1). The
+                // prompt is not the gate; THIS is. `Reviewed -> Accepted` is
+                // refused unless the persisted latest Review for the Bundle is
+                // `Accept` with zero red referenced CheckRuns. Missing, stale
+                // (round mismatch), or red evidence -> no accept; the Bundle
+                // stays Reviewed and the Director state summary flags it as
+                // evidence-broken (the Director re-reviews or escalates).
+                let reviews = match ctx.store.reviews().list_by_bundle(&bundle_id).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: review evidence lookup failed; refusing accept (fail-closed)");
+                        return;
+                    }
+                };
+                let check_runs = match ctx.store.check_runs().list_by_bundle(&bundle_id).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: check-run evidence lookup failed; refusing accept (fail-closed)");
+                        return;
+                    }
+                };
+                let decision = decide_accept(&reviews, &check_runs);
+                if !decision.is_accept() {
+                    warn!(
+                        bundle_id = %bundle_id,
+                        evidence = %decision.evidence_label(),
+                        "accept_bundle: REFUSED by the deterministic accept gate; Bundle stays Reviewed (evidence-broken)"
+                    );
+                    return;
+                }
+                debug!(
+                    bundle_id = %bundle_id,
+                    evidence = %decision.evidence_label(),
+                    "accept_bundle: accept gate passed; proceeding to Accepted"
+                );
                 let expected = bundle.updated_at;
                 if let Err(e) = bundle.transition(BundleStatus::Accepted, Role::Director) {
                     warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");

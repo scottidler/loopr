@@ -10,8 +10,8 @@ use tokio::sync::Notify;
 
 use context::{AssembledContext, ContextBuilder, ContextError, DirectorState as CtxDirectorState};
 use domain::{
-    Bundle, BundleId, BundleStatus, NoteId, OperatorNote, Plan, PlanId, PlanStatus, Work, WorkId, WorkStatus,
-    now_millis,
+    Bundle, BundleId, BundleStatus, CheckRun, NoteId, OperatorNote, Plan, PlanId, PlanStatus, Review, Verdict, Work,
+    WorkId, WorkStatus, now_millis,
 };
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 use store::StoreError;
@@ -417,6 +417,8 @@ struct FakeStore {
     bundles: Mutex<Vec<Bundle>>,
     plan: Mutex<Option<Plan>>,
     notes: Mutex<Vec<OperatorNote>>,
+    reviews: Mutex<Vec<Review>>,
+    check_runs: Mutex<Vec<CheckRun>>,
 }
 
 impl FakeStore {
@@ -424,8 +426,7 @@ impl FakeStore {
         Self {
             works: Mutex::new(works),
             bundles: Mutex::new(bundles),
-            plan: Mutex::new(None),
-            notes: Mutex::new(Vec::new()),
+            ..Default::default()
         }
     }
 
@@ -434,7 +435,7 @@ impl FakeStore {
             works: Mutex::new(works),
             bundles: Mutex::new(bundles),
             plan: Mutex::new(Some(plan)),
-            notes: Mutex::new(Vec::new()),
+            ..Default::default()
         }
     }
 
@@ -498,6 +499,28 @@ impl DirectorStore for FakeStore {
             }
         }
         Ok(())
+    }
+
+    async fn list_reviews_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        Ok(self
+            .reviews
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| &r.bundle_id == bundle_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_check_runs_for_bundle(&self, bundle_id: &BundleId) -> Result<Vec<CheckRun>, StoreError> {
+        Ok(self
+            .check_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| &c.bundle_id == bundle_id)
+            .cloned()
+            .collect())
     }
 }
 
@@ -959,6 +982,66 @@ async fn build_state_stringifies_statuses_pascalcase() {
     assert!(statuses.contains(&"InProgress"));
     assert_eq!(state.bundles.len(), 1);
     assert_eq!(state.bundles[0].status, "Reviewed");
+}
+
+#[tokio::test]
+async fn build_state_flags_reviewed_bundle_with_no_review_evidence() {
+    // Phase 11: a Reviewed bundle with NO persisted Review must be flagged as
+    // evidence-broken in the Director summary, so the operator sees the accept
+    // gate will refuse it.
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let bundle = make_bundle(work.id.clone(), BundleStatus::Reviewed);
+    let store = FakeStore::with(vec![work], vec![bundle]);
+
+    let state = build_director_state(&plan_id, &store).await.expect("ok");
+    assert_eq!(state.bundles.len(), 1);
+    assert!(
+        state.bundles[0].evidence.contains("NO REVIEW EVIDENCE"),
+        "no-review Reviewed bundle must be flagged evidence-broken: {:?}",
+        state.bundles[0].evidence
+    );
+}
+
+#[tokio::test]
+async fn build_state_shows_accept_evidence_for_valid_review() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::Blocked);
+    let bundle = make_bundle(work.id.clone(), BundleStatus::Reviewed);
+    let review = Review::new(
+        bundle.id.clone(),
+        1,
+        Verdict::Accept {
+            summary: "ok".to_string(),
+        },
+        "ok".to_string(),
+        Vec::new(),
+        Vec::new(),
+        "m".to_string(),
+    );
+    let store = FakeStore::with(vec![work], vec![bundle]);
+    *store.reviews.lock().unwrap() = vec![review];
+
+    let state = build_director_state(&plan_id, &store).await.expect("ok");
+    assert!(
+        state.bundles[0].evidence.contains("accept-eligible"),
+        "valid Accept review renders accept-eligible evidence: {:?}",
+        state.bundles[0].evidence
+    );
+}
+
+#[tokio::test]
+async fn build_state_no_evidence_for_non_reviewed_bundle() {
+    let plan_id = PlanId::new();
+    let work = make_work(plan_id.clone(), "wk-1", WorkStatus::InProgress);
+    let bundle = make_bundle(work.id.clone(), BundleStatus::Triaged);
+    let store = FakeStore::with(vec![work], vec![bundle]);
+
+    let state = build_director_state(&plan_id, &store).await.expect("ok");
+    assert!(
+        state.bundles[0].evidence.is_empty(),
+        "non-Reviewed bundle carries no accept-gate evidence"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -29,8 +29,9 @@ pub use lifeguard::{Decision, Lifeguard, canonical_hash};
 pub use parse::{ParseError, parse_actions, parse_one};
 pub use retry::{RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS, RetryPolicy, with_llm_retry};
 pub use reviewer::{
-    ParseError as ReviewerParseError, ReviewerDeps, ReviewerError, VERIFICATION_CAP, git_show, parse_verdict,
-    read_file_contents, render_issue_summary, run_reviewer, strip_commit_header, truncate_diff,
+    ParseError as ReviewerParseError, REJECTION_REASONS_CAP, ReviewerDeps, ReviewerError, VERIFICATION_CAP, git_show,
+    parse_verdict, read_file_contents, render_issue_summary, render_review_feedback, run_reviewer, strip_commit_header,
+    truncate_diff,
 };
 // `BundleUpdateSink` / `BundleUpdateError` were relocated to `store` per
 // docs/design/2026-04-22-integrator.md (Phase 1c cross-doc reconciliation).

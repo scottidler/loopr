@@ -25,10 +25,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use domain::{Bundle, CheckRun, CheckRunId, Plan, PlanStatus, Role, TargetKind, Work, WorkStatus};
+use domain::{
+    Bundle, BundleId, CheckRun, CheckRunId, Plan, PlanStatus, Review, ReviewId, Role, TargetKind, Work, WorkStatus,
+};
 use ipc::DaemonEvent;
 use store::{
-    BundleUpdateError, BundleUpdateSink, CheckRunSink, PlanUpdateError, PlanUpdateSink, Store, StoreError,
+    BundleUpdateError, BundleUpdateSink, CheckRunSink, PlanUpdateError, PlanUpdateSink, ReviewSink, Store, StoreError,
     WorkUpdateError, WorkUpdateSink,
 };
 use tokio::sync::broadcast;
@@ -247,6 +249,24 @@ where
 {
     async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError> {
         self.store.check_runs().create(check_run).await
+    }
+}
+
+/// `ReviewSink` (Phase 11): like `CheckRunSink`, there is no summary artifact
+/// for Reviews (append-only evidence, not a summarized record); the impl
+/// forwards straight to the inner `Store`'s `reviews` collection. The Reviewer
+/// persists one `Review` per round through this and reads prior rounds to
+/// compute the next round number.
+impl<S> ReviewSink for SummaryFanout<S>
+where
+    S: Send + Sync,
+{
+    async fn create_review(&self, review: Review) -> Result<ReviewId, StoreError> {
+        self.store.reviews().create(review).await
+    }
+
+    async fn list_reviews_by_bundle(&self, bundle_id: &BundleId) -> Result<Vec<Review>, StoreError> {
+        self.store.reviews().list_by_bundle(bundle_id).await
     }
 }
 
