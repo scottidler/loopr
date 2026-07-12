@@ -210,13 +210,17 @@ fn note_persists_across_daemon_restart() {
     //    `startup_reconcile_directors` on both forks.
     let plan_id = seed_plan(target, "restart-pickup-target");
 
-    // 2. Auto-fork daemon #1. The DaemonAutoStop guard is panic-safe
-    //    cleanup of last resort; we stop the daemon explicitly below
-    //    so the seed-note write happens with no concurrent writer.
+    // 2. Fork daemon #1 explicitly. Phase 16 of
+    //    `docs/design/2026-07-11-verified-swarm.md` made read verbs
+    //    (`plans` included) report "no daemon" instead of auto-forking;
+    //    `daemon start` is the direct replacement. The DaemonAutoStop
+    //    guard is panic-safe cleanup of last resort; we stop the daemon
+    //    explicitly below so the seed-note write happens with no
+    //    concurrent writer.
     {
         let _stop = DaemonAutoStop::for_target(target);
         loopr()
-            .args(["-C", target.to_str().unwrap(), "plans"])
+            .args(["-C", target.to_str().unwrap(), "daemon", "start"])
             .assert()
             .success();
 
@@ -232,13 +236,13 @@ fn note_persists_across_daemon_restart() {
     let chat_msg = "post-restart pickup probe";
     let note_id = seed_note(target, &plan_id, chat_msg);
 
-    // 5. Auto-fork daemon #2. `startup_reconcile_directors` finds the
-    //    Active Plan, spawns a fresh Director, whose first iteration
+    // 5. Fork daemon #2 explicitly. `startup_reconcile_directors` finds
+    //    the Active Plan, spawns a fresh Director, whose first iteration
     //    calls `list_unread_notes_for_plan` and (after a successful
     //    LLM round-trip) `mark_notes_read`.
     let _stop2 = DaemonAutoStop::for_target(target);
     loopr()
-        .args(["-C", target.to_str().unwrap(), "plans"])
+        .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
 

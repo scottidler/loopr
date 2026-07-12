@@ -374,6 +374,21 @@ pub fn ensure_daemon_if_needed(target: &Path) -> Result<(), LooprError> {
     ensure_daemon(target, false)
 }
 
+/// Read-verb guard (Phase 16 of `docs/design/2026-07-11-verified-swarm.md`):
+/// reports whether a live daemon is running WITHOUT forking one. Every
+/// read verb (`daemon status`, `plans`/`works`/`bundles`/`ticks`, `show`,
+/// `budget reset`) calls this instead of `ensure_daemon_if_needed` so a
+/// read can never silently become a fork; a read verb that finds `false`
+/// prints "no daemon running" and returns `Ok(())` without ever calling
+/// `connect_or_wait`.
+pub fn is_running(target: &Path) -> Result<bool, LooprError> {
+    let pid_file = sentinel::pid_path(target);
+    match sentinel::read_pid(&pid_file)? {
+        Some(pid) if sentinel::is_daemon_alive(pid) => Ok(true),
+        _ => Ok(false),
+    }
+}
+
 /// Client-side blocking poll. `connect_or_wait` is the async version used
 /// by the transport layer; this is the synchronous equivalent that runs
 /// in the parent between fork and telemetry init. We only need to know

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
 
@@ -237,13 +239,64 @@ pub struct HandshakeResult {
     pub daemon_version: String,
 }
 
+/// Per-plan rollup embedded in `system.status`. Phase 16 of
+/// `docs/design/2026-07-11-verified-swarm.md`: "fat status" gives an
+/// operator the works-by-state / bundles-by-state / retry-spend / stuck
+/// signal for every Plan in one call, instead of a separate `record.list`
+/// per kind plus manual cross-referencing by hand.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanRollup {
+    pub plan_id: String,
+    /// Lowercase wire form matching `PlanStatus`'s `Display` impl (see
+    /// `PlanOverrideParams::target_status`'s doc comment for the same
+    /// convention).
+    pub plan_status: String,
+    /// Count of this Plan's Works, keyed by `WorkStatus`'s lowercase wire
+    /// form (`"ready"`, `"inprogress"`, ...). `BTreeMap` keeps rendered
+    /// YAML/JSON key order deterministic across runs.
+    pub works_by_state: BTreeMap<String, u32>,
+    /// Count of this Plan's Bundles (via their parent Works), keyed by
+    /// `BundleStatus`'s lowercase wire form.
+    pub bundles_by_state: BTreeMap<String, u32>,
+    /// The live Director task's mode for this Plan
+    /// (`"Normal"`/`"Conservative"`/`"NeedsOperator"`), mirroring
+    /// `DirectorStatusResult.snapshot.mode`. `None` when no Director task
+    /// is currently running for this Plan (Stalled, Complete, or a
+    /// transient pre-spawn window).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub director_mode: Option<String>,
+    /// Sum of `attempt_count` across this Plan's Works: the total
+    /// implementer/retry spend charged against the Plan's retry budget
+    /// (`max_work_attempts`).
+    pub total_attempts: u32,
+    /// `true` when this Plan itself is `Stalled`, or its live Director
+    /// mode is `NeedsOperator` -- the two states where an operator's
+    /// intervention (not another automatic dispatch) is what unsticks it.
+    pub stuck: bool,
+}
+
+// Not `Eq`: `cost_so_far_usd` is an `f64`, which has no total order (NaN).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StatusResult {
     pub started_at: String,
     pub pid: u32,
     pub active_plans: u32,
     pub active_works: u32,
+    /// Cumulative LLM cost in U.S. dollars for this daemon process's
+    /// lifetime (`ProcessSnapshot::llm_cost_micros / 1_000_000`), priced
+    /// per-call by each call's own model (Phase 4 of
+    /// `docs/design/2026-07-11-verified-swarm.md` fixed this accuracy).
+    /// Process-wide, not per-Plan: `ProcessSnapshot` has no per-Plan cost
+    /// attribution today, so this is the daemon's total spend-so-far
+    /// rather than a per-`PlanRollup` figure.
+    pub cost_so_far_usd: f64,
+    /// Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: per-plan
+    /// rollups (works/bundles by state, Director mode, retry-attempt
+    /// total, stuck flag). One entry per Plan currently persisted in the
+    /// target's taskstore, regardless of status.
+    pub plans: Vec<PlanRollup>,
 }
 
 /// Success payload for `plan.create`: the newly persisted Plan record.

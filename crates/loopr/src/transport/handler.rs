@@ -127,34 +127,104 @@ fn handle_handshake(id: u64, params: HandshakeParams, state: &mut HandshakeState
 
 #[instrument(name = "ipc.status", level = "debug", skip_all, fields(request_id = id))]
 async fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse {
-    // Count active plans (status == Active) and active works (any
-    // non-terminal Work). The store is right here, so the Stage 4
-    // placeholder zeros are no longer warranted. A store-read failure
-    // degrades to 0 (with a warn!) rather than failing the whole status
-    // request.
-    let active_plans = match ctx.store.plans().list().await {
-        Ok(plans) => plans.iter().filter(|p| p.status == domain::PlanStatus::Active).count() as u32,
+    // Plans/Works/Bundles are each read once and reused for both the
+    // legacy scalar counts (active_plans/active_works) and the Phase 16
+    // per-plan rollups below. A store-read failure on any collection
+    // degrades to an empty Vec (with a warn!) rather than failing the
+    // whole status request — the daemon's other collections may still
+    // read fine, and a degraded status beats no status.
+    let plans = match ctx.store.plans().list().await {
+        Ok(plans) => plans,
         Err(e) => {
-            warn!(request_id = id, error = %e, "system.status: plans().list() failed; reporting 0 active plans");
-            0
+            warn!(request_id = id, error = %e, "system.status: plans().list() failed; reporting no plans");
+            Vec::new()
         }
     };
-    let active_works = match ctx.store.works().list().await {
-        Ok(works) => works.iter().filter(|w| !w.status.is_terminal()).count() as u32,
+    let works = match ctx.store.works().list().await {
+        Ok(works) => works,
         Err(e) => {
-            warn!(request_id = id, error = %e, "system.status: works().list() failed; reporting 0 active works");
-            0
+            warn!(request_id = id, error = %e, "system.status: works().list() failed; reporting no works");
+            Vec::new()
         }
     };
+    let bundles = match ctx.store.bundles().list().await {
+        Ok(bundles) => bundles,
+        Err(e) => {
+            warn!(request_id = id, error = %e, "system.status: bundles().list() failed; reporting no bundles");
+            Vec::new()
+        }
+    };
+
+    let active_plans = plans.iter().filter(|p| p.status == domain::PlanStatus::Active).count() as u32;
+    let active_works = works.iter().filter(|w| !w.status.is_terminal()).count() as u32;
+
+    let plan_rollups = plans
+        .iter()
+        .map(|plan| build_plan_rollup(plan, &works, &bundles, ctx))
+        .collect();
+
+    let cost_so_far_usd = ctx.snapshot.lock().map(|s| s.llm_cost_micros).unwrap_or(0) as f64 / 1_000_000.0;
+
     let result = StatusResult {
         started_at: ctx.started_at.to_rfc3339(),
         pid: ctx.pid,
         active_plans,
         active_works,
+        cost_so_far_usd,
+        plans: plan_rollups,
     };
     match serde_json::to_value(&result) {
         Ok(v) => DaemonResponse::ok(id, v),
         Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize status: {e}"))),
+    }
+}
+
+/// Build one Plan's `PlanRollup` (Phase 16 of
+/// `docs/design/2026-07-11-verified-swarm.md`) from the daemon's
+/// already-fetched Works/Bundles collections. `O(works + bundles)` per
+/// Plan; called once per Plan by `handle_status`, so the overall cost is
+/// `O(plans * (works + bundles))` — acceptable at the "fat status is a
+/// once-per-operator-glance call" scale this phase targets.
+fn build_plan_rollup<L: LlmClient + Send + Sync + 'static>(
+    plan: &domain::Plan,
+    works: &[domain::Work],
+    bundles: &[domain::Bundle],
+    ctx: &Arc<DaemonContext<L>>,
+) -> ipc::PlanRollup {
+    let plan_works: Vec<&domain::Work> = works.iter().filter(|w| w.parent_id == plan.id).collect();
+
+    let mut works_by_state: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    let mut total_attempts: u32 = 0;
+    for w in &plan_works {
+        *works_by_state.entry(w.status.to_string()).or_insert(0) += 1;
+        total_attempts = total_attempts.saturating_add(w.attempt_count);
+    }
+
+    let plan_work_ids: std::collections::HashSet<&domain::WorkId> = plan_works.iter().map(|w| &w.id).collect();
+    let mut bundles_by_state: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for b in bundles.iter().filter(|b| plan_work_ids.contains(&b.work_id)) {
+        *bundles_by_state.entry(b.status.to_string()).or_insert(0) += 1;
+    }
+
+    let director_mode = ctx
+        .director_statuses
+        .read()
+        .ok()
+        .and_then(|m| m.get(&plan.id).map(|s| s.mode.as_str().to_string()));
+
+    // Stuck: the Plan itself is Stalled, or its live Director has
+    // escalated to NeedsOperator — both are states an automatic dispatch
+    // cannot resolve; only operator intervention can.
+    let stuck = plan.status == domain::PlanStatus::Stalled || director_mode.as_deref() == Some("NeedsOperator");
+
+    ipc::PlanRollup {
+        plan_id: plan.id.to_string(),
+        plan_status: plan.status.to_string(),
+        works_by_state,
+        bundles_by_state,
+        director_mode,
+        total_attempts,
+        stuck,
     }
 }
 

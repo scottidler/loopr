@@ -198,6 +198,97 @@ async fn status_counts_active_plans_and_works() {
     assert_eq!(result.active_works, 2, "two non-terminal works (Done excluded)");
 }
 
+/// Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: `system.status`
+/// gains per-plan rollups (works-by-state, bundles-by-state, Director
+/// mode, retry-attempt total, cost-so-far, stuck flag). This is the
+/// design doc's "status on a mid-run daemon shows per-plan works-by-state
+/// + cost > 0" success criterion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn status_reports_per_plan_rollup_with_works_bundles_director_mode_and_cost() {
+    let (_td, ctx) = stub_ctx().await;
+
+    let plan = domain::Plan::new("rollup target".to_string());
+    let plan_id = plan.id.clone();
+    ctx.store.plans().create(plan.clone()).await.unwrap();
+
+    let mut w1 = domain::Work::new(plan_id.clone(), "w1".to_string());
+    w1.status = domain::WorkStatus::InProgress;
+    w1.attempt_count = 2;
+    let mut w2 = domain::Work::new(plan_id.clone(), "w2".to_string());
+    w2.status = domain::WorkStatus::Ready;
+    w2.attempt_count = 1;
+    let w1_id = w1.id.clone();
+    ctx.store.works().create(w1).await.unwrap();
+    ctx.store.works().create(w2).await.unwrap();
+
+    let bundle = domain::Bundle::new(w1_id, "loopr/wk-x".to_string(), vec!["tests pass".to_string()]);
+    ctx.store.bundles().create(bundle).await.unwrap();
+
+    // Live Director mode for this Plan (Conservative -- not stuck).
+    ctx.director_statuses.write().unwrap().insert(
+        plan_id.clone(),
+        agents::DirectorStatusSnapshot {
+            mode: agents::DirectorMode::Conservative,
+            no_progress_streak: 1,
+            same_action_streak: 0,
+            iteration: 3,
+            last_action_kind: None,
+            last_action_target_id: None,
+            last_action_ts: None,
+            unread_note_count: 0,
+            needs_operator_iters: 0,
+        },
+    );
+
+    // Non-zero cost-so-far: record one priced LLM call directly on the
+    // process snapshot (mirrors what `MeteredLlmClient` does in
+    // production).
+    ctx.snapshot
+        .lock()
+        .unwrap()
+        .record_llm_call("claude-sonnet-4-6", 1000, 500, 0, 0);
+
+    let mut state = HandshakeState::Pending;
+    dispatch(&handshake_req(8, PROTOCOL_VERSION), &mut state, &ctx).await;
+    let resp = dispatch(&status_req(9), &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "status must succeed: {:?}", resp.error);
+    let result: StatusResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+
+    assert!(result.cost_so_far_usd > 0.0, "cost-so-far must be > 0: {result:?}");
+    assert_eq!(result.plans.len(), 1, "one plan rollup: {result:?}");
+    let rollup = &result.plans[0];
+    assert_eq!(rollup.plan_id, plan_id.to_string());
+    assert_eq!(rollup.plan_status, "active");
+    assert_eq!(rollup.works_by_state.get("inprogress"), Some(&1));
+    assert_eq!(rollup.works_by_state.get("ready"), Some(&1));
+    assert_eq!(rollup.bundles_by_state.get("proposed"), Some(&1));
+    assert_eq!(rollup.director_mode.as_deref(), Some("Conservative"));
+    assert_eq!(rollup.total_attempts, 3, "2 + 1 attempt_count");
+    assert!(!rollup.stuck, "Conservative mode is not stuck");
+}
+
+/// A Stalled Plan is `stuck: true` even with no live Director task
+/// (the common case: the Director exited after transitioning the Plan
+/// to Stalled).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn status_marks_stalled_plan_as_stuck_with_no_live_director() {
+    let (_td, ctx) = stub_ctx().await;
+
+    let mut plan = domain::Plan::new("stuck target".to_string());
+    plan.status = domain::PlanStatus::Stalled;
+    ctx.store.plans().create(plan.clone()).await.unwrap();
+
+    let mut state = HandshakeState::Complete;
+    let resp = dispatch(&status_req(10), &mut state, &ctx).await;
+    let result: StatusResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+
+    assert_eq!(result.plans.len(), 1);
+    let rollup = &result.plans[0];
+    assert_eq!(rollup.plan_status, "stalled");
+    assert!(rollup.director_mode.is_none(), "no live Director task");
+    assert!(rollup.stuck, "Stalled Plan must be flagged stuck");
+}
+
 #[tokio::test]
 async fn unknown_method_returns_method_not_found() {
     let (_td, ctx) = stub_ctx().await;

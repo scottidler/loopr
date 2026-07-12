@@ -43,7 +43,7 @@ pub use frame::{ParseError, decode_line, decode_request_line, encode_line};
 pub use method::{
     BudgetResetResult, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DirectorChatParams, DirectorChatResult, DirectorStatusParams,
     DirectorStatusResult, DirectorStatusSnapshot, HandshakeParams, HandshakeResult, Method, MethodName,
-    PlanCreateParams, PlanCreateResult, PlanOverrideParams, PlanOverrideResult, StatusResult,
+    PlanCreateParams, PlanCreateResult, PlanOverrideParams, PlanOverrideResult, PlanRollup, StatusResult,
 };
 pub use records::{
     BundleSummary, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,

@@ -32,6 +32,15 @@ pub fn run(target: &Path, explicit_format: Option<Format>, id: String) -> Result
     // rather than rendering the wrong sum-type arm.
     let kind = kind_from_prefix(&id)?;
 
+    // Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: a read verb
+    // must not auto-fork a daemon. Checked AFTER the prefix validation
+    // above so a malformed id still fails on that check alone, never on
+    // this daemon-liveness probe or an IPC round-trip.
+    if !crate::daemon::is_running(target)? {
+        println!("no daemon running");
+        return Ok(());
+    }
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

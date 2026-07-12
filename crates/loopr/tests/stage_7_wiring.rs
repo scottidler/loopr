@@ -99,10 +99,12 @@ fn plan_create_daemon_shutdown_drains_implementer_tasks_cleanly() {
     // routes through the decomposer (real LLM call without an API
     // key takes 7-15s before the deterministic fallback), which
     // intermittently exceeded the client's 10s `client-request-secs`
-    // cap. The drain path under test does not depend on which command
-    // forked the daemon — `loopr plans` is the cheapest auto-fork.
+    // cap. `loopr plans` used to be the cheapest auto-fork trigger, but
+    // Phase 16 of `docs/design/2026-07-11-verified-swarm.md` made read
+    // verbs report "no daemon" instead of auto-forking; `daemon start`
+    // is now the cheapest explicit fork.
     loopr()
-        .args(["-C", target.to_str().unwrap(), "plans"])
+        .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
 

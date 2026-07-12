@@ -198,6 +198,14 @@ fn plans_on_fresh_target_emits_empty_records_array() {
     let td = TempDir::new().unwrap();
     let _stop = DaemonAutoStop::for_target(td.path());
     init_git_repo(td.path());
+    // Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: `plans` no
+    // longer auto-forks a daemon, so this test's actual subject (a
+    // running daemon's fresh-target listing is empty) needs an explicit
+    // fork first.
+    loopr(td.path())
+        .args(["-C", td.path().to_str().unwrap(), "daemon", "start"])
+        .assert()
+        .success();
     let output = loopr(td.path())
         .args(["-C", td.path().to_str().unwrap(), "-o", "json", "plans"])
         .assert()

@@ -77,6 +77,103 @@ fn run_daemon_status_on_empty_target_prints_no_daemon() {
     .unwrap();
 }
 
+// ---------- Phase 16: read verbs report "no daemon" instead of forking ----------
+//
+// These call `dispatch` directly (never `daemon::ensure_daemon_if_needed`,
+// which now excludes these commands per `lib::run`'s pre-fork arm). If any
+// of these regressed back to auto-forking, the unconfigured `TempDir`
+// target (no git repo, no `.loopr/config.yml`) would either hang in
+// `connect_or_wait` waiting on a socket that never binds, or fail loudly
+// on the daemon's own startup validation gate -- either way `dispatch`
+// would NOT return `Ok(())` promptly, which is what every assertion below
+// checks. No pid file existing afterward is the other half of the
+// break-to-prove case: a daemon that got auto-forked leaves one behind.
+
+#[test]
+fn run_plans_on_empty_target_prints_no_daemon_and_does_not_fork() {
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        &stub_process_id(),
+        None,
+        parse_cmd(&["loopr", "plans"]),
+    )
+    .unwrap();
+    assert!(
+        !td.path().join(".loopr").join("daemon.pid").exists(),
+        "`loopr plans` on a quiet target must not auto-fork a daemon"
+    );
+}
+
+#[test]
+fn run_works_on_empty_target_prints_no_daemon_and_does_not_fork() {
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        &stub_process_id(),
+        None,
+        parse_cmd(&["loopr", "works"]),
+    )
+    .unwrap();
+    assert!(
+        !td.path().join(".loopr").join("daemon.pid").exists(),
+        "`loopr works` on a quiet target must not auto-fork a daemon"
+    );
+}
+
+#[test]
+fn run_bundles_on_empty_target_prints_no_daemon_and_does_not_fork() {
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        &stub_process_id(),
+        None,
+        parse_cmd(&["loopr", "bundles"]),
+    )
+    .unwrap();
+    assert!(
+        !td.path().join(".loopr").join("daemon.pid").exists(),
+        "`loopr bundles` on a quiet target must not auto-fork a daemon"
+    );
+}
+
+#[test]
+fn run_ticks_on_empty_target_prints_no_daemon_and_does_not_fork() {
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        &stub_process_id(),
+        None,
+        parse_cmd(&["loopr", "ticks"]),
+    )
+    .unwrap();
+    assert!(
+        !td.path().join(".loopr").join("daemon.pid").exists(),
+        "`loopr ticks` on a quiet target must not auto-fork a daemon"
+    );
+}
+
+#[test]
+fn run_show_on_empty_target_prints_no_daemon_and_does_not_fork() {
+    let td = tempfile::TempDir::new().unwrap();
+    dispatch(
+        td.path(),
+        &stub_session_id(),
+        &stub_process_id(),
+        None,
+        parse_cmd(&["loopr", "show", "pl-abc12"]),
+    )
+    .unwrap();
+    assert!(
+        !td.path().join(".loopr").join("daemon.pid").exists(),
+        "`loopr show` on a quiet target must not auto-fork a daemon"
+    );
+}
+
 #[test]
 fn run_tui_returns_tui_not_installed() {
     // Explicit `loopr tui` reaches dispatch and should return

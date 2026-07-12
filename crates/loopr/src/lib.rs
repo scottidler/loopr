@@ -115,13 +115,7 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
                 .map_err(|e| LooprError::DaemonStartup(format!("runtime build: {e}")))?;
             return rt.block_on(daemon::daemon_main(effective, *accept_corruption));
         }
-        Command::Plan { .. }
-        | Command::Plans
-        | Command::Works
-        | Command::Bundles
-        | Command::Ticks
-        | Command::Show { .. }
-        | Command::Director { .. } => {
+        Command::Plan { .. } | Command::Director { .. } => {
             // Client commands that need a live daemon: ensure one exists
             // before the parent installs its own telemetry subscriber.
             //
@@ -130,6 +124,15 @@ pub fn run(cli: Cli) -> Result<(), LooprError> {
             // mutate, making "no daemon running" nearly unreachable). It
             // falls through to dispatch -> daemon_status, which handles the
             // no-daemon case by printing "no daemon running".
+            //
+            // Phase 16 of `docs/design/2026-07-11-verified-swarm.md`
+            // extended that same reasoning to every other read verb:
+            // `Plans`/`Works`/`Bundles`/`Ticks`/`Show` used to auto-fork
+            // here too, which meant "no daemon running" was nearly
+            // unreachable for a `plans`/`show` call. They now fall
+            // through to `dispatch`, which checks for a live daemon
+            // itself and reports "no daemon running" instead of forking
+            // one (mirroring the `daemon_status` pattern above).
             daemon::ensure_daemon_if_needed(&effective)?;
         }
         _ => {}
@@ -222,6 +225,9 @@ fn dispatch(
         Command::Works => commands::list::run(target, output_format, ipc::RecordKind::Work),
         Command::Bundles => commands::list::run(target, output_format, ipc::RecordKind::Bundle),
         Command::Ticks => commands::list::run(target, output_format, ipc::RecordKind::Tick),
+        // `commands::show::run` checks for a live daemon itself, AFTER its
+        // local id-prefix validation (a malformed id must fail on that
+        // check alone, never touching the daemon-running probe or IPC).
         Command::Show { id } => commands::show::run(target, output_format, id),
         Command::Daemon { cmd } => match cmd {
             // `Start` is handled above in `run` (pre-telemetry); it never
@@ -279,6 +285,21 @@ fn daemon_stop(target: &Path) -> Result<(), LooprError> {
     }
 }
 
+/// Read-verb guard (Phase 16 of `docs/design/2026-07-11-verified-swarm.md`):
+/// wraps `daemon::is_running` with the "no daemon running" print so every
+/// caller that doesn't need to interleave its own local checks (unlike
+/// `commands::show::run`, which checks its id-prefix first) can early
+/// return on `false`. This is the exact check `daemon_status` used before
+/// this phase; `budget_reset_command` shares it too.
+fn daemon_is_running(target: &Path) -> Result<bool, LooprError> {
+    if daemon::is_running(target)? {
+        Ok(true)
+    } else {
+        println!("no daemon running");
+        Ok(false)
+    }
+}
+
 /// `loopr daemon status` body. Connects to the daemon, handshakes, asks
 /// for `system.status`, and renders the `StatusResult` through
 /// `output::render` (YAML for a TTY, JSON for a pipe; `-o` overrides). The
@@ -291,13 +312,8 @@ fn daemon_stop(target: &Path) -> Result<(), LooprError> {
     err,
 )]
 fn daemon_status(target: &Path, output_format: Option<output::Format>) -> Result<(), LooprError> {
-    let pid_file = daemon::sentinel::pid_path(target);
-    match daemon::sentinel::read_pid(&pid_file)? {
-        Some(pid) if daemon::sentinel::is_daemon_alive(pid) => {}
-        _ => {
-            println!("no daemon running");
-            return Ok(());
-        }
+    if !daemon_is_running(target)? {
+        return Ok(());
     }
 
     let status: ipc::StatusResult =
@@ -374,13 +390,8 @@ fn plan_override_command(
     err,
 )]
 fn budget_reset_command(target: &Path, output_format: Option<output::Format>) -> Result<(), LooprError> {
-    let pid_file = daemon::sentinel::pid_path(target);
-    match daemon::sentinel::read_pid(&pid_file)? {
-        Some(pid) if daemon::sentinel::is_daemon_alive(pid) => {}
-        _ => {
-            println!("no daemon running");
-            return Ok(());
-        }
+    if !daemon_is_running(target)? {
+        return Ok(());
     }
 
     let result: ipc::BudgetResetResult =

@@ -410,6 +410,8 @@ fn e2e_status_roundtrip() {
         pid: 42,
         active_plans: 0,
         active_works: 0,
+        cost_so_far_usd: 0.0,
+        plans: Vec::new(),
     })
     .unwrap();
     let resp = DaemonResponse::ok(decoded_req.id, result);
@@ -924,4 +926,77 @@ fn budget_reset_result_deny_unknown_fields() {
         serde_json::from_slice::<crate::method::BudgetResetResult>(bytes).is_err(),
         "deny_unknown_fields must reject extras"
     );
+}
+
+// --- Phase 16: fat status (per-plan rollups on system.status) ---
+
+#[test]
+fn plan_rollup_round_trip_with_director_mode() {
+    let before = crate::method::PlanRollup {
+        plan_id: "pl-abc12".to_string(),
+        plan_status: "active".to_string(),
+        works_by_state: [("ready".to_string(), 2), ("inprogress".to_string(), 1)]
+            .into_iter()
+            .collect(),
+        bundles_by_state: [("proposed".to_string(), 1)].into_iter().collect(),
+        director_mode: Some("Conservative".to_string()),
+        total_attempts: 4,
+        stuck: false,
+    };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: crate::method::PlanRollup = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn plan_rollup_round_trip_without_director_mode() {
+    let before = crate::method::PlanRollup {
+        plan_id: "pl-stalled".to_string(),
+        plan_status: "stalled".to_string(),
+        works_by_state: Default::default(),
+        bundles_by_state: Default::default(),
+        director_mode: None,
+        total_attempts: 0,
+        stuck: true,
+    };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: crate::method::PlanRollup = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+    // `director_mode: None` is elided from the wire form, not rendered as
+    // `"director_mode":null` -- same convention as `DirectorStatusResult`.
+    let s = String::from_utf8(bytes).unwrap();
+    assert!(!s.contains("director_mode"), "None must be omitted: {s}");
+}
+
+#[test]
+fn plan_rollup_deny_unknown_fields() {
+    let bytes = br#"{"plan_id":"pl-x","plan_status":"active","works_by_state":{},"bundles_by_state":{},"total_attempts":0,"stuck":false,"bonus":"evil"}"#;
+    assert!(
+        serde_json::from_slice::<crate::method::PlanRollup>(bytes).is_err(),
+        "deny_unknown_fields must reject extras"
+    );
+}
+
+#[test]
+fn status_result_round_trip_with_plan_rollups() {
+    let rollup = crate::method::PlanRollup {
+        plan_id: "pl-abc12".to_string(),
+        plan_status: "active".to_string(),
+        works_by_state: [("ready".to_string(), 1)].into_iter().collect(),
+        bundles_by_state: Default::default(),
+        director_mode: None,
+        total_attempts: 1,
+        stuck: false,
+    };
+    let before = StatusResult {
+        started_at: "2026-07-11T00:00:00Z".to_string(),
+        pid: 99,
+        active_plans: 1,
+        active_works: 1,
+        cost_so_far_usd: 1.234567,
+        plans: vec![rollup],
+    };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: StatusResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
 }

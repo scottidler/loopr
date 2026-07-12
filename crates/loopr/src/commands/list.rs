@@ -23,6 +23,15 @@ use crate::transport;
     err,
 )]
 pub fn run(target: &Path, explicit_format: Option<Format>, kind: RecordKind) -> Result<(), LooprError> {
+    // Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: a read verb
+    // must not auto-fork a daemon. Report "no daemon running" and return
+    // rather than let `connect_or_wait` poll the full daemon-startup
+    // budget waiting for a socket that will never appear.
+    if !crate::daemon::is_running(target)? {
+        println!("no daemon running");
+        return Ok(());
+    }
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

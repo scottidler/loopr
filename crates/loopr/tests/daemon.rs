@@ -421,12 +421,15 @@ fn ac15_pid_reuse_protection_rejects_non_loopr() {
     fs::create_dir_all(td.path().join(".loopr")).unwrap();
     fs::write(td.path().join(".loopr").join("daemon.pid"), "1\n").unwrap();
 
-    // Use a command that triggers ensure_daemon_if_needed and auto-forks.
-    // `daemon status` is deliberately NOT such a command anymore (Phase 7:
-    // a read-only status query must not auto-fork — see
-    // `daemon_status_does_not_fork`), so this uses `plans` instead.
+    // Use a command that triggers `ensure_daemon`'s stale-pid cleanup +
+    // fresh fork. `daemon status` was already excluded (Phase 7: a
+    // read-only status query must not auto-fork — see
+    // `daemon_status_does_not_fork`); Phase 16 of
+    // `docs/design/2026-07-11-verified-swarm.md` removed the remaining
+    // read verbs (`plans` among them) from the auto-fork path too, so
+    // this now uses `daemon start` directly.
     loopr(td.path())
-        .args(["-C", td.path().to_str().unwrap(), "plans"])
+        .args(["-C", td.path().to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
 
@@ -455,6 +458,53 @@ fn daemon_status_does_not_fork() {
         read_pid(td.path()).is_none(),
         "daemon status must not auto-fork a daemon"
     );
+}
+
+// Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: `plans`/`works`/
+// `bundles`/`ticks`/`show` are read verbs and must NOT auto-fork a daemon
+// either (they used to, via `ensure_daemon_if_needed` in `lib::run`'s
+// pre-fork arm). Break-to-prove: on a quiet target with no daemon, each
+// prints "no daemon running" and leaves no pid file behind. This is the
+// design doc's literal success criterion ("`loopr plans` on a quiet repo
+// with NO daemon does NOT fork one").
+#[test]
+fn plans_on_quiet_target_does_not_fork_a_daemon() {
+    let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
+
+    loopr(td.path())
+        .args(["-C", td.path().to_str().unwrap(), "plans"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no daemon running"));
+
+    assert!(
+        read_pid(td.path()).is_none(),
+        "`loopr plans` on a quiet target must not auto-fork a daemon"
+    );
+}
+
+#[test]
+fn works_bundles_ticks_show_on_quiet_target_do_not_fork_a_daemon() {
+    let td = TempDir::new().unwrap();
+    let _stop = DaemonAutoStop::for_target(td.path());
+
+    for args in [
+        vec!["-C", td.path().to_str().unwrap(), "works"],
+        vec!["-C", td.path().to_str().unwrap(), "bundles"],
+        vec!["-C", td.path().to_str().unwrap(), "ticks"],
+        vec!["-C", td.path().to_str().unwrap(), "show", "pl-abc12"],
+    ] {
+        loopr(td.path())
+            .args(&args)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("no daemon running"));
+        assert!(
+            read_pid(td.path()).is_none(),
+            "`loopr {args:?}` on a quiet target must not auto-fork a daemon"
+        );
+    }
 }
 
 // AC 22: cargo-tree on loopr shows tokio / tokio-util / libc (and the

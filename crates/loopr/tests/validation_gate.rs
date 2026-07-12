@@ -44,8 +44,13 @@ fn no_validation_config_refuses_daemon_start() {
     init_git_repo(target);
     // No config.yml written: pure defaults.
 
+    // Phase 16 of `docs/design/2026-07-11-verified-swarm.md`: read verbs
+    // (`plans` among them) no longer auto-fork a daemon, so this gate is
+    // now exercised via an explicit `daemon start` -- the same
+    // `ensure_daemon` fork path, just invoked directly instead of via a
+    // read verb's now-removed auto-fork side effect.
     let assertion = loopr(target)
-        .args(["-C", target.to_str().unwrap(), "plans"])
+        .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .failure();
     let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).to_string();
@@ -73,8 +78,9 @@ fn configured_validation_commands_permit_daemon_start() {
     init_git_repo(target);
     write_config(target, "integrator:\n  validation-commands:\n    - \"true\"\n");
 
+    // Phase 16: `plans` no longer auto-forks; start the daemon explicitly.
     loopr(target)
-        .args(["-C", target.to_str().unwrap(), "plans"])
+        .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
     assert!(
@@ -95,8 +101,9 @@ fn require_validation_false_permits_daemon_start_with_no_commands() {
     init_git_repo(target);
     write_config(target, "integrator:\n  require-validation: false\n");
 
+    // Phase 16: `plans` no longer auto-forks; start the daemon explicitly.
     loopr(target)
-        .args(["-C", target.to_str().unwrap(), "plans"])
+        .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
     assert!(
