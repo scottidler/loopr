@@ -25,10 +25,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use domain::{Bundle, Plan, PlanStatus, Role, TargetKind, Work, WorkStatus};
+use domain::{Bundle, CheckRun, CheckRunId, Plan, PlanStatus, Role, TargetKind, Work, WorkStatus};
 use ipc::DaemonEvent;
 use store::{
-    BundleUpdateError, BundleUpdateSink, PlanUpdateError, PlanUpdateSink, Store, WorkUpdateError, WorkUpdateSink,
+    BundleUpdateError, BundleUpdateSink, CheckRunSink, PlanUpdateError, PlanUpdateSink, Store, StoreError,
+    WorkUpdateError, WorkUpdateSink,
 };
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
@@ -231,6 +232,21 @@ where
             );
         }
         Ok(persisted)
+    }
+}
+
+/// CheckRun persistence flows through the decorator so `run_reviewer` (Phase
+/// 10) can persist executed-check evidence via its single `store` handle. No
+/// summary artifact for CheckRuns (they are append-only evidence, not a
+/// summarized record); the impl forwards straight to the inner `Store`'s
+/// `check_runs` collection. `S: Send + Sync` is all that's required — the
+/// inner sink type is irrelevant since CheckRuns write to `self.store`.
+impl<S> CheckRunSink for SummaryFanout<S>
+where
+    S: Send + Sync,
+{
+    async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError> {
+        self.store.check_runs().create(check_run).await
     }
 }
 

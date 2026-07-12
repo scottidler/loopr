@@ -27,18 +27,28 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
-use domain::{Bundle, BundleStatus, CriterionResult, CriterionStatus, ReviewIssue, Role, TargetKind, Verdict, Work};
+use domain::{
+    Bundle, BundleStatus, CheckRun, CriterionResult, CriterionStatus, ReviewIssue, Role, Severity, TargetKind, Verdict,
+    Work,
+};
 use llm::{LlmClient, Message};
-use store::{BundleUpdateError, BundleUpdateSink};
+use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink};
 use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
 
+use crate::check::CheckRunner;
 use crate::config::ReviewerConfig;
 use crate::retry::{RetryPolicy, with_llm_retry};
+
+/// Bytes of combined check output retained as the persisted `CheckRun`
+/// excerpt (a tail; the full output's sha256 is the tamper-evident digest).
+const CHECK_EXCERPT_CAP: usize = 4096;
 
 /// Maximum `Bundle.verification` string length. The full `Verdict`
 /// lives in the return value; `Bundle.verification` is a scannable
@@ -67,6 +77,16 @@ pub enum ReviewerError {
     Git(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// A configured check could not be SPAWNED (command not found / exec
+    /// failure). Phase 10 failure taxonomy: this is an ENVIRONMENT problem,
+    /// not a code signal — the daemon Blocks the Work (no ChangeRequested,
+    /// no LLM turn burning `max_work_attempts`). The message names the
+    /// offending command so `blocked_reason` is diagnosable.
+    #[error("check environment failure: command {command:?} could not be spawned: {detail}")]
+    CheckEnvironment { command: String, detail: String },
+    /// Persisting a `CheckRun` record failed.
+    #[error("check-run persist failed: {0}")]
+    CheckPersist(String),
 }
 
 /// Parse failure shape for `parse_verdict`. The re-prompt message in
@@ -88,17 +108,32 @@ pub enum ParseError {
 pub struct ReviewerDeps<L, S, C>
 where
     L: LlmClient,
-    S: BundleUpdateSink,
+    S: BundleUpdateSink + CheckRunSink,
     C: ContextBuilder,
 {
     pub llm: L,
     pub store: S,
     pub context: C,
     pub config: ReviewerConfig,
-    /// Target repo path. Used for `git show <head_commit> -- <paths>`
-    /// and for rendering file contents on noop Bundles. Daemon-
-    /// constant; cheap to clone on `Deps` construction.
+    /// Target repo path. Used for `git show <head_commit> -- <paths>` (the
+    /// commits live in the shared object DB, reachable from the main repo).
+    /// Daemon-constant; cheap to clone on `Deps` construction.
     pub target: PathBuf,
+    /// The Bundle's checkout: the Work's warm implementer worktree (lifetime
+    /// extended to outlive review so build caches stay warm), or an ephemeral
+    /// recreate from the bundle branch on the crash-recovery path. This is
+    /// where executed checks RUN, and (Phase 10 fix) where noop-bundle file
+    /// contents are READ from — previously the noop path incorrectly read
+    /// from `target`. Daemon-supplied.
+    pub checkout_path: PathBuf,
+    /// True when `checkout_path` is an ephemeral recreate (the warm worktree
+    /// was missing, e.g. after a crash). Flagged into each persisted
+    /// `CheckRun` excerpt so an operator knows the caches were cold.
+    pub ephemeral_checkout: bool,
+    /// Executed-check runner (Phase 10). `Arc<dyn CheckRunner>` per the
+    /// design doc's API Design; runs `config.check_commands` in
+    /// `checkout_path` before the LLM turn.
+    pub check_runner: Arc<dyn CheckRunner>,
     /// Path-deny patterns applied to per-AC `evidence` fields before
     /// emitting `reviewer.ac` events. Mirrors the implementer
     /// dispatcher's redaction surface so caller-supplied sensitive
@@ -133,7 +168,7 @@ pub async fn run_reviewer<L, S, C>(
 ) -> Result<Verdict, ReviewerError>
 where
     L: LlmClient,
-    S: BundleUpdateSink,
+    S: BundleUpdateSink + CheckRunSink,
     C: ContextBuilder,
 {
     info!(
@@ -147,6 +182,12 @@ where
     if bundle.work_id.to_string() != work.id.to_string() {
         return Err(ReviewerError::Mismatch(bundle.work_id.to_string(), work.id.to_string()));
     }
+
+    // Phase 10: executed checks run BEFORE the LLM turn. A spawn-level failure
+    // aborts here (env problem -> Blocked, no LLM). Otherwise every command's
+    // outcome is persisted as a `CheckRun` and the red set is carried to the
+    // code-gate below.
+    let (check_evidence, red_checks) = run_bundle_checks(deps, bundle, work).await?;
 
     let (diff, noop_files) = match bundle.head_commit.as_deref() {
         Some(head) => {
@@ -163,7 +204,11 @@ where
             (truncated, None)
         }
         None => {
-            let files = read_file_contents(&deps.target, &bundle.paths, deps.config.noop_files_byte_cap).await?;
+            // Phase 10 fix: read noop-bundle file contents from the Bundle's
+            // CHECKOUT (the worktree where the implementer wrote them), not
+            // from `deps.target` (the main repo, where an uncommitted noop
+            // change does not exist).
+            let files = read_file_contents(&deps.checkout_path, &bundle.paths, deps.config.noop_files_byte_cap).await?;
             (String::new(), Some(files))
         }
     };
@@ -171,19 +216,27 @@ where
     let noop_slice = noop_files.as_deref();
     let assembled = deps.context.build_for_reviewer(bundle, work, &diff, noop_slice)?;
 
-    let verdict = call_llm_with_retry(
-        &deps.llm,
-        &deps.config,
-        &assembled.system_prompt,
-        assembled.first_user_text().unwrap_or_default(),
-    )
-    .await?;
+    // Append the executed-check evidence to the user message (fenced via the
+    // context crate's dynamic-fence helper inside `check_evidence`).
+    let base_user = assembled.first_user_text().unwrap_or_default();
+    let user_text = if check_evidence.is_empty() {
+        base_user.to_string()
+    } else {
+        format!("{base_user}\n\n{check_evidence}")
+    };
+
+    let verdict = call_llm_with_retry(&deps.llm, &deps.config, &assembled.system_prompt, &user_text).await?;
+
+    // Phase 10 code-gate: an LLM `Accept` while ANY check is red is overridden
+    // to `ChangeRequested` BEFORE the FSM transition, with a synthesized
+    // `ReviewIssue` naming each red command. The LLM never gets the final word
+    // over an exit code.
+    let verdict = apply_code_gate(verdict, &red_checks);
 
     // Phase 8: synthesize one `CriterionResult` per acceptance criterion
-    // from the parsed Verdict (keyed on the criterion's stable id), emit
-    // the per-criterion + roll-up events, and hold the results. The
-    // Verdict itself is unchanged. Persisting these onto the Review record
-    // is Phase 11; this phase produces/returns them and logs the count.
+    // from the (post-code-gate) Verdict, keyed on the criterion's stable id,
+    // emit the per-criterion + roll-up events, and hold the results.
+    // Persisting these onto the Review record is Phase 11.
     let criteria_results = evaluate_and_emit_criteria(&verdict, work, &bundle.id, &deps.path_deny_patterns);
     debug!(
         bundle_id = %bundle.id,
@@ -197,7 +250,7 @@ where
     // came out"). Failures emit a warn and continue.
     let mut iter = TranscriptIteration::new_single_turn(String::new(), String::new());
     iter.system_prompt = assembled.system_prompt.clone();
-    iter.user_prompt = assembled.first_user_text().unwrap_or_default().to_string();
+    iter.user_prompt = user_text.clone();
     iter.response = render_verification(&verdict);
     iter.parsed_actions = vec![match &verdict {
         Verdict::Accept { .. } => "verdict=accept".to_string(),
@@ -232,6 +285,205 @@ where
         .await?;
 
     Ok(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10: executed checks
+// ---------------------------------------------------------------------------
+
+/// A configured check that spawned cleanly but exited nonzero — a code signal
+/// the deterministic accept gate acts on.
+struct RedCheck {
+    command: String,
+    exit_code: i32,
+    excerpt: String,
+}
+
+/// Run the configured `check_commands` in the Bundle's checkout, persist one
+/// `CheckRun` per command, and return `(prompt_evidence, red_checks)`.
+///
+/// Empty `check_commands` is a no-op (checks skipped, verdict proceeds
+/// LLM-only). A SPAWN-level failure on ANY command returns
+/// `ReviewerError::CheckEnvironment` immediately — the caller has not yet
+/// called the LLM, so the "no LLM turn on an environment failure" invariant
+/// holds structurally.
+async fn run_bundle_checks<L, S, C>(
+    deps: &ReviewerDeps<L, S, C>,
+    bundle: &Bundle,
+    work: &Work,
+) -> Result<(String, Vec<RedCheck>), ReviewerError>
+where
+    L: LlmClient,
+    S: BundleUpdateSink + CheckRunSink,
+    C: ContextBuilder,
+{
+    if deps.config.check_commands.is_empty() {
+        return Ok((String::new(), Vec::new()));
+    }
+
+    let outcomes = deps
+        .check_runner
+        .run(&deps.checkout_path, &deps.config.check_commands)
+        .await;
+
+    // Environment gate: any spawn-level failure aborts the review before the
+    // LLM turn. Named command -> diagnosable `blocked_reason`.
+    for outcome in &outcomes {
+        if let Some(detail) = &outcome.spawn_error {
+            warn!(
+                bundle_id = %bundle.id,
+                work_id = %work.id,
+                command = %outcome.command,
+                detail = %detail,
+                "reviewer: check spawn-level failure (environment); Work will Block, no LLM turn"
+            );
+            return Err(ReviewerError::CheckEnvironment {
+                command: outcome.command.clone(),
+                detail: detail.clone(),
+            });
+        }
+    }
+
+    // Every command spawned cleanly: persist evidence and partition red/green.
+    let mut red_checks = Vec::new();
+    for outcome in &outcomes {
+        let tail = tail_capped(&outcome.combined_output, CHECK_EXCERPT_CAP);
+        let excerpt = if deps.ephemeral_checkout {
+            format!("[ephemeral checkout: warm worktree missing; recreated from bundle branch]\n{tail}")
+        } else {
+            tail
+        };
+        let digest = hex_encode(&Sha256::digest(outcome.combined_output.as_bytes()));
+        let record = CheckRun::new(
+            bundle.id.clone(),
+            work.id.clone(),
+            outcome.command.clone(),
+            outcome.exit_code,
+            digest,
+            excerpt.clone(),
+            Role::Reviewer,
+            outcome.duration_ms,
+        );
+        deps.store
+            .create_check_run(record)
+            .await
+            .map_err(|e| ReviewerError::CheckPersist(e.to_string()))?;
+        if outcome.is_red() {
+            red_checks.push(RedCheck {
+                command: outcome.command.clone(),
+                exit_code: outcome.exit_code,
+                excerpt,
+            });
+        }
+    }
+
+    let evidence = render_check_evidence(&outcomes, deps.ephemeral_checkout);
+    debug!(
+        bundle_id = %bundle.id,
+        work_id = %work.id,
+        check_count = outcomes.len(),
+        red_count = red_checks.len(),
+        ephemeral = deps.ephemeral_checkout,
+        "reviewer: executed checks complete"
+    );
+    Ok((evidence, red_checks))
+}
+
+/// Deterministic accept gate: an `Accept` verdict is overridden to
+/// `ChangeRequested` when any check is red. Non-`Accept` verdicts pass
+/// through unchanged (a red check only tightens the verdict, never loosens).
+fn apply_code_gate(verdict: Verdict, red_checks: &[RedCheck]) -> Verdict {
+    if red_checks.is_empty() {
+        return verdict;
+    }
+    match verdict {
+        Verdict::Accept { summary } => {
+            let commands = red_checks
+                .iter()
+                .map(|r| r.command.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            warn!(
+                red_count = red_checks.len(),
+                commands = %commands,
+                "reviewer: code-gate overriding Accept -> ChangeRequested over red check(s)"
+            );
+            let reasons = red_checks.iter().map(synthesized_issue).collect();
+            Verdict::ChangeRequested {
+                summary: format!(
+                    "Reviewer accepted, but {} configured check(s) failed ({commands}); the accept is \
+                     overridden by the executed-check gate. LLM summary: {summary}",
+                    red_checks.len()
+                ),
+                reasons,
+            }
+        }
+        other => other,
+    }
+}
+
+/// Synthesize a `ReviewIssue` naming a red command, carrying its exit code
+/// and output tail so the retry Implementer (and the operator) sees what
+/// failed.
+fn synthesized_issue(red: &RedCheck) -> ReviewIssue {
+    ReviewIssue {
+        severity: Severity::Error,
+        file: red.command.clone(),
+        line: None,
+        message: format!(
+            "executed check `{}` failed with exit code {}: {}",
+            red.command, red.exit_code, red.excerpt
+        ),
+        suggestion: None,
+    }
+}
+
+/// Render the executed-check evidence block for the reviewer prompt. Each
+/// command's output is fenced with the context crate's dynamic-fence helper
+/// so untrusted output cannot escape into instruction position.
+fn render_check_evidence(outcomes: &[crate::check::CheckOutcome], ephemeral: bool) -> String {
+    use std::fmt::Write;
+    let mut out = String::from(
+        "## Executed checks (evidence)\n\nThese checks were executed against the bundle checkout BEFORE this \
+         review. Their exit codes are authoritative: an accept over a red (nonzero) check is overridden to \
+         change_requested by the harness — do not accept a bundle whose checks are red.\n",
+    );
+    if ephemeral {
+        out.push_str(
+            "\n> Note: the warm worktree was missing; these checks ran in an EPHEMERAL checkout recreated from \
+             the bundle branch (build caches were cold).\n",
+        );
+    }
+    for outcome in outcomes {
+        let _ = write!(out, "\n### `{}` — exit {}\n", outcome.command, outcome.exit_code);
+        let tail = tail_capped(&outcome.combined_output, CHECK_EXCERPT_CAP);
+        out.push_str(&context::dynamic_fence(&tail));
+    }
+    out
+}
+
+/// Retain the last `cap` bytes of `s` (char-boundary safe), prefixed with an
+/// omission marker when truncated.
+fn tail_capped(s: &str, cap: usize) -> String {
+    if s.len() <= cap {
+        return s.to_string();
+    }
+    let mut start = s.len() - cap;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("[... {start} earlier bytes omitted]\n{}", &s[start..])
+}
+
+/// Lowercase-hex encode a byte slice (avoids a `hex` crate dependency for the
+/// one sha256 digest site).
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Inner parse-retry loop. Broken out so the outer function reads

@@ -96,6 +96,12 @@ async fn full_roundtrip_accept_verdict_persists_reviewed_bundle() {
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
         target: repo_path.clone(),
+        checkout_path: repo_path.clone(),
+        ephemeral_checkout: false,
+        check_runner: std::sync::Arc::new(agents::ProductionCheckRunner::new(
+            std::sync::Arc::new(tools::LaneRouter::new(tools::SandboxMode::Off).unwrap()),
+            None,
+        )),
         path_deny_patterns: Vec::new(),
     };
 
@@ -156,7 +162,13 @@ async fn change_requested_verdict_persists_rejected_bundle() {
         store,
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
-        target: repo_path,
+        target: repo_path.clone(),
+        checkout_path: repo_path,
+        ephemeral_checkout: false,
+        check_runner: std::sync::Arc::new(agents::ProductionCheckRunner::new(
+            std::sync::Arc::new(tools::LaneRouter::new(tools::SandboxMode::Off).unwrap()),
+            None,
+        )),
         path_deny_patterns: Vec::new(),
     };
 

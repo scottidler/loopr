@@ -120,6 +120,15 @@ pub struct ReviewerConfig {
     /// bundles across ALL files in `bundle.paths`. Per-file cap is
     /// `noop_files_byte_cap / paths.len().max(1)`, floor 2048.
     pub noop_files_byte_cap: usize,
+    /// Executed check commands (Phase 10 of
+    /// `docs/design/2026-07-11-verified-swarm.md`). Each is run in the
+    /// Bundle's checkout BEFORE the LLM turn; a nonzero exit code-gates an
+    /// LLM `Accept` down to `ChangeRequested`, and a spawn-level failure
+    /// (command not found) Blocks the Work as an environment problem.
+    /// Empty (the default) = checks skipped, verdict proceeds LLM-only.
+    /// Opt-in per target: the universal merge gate is the Integrator's
+    /// validation (Phase 12), not these.
+    pub check_commands: Vec<String>,
 }
 
 impl Default for ReviewerConfig {
@@ -128,6 +137,7 @@ impl Default for ReviewerConfig {
             max_requeries: 3,
             diff_byte_cap: 64 * 1024,
             noop_files_byte_cap: 64 * 1024,
+            check_commands: Vec::new(),
         }
     }
 }

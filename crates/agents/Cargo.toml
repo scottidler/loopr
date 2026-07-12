@@ -21,6 +21,7 @@ thiserror = "2.0.18"
 serde = { workspace = true, features = ["derive"] }
 tokio = { version = "1.52.1", features = ["process", "fs", "macros", "rt", "time"] }
 uuid = { version = "1.23.1", features = ["v7"] }
+sha2 = "0.11.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"

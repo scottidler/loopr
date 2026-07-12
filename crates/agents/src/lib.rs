@@ -3,6 +3,7 @@
 //! later stages.
 
 mod action;
+mod check;
 mod config;
 mod director;
 mod dispatch;
@@ -14,6 +15,7 @@ mod reviewer;
 pub mod scope;
 
 pub use action::AgentAction;
+pub use check::{CheckOutcome, CheckRunner, ProductionCheckRunner};
 pub use config::{AgentsConfig, ConfigError, DirectorConfig, ImplementerConfig, ReviewerConfig};
 pub use director::{
     ActionFingerprint, DirectorAction, DirectorDeps, DirectorError, DirectorMode, DirectorPatternTracker,

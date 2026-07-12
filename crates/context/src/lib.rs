@@ -26,6 +26,41 @@ use domain::{Bundle, Work};
 use llm::Message;
 use tools::ToolSchema;
 
+/// Wrap `content` in a code fence whose backtick run is one longer than the
+/// longest backtick run inside `content` (floor of 3), so untrusted content
+/// (a diff, file contents, or executed-check output) cannot close its own
+/// fence and escape into instruction position (Phase-5 finding 9). Shared by
+/// the reviewer prompt's evidence sections and `agents::reviewer`'s executed-
+/// check evidence block (Phase 10 of `docs/design/2026-07-11-verified-swarm.md`).
+pub fn dynamic_fence(content: &str) -> String {
+    let longest = longest_backtick_run(content);
+    let fence = "`".repeat((longest + 1).max(3));
+    let mut out = String::with_capacity(content.len() + 2 * fence.len() + 2);
+    out.push_str(&fence);
+    out.push('\n');
+    out.push_str(content);
+    if !content.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&fence);
+    out.push('\n');
+    out
+}
+
+fn longest_backtick_run(s: &str) -> usize {
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for ch in s.chars() {
+        if ch == '`' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
+}
+
 /// The output of a successful context assembly. Ready to hand to
 /// `LlmClient::complete_free` (system + messages).
 ///

@@ -2,22 +2,102 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tempfile::TempDir;
 
 use context::InlineContextBuilder;
 use domain::{
-    AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, TargetKind, Verdict, Work, WorkId,
+    AcceptanceCriteria, Bundle, BundleStatus, CheckRun, CheckRunId, PlanId, ReviewIssue, Role, Severity, TargetKind,
+    Verdict, Work, WorkId,
 };
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 
-use store::{BundleUpdateError, BundleUpdateSink};
+use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink, StoreError};
+use tools::{LaneRouter, SandboxMode};
 
 use super::{
     ReviewerDeps, ReviewerError, parse_verdict, render_issue_summary, run_reviewer, strip_commit_header, truncate_diff,
 };
+use crate::check::{CheckOutcome, CheckRunner, ProductionCheckRunner};
 use crate::config::ReviewerConfig;
+
+/// No-op runner for tests whose `check_commands` are empty (checks skipped);
+/// its `run` is never actually invoked in that case.
+struct NoopCheckRunner;
+
+impl CheckRunner for NoopCheckRunner {
+    fn run<'a>(
+        &'a self,
+        _checkout_path: &'a Path,
+        _commands: &'a [String],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<CheckOutcome>> + Send + 'a>> {
+        Box::pin(async { Vec::new() })
+    }
+}
+
+/// LLM that panics if called — proves a code path returns BEFORE the LLM turn.
+struct PanicLlm;
+
+impl LlmClient for PanicLlm {
+    async fn complete_with_tool(
+        &self,
+        _system: &str,
+        _user: &str,
+        _tool: LlmToolSchema,
+        _model: Option<&str>,
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        panic!("PanicLlm: complete_with_tool must not be called")
+    }
+
+    async fn complete_free(
+        &self,
+        _system: &str,
+        _messages: &[Message],
+        _model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
+        panic!("PanicLlm: complete_free must not be called (LLM turn should have been skipped)")
+    }
+}
+
+/// LLM that captures the user message it was sent (for asserting prompt
+/// content), then returns a fixed response.
+struct CapturingLlm {
+    captured: Mutex<String>,
+    response: String,
+}
+
+impl LlmClient for CapturingLlm {
+    async fn complete_with_tool(
+        &self,
+        _system: &str,
+        _user: &str,
+        _tool: LlmToolSchema,
+        _model: Option<&str>,
+    ) -> Result<(ToolCall, Usage), LlmError> {
+        panic!("CapturingLlm: complete_with_tool not used in Reviewer tests")
+    }
+
+    async fn complete_free(
+        &self,
+        _system: &str,
+        messages: &[Message],
+        _model: Option<&str>,
+    ) -> Result<(String, Usage), LlmError> {
+        use llm::MessageContent;
+        if let Some(MessageContent::Text { text }) = messages.first().and_then(|m| m.content.first()) {
+            *self.captured.lock().unwrap() = text.clone();
+        }
+        Ok((self.response.clone(), Usage::default()))
+    }
+}
+
+/// Real heavy-lane check runner (unsandboxed) for tests that execute real
+/// `true` / `false` / missing-binary commands.
+fn real_check_runner() -> Arc<dyn CheckRunner> {
+    let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
+    Arc::new(ProductionCheckRunner::new(router, None))
+}
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -79,6 +159,15 @@ impl LlmClient for FakeLlm {
 struct CollectingSink {
     persisted: Mutex<Vec<(Bundle, i64)>>,
     stale_once: Mutex<bool>,
+    check_runs: Mutex<Vec<CheckRun>>,
+}
+
+impl CheckRunSink for CollectingSink {
+    async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError> {
+        let id = check_run.id.clone();
+        self.check_runs.lock().unwrap().push(check_run);
+        Ok(id)
+    }
 }
 
 impl BundleUpdateSink for CollectingSink {
@@ -155,11 +244,37 @@ fn triaged_bundle(work_id: WorkId, head_commit: Option<&str>, paths: Vec<String>
     b
 }
 
-fn make_deps<L: LlmClient, S: BundleUpdateSink>(
+fn make_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink>(
     llm: L,
     store: S,
     target: PathBuf,
     config: ReviewerConfig,
+) -> ReviewerDeps<L, S, InlineContextBuilder> {
+    // Default: checks skipped (empty check_commands in the default config),
+    // checkout == target (existing noop tests read fixture files from the repo).
+    let checkout_path = target.clone();
+    ReviewerDeps {
+        llm,
+        store,
+        context: InlineContextBuilder::new(),
+        config,
+        target,
+        checkout_path,
+        ephemeral_checkout: false,
+        check_runner: Arc::new(NoopCheckRunner),
+        path_deny_patterns: Vec::new(),
+    }
+}
+
+/// Build deps with an explicit checkout path and real check runner for the
+/// Phase 10 executed-check tests.
+fn make_checked_deps<L: LlmClient, S: BundleUpdateSink + CheckRunSink>(
+    llm: L,
+    store: S,
+    target: PathBuf,
+    checkout_path: PathBuf,
+    config: ReviewerConfig,
+    check_runner: Arc<dyn CheckRunner>,
 ) -> ReviewerDeps<L, S, InlineContextBuilder> {
     ReviewerDeps {
         llm,
@@ -167,6 +282,9 @@ fn make_deps<L: LlmClient, S: BundleUpdateSink>(
         context: InlineContextBuilder::new(),
         config,
         target,
+        checkout_path,
+        ephemeral_checkout: false,
+        check_runner,
         path_deny_patterns: Vec::new(),
     }
 }
@@ -525,6 +643,163 @@ fn parse_verdict_rejects_empty_reasons_change_requested_as_schema() {
 // ---------------------------------------------------------------------------
 // render_issue_summary
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Phase 10: executed checks — code-gate, failure taxonomy, checkout reads
+// ---------------------------------------------------------------------------
+
+/// Break-to-prove the code-gate: the LLM returns Accept, but a configured
+/// check (`false`) exits nonzero -> the Bundle lands ChangeRequested (persisted
+/// Rejected) with a synthesized issue naming the red command, and the CheckRun
+/// is persisted with the real exit code. On pre-Phase-10 code (no gate) the
+/// Bundle would land Reviewed.
+#[tokio::test]
+async fn accept_over_red_check_is_overridden_to_change_requested() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let checkout = TempDir::new().unwrap();
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    let llm = FakeLlm::new(vec![r#"{"kind":"accept","summary":"looks great to me"}"#.to_string()]);
+    let config = ReviewerConfig {
+        check_commands: vec!["false".to_string()],
+        ..ReviewerConfig::default()
+    };
+    let deps = make_checked_deps(
+        llm,
+        CollectingSink::default(),
+        repo,
+        checkout.path().to_path_buf(),
+        config,
+        real_check_runner(),
+    );
+
+    let verdict = run_reviewer(&bundle, &work, &deps).await.unwrap();
+    match &verdict {
+        Verdict::ChangeRequested { reasons, .. } => {
+            assert!(
+                reasons
+                    .iter()
+                    .any(|r| r.file.contains("false") || r.message.contains("false")),
+                "synthesized issue must name the red command `false`: {reasons:?}"
+            );
+        }
+        other => panic!("expected code-gated ChangeRequested, got {other:?}"),
+    }
+
+    // Bundle persisted as Rejected (ChangeRequested routing).
+    let persisted = deps.store.persisted.lock().unwrap();
+    assert_eq!(persisted[0].0.status, BundleStatus::Rejected);
+    drop(persisted);
+
+    // CheckRun persisted with the REAL exit code from `false` (nonzero).
+    let runs = deps.store.check_runs.lock().unwrap();
+    assert_eq!(runs.len(), 1, "one CheckRun per command");
+    assert_eq!(runs[0].command, "false");
+    assert_ne!(runs[0].exit_code, 0, "false must record a nonzero exit code");
+    assert_eq!(runs[0].executor, Role::Reviewer);
+    assert!(!runs[0].output_digest.is_empty(), "digest must be computed");
+}
+
+/// A green check does NOT override an Accept; the Bundle lands Reviewed and the
+/// CheckRun records exit 0.
+#[tokio::test]
+async fn accept_over_green_check_stays_reviewed() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let checkout = TempDir::new().unwrap();
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    let llm = FakeLlm::new(vec![r#"{"kind":"accept","summary":"ok"}"#.to_string()]);
+    let config = ReviewerConfig {
+        check_commands: vec!["true".to_string()],
+        ..ReviewerConfig::default()
+    };
+    let deps = make_checked_deps(
+        llm,
+        CollectingSink::default(),
+        repo,
+        checkout.path().to_path_buf(),
+        config,
+        real_check_runner(),
+    );
+
+    let verdict = run_reviewer(&bundle, &work, &deps).await.unwrap();
+    assert!(matches!(verdict, Verdict::Accept { .. }));
+    assert_eq!(deps.store.persisted.lock().unwrap()[0].0.status, BundleStatus::Reviewed);
+    let runs = deps.store.check_runs.lock().unwrap();
+    assert_eq!(runs[0].exit_code, 0);
+}
+
+/// Break-to-prove the failure taxonomy: a check whose program cannot be spawned
+/// (command not found) returns `CheckEnvironment` and the LLM is NEVER called
+/// (a `PanicLlm` would panic the test if it were). This is what maps to a
+/// Blocked Work in the daemon, not ChangeRequested.
+#[tokio::test]
+async fn spawn_level_check_failure_blocks_without_llm_call() {
+    let (_dir, repo, sha) = init_repo_with_commit();
+    let checkout = TempDir::new().unwrap();
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), Some(&sha), vec!["src.rs".to_string()]);
+
+    let missing = "loopr-definitely-not-a-real-binary-xyzzy".to_string();
+    let config = ReviewerConfig {
+        check_commands: vec![missing.clone()],
+        ..ReviewerConfig::default()
+    };
+    let deps = make_checked_deps(
+        PanicLlm,
+        CollectingSink::default(),
+        repo,
+        checkout.path().to_path_buf(),
+        config,
+        real_check_runner(),
+    );
+
+    let err = run_reviewer(&bundle, &work, &deps).await.unwrap_err();
+    match err {
+        ReviewerError::CheckEnvironment { command, .. } => assert_eq!(command, missing),
+        other => panic!("expected CheckEnvironment, got {other:?}"),
+    }
+    // No Bundle persisted (aborted before the verdict transition).
+    assert!(deps.store.persisted.lock().unwrap().is_empty());
+}
+
+/// Break-to-prove the noop-bundle checkout fix: file contents are read from the
+/// CHECKOUT, not from `target`. The marker file exists only in the checkout;
+/// pre-Phase-10 code read from `target` and would render `(file not found)`.
+#[tokio::test]
+async fn noop_bundle_reads_file_contents_from_checkout_not_target() {
+    let (_dir, repo, _sha) = init_repo_with_commit();
+    let checkout = TempDir::new().unwrap();
+    const MARKER: &str = "CHECKOUT_ONLY_CONTENT_9f3a";
+    std::fs::write(checkout.path().join("marker.txt"), format!("{MARKER}\n")).unwrap();
+    // Deliberately do NOT write marker.txt into `repo` (target).
+
+    let work = sample_work();
+    let bundle = triaged_bundle(work.id.clone(), None, vec!["marker.txt".to_string()]);
+
+    let llm = CapturingLlm {
+        captured: Mutex::new(String::new()),
+        response: r#"{"kind":"accept","summary":"noop ok"}"#.to_string(),
+    };
+    // check_commands empty -> checks skipped; this test isolates the noop read.
+    let deps = make_checked_deps(
+        llm,
+        CollectingSink::default(),
+        repo,
+        checkout.path().to_path_buf(),
+        ReviewerConfig::default(),
+        Arc::new(NoopCheckRunner),
+    );
+
+    let _ = run_reviewer(&bundle, &work, &deps).await.unwrap();
+    let sent = deps.llm.captured.lock().unwrap().clone();
+    assert!(
+        sent.contains(MARKER),
+        "reviewer prompt must contain the checkout-only file contents (read from checkout, not target)"
+    );
+}
 
 #[test]
 fn render_issue_summary_includes_every_reason() {

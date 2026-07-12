@@ -153,30 +153,7 @@ fn build_evidence_section(
 /// could forge a verdict. A dynamically-sized fence cannot be closed by the
 /// content it wraps.
 fn push_fenced(out: &mut String, content: &str) {
-    let longest = longest_backtick_run(content);
-    let fence = "`".repeat((longest + 1).max(3));
-    out.push_str(&fence);
-    out.push('\n');
-    out.push_str(content);
-    if !content.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&fence);
-    out.push('\n');
-}
-
-fn longest_backtick_run(s: &str) -> usize {
-    let mut longest = 0usize;
-    let mut current = 0usize;
-    for ch in s.chars() {
-        if ch == '`' {
-            current += 1;
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    longest
+    out.push_str(&crate::dynamic_fence(content));
 }
 
 #[cfg(test)]

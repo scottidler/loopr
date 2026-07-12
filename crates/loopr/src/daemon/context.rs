@@ -20,8 +20,8 @@ use tracing::{Instrument, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use agents::{
-    Deps, DirectorConfig, DirectorStatusSnapshot, ImplementerConfig, ImplementerError, RealTools, ReviewerConfig,
-    ReviewerDeps, ReviewerError, run_implementer, run_reviewer,
+    CheckRunner, Deps, DirectorConfig, DirectorStatusSnapshot, ImplementerConfig, ImplementerError,
+    ProductionCheckRunner, RealTools, ReviewerConfig, ReviewerDeps, ReviewerError, run_implementer, run_reviewer,
 };
 use context::{InlineContextBuilder, StateSummary};
 use domain::{
@@ -746,13 +746,26 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             self.wake_director(&work.parent_id).await;
         }
 
-        match self.worktree_cleanup_policy {
-            AttemptCleanupPolicy::Immediate | AttemptCleanupPolicy::OnWorkTerminal => {
-                let _ = tokio::task::spawn_blocking(move || worktree.cleanup()).await;
-            }
-            AttemptCleanupPolicy::OnRunEnd => {}
-            AttemptCleanupPolicy::Never => {
-                warn!("AttemptCleanupPolicy::Never — leaking worktree (debug only)");
+        // Phase 10: when the implementer produced a Bundle (Work -> InReview),
+        // keep the worktree WARM so the Reviewer's executed checks run against
+        // incremental build caches, not a cold recreate that trips subprocess
+        // timeouts. Cleanup is deferred until the Bundle reaches a terminal
+        // state — Phase 19 reaps at terminal states; here we simply do not
+        // delete at the old (too-early) point. `retain()` marks the handle
+        // consumed so its `Drop` safety-net does not remove the worktree
+        // either. On any non-review exit (Blocked), clean up now as before.
+        if work.status == WorkStatus::InReview {
+            debug!("implementer produced bundle; retaining worktree warm for reviewer checks (cleanup deferred)");
+            worktree.retain();
+        } else {
+            match self.worktree_cleanup_policy {
+                AttemptCleanupPolicy::Immediate | AttemptCleanupPolicy::OnWorkTerminal => {
+                    let _ = tokio::task::spawn_blocking(move || worktree.cleanup()).await;
+                }
+                AttemptCleanupPolicy::OnRunEnd => {}
+                AttemptCleanupPolicy::Never => {
+                    warn!("AttemptCleanupPolicy::Never — leaking worktree (debug only)");
+                }
             }
         }
     }
@@ -867,16 +880,30 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         }
 
         // Step 4: build ReviewerDeps.
+        // Phase 10: resolve the checkout the executed checks run in. The
+        // implementer worktree is kept warm past review (cleanup deferred in
+        // `spawn_implementer_for_work`) so build caches stay warm; use it when
+        // present. If it is missing (crash), recreate an ephemeral worktree
+        // from the bundle branch and flag it so the CheckRun excerpt records
+        // the cold-cache caveat. `_ephemeral_guard` cleans up the ephemeral
+        // worktree on scope exit (any return path).
+        let (checkout_path, ephemeral_checkout, _ephemeral_guard) = self.resolve_review_checkout(&bundle).await;
+        let check_runner: Arc<dyn CheckRunner> = Arc::new(ProductionCheckRunner::new(self.router.clone(), None));
+
         // Phase 6: pass the SummaryFanout decorator as the BundleUpdateSink
         // so per-Bundle summaries land transactionally with the OCC
         // update; the inner sink is `Arc<Store>` and the decorator's
-        // BundleUpdateSink impl writes the summary on Ok.
+        // BundleUpdateSink impl writes the summary on Ok. It also carries
+        // the CheckRunSink impl for Phase 10 executed-check persistence.
         let deps = ReviewerDeps {
             llm: Arc::clone(&self.llm),
             store: &*self.summary_fanout,
             context: Arc::clone(&self.context_builder),
             config: self.reviewer_config.clone(),
             target: self.target.clone(),
+            checkout_path,
+            ephemeral_checkout,
+            check_runner,
             path_deny_patterns: self.path_deny_patterns.clone(),
         };
 
@@ -915,6 +942,33 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 return;
             }
             Ok(Ok(v)) => v,
+            // Phase 10 failure taxonomy: a SPAWN-level check failure (command
+            // not found / exec failure) is an ENVIRONMENT problem, not a code
+            // signal. The Work goes Blocked with a `blocked_reason` naming the
+            // command; there was no LLM turn and no ChangeRequested — asking
+            // the LLM to fix infra would burn `max_work_attempts` at max cost.
+            Ok(Err(ReviewerError::CheckEnvironment { command, detail })) => {
+                warn!(
+                    %command,
+                    %detail,
+                    "reviewer: check environment failure; Work -> Blocked (no LLM turn, no ChangeRequested)"
+                );
+                work.failure_reason = Some(FailureReason::Other(format!("check environment failure: {command}")));
+                work.blocked_reason = Some(format!(
+                    "configured check `{command}` could not be spawned (environment): {detail}"
+                ));
+                let _ = transition_and_persist_work(
+                    &*self.summary_fanout,
+                    &mut work,
+                    WorkStatus::Blocked,
+                    Role::Reactor,
+                    true,
+                    &self.snapshot,
+                )
+                .await;
+                self.wake_director(&work.parent_id).await;
+                return;
+            }
             Ok(Err(ReviewerError::EscalationNeeded(reason))) => {
                 warn!(%reason, "reviewer escalated; marking Work Blocked");
                 let _ = transition_and_persist_work(
@@ -1007,6 +1061,86 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         self.wake_director(&work.parent_id).await;
     }
 
+    /// Resolve the checkout the Reviewer's executed checks run in. Returns
+    /// `(checkout_path, ephemeral, guard)`:
+    /// - the warm implementer worktree when present (`ephemeral = false`, no
+    ///   guard — the worktree's lifetime is owned by the implementer task,
+    ///   extended past review);
+    /// - an ephemeral, detached worktree recreated from the bundle head when
+    ///   the warm one is missing (crash) (`ephemeral = true`, the guard reaps
+    ///   it on scope exit);
+    /// - `self.target` as an inert fallback when checks are disabled or the
+    ///   branch can't be resolved (checks either won't run or surface a spawn
+    ///   error).
+    async fn resolve_review_checkout(&self, bundle: &Bundle) -> (PathBuf, bool, Option<EphemeralCheckout>) {
+        if self.reviewer_config.check_commands.is_empty() {
+            // Checks disabled: the path is never used to execute anything.
+            return (self.target.clone(), false, None);
+        }
+        let worktree_root = self.target.join(".loopr").join("worktrees");
+        let Some((work_id, seq)) = worktree::parse_branch(&bundle.branch_name) else {
+            warn!(
+                branch = %bundle.branch_name,
+                "reviewer checkout: unparseable bundle branch; falling back to target"
+            );
+            return (self.target.clone(), false, None);
+        };
+        let warm = worktree_root.join(format!("{work_id}-{seq}"));
+        if warm.is_dir() {
+            return (warm, false, None);
+        }
+        // Crash fallback: the warm worktree is gone. Recreate an ephemeral,
+        // detached checkout from the bundle head so checks still run.
+        warn!(
+            work_id = %work_id,
+            worktree = %warm.display(),
+            "reviewer checkout: warm worktree missing; recreating ephemeral from bundle branch"
+        );
+        let ephemeral = worktree_root.join(format!("{work_id}-{seq}-review"));
+        let reference = bundle.head_commit.clone().unwrap_or_else(|| bundle.branch_name.clone());
+        match self.create_ephemeral_checkout(&ephemeral, &reference).await {
+            Ok(()) => {
+                let guard = EphemeralCheckout {
+                    repo: self.target.clone(),
+                    path: ephemeral.clone(),
+                };
+                (ephemeral, true, Some(guard))
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "reviewer checkout: ephemeral recreate failed; falling back to target (checks will spawn-fail)"
+                );
+                (self.target.clone(), false, None)
+            }
+        }
+    }
+
+    /// Create an ephemeral, detached worktree at `path` checked out at
+    /// `reference`. Prunes stale registrations first so a crashed worktree's
+    /// leftover metadata doesn't block `git worktree add`.
+    async fn create_ephemeral_checkout(&self, path: &std::path::Path, reference: &str) -> Result<(), String> {
+        let _ = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.target)
+            .args(["worktree", "prune"])
+            .output()
+            .await;
+        let out = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.target)
+            .args(["worktree", "add", "--detach"])
+            .arg(path)
+            .arg(reference)
+            .output()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    }
+
     /// Wake the per-Plan Director task so it reacts to a Director-actionable
     /// state change (Bundle Reviewed/Rejected, Work Blocked/Ready)
     /// immediately instead of waiting out its idle poll. A missing entry is
@@ -1034,6 +1168,28 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             bash_denylist: self.bash_denylist.clone(),
             persist_base,
             invocation_id: Some(invocation_id),
+        }
+    }
+}
+
+/// RAII guard that reaps an ephemeral review worktree on drop. Best-effort
+/// synchronous removal, mirroring `Worktree::Drop`'s safety-net posture: a
+/// failed cleanup logs and defers to the startup reconcile sweep. Held in
+/// `spawn_reviewer_for_bundle` for the duration of the review so every return
+/// path (verdict, error, panic-unwind) reaps the ephemeral checkout.
+struct EphemeralCheckout {
+    repo: PathBuf,
+    path: PathBuf,
+}
+
+impl Drop for EphemeralCheckout {
+    fn drop(&mut self) {
+        if let Err(e) = worktree::cleanup_at(&self.repo, &self.path) {
+            warn!(
+                path = %self.path.display(),
+                error = %e,
+                "ephemeral review worktree cleanup failed (reconcile will sweep)"
+            );
         }
     }
 }

@@ -13,7 +13,7 @@ mod ticks;
 mod works;
 
 pub use bundles::{BundleUpdateError, BundleUpdateSink, BundlesStore};
-pub use checks::CheckRunsStore;
+pub use checks::{CheckRunSink, CheckRunsStore};
 pub use error::StoreError;
 pub use notes::NotesStore;
 pub use plans::{PlanUpdateError, PlanUpdateSink, PlansStore};

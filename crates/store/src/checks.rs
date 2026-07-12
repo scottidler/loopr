@@ -16,6 +16,35 @@ use domain::{BundleId, CheckRun, CheckRunId};
 
 use crate::error::StoreError;
 
+/// Narrow write sink for `CheckRun` evidence, mirroring the `*UpdateSink`
+/// pattern (`BundleUpdateSink` et al.). CheckRuns are append-only immutable
+/// facts, so this is create-only — no OCC, no update. The Reviewer (Phase 10)
+/// and Integrator (Phase 12) persist through this so a caller can inject a
+/// real `Store` (or a test fake) without depending on the concrete store type.
+/// The `&B` / `Arc<B>` forwarding impls let callers pass a borrowed sink.
+#[trait_variant::make(Send)]
+pub trait CheckRunSink: Send + Sync {
+    async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError>;
+}
+
+impl CheckRunSink for crate::Store {
+    async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError> {
+        self.check_runs().create(check_run).await
+    }
+}
+
+impl<B: CheckRunSink + ?Sized> CheckRunSink for &B {
+    async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError> {
+        (*self).create_check_run(check_run).await
+    }
+}
+
+impl<B: CheckRunSink + ?Sized> CheckRunSink for std::sync::Arc<B> {
+    async fn create_check_run(&self, check_run: CheckRun) -> Result<CheckRunId, StoreError> {
+        (**self).create_check_run(check_run).await
+    }
+}
+
 pub struct CheckRunsStore<'a> {
     inner: &'a AsyncStore,
 }

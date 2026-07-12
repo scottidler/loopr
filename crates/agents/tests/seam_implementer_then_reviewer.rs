@@ -129,7 +129,13 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
         store: &store,
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
-        target: repo_path,
+        target: repo_path.clone(),
+        checkout_path: repo_path,
+        ephemeral_checkout: false,
+        check_runner: std::sync::Arc::new(agents::ProductionCheckRunner::new(
+            std::sync::Arc::new(tools::LaneRouter::new(tools::SandboxMode::Off).unwrap()),
+            None,
+        )),
         path_deny_patterns: Vec::new(),
     };
     let verdict = run_reviewer(&triaged_bundle, &work, &rev_deps).await.unwrap();

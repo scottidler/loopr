@@ -82,6 +82,18 @@ impl Worktree {
         Ok(())
     }
 
+    /// Relinquish this handle WITHOUT removing the worktree: marks it consumed
+    /// so `Drop` is a no-op and the on-disk worktree + branch survive.
+    ///
+    /// Phase 10 of `docs/design/2026-07-11-verified-swarm.md`: the implementer
+    /// worktree is kept warm past review so the Reviewer's executed checks run
+    /// against incremental build caches instead of a cold recreate. Cleanup
+    /// then happens at a Bundle terminal state (startup reconcile / Phase 19
+    /// reaping), never at implementer exit.
+    pub fn retain(mut self) {
+        self.consumed = true;
+    }
+
     /// Provision a fresh worktree + branch for `work_id`. The seq suffix is
     /// allocated internally by looping from 1 and retrying on git's
     /// "already exists" class of errors (locale-stable via `LC_ALL=C` in

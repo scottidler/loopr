@@ -117,6 +117,12 @@ async fn reviewer_emits_per_ac_events_on_accept() {
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
         target: repo_path.clone(),
+        checkout_path: repo_path.clone(),
+        ephemeral_checkout: false,
+        check_runner: std::sync::Arc::new(agents::ProductionCheckRunner::new(
+            std::sync::Arc::new(tools::LaneRouter::new(tools::SandboxMode::Off).unwrap()),
+            None,
+        )),
         path_deny_patterns: Vec::new(),
     };
 
@@ -228,6 +234,12 @@ async fn reviewer_marks_all_criteria_unmet_on_change_requested() {
         context: InlineContextBuilder::new(),
         config: ReviewerConfig::default(),
         target: repo_path.clone(),
+        checkout_path: repo_path.clone(),
+        ephemeral_checkout: false,
+        check_runner: std::sync::Arc::new(agents::ProductionCheckRunner::new(
+            std::sync::Arc::new(tools::LaneRouter::new(tools::SandboxMode::Off).unwrap()),
+            None,
+        )),
         path_deny_patterns: Vec::new(),
     };
 
