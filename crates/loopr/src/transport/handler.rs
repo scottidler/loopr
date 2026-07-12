@@ -12,9 +12,9 @@ use tracing::{debug, info, instrument, warn};
 use agents::{DirectorDeps, DirectorError, run_director};
 use futures_util::FutureExt;
 use ipc::{
-    BundleSummary, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DaemonRequest, DaemonResponse, DirectorChatParams,
-    DirectorChatResult, DirectorStatusParams, DirectorStatusResult, DirectorStatusSnapshot, HandshakeParams,
-    HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult, PlanOverrideParams,
+    BudgetResetResult, BundleSummary, DIRECTOR_CHAT_MESSAGE_BYTE_CAP, DaemonRequest, DaemonResponse,
+    DirectorChatParams, DirectorChatResult, DirectorStatusParams, DirectorStatusResult, DirectorStatusSnapshot,
+    HandshakeParams, HandshakeResult, Method, PROTOCOL_VERSION, PlanCreateParams, PlanCreateResult, PlanOverrideParams,
     PlanOverrideResult, PlanSummary, RecordGetParams, RecordKind, RecordListParams, RecordResult, RecordsResult,
     RpcError, StatusResult, TickSummary, WorkSummary,
 };
@@ -84,6 +84,7 @@ where
         Method::DirectorChat(params) => handle_director_chat(req.id, params, ctx).await,
         Method::PlanOverride(params) => handle_plan_override(req.id, params, ctx).await,
         Method::DirectorStatus(params) => handle_director_status(req.id, params, ctx).await,
+        Method::BudgetReset => handle_budget_reset(req.id, ctx),
     }
 }
 
@@ -154,6 +155,22 @@ async fn handle_status<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<
     match serde_json::to_value(&result) {
         Ok(v) => DaemonResponse::ok(id, v),
         Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize status: {e}"))),
+    }
+}
+
+/// `budget.reset` (Phase 15 of `docs/design/2026-07-11-verified-swarm.md`):
+/// clear the daemon's one-shot per-run budget soft-pause guard so a
+/// budget-tripped daemon resumes spawning new implementers/Directors on
+/// its next reactive sweep. Synchronous and infallible (a single atomic
+/// swap), so no `.await` and no error arm.
+#[instrument(name = "ipc.budget_reset", level = "info", skip_all, fields(request_id = id))]
+fn handle_budget_reset<L: LlmClient + Send + Sync + 'static>(id: u64, ctx: &Arc<DaemonContext<L>>) -> DaemonResponse {
+    let was_tripped = ctx.reset_budget_event();
+    info!(request_id = id, was_tripped, "budget.reset: soft-pause guard cleared");
+    let result = BudgetResetResult { was_tripped };
+    match serde_json::to_value(result) {
+        Ok(v) => DaemonResponse::ok(id, v),
+        Err(e) => DaemonResponse::err(id, RpcError::Internal(format!("serialize budget.reset: {e}"))),
     }
 }
 

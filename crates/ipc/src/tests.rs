@@ -866,3 +866,62 @@ fn version_advertisement_in_handshake_bytes() {
         "expected protocol_version:1 in: {s}"
     );
 }
+
+// --- budget.reset (Phase 15 of verified-swarm) ---
+
+#[test]
+fn method_name_budget_reset_wire_form() {
+    let name: &'static str = crate::method::MethodName::BudgetReset.into();
+    assert_eq!(name, "budget.reset");
+}
+
+#[test]
+fn method_try_from_budget_reset_with_null_params() {
+    let req = DaemonRequest {
+        id: 30,
+        method: "budget.reset".into(),
+        params: serde_json::Value::Null,
+    };
+    assert_eq!(Method::try_from(&req).unwrap(), Method::BudgetReset);
+}
+
+#[test]
+fn method_try_from_budget_reset_with_empty_object_params() {
+    let req = DaemonRequest {
+        id: 31,
+        method: "budget.reset".into(),
+        params: json!({}),
+    };
+    assert_eq!(Method::try_from(&req).unwrap(), Method::BudgetReset);
+}
+
+#[test]
+fn budget_reset_rejects_nonempty_params() {
+    let req = DaemonRequest {
+        id: 32,
+        method: "budget.reset".into(),
+        params: json!({ "unexpected": true }),
+    };
+    let err = Method::try_from(&req).unwrap_err();
+    assert!(
+        matches!(err, RpcError::InvalidParams(_)),
+        "budget.reset takes no params: {err:?}"
+    );
+}
+
+#[test]
+fn budget_reset_result_round_trip() {
+    let before = crate::method::BudgetResetResult { was_tripped: true };
+    let bytes = serde_json::to_vec(&before).unwrap();
+    let after: crate::method::BudgetResetResult = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn budget_reset_result_deny_unknown_fields() {
+    let bytes = br#"{"was_tripped":false,"extra":"nope"}"#;
+    assert!(
+        serde_json::from_slice::<crate::method::BudgetResetResult>(bytes).is_err(),
+        "deny_unknown_fields must reject extras"
+    );
+}

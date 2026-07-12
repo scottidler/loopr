@@ -166,6 +166,7 @@ mod shutdown {
             snapshot,
             crate::transport::ServerTimeouts::default(),
             None,
+            4,
         ))
     }
 
@@ -283,6 +284,131 @@ mod shutdown {
         assert!(
             !names.iter().any(|n| n == "spawn_implementer_for_work"),
             "the duplicate default-named instrument span must be gone; got {names:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 15 (`docs/design/2026-07-11-verified-swarm.md`): `budget.reset`'s
+// underlying `reset_budget_event` mechanism.
+// ---------------------------------------------------------------------------
+
+mod budget {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use agents::{DirectorConfig, ImplementerConfig, ReviewerConfig};
+    use context::InlineContextBuilder;
+    use llm::{AnthropicClient, LlmConfig};
+    use store::Store;
+    use telemetry::{ProcessId, SessionId};
+    use tempfile::TempDir;
+    use tools::{BashDenylist, LaneRouter, SandboxMode};
+    use worktree::AttemptCleanupPolicy;
+
+    use crate::daemon::DaemonContext;
+
+    fn dummy_llm() -> Arc<AnthropicClient> {
+        let cfg = LlmConfig {
+            api_base_url: "http://127.0.0.1:1".to_string(),
+            ..LlmConfig::default()
+        };
+        Arc::new(AnthropicClient::new(cfg, "test-key".to_string()).unwrap())
+    }
+
+    /// Same shape as the `shutdown` module's `ctx_for_test`, parameterized
+    /// by the per-run cost cap so budget-brake tests can drive a live trip.
+    async fn ctx_with_cap(target: PathBuf, per_run_cost_usd: Option<f64>) -> Arc<DaemonContext<AnthropicClient>> {
+        let store = Store::open(&target).await.unwrap();
+        let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
+        let bash_denylist = Arc::new(BashDenylist::with_base());
+        let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+            "test-stub-model",
+        )));
+        Arc::new(DaemonContext::new(
+            target,
+            SessionId::parse("20260419-000000").unwrap(),
+            "-test-target".to_string(),
+            ProcessId::parse("pc-test01").unwrap(),
+            std::process::id(),
+            store,
+            dummy_llm(),
+            router,
+            bash_denylist,
+            Vec::new(),
+            SandboxMode::Off,
+            Arc::new(InlineContextBuilder::new()),
+            ImplementerConfig::default(),
+            ReviewerConfig::default(),
+            integrator::IntegratorConfig::default(),
+            DirectorConfig::default(),
+            decomposer::DecomposerConfig::default(),
+            AttemptCleanupPolicy::default(),
+            snapshot,
+            crate::transport::ServerTimeouts::default(),
+            per_run_cost_usd,
+            4,
+        ))
+    }
+
+    /// A daemon that never breached its cap has nothing to reset.
+    #[tokio::test]
+    async fn reset_on_a_never_tripped_daemon_is_a_no_op_reporting_false() {
+        let td = TempDir::new().unwrap();
+        let ctx = ctx_with_cap(td.path().to_path_buf(), None).await;
+        assert!(!ctx.reset_budget_event(), "an unconfigured (unlimited) cap never trips");
+    }
+
+    /// Break-to-prove the OTHER half of Phase 15's success criterion: reset
+    /// alone (cap unchanged) must NOT unblock a genuinely over-cap daemon —
+    /// `budget_blocks_spawn` re-derives its answer from
+    /// `per_run_cost_usd` vs. the live (monotonic) snapshot cost on every
+    /// call; `budget_event_sent` only dedupes the WARN/event emission. Only
+    /// once the cap itself is raised (here: the sole `Arc<DaemonContext>`
+    /// clone in scope, mutated directly via `Arc::get_mut` to stand in for
+    /// the config-raise + restart a real deployment requires today) does
+    /// the next `budget_blocks_spawn` call return `false` — dispatch
+    /// resumes. See this phase's implementation notes (Deviations) for the
+    /// full reasoning.
+    #[tokio::test]
+    async fn reset_clears_the_flag_but_dispatch_resumes_only_after_the_cap_is_raised() {
+        let td = TempDir::new().unwrap();
+        let mut ctx = ctx_with_cap(td.path().to_path_buf(), Some(0.0)).await;
+
+        // First spawn-gate check: cost (0) >= cap (0.0) trips it and emits
+        // the one-shot event; the daemon must not spawn.
+        assert!(
+            ctx.budget_blocks_spawn("implementer", "wk-test"),
+            "a zero cap trips immediately (0 spend >= 0.0 cap)"
+        );
+
+        // Reset clears the one-shot flag...
+        assert!(
+            ctx.reset_budget_event(),
+            "the guard was tripped; reset must report that"
+        );
+        // ...but the cap is still 0.0 and cost is still >= it, so the very
+        // next gate check re-trips and blocks again. Resetting alone does
+        // not resume dispatch.
+        assert!(
+            ctx.budget_blocks_spawn("implementer", "wk-test"),
+            "cap unchanged: the daemon must still be blocked immediately after reset"
+        );
+
+        // Now raise the cap (standing in for the operator's config change +
+        // restart) and reset again.
+        Arc::get_mut(&mut ctx)
+            .expect("sole Arc clone in this test")
+            .per_run_cost_usd = Some(1_000_000.0);
+        assert!(
+            ctx.reset_budget_event(),
+            "the re-trip above set the flag again; reset must report that"
+        );
+
+        // Dispatch resumes: the cap is no longer exceeded.
+        assert!(
+            !ctx.budget_blocks_spawn("implementer", "wk-test"),
+            "with the cap raised, spawns must no longer be blocked"
         );
     }
 }

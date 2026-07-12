@@ -796,6 +796,7 @@ where
         snapshot,
         server_timeouts,
         config.budgets.per_run_cost_usd,
+        config.budgets.max_concurrent_implementers,
     ));
 
     tracing::info!(

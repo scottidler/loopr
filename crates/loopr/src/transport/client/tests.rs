@@ -70,6 +70,7 @@ async fn ctx_for_test(target: PathBuf) -> Arc<DaemonContext<AnthropicClient>> {
         snapshot,
         crate::transport::ServerTimeouts::default(),
         None,
+        4,
     ))
 }
 

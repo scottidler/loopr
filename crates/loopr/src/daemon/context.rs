@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use tokio::process::Command;
-use tokio::sync::{Mutex, Notify, RwLock, broadcast};
+use tokio::sync::{Mutex, Notify, RwLock, Semaphore, broadcast};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use uuid::Uuid;
@@ -311,8 +311,19 @@ pub struct DaemonContext<L: LlmClient + Send + Sync + 'static> {
     pub per_run_cost_usd: Option<f64>,
     /// One-shot guard so the per-run budget breach emits exactly one
     /// `budget.exceeded` event no matter how many spawn attempts the
-    /// reactor makes after the cap is hit.
+    /// reactor makes after the cap is hit. Cleared by `budget.reset`
+    /// (Phase 15) so a tripped daemon can resume without a restart once
+    /// the operator raises the cap.
     budget_event_sent: AtomicBool,
+    /// Phase 15 (`docs/design/2026-07-11-verified-swarm.md`): global
+    /// implementer semaphore bounding the N-plans x M-works LLM
+    /// fan-out. A permit is acquired at the TOP of
+    /// `spawn_implementer_for_work`, before any other guard, and
+    /// released as soon as `run_implementer` returns — well before the
+    /// Reviewer spawn, which is never semaphore-bound. Sized from
+    /// `budgets.max-concurrent-implementers`
+    /// (`config::DEFAULT_MAX_CONCURRENT_IMPLEMENTERS` when unset).
+    implementer_semaphore: Semaphore,
 }
 
 impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
@@ -347,6 +358,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         snapshot: Arc<StdMutex<ProcessSnapshot>>,
         server_timeouts: crate::transport::ServerTimeouts,
         per_run_cost_usd: Option<f64>,
+        max_concurrent_implementers: usize,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENTS_CAPACITY);
         let store = Arc::new(store);
@@ -396,6 +408,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             server_timeouts,
             per_run_cost_usd,
             budget_event_sent: AtomicBool::new(false),
+            implementer_semaphore: Semaphore::new(max_concurrent_implementers),
         }
     }
 
@@ -452,6 +465,20 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         true
     }
 
+    /// `budget.reset` IPC verb body (Phase 15). Clears the one-shot
+    /// `budget_event_sent` soft-pause guard so a budget-tripped daemon
+    /// resumes dispatching new implementer spawns on its next reactive
+    /// sweep, without a restart. Returns the PRIOR value (`true` = the
+    /// daemon had actually tripped, so this reset mattered; `false` = the
+    /// guard was already clear, a no-op). Does not touch
+    /// `per_run_cost_usd` itself — the operator is expected to raise the
+    /// cap (via a new `.loopr/config.yml` + daemon restart, since
+    /// `per_run_cost_usd` is read once at `DaemonContext::new`) before
+    /// calling this, or the very next spawn attempt re-trips the guard.
+    pub fn reset_budget_event(&self) -> bool {
+        self.budget_event_sent.swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Build a per-invocation `ToolContext` for one tool call.
     ///
     /// The persist base for overflow output is
@@ -487,6 +514,22 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         fields(work_id = %work.id, work_status = ?work.status, session_id = %self.session_id),
     )]
     pub async fn spawn_implementer_for_work(self: Arc<Self>, mut work: Work) {
+        // Phase 15 global implementer semaphore (bounds the N-plans x
+        // M-works LLM fan-out): acquired FIRST, before any other guard,
+        // per the design doc's "top of spawn_implementer_for_work"
+        // placement. Never closed in production (no `close()` caller),
+        // so `acquire()` failing would mean the semaphore was dropped out
+        // from under a live `Arc<Self>` — unreachable; `.expect` documents
+        // the invariant rather than threading a dead error arm. Released
+        // explicitly the moment `run_implementer` returns, well before the
+        // Reviewer spawn below (the Reviewer/Integrator are NOT
+        // semaphore-bound).
+        let _permit = self
+            .implementer_semaphore
+            .acquire()
+            .await
+            .expect("implementer semaphore is never closed");
+
         // Phase 2 sidecar-map insert. Guard is dropped on every exit
         // (panic or normal return), so `WorkSpawner::list_running_work_ids`
         // observes the live set even across abrupt panics.
@@ -666,6 +709,15 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         ))
         .catch_unwind()
         .await;
+
+        // Phase 15: release the implementer permit the instant the
+        // implementer run returns (or panics) — BEFORE routing the
+        // outcome, BEFORE the terminal FSM transition below, and BEFORE
+        // the Reviewer spawn inside the `Ok(Ok(bundle))` arm. The
+        // Reviewer and Integrator are never semaphore-bound; only the
+        // Implementer's own LLM fan-out is capped.
+        drop(_permit);
+
         match result {
             Err(panic) => {
                 let msg = panic_message(&*panic);

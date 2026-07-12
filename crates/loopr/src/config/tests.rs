@@ -429,6 +429,38 @@ budgets:
     assert_eq!(cfg.budgets.per_work_cost_usd, Some(1.25));
 }
 
+/// Phase 15 of `docs/design/2026-07-11-verified-swarm.md`: an unbounded
+/// implementer fan-out is never the sane default, so
+/// `max_concurrent_implementers` defaults to the concrete
+/// `DEFAULT_MAX_CONCURRENT_IMPLEMENTERS` (4), unlike the two `Option`
+/// cost caps above which default to unlimited.
+#[test]
+fn max_concurrent_implementers_defaults_to_four() {
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.budgets.max_concurrent_implementers, 4);
+    assert_eq!(
+        cfg.budgets.max_concurrent_implementers,
+        crate::config::DEFAULT_MAX_CONCURRENT_IMPLEMENTERS
+    );
+}
+
+#[test]
+fn max_concurrent_implementers_parses_from_yaml() {
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = "budgets:\n  max-concurrent-implementers: 2\n";
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(cfg.budgets.max_concurrent_implementers, 2);
+    // Untouched fields keep their own defaults — proves the container-level
+    // `#[serde(default)]` fills in siblings, not just the one set key.
+    assert_eq!(cfg.budgets.per_run_cost_usd, None);
+}
+
 #[test]
 fn env_invalid_value_errors_cleanly() {
     let _g = load_guard();

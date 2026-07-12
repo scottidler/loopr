@@ -39,6 +39,14 @@ pub enum MethodName {
     /// no-progress streak?" without grepping `events.log`.
     #[strum(serialize = "director.status")]
     DirectorStatus,
+    /// Clear the daemon's one-shot per-run budget soft-pause
+    /// (`DaemonContext::budget_event_sent`) so a budget-tripped daemon
+    /// resumes spawning implementers after the operator raises
+    /// `budgets.per-run-cost-usd` (or restarts the target with a fresh
+    /// cap). Phase 15 of `docs/design/2026-07-11-verified-swarm.md`.
+    /// Takes no params.
+    #[strum(serialize = "budget.reset")]
+    BudgetReset,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +59,7 @@ pub enum Method {
     DirectorChat(DirectorChatParams),
     PlanOverride(PlanOverrideParams),
     DirectorStatus(DirectorStatusParams),
+    BudgetReset,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +220,12 @@ impl TryFrom<&DaemonRequest> for Method {
                     serde_json::from_value(req.params.clone()).map_err(|e| RpcError::InvalidParams(e.to_string()))?;
                 Ok(Method::DirectorStatus(params))
             }
+            MethodName::BudgetReset => {
+                if !req.params.is_null() && !matches!(&req.params, serde_json::Value::Object(m) if m.is_empty()) {
+                    return Err(RpcError::InvalidParams("budget.reset takes no params".into()));
+                }
+                Ok(Method::BudgetReset)
+            }
         }
     }
 }
@@ -240,4 +255,14 @@ pub struct StatusResult {
 #[serde(deny_unknown_fields)]
 pub struct PlanCreateResult {
     pub plan: Plan,
+}
+
+/// `budget.reset` response. `was_tripped` tells the operator whether the
+/// reset actually mattered: `true` means the per-run soft-pause had
+/// fired and new implementer spawns are now unblocked; `false` means
+/// the daemon was never tripped (a no-op reset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetResetResult {
+    pub was_tripped: bool,
 }

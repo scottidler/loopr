@@ -121,6 +121,13 @@ pub enum Command {
         cmd: DirectorCmd,
     },
 
+    /// Operator budget-brake interaction. Phase 15 of
+    /// `docs/design/2026-07-11-verified-swarm.md`.
+    Budget {
+        #[command(subcommand)]
+        cmd: BudgetCmd,
+    },
+
     /// Launch the TUI. Same as bare `loopr` (no subcommand).
     Tui,
 }
@@ -158,6 +165,9 @@ impl Command {
             Command::Director { cmd } => match cmd {
                 DirectorCmd::Chat { .. } => "director-chat",
                 DirectorCmd::Status { .. } => "director-status",
+            },
+            Command::Budget { cmd } => match cmd {
+                BudgetCmd::Reset => "budget-reset",
             },
             Command::Tui => "tui",
         }
@@ -236,6 +246,19 @@ pub enum DirectorCmd {
         /// Target Plan id, e.g. `pl-abc12`.
         plan_id: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BudgetCmd {
+    /// Clear the daemon's one-shot per-run budget soft-pause guard, so a
+    /// budget-tripped daemon resumes spawning new implementers/Directors
+    /// on its next reactive sweep. Phase 15 of
+    /// `docs/design/2026-07-11-verified-swarm.md`. Note: the guard is
+    /// re-derived from `budgets.per-run-cost-usd` vs. live spend on every
+    /// spawn attempt, so if the cap itself was not also raised (a
+    /// `.loopr/config.yml` edit + `loopr daemon stop`/`daemon start`
+    /// today), the very next spawn attempt re-trips it.
+    Reset,
 }
 
 #[derive(Subcommand, Debug)]

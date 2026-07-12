@@ -212,6 +212,12 @@ fn test_cli_parses_tui_explicit() {
 }
 
 #[test]
+fn test_cli_parses_budget_reset() {
+    let cli = Cli::parse_from(["loopr", "budget", "reset"]);
+    assert!(matches!(cli.command, Some(Command::Budget { cmd: BudgetCmd::Reset })));
+}
+
+#[test]
 fn test_cli_parses_bare_invocation_as_none() {
     let cli = Cli::parse_from(["loopr"]);
     assert!(cli.command.is_none(), "bare `loopr` must leave command unset");
@@ -284,6 +290,7 @@ fn test_command_label_covers_every_variant() {
         (&["loopr", "daemon", "status"][..], "daemon-status"),
         (&["loopr", "logs", "tail"][..], "logs-tail"),
         (&["loopr", "logs", "runs"][..], "logs-runs"),
+        (&["loopr", "budget", "reset"][..], "budget-reset"),
         (&["loopr", "tui"][..], "tui"),
     ];
     for (argv, expected) in cases {

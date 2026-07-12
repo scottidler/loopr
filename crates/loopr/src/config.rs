@@ -164,12 +164,25 @@ impl Default for TransportSection {
     }
 }
 
-/// Cost budgets (vision "Budgets"). Both caps default to `None`
+/// Default cap on concurrently-InProgress Implementer runs
+/// (`budgets.max-concurrent-implementers`). Bounds the N-plans x
+/// M-works LLM fan-out: every `spawn_implementer_for_work` call
+/// acquires a permit from `DaemonContext`'s global `Semaphore` before
+/// doing any work, so at most this many Implementer loops run at
+/// once regardless of how many Works are Ready across however many
+/// live Plans. Phase 15 of `docs/design/2026-07-11-verified-swarm.md`.
+pub const DEFAULT_MAX_CONCURRENT_IMPLEMENTERS: usize = 4;
+
+/// Cost budgets (vision "Budgets"). Both cost caps default to `None`
 /// (unlimited) per the options-with-sane-defaults rule — a fresh target
 /// runs uncapped until an operator opts into a ceiling. Enforcement is
 /// soft-pause only: hitting a cap stops new agent spawns and emits a
 /// `budget.exceeded` event; in-flight agents finish and are never killed.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+/// `max_concurrent_implementers` is a concurrency brake, not a cost cap,
+/// and always has a concrete (non-`Option`) default: an unbounded
+/// implementer fan-out is never the sane default, per
+/// `DEFAULT_MAX_CONCURRENT_IMPLEMENTERS`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct BudgetsSection {
     /// Per-run (per-daemon-process) cumulative LLM cost cap in U.S.
@@ -182,6 +195,19 @@ pub struct BudgetsSection {
     /// escalates the Work (the implementer's "stop this Work" signal).
     /// `None` = unlimited.
     pub per_work_cost_usd: Option<f64>,
+    /// Global cap on concurrently-InProgress Implementer runs. See
+    /// `DEFAULT_MAX_CONCURRENT_IMPLEMENTERS`.
+    pub max_concurrent_implementers: usize,
+}
+
+impl Default for BudgetsSection {
+    fn default() -> Self {
+        Self {
+            per_run_cost_usd: None,
+            per_work_cost_usd: None,
+            max_concurrent_implementers: DEFAULT_MAX_CONCURRENT_IMPLEMENTERS,
+        }
+    }
 }
 
 /// Top-level configuration composed from each stage crate's config.

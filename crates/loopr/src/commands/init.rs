@@ -171,6 +171,21 @@ const CONFIG_TEMPLATE: &str = "\
 #
 #   An unknown tier name fails daemon startup with a named error instead
 #   of silently routing a role to a nonsense model.
+#
+# budgets:
+#   `max-concurrent-implementers` (Phase 15) bounds how many Works may run
+#   their Implementer loop at once across every live Plan -- the brake on
+#   the N-plans x M-works LLM fan-out. Defaults to 4. Raise it on a bigger
+#   box, lower it to throttle spend:
+#
+#     max-concurrent-implementers: 4
+#
+#   `per-run-cost-usd` / `per-work-cost-usd` cap cumulative LLM spend
+#   (unlimited by default). A tripped per-run cap soft-pauses new agent
+#   spawns until `loopr budget reset` is run AND this cap is raised:
+#
+#     per-run-cost-usd: 25.0
+#     per-work-cost-usd: 2.0
 ";
 
 fn step_seed_config_template(target: &Path) -> Result<StepOutcome, LooprError> {

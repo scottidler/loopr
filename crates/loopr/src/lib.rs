@@ -243,6 +243,9 @@ fn dispatch(
         },
         Command::Sessions { cmd } => commands::sessions::run(target, cmd),
         Command::Director { cmd } => commands::director::run(target, cmd, output_format),
+        Command::Budget { cmd } => match cmd {
+            cli::BudgetCmd::Reset => budget_reset_command(target, output_format),
+        },
         Command::Tui => Err(LooprError::TuiNotInstalled),
     }
 }
@@ -352,6 +355,39 @@ fn plan_override_command(
     let fmt = output::Format::resolve(output_format);
     let rendered =
         output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render plan.override: {e}")))?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `loopr budget reset` body. Phase 15 of
+/// `docs/design/2026-07-11-verified-swarm.md`: clears the daemon's
+/// one-shot per-run budget soft-pause guard via `MethodName::BudgetReset`.
+/// Deliberately NOT in `run()`'s auto-fork arm (mirrors `daemon status`):
+/// resetting a budget-brake state on a daemon that does not exist is
+/// meaningless, so this checks for a live daemon itself rather than
+/// forking one just to reset a guard that starts clear on every boot.
+#[tracing::instrument(
+    name = "client.budget_reset_command",
+    level = "info",
+    skip_all,
+    fields(target = %target.display(), subcommand = "budget-reset"),
+    err,
+)]
+fn budget_reset_command(target: &Path, output_format: Option<output::Format>) -> Result<(), LooprError> {
+    let pid_file = daemon::sentinel::pid_path(target);
+    match daemon::sentinel::read_pid(&pid_file)? {
+        Some(pid) if daemon::sentinel::is_daemon_alive(pid) => {}
+        _ => {
+            println!("no daemon running");
+            return Ok(());
+        }
+    }
+
+    let result: ipc::BudgetResetResult =
+        transport::ipc_call(target, ipc::MethodName::BudgetReset, &serde_json::Value::Null)?;
+    let fmt = output::Format::resolve(output_format);
+    let rendered =
+        output::render(&result, fmt).map_err(|e| LooprError::ClientIo(format!("render budget.reset: {e}")))?;
     println!("{rendered}");
     Ok(())
 }

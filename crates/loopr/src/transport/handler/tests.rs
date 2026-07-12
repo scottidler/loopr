@@ -67,6 +67,7 @@ async fn stub_ctx() -> (TempDir, Arc<DaemonContext<AnthropicClient>>) {
         snapshot,
         crate::transport::ServerTimeouts::default(),
         None,
+        4,
     ));
     (td, ctx)
 }
@@ -329,11 +330,16 @@ impl llm::LlmClient for DirectorNoopLlm {
     }
 }
 
-/// Test context identical to `stub_ctx()` but backed by a `ScriptedLlm`
-/// (wrapped in `DirectorNoopLlm`) instead of a dead-port `AnthropicClient`,
-/// so decompose can actually succeed and drive Work creation. Used by the
-/// Phase 4 pipeline-counter e2e test below.
-async fn stub_ctx_scripted(llm: llm::ScriptedLlm) -> (TempDir, Arc<DaemonContext<DirectorNoopLlm>>) {
+/// Test context identical to `stub_ctx()` but backed by a scripted
+/// `LlmClient` instead of a dead-port `AnthropicClient`, so decompose can
+/// actually succeed and drive Work creation. Used by the Phase 4
+/// pipeline-counter e2e test below, and by the Phase 15 concurrency-cap
+/// tests (which wrap a different `LlmClient` than `DirectorNoopLlm`, hence
+/// the generic `L` rather than a hardcoded wrapper type).
+async fn stub_ctx_scripted<L>(llm: L, max_concurrent_implementers: usize) -> (TempDir, Arc<DaemonContext<L>>)
+where
+    L: llm::LlmClient + Send + Sync + 'static,
+{
     let td = TempDir::new().unwrap();
     init_git_repo(td.path());
     let store = Store::open(td.path()).await.unwrap();
@@ -349,7 +355,7 @@ async fn stub_ctx_scripted(llm: llm::ScriptedLlm) -> (TempDir, Arc<DaemonContext
         ProcessId::parse("pc-scrpt1").unwrap(),
         12346,
         store,
-        Arc::new(DirectorNoopLlm { inner: llm }),
+        Arc::new(llm),
         router,
         bash_denylist,
         Vec::new(),
@@ -364,6 +370,7 @@ async fn stub_ctx_scripted(llm: llm::ScriptedLlm) -> (TempDir, Arc<DaemonContext
         snapshot,
         crate::transport::ServerTimeouts::default(),
         None,
+        max_concurrent_implementers,
     ));
     (td, ctx)
 }
@@ -396,7 +403,7 @@ async fn plan_create_scripted_e2e_increments_process_digest_counters() {
     }));
     scripted.queue_free(Ok(r#"[{"type":"need_help","reason":"test escalation"}]"#.to_string()));
 
-    let (_td, ctx) = stub_ctx_scripted(scripted).await;
+    let (_td, ctx) = stub_ctx_scripted(DirectorNoopLlm { inner: scripted }, 4).await;
     let mut state = HandshakeState::Complete;
     let req = DaemonRequest {
         id: 200,
@@ -432,6 +439,202 @@ async fn plan_create_scripted_e2e_increments_process_digest_counters() {
     assert_eq!(
         snap.works_blocked, 1,
         "the Implementer's NeedHelp escalation must increment works_blocked"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 15 (`docs/design/2026-07-11-verified-swarm.md`): global implementer
+// semaphore caps the N-plans x M-works LLM fan-out.
+// ---------------------------------------------------------------------------
+
+/// Wraps a scripted decomposer response and instruments every genuine
+/// Implementer `complete_free` call (model == the `ImplementerConfig`
+/// default literal, `"claude-sonnet-4-6"`) with an in-flight counter + a
+/// deliberate hold, so a test can observe the TRUE peak concurrency the
+/// daemon actually dispatched rather than inferring it from timing.
+/// Director calls (model == `"claude-opus-4-7"`) are shielded exactly
+/// like `DirectorNoopLlm` — no Bundle exists in this scenario, so `done`
+/// is always the right canned answer — which keeps the single queued
+/// decompose tool-call response as the ONLY thing `inner` ever serves.
+/// Implementer calls never touch `inner`'s free-response queue at all
+/// (a canned answer, not a FIFO pop), so queuing 6 identical Works needs
+/// no per-Work scripting and can never panic on "empty queue".
+#[derive(Clone)]
+struct ConcurrencyProbeLlm {
+    inner: llm::ScriptedLlm,
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    max_seen: Arc<std::sync::atomic::AtomicUsize>,
+    hold: std::time::Duration,
+}
+
+impl llm::LlmClient for ConcurrencyProbeLlm {
+    async fn complete_with_tool(
+        &self,
+        system: &str,
+        user: &str,
+        tool: llm::ToolSchema,
+        model: Option<&str>,
+    ) -> Result<(llm::ToolCall, llm::Usage), llm::LlmError> {
+        self.inner.complete_with_tool(system, user, tool, model).await
+    }
+
+    async fn complete_free(
+        &self,
+        system: &str,
+        messages: &[llm::Message],
+        model: Option<&str>,
+    ) -> Result<(String, llm::Usage), llm::LlmError> {
+        if model == Some("claude-opus-4-7") {
+            return Ok((
+                r#"[{"action":"done","summary":"test: no bundle to act on"}]"#.to_string(),
+                llm::Usage::default(),
+            ));
+        }
+        let now = self.in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        self.max_seen.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(self.hold).await;
+        self.in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = (system, messages);
+        Ok((
+            r#"[{"type":"need_help","reason":"concurrency probe"}]"#.to_string(),
+            llm::Usage::default(),
+        ))
+    }
+
+    fn model(&self) -> &str {
+        self.inner.model()
+    }
+}
+
+/// Six independent (no-dependency) decomposition children, each scoped to
+/// its own file so the propose-time scope gate (Phase 14) never rejects
+/// anything — not that any of these Works gets far enough to propose a
+/// Bundle (the probe LLM escalates every Work on its first iteration).
+fn six_child_decomposition() -> serde_json::Value {
+    let children: Vec<serde_json::Value> = (1..=6)
+        .map(|i| {
+            serde_json::json!({
+                "title": format!("concurrency probe child {i}"),
+                "content": format!("Concurrency-probe child {i}."),
+                "dependencies": [],
+                "acceptance_criteria": [format!("child {i} criterion")],
+                "files": [format!("FILE_{i}.md")],
+            })
+        })
+        .collect();
+    serde_json::json!({ "children": children })
+}
+
+/// Phase 15 success criterion: "with 6 ready works, cap 2 -> at most 2
+/// InProgress concurrently." Drives `plan.create` over the exact
+/// production dispatch path (`decompose_and_dispatch` spawns all 6
+/// dep-free Works into `implementer_tasks` at once, precisely as it does
+/// with any real target) with `budgets.max-concurrent-implementers = 2`,
+/// and asserts the OBSERVED peak concurrency of genuine Implementer LLM
+/// calls never exceeds 2 — proof at the LLM-call boundary, not a racy
+/// sample of `WorkStatus::InProgress` rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn implementer_semaphore_caps_concurrent_dispatch_at_configured_limit() {
+    let scripted = llm::ScriptedLlm::new();
+    scripted.queue_tool(Ok(llm::ToolCall {
+        tool_name: "submit_decomposition".to_string(),
+        input: six_child_decomposition(),
+    }));
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let probe = ConcurrencyProbeLlm {
+        inner: scripted,
+        in_flight: Arc::clone(&in_flight),
+        max_seen: Arc::clone(&max_seen),
+        hold: std::time::Duration::from_millis(150),
+    };
+
+    let (_td, ctx) = stub_ctx_scripted(probe, 2).await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 300,
+        method: "plan.create".into(),
+        params: serde_json::json!({"goal": "concurrency probe capped"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "plan.create errored: {:?}", resp.error);
+
+    {
+        let mut tasks = ctx.plan_create_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+    {
+        let mut tasks = ctx.implementer_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+
+    let works = ctx.store.works().list().await.unwrap();
+    assert_eq!(works.len(), 6, "decompose must produce all 6 independent Works");
+    assert!(
+        works.iter().all(|w| w.status == domain::WorkStatus::Blocked),
+        "every Work escalates (need_help) exactly once and lands Blocked"
+    );
+    assert_eq!(
+        in_flight.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "every held permit must have been released by the time all tasks joined"
+    );
+    let peak = max_seen.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(peak <= 2, "cap 2: observed {peak} concurrent Implementer LLM calls");
+    assert!(
+        peak >= 2,
+        "harness sanity: with 6 Works and a 150ms hold, the cap-2 daemon should still reach \
+         exactly 2 concurrent calls (peak was {peak}) — a lower peak would mean this test isn't \
+         actually exercising overlap"
+    );
+}
+
+/// Break-to-prove companion: same 6-Work scenario, but the cap is raised to
+/// 6 (every Work may run at once — the semaphore is effectively disabled).
+/// Concurrency must then exceed 2, proving the capped test's `<= 2` result
+/// above is the semaphore's doing and not an artifact of sequential
+/// scheduling that would have produced `<= 2` regardless of any cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn implementer_semaphore_break_to_prove_uncapped_dispatch_exceeds_two_concurrent() {
+    let scripted = llm::ScriptedLlm::new();
+    scripted.queue_tool(Ok(llm::ToolCall {
+        tool_name: "submit_decomposition".to_string(),
+        input: six_child_decomposition(),
+    }));
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let probe = ConcurrencyProbeLlm {
+        inner: scripted,
+        in_flight: Arc::clone(&in_flight),
+        max_seen: Arc::clone(&max_seen),
+        hold: std::time::Duration::from_millis(150),
+    };
+
+    let (_td, ctx) = stub_ctx_scripted(probe, 6).await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 301,
+        method: "plan.create".into(),
+        params: serde_json::json!({"goal": "concurrency probe uncapped"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "plan.create errored: {:?}", resp.error);
+
+    {
+        let mut tasks = ctx.plan_create_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+    {
+        let mut tasks = ctx.implementer_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+
+    let peak = max_seen.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        peak > 2,
+        "with the cap effectively disabled (6 == every Work), concurrency must exceed 2 \
+         (observed {peak}) — otherwise the capped test's <=2 result would not be attributable \
+         to the semaphore"
     );
 }
 
