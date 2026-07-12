@@ -7,7 +7,8 @@
 //!    interpolated into the user message on any `LlmError`.
 //! 4. Tool-call input deserialization to `DecomposeResponse`.
 //! 5. Validation: non-empty children, no empty titles, no duplicates
-//!    after normalization.
+//!    after normalization, non-empty per-child `files` scope, valid
+//!    scope paths.
 //! 6. Title-to-`WorkId` mint, dep-graph cycle detection, dep
 //!    resolution.
 //! 7. Build `Vec<Work>` with pre-minted ids, resolved deps, and non-
@@ -436,6 +437,21 @@ fn parse_and_validate(
             "duplicate_titles",
             render_decompose_response(&response),
         ));
+    }
+
+    // Empty-scope validation (Phase 14): each child's `files` must be
+    // non-empty. `files` is the staging allow-list AND the propose-time
+    // scope gate, so a Work with no files has no enforceable boundary.
+    // Reject at produce time and let the retry path re-emit a concrete
+    // list. A whitespace-only entry is treated as absent.
+    for child in &response.children {
+        if child.files.iter().all(|f| f.trim().is_empty()) {
+            return Err(ValidationFailure::boxed(
+                DecomposerError::EmptyFiles(child.title.clone()),
+                "empty_files",
+                render_decompose_response(&response),
+            ));
+        }
     }
 
     // Scope-path validation (finding 10): each child's `files` must be a

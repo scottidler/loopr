@@ -82,6 +82,15 @@ pub enum DecomposerError {
     #[error("child at index {0} has empty title")]
     EmptyTitle(usize),
 
+    /// A child's `files` scope was empty (or omitted). Since Phase 14
+    /// the per-Work `files` list is both the staging allow-list and the
+    /// propose-time scope gate, so an empty scope would leave the Work
+    /// with no enforceable boundary. Rejected at produce time and routed
+    /// through the retry-with-error path so the model re-emits the Work
+    /// with a concrete file list.
+    #[error("child {0:?} has an empty `files` scope; list the files this Work will create or modify")]
+    EmptyFiles(String),
+
     /// A child's `files` scope contained an unusable path: absolute, a
     /// parent-traversal (`..`), or a backslash separator. The per-Work scope
     /// is rendered into the implementer/reviewer prompts (Phase-5 finding

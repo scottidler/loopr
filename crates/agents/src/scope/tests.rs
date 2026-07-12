@@ -91,6 +91,94 @@ fn test_artifacts_filtered_even_with_empty_scope() {
     assert_eq!(out, vec![".loopr/taskstore/data.jsonl", ".loopr/runs/r-1/log"]);
 }
 
+// --- directory-prefix scope semantics (Phase 14) ---
+
+#[test]
+fn test_dir_prefix_matches_nested_paths() {
+    // A trailing-slash entry is a directory prefix: everything under it is
+    // in scope, at any depth.
+    let dirty = vec![
+        "src/foo.rs".to_string(),
+        "src/nested/bar.rs".to_string(),
+        "other.rs".to_string(),
+    ];
+    let scope = vec!["src/".to_string()];
+    let (in_scope, out) = partition_by_scope(&dirty, &scope);
+    assert_eq!(in_scope, vec!["src/foo.rs", "src/nested/bar.rs"]);
+    assert_eq!(out, vec!["other.rs"]);
+}
+
+#[test]
+fn test_dir_prefix_does_not_match_sibling_prefix() {
+    // `src/` must NOT match `src-gen/...` — the boundary is the slash, not a
+    // raw string prefix.
+    let dirty = vec!["src-gen/x.rs".to_string(), "srcfoo.rs".to_string()];
+    let scope = vec!["src/".to_string()];
+    let (in_scope, out) = partition_by_scope(&dirty, &scope);
+    assert!(in_scope.is_empty());
+    assert_eq!(out, vec!["src-gen/x.rs", "srcfoo.rs"]);
+}
+
+#[test]
+fn test_exact_entry_does_not_match_directory_children() {
+    // Without a trailing slash the entry is an exact path: `src` matches only
+    // a file literally named `src`, not files under a `src/` directory.
+    let dirty = vec!["src/foo.rs".to_string()];
+    let scope = vec!["src".to_string()];
+    let (in_scope, out) = partition_by_scope(&dirty, &scope);
+    assert!(in_scope.is_empty());
+    assert_eq!(out, vec!["src/foo.rs"]);
+}
+
+#[test]
+fn test_bare_slash_scope_fails_closed() {
+    // A bare `/` entry is not a usable directory scope. Fail closed: it must
+    // NOT match everything.
+    let dirty = vec!["anything.rs".to_string()];
+    let scope = vec!["/".to_string()];
+    let (in_scope, out) = partition_by_scope(&dirty, &scope);
+    assert!(in_scope.is_empty());
+    assert_eq!(out, vec!["anything.rs"]);
+}
+
+#[test]
+fn test_dir_prefix_still_excludes_loopr_artifacts() {
+    // `.loopr/` is always out of scope even under a broad directory prefix.
+    let dirty = vec![".loopr/state.jsonl".to_string(), "keep.rs".to_string()];
+    let scope = vec!["./".to_string(), "keep.rs".to_string()];
+    let (in_scope, out) = partition_by_scope(&dirty, &scope);
+    assert_eq!(in_scope, vec!["keep.rs"]);
+    assert_eq!(out, vec![".loopr/state.jsonl"]);
+}
+
+// --- out_of_scope_paths (propose-time defense-in-depth gate) ---
+
+#[test]
+fn test_out_of_scope_paths_flags_only_out_of_scope() {
+    let paths = vec![
+        "src/foo.rs".to_string(),
+        "secret.txt".to_string(),
+        "src/nested/bar.rs".to_string(),
+    ];
+    let scope = vec!["src/".to_string()];
+    let out = out_of_scope_paths(&paths, &scope);
+    assert_eq!(out, vec!["secret.txt"]);
+}
+
+#[test]
+fn test_out_of_scope_paths_empty_when_all_in_scope() {
+    let paths = vec!["src/foo.rs".to_string(), "README.md".to_string()];
+    let scope = vec!["src/foo.rs".to_string(), "README.md".to_string()];
+    assert!(out_of_scope_paths(&paths, &scope).is_empty());
+}
+
+#[test]
+fn test_out_of_scope_paths_flags_loopr_artifacts() {
+    let paths = vec!["src/foo.rs".to_string(), ".loopr/leak.txt".to_string()];
+    let scope = vec!["src/".to_string()];
+    assert_eq!(out_of_scope_paths(&paths, &scope), vec![".loopr/leak.txt"]);
+}
+
 // --- parse_porcelain_status tests ---
 
 #[test]

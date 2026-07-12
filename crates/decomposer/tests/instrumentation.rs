@@ -127,6 +127,7 @@ async fn decomposer_smoke_spans_decompose() {
                     "content": "## Acceptance Criteria\n- it works\n",
                     "acceptance_criteria": ["it works"],
                     "dependencies": [],
+                    "files": ["src/x.rs"],
                 }
             ]
         }),

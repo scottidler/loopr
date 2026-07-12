@@ -389,6 +389,7 @@ async fn plan_create_scripted_e2e_increments_process_digest_counters() {
                     "content": "Create a top-level VERSION.md file.",
                     "dependencies": [],
                     "acceptance_criteria": ["VERSION.md exists at repo root"],
+                    "files": ["VERSION.md"],
                 }
             ]
         }),

@@ -270,9 +270,26 @@ fn dangerous_rm_target(tok: &str) -> Option<usize> {
     }
 }
 
+/// git subcommands that mutate history or the index. The scoped dispatcher
+/// (`agents::dispatch`'s `commit_changes` / `propose_bundle`, which call git
+/// directly, not through this bash tool) is the ONLY sanctioned mutation
+/// path. Read-only git (`log`, `diff`, `status`, `show`, `blame`) stays
+/// allowed — it is absent from this list. Phase 14.
+const GIT_MUTATION_SUBCOMMANDS: &[&str] = &[
+    "add",
+    "commit",
+    "checkout",
+    "switch",
+    "reset",
+    "rebase",
+    "merge",
+    "cherry-pick",
+    "stash",
+];
+
 fn base() -> Vec<DenyPattern> {
     use TokenMatcher::*;
-    vec![
+    let mut patterns = vec![
         // Position 0 is reserved for the pipe-to-shell synthetic pattern.
         // `tokens` is unused at match time (short-circuited in check()); the
         // `reason` is what callers surface.
@@ -303,7 +320,17 @@ fn base() -> Vec<DenyPattern> {
             tokens: vec![Literal("gh".into()), Literal("repo".into()), Literal("delete".into())],
             reason: "destructive github op".into(),
         },
-    ]
+    ];
+    // Git history/index mutation is human-only; the scoped dispatcher is the
+    // only mutation path (Phase 14). Appended as data so the set stays a
+    // single source of truth rather than nine special-cased blocks.
+    for sub in GIT_MUTATION_SUBCOMMANDS {
+        patterns.push(DenyPattern {
+            tokens: vec![Literal("git".into()), Literal((*sub).into())],
+            reason: format!("git {sub} mutates history/index; the scoped dispatcher is the only mutation path"),
+        });
+    }
+    patterns
 }
 
 /// Detect the `curl X | sh` / `wget X | bash` pattern at the CST level.

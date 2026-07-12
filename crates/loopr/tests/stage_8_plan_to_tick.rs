@@ -35,6 +35,7 @@ fn decomposer_response() -> ToolCall {
                     "content": "Create a top-level VERSION.md file.",
                     "dependencies": [],
                     "acceptance_criteria": ["VERSION.md exists at repo root"],
+                    "files": ["VERSION.md"],
                 }
             ]
         }),

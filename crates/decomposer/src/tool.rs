@@ -26,7 +26,11 @@ pub(crate) struct DecomposeChild {
     pub acceptance_criteria: Vec<String>,
     /// Files this Work is expected to create or modify, relative to
     /// the worktree root. Used as the staging allow-list at commit
-    /// time. Empty falls back to artifact-only filtering.
+    /// time and as the propose-time scope gate (Phase 14). Required:
+    /// an empty (or omitted) `files` is rejected at validation via the
+    /// retry-with-error path. `#[serde(default)]` is kept so an omitted
+    /// key routes through that same clear `EmptyFiles` message rather
+    /// than a generic deserialize failure.
     #[serde(default)]
     pub files: Vec<String>,
 }
@@ -72,10 +76,10 @@ pub(crate) fn submit_decomposition_schema() -> ToolSchema {
                             "files": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Files this Work will create or modify (paths relative to repo root). The implementer's commit will be restricted to these paths; out-of-scope edits will be flagged in the iteration result."
+                                "description": "Files this Work will create or modify (paths relative to repo root). REQUIRED and non-empty: the implementer's commit is restricted to these paths and a bundle touching any path outside them is rejected at propose time. A directory prefix (trailing slash, e.g. `src/foo/`) scopes everything under it."
                             }
                         },
-                        "required": ["title", "content"]
+                        "required": ["title", "content", "files"]
                     }
                 }
             },

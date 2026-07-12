@@ -405,6 +405,28 @@ async fn propose_bundle(
             .unwrap_or_default()
     };
 
+    // Phase 14 scope gate (defense-in-depth). `branch_paths` is the full set
+    // of paths the bundle touches across every commit on this branch,
+    // regardless of how they were committed. The scoped dispatcher already
+    // drops out-of-scope dirty paths at staging time, so under normal
+    // operation this is empty; a non-empty result means a path reached a
+    // commit OUTSIDE the scoped dispatcher. Reject the propose with a typed
+    // reason (the same `ActionResult::Error` shape the no-commits guard uses),
+    // routing the implementer back through the bounded re-prompt loop. This
+    // backstops the Reviewer's scope criterion in code, not prose.
+    let out_of_scope = scope::out_of_scope_paths(&branch_paths, scope_files);
+    if !out_of_scope.is_empty() {
+        warn!(
+            ?out_of_scope,
+            "propose_bundle: rejecting; branch touches out-of-scope paths"
+        );
+        return Ok(ActionResult::Error(format!(
+            "propose rejected: this branch touches {n} path(s) outside this Work's `files` scope: {out_of_scope:?}. \
+             Move those changes out of the commit (revert or reset them), or emit `need_help` if the Work's scope is wrong.",
+            n = out_of_scope.len(),
+        )));
+    }
+
     // Phase 6 manifest: classify the branch diff into added / modified
     // / deleted, plus a stable patch_id capped at PATCH_ID_OVERSIZE_CAP.
     let manifest = if worktree.sha().is_empty() {

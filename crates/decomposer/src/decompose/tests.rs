@@ -62,7 +62,8 @@ async fn happy_path_single_child_no_deps() {
                 "title": "Add --version flag",
                 "content": "Implement --version via clap.",
                 "dependencies": [],
-                "acceptance_criteria": ["assert --version prints the version"]
+                "acceptance_criteria": ["assert --version prints the version"],
+                "files": ["src/cli.rs"]
             }
         ]
     }));
@@ -84,13 +85,15 @@ async fn happy_path_two_children_with_one_dep() {
                 "title": "Build CLI",
                 "content": "scaffold CLI",
                 "dependencies": [],
-                "acceptance_criteria": ["assert scaffold exists"]
+                "acceptance_criteria": ["assert scaffold exists"],
+                "files": ["src/main.rs"]
             },
             {
                 "title": "Add Tests",
                 "content": "CLI tests",
                 "dependencies": ["Build CLI"],
-                "acceptance_criteria": ["assert tests pass"]
+                "acceptance_criteria": ["assert tests pass"],
+                "files": ["tests/cli.rs"]
             }
         ]
     }));
@@ -118,7 +121,8 @@ async fn retry_fires_on_first_llm_error_and_second_succeeds() {
             {
                 "title": "A",
                 "content": "aaa",
-                "acceptance_criteria": ["assert a works"]
+                "acceptance_criteria": ["assert a works"],
+                "files": ["src/a.rs"]
             }
         ]
     }));
@@ -137,7 +141,7 @@ async fn validation_error_retries_then_succeeds() {
     let dir = TempDir::new().expect("tempdir");
     let bad = tool_call(json!({ "children": [] }));
     let good = tool_call(json!({
-        "children": [{ "title": "A", "content": "a", "acceptance_criteria": ["assert a"] }]
+        "children": [{ "title": "A", "content": "a", "acceptance_criteria": ["assert a"], "files": ["src/a.rs"] }]
     }));
     let works = run_decompose(vec![ok(bad), ok(good)], dir.path())
         .await
@@ -223,13 +227,15 @@ async fn cycle_detected_between_two_children() {
                 "title": "A",
                 "content": "a",
                 "dependencies": ["B"],
-                "acceptance_criteria": ["assert a"]
+                "acceptance_criteria": ["assert a"],
+                "files": ["src/a.rs"]
             },
             {
                 "title": "B",
                 "content": "b",
                 "dependencies": ["A"],
-                "acceptance_criteria": ["assert b"]
+                "acceptance_criteria": ["assert b"],
+                "files": ["src/b.rs"]
             }
         ]
     }));
@@ -248,7 +254,8 @@ async fn self_loop_is_cycle() {
                 "title": "A",
                 "content": "a",
                 "dependencies": ["A"],
-                "acceptance_criteria": ["assert a"]
+                "acceptance_criteria": ["assert a"],
+                "files": ["src/a.rs"]
             }
         ]
     }));
@@ -295,7 +302,8 @@ async fn unresolved_dep_errors() {
                 "title": "A",
                 "content": "a",
                 "dependencies": ["NotThere"],
-                "acceptance_criteria": ["assert a"]
+                "acceptance_criteria": ["assert a"],
+                "files": ["src/a.rs"]
             }
         ]
     }));
@@ -370,6 +378,56 @@ async fn relative_files_path_is_accepted() {
 }
 
 #[tokio::test]
+async fn omitted_files_errors_empty_files_after_retry() {
+    // Phase 14: `files` is required. A child that omits it (serde defaults
+    // to `[]`) is rejected at validation and the retry path re-prompts;
+    // when the retry also omits `files`, the final error is EmptyFiles.
+    // Break-to-prove: dropping the empty-files check in decompose.rs makes
+    // this decompose succeed and fail the test.
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {
+                "title": "A",
+                "content": "a",
+                "acceptance_criteria": ["assert a"]
+            }
+        ]
+    }));
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect_err("empty files");
+    match err {
+        DecomposerError::EmptyFiles(title) => assert_eq!(title, "A"),
+        other => panic!("expected EmptyFiles, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn explicitly_empty_files_array_errors_empty_files() {
+    // An explicit empty (or whitespace-only) `files` array is rejected the
+    // same as an omitted one.
+    let dir = TempDir::new().expect("tempdir");
+    let response = tool_call(json!({
+        "children": [
+            {
+                "title": "Blank",
+                "content": "b",
+                "acceptance_criteria": ["assert b"],
+                "files": ["   "]
+            }
+        ]
+    }));
+    let err = run_decompose(vec![ok(response.clone()), ok(response)], dir.path())
+        .await
+        .expect_err("empty files");
+    match err {
+        DecomposerError::EmptyFiles(title) => assert_eq!(title, "Blank"),
+        other => panic!("expected EmptyFiles, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn empty_title_errors_empty_title_with_index() {
     let dir = TempDir::new().expect("tempdir");
     let response = tool_call(json!({
@@ -403,7 +461,8 @@ async fn empty_ac_in_both_array_and_content_errors_empty_acceptance_criteria() {
             {
                 "title": "Foo",
                 "content": "no AC section here",
-                "acceptance_criteria": []
+                "acceptance_criteria": [],
+                "files": ["src/foo.rs"]
             }
         ]
     }));
@@ -425,7 +484,8 @@ async fn ac_fallback_extracts_from_markdown_when_array_empty() {
             {
                 "title": "Foo",
                 "content": content,
-                "acceptance_criteria": []
+                "acceptance_criteria": [],
+                "files": ["src/foo.rs"]
             }
         ]
     }));
@@ -445,8 +505,8 @@ async fn every_work_has_parent_id_equal_to_plan_id() {
     let dir = TempDir::new().expect("tempdir");
     let response = tool_call(json!({
         "children": [
-            {"title": "A", "content": "a", "acceptance_criteria": ["assert a"]},
-            {"title": "B", "content": "b", "acceptance_criteria": ["assert b"]}
+            {"title": "A", "content": "a", "acceptance_criteria": ["assert a"], "files": ["src/a.rs"]},
+            {"title": "B", "content": "b", "acceptance_criteria": ["assert b"], "files": ["src/b.rs"]}
         ]
     }));
     let plan = fresh_plan("roots");
@@ -490,7 +550,7 @@ async fn transcript_written_on_success() {
     let response = tool_call(json!({
         "children": [{
             "title": "A", "content": "a",
-            "dependencies": [], "acceptance_criteria": ["assert a"]
+            "dependencies": [], "acceptance_criteria": ["assert a"], "files": ["src/a.rs"]
         }]
     }));
     let plan = fresh_plan("happy");
@@ -515,7 +575,7 @@ async fn transcript_written_with_two_iterations_on_retry() {
     let success = tool_call(json!({
         "children": [{
             "title": "A", "content": "a",
-            "dependencies": [], "acceptance_criteria": ["assert a"]
+            "dependencies": [], "acceptance_criteria": ["assert a"], "files": ["src/a.rs"]
         }]
     }));
     let plan = fresh_plan("retry");
@@ -610,8 +670,8 @@ async fn transcript_written_on_cycle_detected() {
     let dir = TempDir::new().expect("tempdir");
     let response = tool_call(json!({
         "children": [
-            {"title": "A", "content": "a", "dependencies": ["B"], "acceptance_criteria": ["assert a"]},
-            {"title": "B", "content": "b", "dependencies": ["A"], "acceptance_criteria": ["assert b"]}
+            {"title": "A", "content": "a", "dependencies": ["B"], "acceptance_criteria": ["assert a"], "files": ["src/a.rs"]},
+            {"title": "B", "content": "b", "dependencies": ["A"], "acceptance_criteria": ["assert b"], "files": ["src/b.rs"]}
         ]
     }));
     let plan = fresh_plan("cyclic");

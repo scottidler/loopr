@@ -27,10 +27,13 @@ pub enum AgentAction {
     /// can re-prompt.
     RunTool { tool: String, input: serde_json::Value },
 
-    /// Git add + commit the currently staged work. Uses `git add -A`
-    /// so newly created files are included - `git add -u` would
-    /// skip untracked files and cause `git commit` to fail with
-    /// "nothing added to commit" when the agent writes a new file.
+    /// Commit the current work, restricted to the Work's `files` scope.
+    /// The dispatcher stages only the in-scope dirty paths (`git add --
+    /// <in-scope...>`, so newly created in-scope files are included) and
+    /// then `git commit --only -- <in-scope...>`; out-of-scope and
+    /// `.loopr/` paths are dropped, not committed. This is NOT `git add
+    /// -A` — that scoped-staging behavior shipped and is what makes the
+    /// propose-time scope gate enforceable.
     CommitChanges { message: String },
 
     /// Finalize the Bundle. The dispatcher records HEAD SHA,

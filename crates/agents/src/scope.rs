@@ -15,37 +15,83 @@
 
 const LOOPR_ARTIFACTS: &[&str] = &[".loopr/"];
 
-/// Partition dirty files into in-scope and out-of-scope relative to `scope_files`.
+/// Scope-match semantics (Phase 14). Return `true` when `path` is inside the
+/// Work's declared `scope_files`.
 ///
-/// A file is in-scope if:
-/// - It is NOT a loopr artifact (always filtered, regardless of `scope_files`)
-/// - AND it matches at least one entry in `scope_files` as an exact path
-/// - OR `scope_files` is empty (artifact-only filtering)
+/// Rules (fail-closed: an unmatched path is out of scope):
+/// - A loopr artifact (under `.loopr/`) is ALWAYS out of scope, regardless of
+///   `scope_files`.
+/// - An empty `scope_files` is the artifact-only fallback: every non-artifact
+///   path is in scope. Production Works always carry a non-empty scope (the
+///   decomposer rejects an empty one), so this branch only covers legacy /
+///   test-constructed Works.
+/// - A `scope_files` entry ending in `/` is a directory prefix: `path` matches
+///   when it lives under that directory.
+/// - Any other entry is an exact repo-relative path: `path` matches on exact
+///   equality.
 ///
-/// Both sides are normalized: leading `./` is stripped, paths are compared
-/// case-sensitively (Unix convention).
+/// Both sides have a leading `./` stripped and are compared case-sensitively
+/// (Unix convention). The check is against the INTENDED path text, not
+/// filesystem existence.
+fn is_in_scope(path: &str, scope_files: &[String]) -> bool {
+    let normalized = path.strip_prefix("./").unwrap_or(path);
+    if LOOPR_ARTIFACTS.iter().any(|a| normalized.starts_with(a)) {
+        return false;
+    }
+    if scope_files.is_empty() {
+        return true;
+    }
+    scope_files.iter().any(|entry| {
+        let tag = entry.strip_prefix("./").unwrap_or(entry);
+        match tag.strip_suffix('/') {
+            // Directory prefix: `path` must be strictly under `dir/`.
+            Some(dir) if !dir.is_empty() => {
+                let mut prefix = dir.to_string();
+                prefix.push('/');
+                normalized.starts_with(&prefix)
+            }
+            // A bare `/` (or empty after stripping) is not a usable directory
+            // scope; fail closed rather than match everything.
+            Some(_) => false,
+            // Exact repo-relative path.
+            None => normalized == tag,
+        }
+    })
+}
+
+/// Partition dirty files into in-scope and out-of-scope relative to
+/// `scope_files`, using [`is_in_scope`]'s semantics (exact path or trailing-
+/// slash directory prefix; `.loopr/` always out-of-scope).
+///
+/// Emitted paths are normalized: leading `./` is stripped.
 pub fn partition_by_scope(dirty_files: &[String], scope_files: &[String]) -> (Vec<String>, Vec<String>) {
     let mut in_scope = Vec::new();
     let mut out_of_scope = Vec::new();
     for file in dirty_files {
-        let normalized = file.strip_prefix("./").unwrap_or(file);
-        let is_artifact = LOOPR_ARTIFACTS.iter().any(|a| normalized.starts_with(a));
-        if is_artifact {
-            out_of_scope.push(normalized.to_string());
-            continue;
-        }
-        // Empty scope = artifact-only filter: every non-artifact path is in-scope.
-        let matches_tag = scope_files.is_empty()
-            || scope_files
-                .iter()
-                .any(|tag| normalized == tag.strip_prefix("./").unwrap_or(tag));
-        if matches_tag {
-            in_scope.push(normalized.to_string());
+        let normalized = file.strip_prefix("./").unwrap_or(file).to_string();
+        if is_in_scope(&normalized, scope_files) {
+            in_scope.push(normalized);
         } else {
-            out_of_scope.push(normalized.to_string());
+            out_of_scope.push(normalized);
         }
     }
     (in_scope, out_of_scope)
+}
+
+/// Return the subset of `paths` that fall OUTSIDE the Work's declared scope,
+/// using the same semantics as [`partition_by_scope`]. Used by
+/// `propose_bundle` as a defense-in-depth gate: the branch-vs-base diff is
+/// re-checked against `scope_files` so any path that reached a commit outside
+/// the scoped dispatcher (e.g. a bash `git` action before the denylist, a
+/// merge, a stash pop) rejects the propose instead of silently shipping.
+///
+/// Emitted paths are normalized: leading `./` is stripped.
+pub fn out_of_scope_paths(paths: &[String], scope_files: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|p| p.strip_prefix("./").unwrap_or(p).to_string())
+        .filter(|p| !is_in_scope(p, scope_files))
+        .collect()
 }
 
 /// Parse `git status --porcelain` output into a flat list of file paths.

@@ -252,6 +252,79 @@ async fn propose_bundle_with_no_commits_errors() {
 }
 
 #[tokio::test]
+async fn propose_bundle_rejects_out_of_scope_branch_path() {
+    // Phase 14 scope gate. If a path OUTSIDE the Work's `files` scope
+    // reached a commit outside the scoped dispatcher (here: a raw
+    // `git add -A && git commit`, standing in for a bash-tool bypass),
+    // `propose_bundle` must reject with a typed reason naming the path,
+    // NOT construct a Bundle. Break-to-prove: deleting the scope gate in
+    // dispatch.rs makes this return BundleCreated and fail the test.
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+    // One in-scope file and one out-of-scope file, both committed directly
+    // (bypassing the dispatcher's scoped staging).
+    std::fs::create_dir_all(wt_path.join("src")).unwrap();
+    std::fs::write(wt_path.join("src/foo.rs"), "fn foo() {}\n").unwrap();
+    std::fs::write(wt_path.join("secret.txt"), "leak\n").unwrap();
+    run(wt_path, &["add", "-A"]);
+    run(
+        wt_path,
+        &["commit", "-q", "-m", "sneak out-of-scope file", "--no-gpg-sign"],
+    );
+
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let action = AgentAction::ProposeBundle {
+        claims: vec!["did the work".into()],
+    };
+    let work = test_work(vec!["src/foo.rs".to_string()]);
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
+    match result {
+        ActionResult::Error(msg) => {
+            assert!(msg.contains("outside this Work's `files` scope"), "got: {msg}");
+            assert!(msg.contains("secret.txt"), "reason must name the offending path: {msg}");
+        }
+        other => panic!("expected Error (out-of-scope propose rejection), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn propose_bundle_accepts_in_scope_directory_prefix() {
+    // Complement to the rejection test: a directory-prefix scope (`src/`)
+    // admits every path under it, so a bundle touching only `src/**` is
+    // accepted, not rejected.
+    let (_dir, path, base) = init_repo();
+    let wt = fake_worktree(&path, base);
+    let wt_path = wt.path();
+    std::fs::create_dir_all(wt_path.join("src/nested")).unwrap();
+    std::fs::write(wt_path.join("src/foo.rs"), "fn foo() {}\n").unwrap();
+    std::fs::write(wt_path.join("src/nested/bar.rs"), "fn bar() {}\n").unwrap();
+    run(wt_path, &["add", "-A"]);
+    run(wt_path, &["commit", "-q", "-m", "in-scope work", "--no-gpg-sign"]);
+
+    let tools = FakeTools {
+        response: String::new(),
+    };
+    let action = AgentAction::ProposeBundle {
+        claims: vec!["did the work".into()],
+    };
+    let work = test_work(vec!["src/".to_string()]);
+    let result = dispatch_action(action, &work, &wt, &tools, &CommitContext::test())
+        .await
+        .unwrap();
+    match result {
+        ActionResult::BundleCreated { bundle, .. } => {
+            assert!(bundle.head_commit.is_some(), "head_commit must be captured");
+        }
+        other => panic!("expected BundleCreated for in-scope dir prefix, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn commit_emits_loopr_trailers() {
     // Finding 6: every agent commit carries Loopr-* trailers. Default
     // posture is unsigned (--no-gpg-sign appended); the trailers ride

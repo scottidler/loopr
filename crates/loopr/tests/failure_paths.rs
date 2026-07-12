@@ -45,6 +45,7 @@ fn one_work_decomposition() -> ToolCall {
                     "content": "Create a top-level VERSION.md file.",
                     "dependencies": [],
                     "acceptance_criteria": ["VERSION.md exists at repo root"],
+                    "files": ["VERSION.md"],
                 }
             ]
         }),
@@ -134,12 +135,14 @@ fn two_work_decomposition() -> ToolCall {
                     "content": "Create A.md at repo root.",
                     "dependencies": [],
                     "acceptance_criteria": ["A.md exists at repo root"],
+                    "files": ["A.md"],
                 },
                 {
                     "title": "Add B.md",
                     "content": "Create B.md at repo root.",
                     "dependencies": ["Add A.md"],
                     "acceptance_criteria": ["B.md exists at repo root"],
+                    "files": ["B.md"],
                 }
             ]
         }),
