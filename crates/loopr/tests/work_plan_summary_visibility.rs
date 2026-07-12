@@ -9,10 +9,19 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use serde_json::Value;
+use telemetry::digest::process::ProcessSnapshot;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
+
+/// Phase 4 threaded `transition_and_persist_work` with a
+/// `&Arc<Mutex<ProcessSnapshot>>`; this contract test doesn't assert on
+/// the snapshot, so a fresh one per call site is enough.
+fn fresh_snapshot() -> Arc<StdMutex<ProcessSnapshot>> {
+    Arc::new(StdMutex::new(ProcessSnapshot::new("test-model")))
+}
 
 // Both scenarios install a thread-local `set_default` telemetry
 // subscriber via `init_for_test` and read back their own tempdir
@@ -71,7 +80,7 @@ async fn work_terminal_summary_emits_on_done_transition() {
             (WorkStatus::Done, Role::Reactor),
         ];
         for &(next, role) in walk {
-            transition_and_persist_work::<Store>(&store, &mut work, next, role, false)
+            transition_and_persist_work::<Store>(&store, &mut work, next, role, false, &fresh_snapshot())
                 .await
                 .expect("transition ok");
         }
@@ -125,10 +134,10 @@ async fn plan_terminal_summary_emits_on_complete_transition() {
         (WorkStatus::Done, Role::Reactor),
     ];
     for &(next, role) in walk {
-        transition_and_persist_work::<Store>(&store, &mut work_a, next, role, false)
+        transition_and_persist_work::<Store>(&store, &mut work_a, next, role, false, &fresh_snapshot())
             .await
             .expect("a transition ok");
-        transition_and_persist_work::<Store>(&store, &mut work_b, next, role, false)
+        transition_and_persist_work::<Store>(&store, &mut work_b, next, role, false, &fresh_snapshot())
             .await
             .expect("b transition ok");
     }

@@ -12,15 +12,26 @@
 //!   defense-in-depth backstop behind the Director's soft cap; it
 //!   should never fire in well-behaved deployments.
 
+use std::sync::{Arc, Mutex};
+
 use domain::{AcceptanceCriteria, Plan, Role, Work, WorkStatus};
 use loopr::daemon::context::{MAX_WORK_ATTEMPTS_HARD_CAP, transition_and_persist_work};
 use store::Store;
+use telemetry::digest::process::ProcessSnapshot;
 use tempfile::TempDir;
 
 async fn fresh_store() -> (TempDir, Store) {
     let tmp = TempDir::new().unwrap();
     let store = Store::open(tmp.path()).await.unwrap();
     (tmp, store)
+}
+
+/// Phase 4 threaded `transition_and_persist_work` with a
+/// `&Arc<Mutex<ProcessSnapshot>>` so the shared helper can wire the
+/// pipeline counters; these retry-budget tests don't assert on the
+/// snapshot, so a fresh one per call site is enough.
+fn fresh_snapshot() -> Arc<Mutex<ProcessSnapshot>> {
+    Arc::new(Mutex::new(ProcessSnapshot::new("test-model")))
 }
 
 async fn seed_plan_and_work(store: &Store) -> Work {
@@ -38,9 +49,16 @@ async fn pending_to_ready_increments_attempt_count_to_one() {
     let mut work = seed_plan_and_work(&store).await;
     assert_eq!(work.attempt_count, 0, "fresh Work starts at 0");
 
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Reactor, false)
-        .await
-        .expect("transition ok");
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .expect("transition ok");
 
     assert_eq!(work.attempt_count, 1, "Pending -> Ready must increment to 1 (1-based)");
     let persisted = store.works().get(&work.id).await.unwrap();
@@ -53,33 +71,82 @@ async fn blocked_to_ready_via_override_increments_each_call() {
     let mut work = seed_plan_and_work(&store).await;
 
     // Walk to Blocked: Pending -> Ready (++) -> InProgress -> Blocked.
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Reactor, false)
-        .await
-        .unwrap();
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::InProgress, Role::Reactor, false)
-        .await
-        .unwrap();
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Blocked, Role::Implementer, false)
-        .await
-        .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::InProgress,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Blocked,
+        Role::Implementer,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
     assert_eq!(work.attempt_count, 1, "after one Pending->Ready dispatch");
 
     // Director override: Blocked -> Ready. Cross-iteration retry, ++.
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Director, true)
-        .await
-        .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Director,
+        true,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
     assert_eq!(work.attempt_count, 2, "second Ready dispatch");
 
     // Walk back to Blocked and retry again.
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::InProgress, Role::Reactor, false)
-        .await
-        .unwrap();
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Blocked, Role::Implementer, false)
-        .await
-        .unwrap();
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Director, true)
-        .await
-        .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::InProgress,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Blocked,
+        Role::Implementer,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Director,
+        true,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
     assert_eq!(work.attempt_count, 3, "third Ready dispatch");
 }
 
@@ -90,15 +157,29 @@ async fn unchanged_transition_skips_increment() {
     let (_tmp, store) = fresh_store().await;
     let mut work = seed_plan_and_work(&store).await;
 
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Reactor, false)
-        .await
-        .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
     assert_eq!(work.attempt_count, 1);
 
     // Ready -> Ready: Unchanged result, no increment, no store write.
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Reactor, false)
-        .await
-        .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
     assert_eq!(work.attempt_count, 1, "Unchanged FSM result must not increment");
 }
 
@@ -109,12 +190,26 @@ async fn non_ready_target_skips_increment() {
     let (_tmp, store) = fresh_store().await;
     let mut work = seed_plan_and_work(&store).await;
 
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Reactor, false)
-        .await
-        .unwrap();
-    transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::InProgress, Role::Reactor, false)
-        .await
-        .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
+    transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::InProgress,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .unwrap();
     assert_eq!(work.attempt_count, 1, "InProgress is not Ready; no increment");
 }
 
@@ -130,9 +225,16 @@ async fn hard_cap_refuses_persist_at_max() {
     // state from which `transition` to Ready is valid (Blocked uses
     // Director override; Pending uses Reactor transition).
     work.attempt_count = MAX_WORK_ATTEMPTS_HARD_CAP;
-    let err = transition_and_persist_work::<Store>(&store, &mut work, WorkStatus::Ready, Role::Reactor, false)
-        .await
-        .expect_err("must refuse at hard cap");
+    let err = transition_and_persist_work::<Store>(
+        &store,
+        &mut work,
+        WorkStatus::Ready,
+        Role::Reactor,
+        false,
+        &fresh_snapshot(),
+    )
+    .await
+    .expect_err("must refuse at hard cap");
     assert!(
         err.to_string().contains("MAX_WORK_ATTEMPTS_HARD_CAP"),
         "error must name the cap: {err}"

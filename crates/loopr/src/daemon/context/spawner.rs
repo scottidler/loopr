@@ -118,6 +118,12 @@ where
                     warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
                     return;
                 }
+                // Phase 4: `Reviewed -> Accepted` just persisted successfully.
+                if let Ok(mut snap) = ctx.snapshot.lock() {
+                    snap.bundles_accepted += 1;
+                } else {
+                    warn!("accept_bundle: snapshot Mutex poisoned; bundles_accepted dropped");
+                }
                 // Spawn Integrator into the existing pool so the drain order
                 // still applies.
                 let integrator_ctx = Arc::clone(&ctx);
@@ -179,6 +185,7 @@ where
                     target_status,
                     Role::Director,
                     true, // override
+                    &ctx.snapshot,
                 )
                 .await
                 {
@@ -481,6 +488,7 @@ where
                     WorkStatus::Ready,
                     Role::Reactor,
                     true, // override
+                    &ctx.snapshot,
                 )
                 .await
                 {

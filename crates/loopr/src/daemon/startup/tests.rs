@@ -249,6 +249,97 @@ async fn build_ctx(target: &Path) -> Arc<DaemonContext<ScriptedLlm>> {
     .unwrap()
 }
 
+/// Phase 4 (closing Phase 3's deferred cap-validation wiring): a negative
+/// `budgets.per-work-cost-usd` must abort daemon startup with a typed
+/// error, not silently saturate the `(cap * 1e6) as u64` cast to 0 at
+/// the per-Work runtime brake. `ImplementerConfig::validate()` (Phase 3,
+/// `agents::config`) already rejects the value; this test proves it is
+/// actually wired into loopr's config-load path
+/// (`daemon::build_context`), not just exercised by the agents crate's
+/// own unit test.
+#[tokio::test]
+async fn build_context_rejects_negative_per_work_cost_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    seed_repo(&repo);
+
+    let llm = ScriptedLlm::new();
+    let session_id = SessionId::parse("20260712-000000").unwrap();
+    let process_id = ProcessId::parse("pc-negcap").unwrap();
+    let mut config = crate::config::Config::default();
+    config.tools.sandbox = SandboxMode::Off;
+    config.budgets.per_work_cost_usd = Some(-1.0);
+    let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-negcap-model")));
+
+    let result = crate::daemon::build_context(
+        repo,
+        session_id,
+        "-test-negcap".to_string(),
+        process_id,
+        0,
+        llm,
+        config,
+        false,
+        snapshot,
+    )
+    .await;
+    // `DaemonContext<L>` has no `Debug` impl (it holds live task pools /
+    // sockets), so `expect_err` (which requires `T: Debug` for its own
+    // panic message on the Ok branch) doesn't apply — match instead.
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("a negative per-work cost cap must fail daemon startup, not silently saturate to 0"),
+    };
+
+    match err {
+        crate::error::LooprError::DaemonStartup(msg) => {
+            assert!(
+                msg.contains("agents.implementer config"),
+                "expected the wrapped ImplementerConfig::validate() error, got: {msg}"
+            );
+        }
+        other => panic!("expected LooprError::DaemonStartup, got: {other:?}"),
+    }
+}
+
+/// A NaN cap is rejected the same way as a negative one — `validate()`
+/// treats "not finite" and "negative" as the same error class.
+#[tokio::test]
+async fn build_context_rejects_nan_per_work_cost_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    seed_repo(&repo);
+
+    let llm = ScriptedLlm::new();
+    let session_id = SessionId::parse("20260712-000001").unwrap();
+    let process_id = ProcessId::parse("pc-nancap").unwrap();
+    let mut config = crate::config::Config::default();
+    config.tools.sandbox = SandboxMode::Off;
+    config.budgets.per_work_cost_usd = Some(f64::NAN);
+    let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-nancap-model")));
+
+    let result = crate::daemon::build_context(
+        repo,
+        session_id,
+        "-test-nancap".to_string(),
+        process_id,
+        0,
+        llm,
+        config,
+        false,
+        snapshot,
+    )
+    .await;
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("a NaN per-work cost cap must fail daemon startup"),
+    };
+
+    assert!(matches!(err, crate::error::LooprError::DaemonStartup(_)));
+}
+
 fn seed_bundle(status: BundleStatus) -> Bundle {
     let mut b = Bundle::new(WorkId::new(), "loopr/wk-x-1".to_string(), vec!["claim".to_string()]);
     // Direct status set is a test-only shortcut: terminal statuses like

@@ -509,6 +509,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 WorkStatus::Ready,
                 Role::Reactor,
                 false,
+                &self.snapshot,
             )
             .await
         {
@@ -522,6 +523,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 WorkStatus::InProgress,
                 Role::Reactor,
                 false,
+                &self.snapshot,
             )
             .await
         {
@@ -561,6 +563,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     false,
+                    &self.snapshot,
                 )
                 .await;
                 self.wake_director(&work.parent_id).await;
@@ -643,6 +646,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     false,
+                    &self.snapshot,
                 )
                 .await;
             }
@@ -665,10 +669,23 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::InReview,
                     Role::Implementer,
                     false,
+                    &self.snapshot,
                 )
                 .await
                 {
                     error!(error = %e, "InProgress -> InReview transition failed after successful implementer");
+                }
+                // Phase 4: the daemon has a freshly-produced Bundle in hand
+                // here regardless of the transition outcome above — this is
+                // the loopr-side observation point for "a Bundle was
+                // proposed" (the actual `Bundle` record is created inside
+                // `agents::dispatch::propose_bundle`, out of this phase's
+                // crate scope, so the counter is wired at the closest
+                // in-scope seam instead).
+                if let Ok(mut snap) = self.snapshot.lock() {
+                    snap.bundles_proposed += 1;
+                } else {
+                    warn!("spawn_implementer_for_work: snapshot Mutex poisoned; bundles_proposed dropped");
                 }
                 // Stage 8 Phase 2 handoff: spawn a Reviewer task for this
                 // Bundle. Shutdown-guard: if the daemon is winding down, skip
@@ -690,6 +707,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     false,
+                    &self.snapshot,
                 )
                 .await;
             }
@@ -705,6 +723,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     false,
+                    &self.snapshot,
                 )
                 .await;
             }
@@ -795,6 +814,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::InReview,
                     Role::Reactor,
                     true, // override
+                    &self.snapshot,
                 )
                 .await
                 {
@@ -869,6 +889,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
                 self.wake_director(&work.parent_id).await;
@@ -883,6 +904,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
                 self.wake_director(&work.parent_id).await;
@@ -909,6 +931,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
                 self.wake_director(&work.parent_id).await;
@@ -940,6 +963,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
             }
@@ -951,6 +975,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
             }
@@ -1106,6 +1131,7 @@ pub(crate) fn block_dependent_siblings<L: LlmClient + Send + Sync + 'static>(
                     WorkStatus::Blocked,
                     Role::Reactor,
                     false,
+                    &ctx.snapshot,
                 )
                 .await
                 {
@@ -1192,12 +1218,22 @@ pub enum TransitionError {
 /// Work that has run once has `attempt_count == 1` (1-based). Layer 3's
 /// hard cap pre-checks the count BEFORE the increment; the persist is
 /// refused if `attempt_count >= MAX_WORK_ATTEMPTS_HARD_CAP`.
+///
+/// **Pipeline counters (Phase 4 of the verified-swarm doc).** On a
+/// persisted transition into a terminal `Work` status with a dedicated
+/// `ProcessSnapshot` field, the matching counter increments:
+/// `WorkStatus::Done` -> `works_completed`, `WorkStatus::Blocked` ->
+/// `works_blocked`. `Abandoned`/`Superseded` are terminal too but have no
+/// counter field yet, so they are not counted. Every call site threads its
+/// own `&self.snapshot` / `&ctx.snapshot`, so the counters stay live
+/// regardless of which caller drives the transition.
 pub async fn transition_and_persist_work<S>(
     sink: &S,
     work: &mut Work,
     target: WorkStatus,
     role: Role,
     override_: bool,
+    snapshot: &Arc<StdMutex<ProcessSnapshot>>,
 ) -> Result<(), TransitionError>
 where
     S: store::WorkUpdateSink,
@@ -1271,6 +1307,23 @@ where
             session_failure_count = work.session_failure_count,
             "work: terminal-state summary"
         );
+    }
+    // Phase 4: wire the dead `works_completed` / `works_blocked` counters.
+    // NOT nested inside the `is_terminal()` block above: `Blocked` has
+    // outgoing FSM edges (`Blocked => Ready/Superseded/Abandoned`, see
+    // `domain::Work`'s FSM table), so `work.status.is_terminal()` is
+    // `false` for it — a Work can recover from Blocked, which is exactly
+    // why the terminal-state summary log correctly excludes it. The
+    // pipeline counter still needs to count every time a Work lands on
+    // Blocked, terminal or not.
+    if let Ok(mut snap) = snapshot.lock() {
+        match work.status {
+            WorkStatus::Done => snap.works_completed += 1,
+            WorkStatus::Blocked => snap.works_blocked += 1,
+            _ => {}
+        }
+    } else {
+        warn!("transition_and_persist_work: snapshot Mutex poisoned; pipeline counters dropped");
     }
     Ok(())
 }

@@ -117,6 +117,18 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
         match outcome {
             Ok(tick) => {
                 info!(tick_id = %tick.id, sha = %tick.sha, "integration succeeded");
+                // Phase 4: this Tick-persist site is the loopr-side
+                // observation point for both dead counters. `integrate()`
+                // was called with a single-Bundle slice
+                // (`std::slice::from_ref(&bundle)`), so `Ok(tick)` means
+                // exactly the one `bundle` in scope here got merged to
+                // produce it.
+                if let Ok(mut snap) = self.snapshot.lock() {
+                    snap.ticks_created += 1;
+                    snap.bundles_merged += 1;
+                } else {
+                    warn!("spawn_integrator_for_bundle: snapshot Mutex poisoned; ticks_created/bundles_merged dropped");
+                }
                 // Work: InReview -> Integrated -> Done.
                 if let Err(e) = transition_and_persist_work(
                     &*self.summary_fanout,
@@ -124,6 +136,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Integrated,
                     Role::Integrator,
                     false,
+                    &self.snapshot,
                 )
                 .await
                 {
@@ -136,6 +149,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Done,
                     Role::Reactor,
                     false,
+                    &self.snapshot,
                 )
                 .await
                 {
@@ -222,6 +236,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
                 self.wake_director(&work.parent_id).await;
@@ -235,6 +250,7 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     WorkStatus::Blocked,
                     Role::Reactor,
                     true,
+                    &self.snapshot,
                 )
                 .await;
                 self.wake_director(&work.parent_id).await;

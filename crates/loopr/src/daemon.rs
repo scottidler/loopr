@@ -733,6 +733,18 @@ where
     // implementer loop's per-Work cost brake.
     let mut implementer_config = config.agents.implementer.clone();
     implementer_config.per_work_cost_cap_usd = config.budgets.per_work_cost_usd;
+    // Phase 3 (llm/agents defect sweep) added `ImplementerConfig::validate()`
+    // to reject a negative/NaN `per_work_cost_cap_usd`, but had no seam of
+    // its own into loopr's config-load path. Phase 4 closes that here: this
+    // overlay is the only place `per_work_cost_cap_usd` is set from
+    // operator-controlled config (`budgets.per-work-cost-usd`), so validating
+    // immediately after the overlay — and BEFORE `DaemonContext::new` runs —
+    // fails daemon startup loudly and closed instead of letting an invalid
+    // cap reach the per-Work runtime brake (`(cap * 1e6) as u64` on a
+    // negative/NaN cap saturates to 0 and escalates every Work instantly).
+    implementer_config
+        .validate()
+        .map_err(|e| LooprError::DaemonStartup(format!("agents.implementer config: {e}")))?;
     let reviewer_config = config.agents.reviewer.clone();
     let director_config = config.agents.director.clone();
     let decomposer_config = config.decomposer.clone();

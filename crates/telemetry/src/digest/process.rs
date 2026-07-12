@@ -11,12 +11,13 @@
 //! The renderer produces YAML frontmatter (machine-parseable for the
 //! Phase 8 aggregator) followed by a human-readable markdown body.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::digest::cost::{cost_micros, format_dollars};
+use crate::digest::cost::{cost_micros, format_dollars, rate_for};
 
 /// Counters accumulated during one daemon (or CLI) lifetime. Held
 /// inside `Arc<Mutex<_>>` by the daemon's `DaemonContext` so handler
@@ -50,6 +51,11 @@ pub struct ProcessSnapshot {
     /// kill); `None` for a graceful drain. Set by the panic hook /
     /// SIGQUIT handler before the digest is rendered.
     pub abnormal_exit: Option<String>,
+    /// Unknown model ids already logged by `record_llm_call`. De-dup so
+    /// a long run against an unrecognized model (the budget brake's
+    /// gauge) warns once per distinct id for the life of this snapshot,
+    /// not once per call. Phase 4 of the verified-swarm doc.
+    warned_unknown_models: HashSet<String>,
 }
 
 impl ProcessSnapshot {
@@ -75,16 +81,28 @@ impl ProcessSnapshot {
             escalations: 0,
             corruption_count: 0,
             abnormal_exit: None,
+            warned_unknown_models: HashSet::new(),
         }
     }
 
-    /// Record one LLM call's usage. Increments token counts and
-    /// accumulates the per-call cost via the rate table; unknown
-    /// models add 0 and emit no warning (the table is small and
-    /// hand-maintained, so omissions are intentional rather than
-    /// errors).
+    /// Record one LLM call's usage. Increments token counts and prices
+    /// the call by its OWN `model` — not `self.model` (the process's
+    /// configured/primary model). Phase 4 of the verified-swarm doc: a
+    /// per-process snapshot mixes calls from every role (cheap
+    /// Implementer, expensive Director/Reviewer on Opus); pricing every
+    /// call at the config's single `llm.model` rate silently mispriced
+    /// every call made on a different model, and the per-run budget
+    /// brake (`DaemonContext::run_budget_exceeded`) reads this same
+    /// total, so a wrong price is a wrong brake.
+    ///
+    /// A model absent from the rate table prices at $0 (unchanged
+    /// behavior) but now emits `tracing::warn!` exactly once per
+    /// distinct unknown id for the life of this snapshot — silent $0
+    /// forever was the bug; the warning does not fire again once
+    /// logged so a long run against an unrecognized model doesn't spam.
     pub fn record_llm_call(
         &mut self,
+        model: &str,
         input_tokens: u64,
         output_tokens: u64,
         cache_write_tokens: u64,
@@ -95,8 +113,14 @@ impl ProcessSnapshot {
         self.llm_output_tokens = self.llm_output_tokens.saturating_add(output_tokens);
         self.llm_cache_write_tokens = self.llm_cache_write_tokens.saturating_add(cache_write_tokens);
         self.llm_cache_read_tokens = self.llm_cache_read_tokens.saturating_add(cache_read_tokens);
+        if rate_for(model).is_none() && self.warned_unknown_models.insert(model.to_string()) {
+            tracing::warn!(
+                model,
+                "record_llm_call: unknown model id; pricing this (and every future) call of this model as $0"
+            );
+        }
         let micros = cost_micros(
-            &self.model,
+            model,
             input_tokens,
             output_tokens,
             cache_write_tokens,
@@ -232,7 +256,7 @@ mod tests {
     #[test]
     fn record_llm_call_increments_counters() {
         let mut s = ProcessSnapshot::new("claude-sonnet-4-6");
-        s.record_llm_call(100, 50, 0, 0);
+        s.record_llm_call("claude-sonnet-4-6", 100, 50, 0, 0);
         assert_eq!(s.llm_calls, 1);
         assert_eq!(s.llm_input_tokens, 100);
         assert_eq!(s.llm_output_tokens, 50);
@@ -242,8 +266,72 @@ mod tests {
     #[test]
     fn record_llm_call_unknown_model_zero_cost() {
         let mut s = ProcessSnapshot::new("not-a-model");
-        s.record_llm_call(1_000_000, 1_000_000, 0, 0);
+        s.record_llm_call("not-a-model", 1_000_000, 1_000_000, 0, 0);
         assert_eq!(s.llm_cost_micros, 0);
+    }
+
+    /// Phase 4 regression (break-to-prove): before this phase,
+    /// `record_llm_call` priced every call at `self.model` (the
+    /// process's configured model) regardless of which model actually
+    /// ran the call. A Director call on Opus routed through a snapshot
+    /// configured for Sonnet used to price at the Sonnet rate; this
+    /// test fails on that old behavior and passes now that pricing
+    /// follows the per-call `model` argument.
+    #[test]
+    fn record_llm_call_prices_by_call_model_not_snapshot_model() {
+        let mut s = ProcessSnapshot::new("claude-sonnet-4-6");
+        s.record_llm_call("claude-opus-4-7", 1_000_000, 1_000_000, 0, 0);
+        let expected_opus_cost = crate::digest::cost::cost_micros("claude-opus-4-7", 1_000_000, 1_000_000, 0, 0);
+        let wrong_sonnet_cost = crate::digest::cost::cost_micros("claude-sonnet-4-6", 1_000_000, 1_000_000, 0, 0);
+        assert_eq!(s.llm_cost_micros, expected_opus_cost);
+        assert_ne!(
+            s.llm_cost_micros, wrong_sonnet_cost,
+            "call must price at the Opus rate, not the snapshot's configured Sonnet rate"
+        );
+    }
+
+    /// Two-model run: each call prices independently by its own model.
+    #[test]
+    fn record_llm_call_two_models_price_independently() {
+        let mut s = ProcessSnapshot::new("claude-sonnet-4-6");
+        s.record_llm_call("claude-sonnet-4-6", 1_000_000, 1_000_000, 0, 0);
+        s.record_llm_call("claude-opus-4-7", 1_000_000, 1_000_000, 0, 0);
+        let expected = crate::digest::cost::cost_micros("claude-sonnet-4-6", 1_000_000, 1_000_000, 0, 0)
+            + crate::digest::cost::cost_micros("claude-opus-4-7", 1_000_000, 1_000_000, 0, 0);
+        assert_eq!(s.llm_calls, 2);
+        assert_eq!(s.llm_cost_micros, expected);
+    }
+
+    /// The budget-brake gauge: repeated calls against an unrecognized
+    /// model id warn exactly once (not once per call), and every call
+    /// still lands a nonzero-usage row in the counters (only the price
+    /// is $0, not the usage).
+    #[test]
+    fn record_llm_call_unknown_model_warns_once_not_per_call() {
+        let mut s = ProcessSnapshot::new("claude-sonnet-4-6");
+        for _ in 0..3 {
+            s.record_llm_call("not-a-real-model", 10, 20, 0, 0);
+        }
+        assert_eq!(s.llm_calls, 3);
+        assert_eq!(s.llm_input_tokens, 30, "usage still accrues even though pricing is $0");
+        assert_eq!(s.llm_cost_micros, 0);
+        assert_eq!(
+            s.warned_unknown_models.len(),
+            1,
+            "one distinct unknown id must warn exactly once, not once per call"
+        );
+        assert!(s.warned_unknown_models.contains("not-a-real-model"));
+    }
+
+    /// A second, distinct unknown model id gets its own warn slot — the
+    /// de-dup key is the model id, not "any unknown model at all".
+    #[test]
+    fn record_llm_call_two_distinct_unknown_models_each_warn_once() {
+        let mut s = ProcessSnapshot::new("claude-sonnet-4-6");
+        s.record_llm_call("unknown-a", 1, 1, 0, 0);
+        s.record_llm_call("unknown-a", 1, 1, 0, 0);
+        s.record_llm_call("unknown-b", 1, 1, 0, 0);
+        assert_eq!(s.warned_unknown_models.len(), 2);
     }
 
     #[test]

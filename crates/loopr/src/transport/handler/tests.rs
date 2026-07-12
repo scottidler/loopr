@@ -282,6 +282,158 @@ async fn plan_create_with_failing_llm_still_persists_plan_and_leaves_works_empty
     );
 }
 
+/// `decompose_and_dispatch` unconditionally spawns a per-Plan Director
+/// alongside the Implementer, and both draw `complete_free` calls from
+/// the SAME underlying `ScriptedLlm` FIFO queue when wrapped directly —
+/// racing the single queued Implementer response against the Director's
+/// own first iteration. This wrapper (mirrors
+/// `tests/stage_8_plan_to_tick.rs::Stage8DirectorAwareLlm`) shields the
+/// Director's model="claude-opus-4-7" calls from the queue entirely by
+/// always answering `done` (no Bundle exists yet in this scenario, so
+/// there is nothing for the Director to act on); every other call
+/// (decomposer, Implementer) passes through to the inner `ScriptedLlm`
+/// untouched, so the queue is exclusively the Implementer's.
+#[derive(Clone)]
+struct DirectorNoopLlm {
+    inner: llm::ScriptedLlm,
+}
+
+impl llm::LlmClient for DirectorNoopLlm {
+    async fn complete_with_tool(
+        &self,
+        system: &str,
+        user: &str,
+        tool: llm::ToolSchema,
+        model: Option<&str>,
+    ) -> Result<(llm::ToolCall, llm::Usage), llm::LlmError> {
+        self.inner.complete_with_tool(system, user, tool, model).await
+    }
+
+    async fn complete_free(
+        &self,
+        system: &str,
+        messages: &[llm::Message],
+        model: Option<&str>,
+    ) -> Result<(String, llm::Usage), llm::LlmError> {
+        if model == Some("claude-opus-4-7") {
+            return Ok((
+                r#"[{"action":"done","summary":"test: no bundle to act on"}]"#.to_string(),
+                llm::Usage::default(),
+            ));
+        }
+        self.inner.complete_free(system, messages, model).await
+    }
+
+    fn model(&self) -> &str {
+        self.inner.model()
+    }
+}
+
+/// Test context identical to `stub_ctx()` but backed by a `ScriptedLlm`
+/// (wrapped in `DirectorNoopLlm`) instead of a dead-port `AnthropicClient`,
+/// so decompose can actually succeed and drive Work creation. Used by the
+/// Phase 4 pipeline-counter e2e test below.
+async fn stub_ctx_scripted(llm: llm::ScriptedLlm) -> (TempDir, Arc<DaemonContext<DirectorNoopLlm>>) {
+    let td = TempDir::new().unwrap();
+    init_git_repo(td.path());
+    let store = Store::open(td.path()).await.unwrap();
+    let router = Arc::new(LaneRouter::new(SandboxMode::Off).unwrap());
+    let bash_denylist = Arc::new(BashDenylist::with_base());
+    let snapshot = Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
+        "test-scripted-model",
+    )));
+    let ctx = Arc::new(DaemonContext::new(
+        td.path().to_path_buf(),
+        SessionId::parse("20260712-000002").unwrap(),
+        "-test-scripted".to_string(),
+        ProcessId::parse("pc-scrpt1").unwrap(),
+        12346,
+        store,
+        Arc::new(DirectorNoopLlm { inner: llm }),
+        router,
+        bash_denylist,
+        Vec::new(),
+        SandboxMode::Off,
+        Arc::new(InlineContextBuilder::new()),
+        ImplementerConfig::default(),
+        ReviewerConfig::default(),
+        integrator::IntegratorConfig::default(),
+        DirectorConfig::default(),
+        decomposer::DecomposerConfig::default(),
+        AttemptCleanupPolicy::default(),
+        snapshot,
+        crate::transport::ServerTimeouts::default(),
+        None,
+    ));
+    (td, ctx)
+}
+
+/// Phase 4 success criterion: "process digest shows nonzero counters
+/// after a scripted e2e." Drives `plan.create` over the real dispatch
+/// path with a scripted decomposer (one Work, no deps) and a scripted
+/// Implementer that immediately escalates (`need_help`) — the escalation
+/// keeps this test self-contained (no Reviewer/Integrator stub responses
+/// needed) while still exercising every counter this phase wires:
+/// `plans_created` (Plan persisted), `works_created` (batch persisted by
+/// decompose), and `works_blocked` (the Implementer's `NeedHelp` action
+/// blocks the Work via `transition_and_persist_work`).
+#[tokio::test]
+async fn plan_create_scripted_e2e_increments_process_digest_counters() {
+    let scripted = llm::ScriptedLlm::new();
+    scripted.queue_tool(Ok(llm::ToolCall {
+        tool_name: "submit_decomposition".to_string(),
+        input: serde_json::json!({
+            "children": [
+                {
+                    "title": "Add VERSION.md",
+                    "content": "Create a top-level VERSION.md file.",
+                    "dependencies": [],
+                    "acceptance_criteria": ["VERSION.md exists at repo root"],
+                }
+            ]
+        }),
+    }));
+    scripted.queue_free(Ok(r#"[{"type":"need_help","reason":"test escalation"}]"#.to_string()));
+
+    let (_td, ctx) = stub_ctx_scripted(scripted).await;
+    let mut state = HandshakeState::Complete;
+    let req = DaemonRequest {
+        id: 200,
+        method: "plan.create".into(),
+        params: serde_json::json!({"goal": "add VERSION.md"}),
+    };
+    let resp = dispatch(&req, &mut state, &ctx).await;
+    assert!(resp.error.is_none(), "plan.create errored: {:?}", resp.error);
+
+    // Drain the async-ACK decompose task (increments plans_created before
+    // this call even starts; increments works_created inside it).
+    {
+        let mut tasks = ctx.plan_create_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+    // Drain the Implementer task the decompose spawned (increments
+    // works_blocked on the NeedHelp escalation). The per-Plan Director
+    // task is deliberately NOT drained here: `DirectorConfig::default()`
+    // idles 15s between iterations, and cutting that sleep short needs
+    // either a zeroed poll/idle interval or a `shutdown_notify` wakeup
+    // timed against the director's select point — neither is needed for
+    // this test's assertions. The test's own single-threaded tokio
+    // runtime aborts the still-sleeping Director task when it tears down
+    // at the end of this function, same as any other detached task.
+    {
+        let mut tasks = ctx.implementer_tasks.lock().await;
+        while tasks.join_next().await.is_some() {}
+    }
+
+    let snap = ctx.snapshot.lock().unwrap();
+    assert_eq!(snap.plans_created, 1, "plan.create must increment plans_created");
+    assert_eq!(snap.works_created, 1, "decompose must increment works_created");
+    assert_eq!(
+        snap.works_blocked, 1,
+        "the Implementer's NeedHelp escalation must increment works_blocked"
+    );
+}
+
 #[tokio::test]
 async fn record_list_plans_returns_all_plan_summaries() {
     let (_td, ctx) = stub_ctx().await;

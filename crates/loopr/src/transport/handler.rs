@@ -200,6 +200,18 @@ where
         return DaemonResponse::err(id, map_store_error(e));
     }
 
+    // Phase 4: the Plan record just persisted successfully (creation, not
+    // a status transition — `transition_and_persist_plan` never runs for
+    // a brand-new Plan, so this is the correct seam for the counter).
+    if let Ok(mut snap) = ctx.snapshot.lock() {
+        snap.plans_created += 1;
+    } else {
+        warn!(
+            request_id = id,
+            "plan.create: snapshot Mutex poisoned; plans_created dropped"
+        );
+    }
+
     // Phase B (async ACK): the Plan is persisted, so the client can be
     // told its id now. Decompose (an ~18s LLM call) + Works persist + the
     // initial Implementer/Director spawns run on a daemon-owned task in
@@ -272,6 +284,14 @@ where
                     return;
                 }
             };
+            // Phase 4: the batch just persisted successfully (Works are
+            // created here, not transitioned — `transition_and_persist_work`
+            // never runs for a brand-new Work, so this is the correct seam).
+            if let Ok(mut snap) = ctx.snapshot.lock() {
+                snap.works_created += works.len() as u32;
+            } else {
+                warn!(request_id, plan_id = %plan.id, "decompose_and_dispatch: snapshot Mutex poisoned; works_created dropped");
+            }
             // Dep gate: partition into unblocked (all deps Done or
             // no deps) and held (at least one dep not Done). Only
             // unblocked Works get an Implementer spawned immediately;
