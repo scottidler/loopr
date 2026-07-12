@@ -234,7 +234,14 @@ impl DirectorStore for store::Store {
     }
 
     async fn update_plan(&self, plan: Plan, expected_updated_at: i64) -> Result<(), StoreError> {
-        self.plans().update(plan, expected_updated_at).await.map(|_| ())
+        // Phase 9: `DirectorStore::update_plan` is the Director's plan-write
+        // seam; its sole caller transitions the Plan via the FSM
+        // (`Active -> Stalled`, Director role, normal edge) before calling
+        // here, so the store chokepoint re-validates that same normal edge.
+        self.plans()
+            .update(plan, expected_updated_at, Role::Director, domain::TargetKind::Normal)
+            .await
+            .map(|_| ())
     }
 
     async fn list_unread_notes_for_plan(&self, plan_id: &PlanId) -> Result<Vec<OperatorNote>, StoreError> {

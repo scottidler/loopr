@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::Mutex as AsyncMutex;
 
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, Tick, Work, WorkId};
+use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, TargetKind, Tick, Work, WorkId};
 use store::{BundleUpdateError, BundleUpdateSink, StoreError};
 
 use crate::classify::{ConflictKind, classify_conflict, is_merge_conflict};
@@ -226,7 +226,13 @@ struct FakeBundleSink {
 }
 
 impl BundleUpdateSink for FakeBundleSink {
-    async fn update(&self, bundle: Bundle, _expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
+    async fn update(
+        &self,
+        bundle: Bundle,
+        _expected_updated_at: i64,
+        _role: Role,
+        _kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError> {
         let ts = bundle.updated_at;
         self.writes.lock().unwrap().push(bundle);
         Ok(ts)

@@ -7,6 +7,18 @@ pub enum Transition {
     Override,
 }
 
+/// Whether an FSM edge belongs to the normal `transitions(...)` table or
+/// the wider `overrides(...)` table.
+///
+/// Two uses:
+/// 1. `validate_targets` returns `(target, TargetKind)` pairs classifying
+///    each reachable target.
+/// 2. The store FSM chokepoint (verified-swarm Phase 9) takes a
+///    `TargetKind` as the caller's declared write intent: `Normal`
+///    re-validates the persisted `from -> to` edge against
+///    `validate_transition`, `Override` against `validate_override`
+///    (which also accepts every normal edge). Reconcile / operator writes
+///    pass `Override`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetKind {
     Normal,

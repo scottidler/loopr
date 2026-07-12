@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex as AsyncMutex;
 
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, Work};
+use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, TargetKind, Work};
 use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use store::Store;
 
@@ -122,17 +122,29 @@ async fn persist_accepted_bundle(
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
     next.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
-    store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(next.clone(), current.updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap();
 
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
     next.transition(BundleStatus::Reviewed, Role::Reviewer).unwrap();
-    store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(next.clone(), current.updated_at, Role::Reviewer, TargetKind::Normal)
+        .await
+        .unwrap();
 
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
     next.transition(BundleStatus::Accepted, Role::Reactor).unwrap();
-    store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(next.clone(), current.updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap();
 
     store.bundles().get(&b.id).await.unwrap()
 }
@@ -267,11 +279,19 @@ async fn integration_branch_missing_returns_typed_error() {
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
     next.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
-    store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(next.clone(), current.updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap();
     let current = store.bundles().get(&b.id).await.unwrap();
     let mut next = current.clone();
     next.transition(BundleStatus::Accepted, Role::Reactor).unwrap();
-    store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(next.clone(), current.updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap();
     let accepted = store.bundles().get(&b.id).await.unwrap();
 
     let deps = deps_for(&store, &repo);
@@ -386,7 +406,11 @@ async fn transition_bundle_via_store(store: &Store, bundle: &Bundle, target: Bun
     let current = store.bundles().get(&bundle.id).await.unwrap();
     let mut next = current.clone();
     next.transition(target, role).unwrap();
-    store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(next.clone(), current.updated_at, role, TargetKind::Normal)
+        .await
+        .unwrap();
     store.bundles().get(&bundle.id).await.unwrap()
 }
 

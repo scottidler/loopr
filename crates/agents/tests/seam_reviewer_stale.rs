@@ -26,7 +26,7 @@ use tempfile::TempDir;
 
 use agents::{ReviewerConfig, ReviewerDeps, ReviewerError, run_reviewer};
 use context::InlineContextBuilder;
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, Role, Work};
+use domain::{AcceptanceCriteria, Bundle, BundleStatus, Role, TargetKind, Work};
 use llm::ScriptedLlm;
 use store::{BundleUpdateError, Store};
 
@@ -103,7 +103,11 @@ async fn reviewer_propagates_store_stale() {
     let mut external = stale.clone();
     external.verification = "external reviewer beat us".to_string();
     external.transition(BundleStatus::Reviewed, Role::Reviewer).unwrap();
-    store.bundles().update(external, stale.updated_at).await.unwrap();
+    store
+        .bundles()
+        .update(external, stale.updated_at, Role::Reviewer, TargetKind::Normal)
+        .await
+        .unwrap();
 
     // Now run the reviewer with the original (now-stale) snapshot. The
     // reviewer's internal `bundle.clone()` -> transition -> store.update

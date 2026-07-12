@@ -930,6 +930,14 @@ fn map_store_error(err: StoreError) -> RpcError {
         } => RpcError::InvalidRequest(format!(
             "duplicate tick: existing tick_id={tick_id} for plan_id={plan_id} with bundles={bundles:?}"
         )),
+        StoreError::IllegalTransition {
+            record_kind,
+            from,
+            to,
+            role,
+        } => RpcError::InvalidRequest(format!(
+            "illegal FSM transition on {record_kind}: {from} -> {to} (role: {role})"
+        )),
     }
 }
 

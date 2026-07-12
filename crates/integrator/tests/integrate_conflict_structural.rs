@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex as AsyncMutex;
 
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, Work};
+use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, TargetKind, Work};
 use integrator::{IntegrationError, IntegratorConfig, IntegratorDeps, integrate};
 use store::Store;
 
@@ -58,7 +58,11 @@ async fn persist_accepted_bundle(
         let current = store.bundles().get(&b.id).await.unwrap();
         let mut next = current.clone();
         next.transition(target, role).unwrap();
-        store.bundles().update(next.clone(), current.updated_at).await.unwrap();
+        store
+            .bundles()
+            .update(next.clone(), current.updated_at, role, TargetKind::Normal)
+            .await
+            .unwrap();
     }
 
     store.bundles().get(&b.id).await.unwrap()

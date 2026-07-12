@@ -35,7 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agents::{DirectorDeps, DirectorError, run_director};
-use domain::{Bundle, BundleStatus, FailureReason, PlanStatus, WorkStatus};
+use domain::{Bundle, BundleStatus, FailureReason, PlanStatus, Role, TargetKind, WorkStatus};
 use futures_util::FutureExt;
 use llm::LlmClient;
 use store::Store;
@@ -266,7 +266,18 @@ pub async fn sweep_worktrees(target: &Path, store: &Store) -> Result<ReconcileRe
                     if work.failure_reason != Some(FailureReason::CrashInterrupted) {
                         let expected = work.updated_at;
                         work.failure_reason = Some(FailureReason::CrashInterrupted);
-                        if let Err(e) = store.works().update(work.clone(), expected).await {
+                        // Reconcile discipline (Phase 9): the daemon (Reactor
+                        // role) stamps a field-only change here — status is
+                        // unchanged, so the chokepoint's same-status bypass
+                        // makes this a no-op transition. Declared `Override`
+                        // per the reconcile-writes-through-`validate_override`
+                        // rule so any future status-changing recovery write on
+                        // this path validates against the override table.
+                        if let Err(e) = store
+                            .works()
+                            .update(work.clone(), expected, Role::Reactor, TargetKind::Override)
+                            .await
+                        {
                             tracing::warn!(
                                 work_id = %work_id,
                                 error = %e,

@@ -14,7 +14,7 @@ use tempfile::TempDir;
 
 use agents::{Deps, ImplementerConfig, ReviewerConfig, ReviewerDeps, ToolExecutor, run_implementer, run_reviewer};
 use context::{InlineContextBuilder, StateSummary};
-use domain::{AcceptanceCriteria, BundleStatus, Role, Verdict, Work};
+use domain::{AcceptanceCriteria, BundleStatus, Role, TargetKind, Verdict, Work};
 use llm::ScriptedLlm;
 use store::{BundleUpdateSink, Store};
 use worktree::Worktree;
@@ -114,7 +114,7 @@ async fn implementer_writes_bundle_then_reviewer_accepts_it() {
     let expected_updated_at = persisted.updated_at;
     let mut triaged = persisted.clone();
     triaged.transition(BundleStatus::Triaged, Role::Reactor).unwrap();
-    BundleUpdateSink::update(&&store, triaged, expected_updated_at)
+    BundleUpdateSink::update(&&store, triaged, expected_updated_at, Role::Reactor, TargetKind::Normal)
         .await
         .unwrap();
 

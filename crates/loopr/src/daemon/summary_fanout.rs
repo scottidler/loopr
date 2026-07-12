@@ -25,7 +25,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use domain::{Bundle, Plan, PlanStatus, Work, WorkStatus};
+use domain::{Bundle, Plan, PlanStatus, Role, TargetKind, Work, WorkStatus};
 use ipc::DaemonEvent;
 use store::{
     BundleUpdateError, BundleUpdateSink, PlanUpdateError, PlanUpdateSink, Store, WorkUpdateError, WorkUpdateSink,
@@ -134,8 +134,14 @@ impl<S> WorkUpdateSink for SummaryFanout<S>
 where
     S: WorkUpdateSink,
 {
-    async fn update(&self, mut work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
-        let persisted = self.inner.update(work.clone(), expected_updated_at).await?;
+    async fn update(
+        &self,
+        mut work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, WorkUpdateError> {
+        let persisted = self.inner.update(work.clone(), expected_updated_at, role, kind).await?;
         // Reflect the persisted (floored) `updated_at` in the summary so
         // the on-disk record and its summary agree.
         work.updated_at = persisted;
@@ -204,8 +210,17 @@ impl<S> BundleUpdateSink for SummaryFanout<S>
 where
     S: BundleUpdateSink,
 {
-    async fn update(&self, mut bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
-        let persisted = self.inner.update(bundle.clone(), expected_updated_at).await?;
+    async fn update(
+        &self,
+        mut bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError> {
+        let persisted = self
+            .inner
+            .update(bundle.clone(), expected_updated_at, role, kind)
+            .await?;
         bundle.updated_at = persisted;
         let bundle_for_summary = bundle;
         if let Err(e) = summary::write_bundle(&self.target, &bundle_for_summary) {
@@ -228,9 +243,14 @@ where
         mut plan: Plan,
         children: Vec<Work>,
         expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
     ) -> Result<i64, PlanUpdateError> {
         let children_for_summary = children.clone();
-        let persisted = self.inner.update(plan.clone(), children, expected_updated_at).await?;
+        let persisted = self
+            .inner
+            .update(plan.clone(), children, expected_updated_at, role, kind)
+            .await?;
         plan.updated_at = persisted;
         let plan_for_summary = plan;
         if let Err(e) = summary::write_plan(&self.target, &plan_for_summary, &children_for_summary) {

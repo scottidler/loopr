@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use domain::{Bundle, Plan, PlanStatus, Work, WorkStatus};
+use domain::{Bundle, Plan, PlanStatus, Role, TargetKind, Work, WorkStatus};
 use store::Store;
 use store::{BundleUpdateSink, PlanUpdateSink, WorkUpdateSink};
 
@@ -53,9 +53,15 @@ async fn work_update_writes_work_summary_and_refreshes_parent_plan() {
     store.works().create(work.clone()).await.expect("create work");
 
     let fanout = SummaryFanout::new(Arc::clone(&store), target.clone(), Arc::clone(&store));
-    WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
-        .await
-        .expect("update");
+    WorkUpdateSink::update(
+        &fanout,
+        work.clone(),
+        work.updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .expect("update");
 
     let work_summary = summary_path(&target, "works", work.id.as_ref());
     assert!(
@@ -91,9 +97,15 @@ async fn work_update_with_missing_parent_writes_only_work_summary() {
     store.works().create(work.clone()).await.expect("create work");
 
     let fanout = SummaryFanout::new(Arc::clone(&store), target.clone(), Arc::clone(&store));
-    WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
-        .await
-        .expect("update");
+    WorkUpdateSink::update(
+        &fanout,
+        work.clone(),
+        work.updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .expect("update");
 
     let work_summary = summary_path(&target, "works", work.id.as_ref());
     assert!(work_summary.exists());
@@ -119,9 +131,15 @@ async fn bundle_update_writes_bundle_summary() {
     store.bundles().create(bundle.clone()).await.expect("create bundle");
 
     let fanout = SummaryFanout::new(Arc::clone(&store), target.clone(), Arc::clone(&store));
-    BundleUpdateSink::update(&fanout, bundle.clone(), expected_updated_at)
-        .await
-        .expect("update");
+    BundleUpdateSink::update(
+        &fanout,
+        bundle.clone(),
+        expected_updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .expect("update");
 
     let bundle_summary = summary_path(&target, "bundles", bundle.id.as_ref());
     assert!(bundle_summary.exists(), "bundle summary should exist");
@@ -143,9 +161,16 @@ async fn plan_update_writes_plan_summary_and_passes_children_through() {
     // Disambiguate: SummaryFanout impls all three sink traits, so a
     // bare `.update()` is ambiguous on the call site. Use the trait-
     // qualified form to lock onto PlanUpdateSink.
-    PlanUpdateSink::update(&fanout, plan.clone(), vec![w1.clone(), w2.clone()], plan.updated_at)
-        .await
-        .expect("update");
+    PlanUpdateSink::update(
+        &fanout,
+        plan.clone(),
+        vec![w1.clone(), w2.clone()],
+        plan.updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .expect("update");
 
     let plan_summary = summary_path(&target, "plans", plan.id.as_ref());
     assert!(plan_summary.exists());
@@ -168,9 +193,15 @@ async fn blocked_work_emits_daemon_event_but_non_terminal_does_not() {
 
     // A non-terminal transition (Ready) must NOT emit an event.
     work.status = WorkStatus::Ready;
-    let persisted = WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
-        .await
-        .unwrap();
+    let persisted = WorkUpdateSink::update(
+        &fanout,
+        work.clone(),
+        work.updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .unwrap();
     work.updated_at = persisted;
     assert!(
         rx.try_recv().is_err(),
@@ -180,9 +211,15 @@ async fn blocked_work_emits_daemon_event_but_non_terminal_does_not() {
     // A Blocked transition emits `work.blocked` carrying the ids.
     work.status = WorkStatus::Blocked;
     work.blocked_reason = Some("dep failed".to_string());
-    WorkUpdateSink::update(&fanout, work.clone(), work.updated_at)
-        .await
-        .unwrap();
+    WorkUpdateSink::update(
+        &fanout,
+        work.clone(),
+        work.updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .unwrap();
     let event = rx.try_recv().expect("work.blocked event emitted");
     assert_eq!(event.event, "work.blocked");
     assert_eq!(event.data["work_id"], work.id.to_string());
@@ -201,9 +238,16 @@ async fn stalled_plan_emits_daemon_event() {
     let fanout = SummaryFanout::with_events(Arc::clone(&store), target.clone(), Arc::clone(&store), events);
 
     plan.status = PlanStatus::Stalled;
-    PlanUpdateSink::update(&fanout, plan.clone(), vec![], plan.updated_at)
-        .await
-        .unwrap();
+    PlanUpdateSink::update(
+        &fanout,
+        plan.clone(),
+        vec![],
+        plan.updated_at,
+        Role::Reactor,
+        TargetKind::Normal,
+    )
+    .await
+    .unwrap();
     let event = rx.try_recv().expect("plan.stalled event emitted");
     assert_eq!(event.event, "plan.stalled");
     assert_eq!(event.data["plan_id"], plan.id.to_string());

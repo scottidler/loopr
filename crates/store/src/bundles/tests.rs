@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use domain::{Bundle, BundleStatus, Role, WorkId};
+use domain::{Bundle, BundleId, BundleStatus, Role, TargetKind, WorkId};
 use tempfile::TempDir;
 
 use crate::{Store, StoreError};
@@ -27,23 +27,43 @@ fn fresh_bundle() -> Bundle {
     )
 }
 
+/// Create a Bundle and advance it to `Triaged` on disk (a single legal
+/// `Proposed -> Triaged` Reactor edge), mirroring the production daemon
+/// which triages before the Reviewer runs. Returns the id plus the
+/// in-memory Triaged clone with its persisted `updated_at`. The OCC tests
+/// below start from this realistic on-disk status so the persisted edge is
+/// a single legal FSM hop (`Triaged -> Reviewed`/`Rejected`), which the
+/// Phase 9 store chokepoint validates.
+async fn create_triaged(store: &Store) -> (BundleId, Bundle) {
+    let bundle = fresh_bundle();
+    let id = store.bundles().create(bundle.clone()).await.expect("create");
+    let stored = store.bundles().get(&id).await.expect("get after create");
+    let mut triaged = stored.clone();
+    triaged
+        .transition(BundleStatus::Triaged, Role::Reactor)
+        .expect("triage");
+    let ts = store
+        .bundles()
+        .update(triaged.clone(), stored.updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect("triage persist");
+    triaged.updated_at = ts;
+    (id, triaged)
+}
+
 #[tokio::test]
 async fn update_round_trip_ok() {
     let (_dir, store) = open_store().await;
-    let bundle = fresh_bundle();
-    let id = store.bundles().create(bundle.clone()).await.expect("create");
+    let (id, triaged) = create_triaged(&store).await;
+    let expected_updated_at = triaged.updated_at;
 
-    let stored = store.bundles().get(&id).await.expect("get after create");
-    let expected_updated_at = stored.updated_at;
-
-    let mut next = stored.clone();
-    next.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
+    let mut next = triaged.clone();
     next.transition(BundleStatus::Reviewed, Role::Reviewer).expect("review");
     next.verification = "Reviewer approved: test".to_string();
 
     store
         .bundles()
-        .update(next.clone(), expected_updated_at)
+        .update(next.clone(), expected_updated_at, Role::Reviewer, TargetKind::Normal)
         .await
         .expect("update");
 
@@ -56,31 +76,30 @@ async fn update_round_trip_ok() {
 #[tokio::test]
 async fn update_stale_version_rejected() {
     let (_dir, store) = open_store().await;
-    let bundle = fresh_bundle();
-    let id = store.bundles().create(bundle.clone()).await.expect("create");
+    let (id, triaged) = create_triaged(&store).await;
+    let snapshot = triaged.updated_at;
 
-    let stored = store.bundles().get(&id).await.expect("get");
-    let snapshot = stored.updated_at;
-
-    let mut first = stored.clone();
-    first.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
+    let mut first = triaged.clone();
     first
         .transition(BundleStatus::Reviewed, Role::Reviewer)
         .expect("review");
     first.verification = "first winner".to_string();
     store
         .bundles()
-        .update(first.clone(), snapshot)
+        .update(first.clone(), snapshot, Role::Reviewer, TargetKind::Normal)
         .await
         .expect("first update");
 
-    let mut second = stored;
-    second.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
+    let mut second = triaged;
     second
         .transition(BundleStatus::Rejected, Role::Reviewer)
         .expect("reject");
     second.verification = "second would overwrite".to_string();
-    let err = store.bundles().update(second, snapshot).await.unwrap_err();
+    let err = store
+        .bundles()
+        .update(second, snapshot, Role::Reviewer, TargetKind::Normal)
+        .await
+        .unwrap_err();
     match err {
         StoreError::Stale { expected, actual } => {
             assert_eq!(expected, snapshot);
@@ -98,7 +117,11 @@ async fn update_stale_version_rejected() {
 async fn update_unknown_id_yields_not_found() {
     let (_dir, store) = open_store().await;
     let bundle = fresh_bundle();
-    let err = store.bundles().update(bundle, 0).await.unwrap_err();
+    let err = store
+        .bundles()
+        .update(bundle, 0, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap_err();
     match err {
         StoreError::RecordNotFound { collection, .. } => {
             assert_eq!(collection, "bundles");
@@ -110,28 +133,31 @@ async fn update_unknown_id_yields_not_found() {
 #[tokio::test]
 async fn concurrent_updates_produce_exactly_one_winner() {
     let (_dir, store) = open_store().await;
-    let bundle = fresh_bundle();
-    let id = store.bundles().create(bundle.clone()).await.expect("create");
-
-    let stored = store.bundles().get(&id).await.expect("get");
-    let snapshot = stored.updated_at;
+    let (id, triaged) = create_triaged(&store).await;
+    let snapshot = triaged.updated_at;
 
     let store = Arc::new(store);
 
     let s1 = Arc::clone(&store);
-    let mut b1 = stored.clone();
-    b1.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
+    let mut b1 = triaged.clone();
     b1.transition(BundleStatus::Reviewed, Role::Reviewer).expect("review");
     b1.verification = "task A".to_string();
 
     let s2 = Arc::clone(&store);
-    let mut b2 = stored.clone();
-    b2.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
+    let mut b2 = triaged.clone();
     b2.transition(BundleStatus::Rejected, Role::Reviewer).expect("reject");
     b2.verification = "task B".to_string();
 
-    let h1 = tokio::spawn(async move { s1.bundles().update(b1, snapshot).await });
-    let h2 = tokio::spawn(async move { s2.bundles().update(b2, snapshot).await });
+    let h1 = tokio::spawn(async move {
+        s1.bundles()
+            .update(b1, snapshot, Role::Reviewer, TargetKind::Normal)
+            .await
+    });
+    let h2 = tokio::spawn(async move {
+        s2.bundles()
+            .update(b2, snapshot, Role::Reviewer, TargetKind::Normal)
+            .await
+    });
 
     let r1 = h1.await.expect("join");
     let r2 = h2.await.expect("join");

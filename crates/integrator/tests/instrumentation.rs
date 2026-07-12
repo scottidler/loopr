@@ -19,7 +19,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, Work};
+use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, TargetKind, Work};
 use integrator::{IntegratorConfig, IntegratorDeps, integrate};
 use store::Store;
 
@@ -146,7 +146,11 @@ async fn persist_accepted_bundle(store: &Store, work: &Work, branch: &str, head:
         let current = store.bundles().get(&b.id).await.unwrap();
         let mut next = current.clone();
         next.transition(target, role).unwrap();
-        store.bundles().update(next, current.updated_at).await.unwrap();
+        store
+            .bundles()
+            .update(next, current.updated_at, role, TargetKind::Normal)
+            .await
+            .unwrap();
     }
     store.bundles().get(&b.id).await.unwrap()
 }

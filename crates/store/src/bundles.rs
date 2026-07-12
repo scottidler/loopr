@@ -4,7 +4,7 @@ use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-use domain::{Bundle, BundleId, WorkId};
+use domain::{Bundle, BundleId, BundleStatus, Role, TargetKind, WorkId};
 
 use crate::error::StoreError;
 
@@ -165,12 +165,20 @@ impl<'a> BundlesStore<'a> {
             work_id = %bundle.work_id,
             status = ?bundle.status,
             expected_updated_at,
+            role = %role,
+            kind = ?kind,
             op = "update",
         ),
         ret,
         err,
     )]
-    pub async fn update(&self, mut bundle: Bundle, expected_updated_at: i64) -> Result<i64, StoreError> {
+    pub async fn update(
+        &self,
+        mut bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, StoreError> {
         let _guard = self.update_lock.lock().await;
         let id_str = bundle.id.as_ref().to_string();
         let current = self
@@ -186,6 +194,26 @@ impl<'a> BundlesStore<'a> {
                 expected: expected_updated_at,
                 actual: current.updated_at,
             });
+        }
+        // Phase 9 FSM chokepoint: re-validate the persisted status change
+        // against the table the caller declared via `kind`. Same-status
+        // writes (field-only updates, e.g. the Reviewer's `verification`
+        // edit) bypass edge validation. Behavior-neutral for legal flows
+        // (production callers transitioned via the FSM first); fails closed
+        // on a direct-assignment path.
+        if current.status != bundle.status {
+            let validated = match kind {
+                TargetKind::Normal => BundleStatus::validate_transition(current.status, bundle.status, role),
+                TargetKind::Override => BundleStatus::validate_override(current.status, bundle.status, role),
+            };
+            if validated.is_err() {
+                return Err(StoreError::IllegalTransition {
+                    record_kind: "bundle",
+                    from: current.status.to_string(),
+                    to: bundle.status.to_string(),
+                    role,
+                });
+            }
         }
         // Monotonic `updated_at` floor under the lock; see
         // `WorksStore::update` for the same-millisecond OCC/merge-driver
@@ -218,7 +246,13 @@ impl<'a> BundlesStore<'a> {
 /// expected version between writes (see `BundlesStore::update`).
 #[trait_variant::make(Send)]
 pub trait BundleUpdateSink: Send + Sync {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError>;
+    async fn update(
+        &self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -237,8 +271,14 @@ pub enum BundleUpdateError {
 /// `StoreError::Stale` is specifically preserved as
 /// `BundleUpdateError::Stale` so downstream matching works.
 impl BundleUpdateSink for crate::Store {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
-        match self.bundles().update(bundle, expected_updated_at).await {
+    async fn update(
+        &self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError> {
+        match self.bundles().update(bundle, expected_updated_at, role, kind).await {
             Ok(ts) => Ok(ts),
             Err(StoreError::Stale { expected, actual }) => Err(BundleUpdateError::Stale { expected, actual }),
             Err(other) => Err(BundleUpdateError::Update(other.to_string())),
@@ -249,15 +289,27 @@ impl BundleUpdateSink for crate::Store {
 /// Forwarding impl for any reference to a `BundleUpdateSink`. Lets
 /// callers build deps with a borrowed `Store` without cloning.
 impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for &B {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
-        (*self).update(bundle, expected_updated_at).await
+    async fn update(
+        &self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError> {
+        (*self).update(bundle, expected_updated_at, role, kind).await
     }
 }
 
 /// Forwarding impl for `Arc<B>`.
 impl<B: BundleUpdateSink + ?Sized> BundleUpdateSink for std::sync::Arc<B> {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
-        (**self).update(bundle, expected_updated_at).await
+    async fn update(
+        &self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError> {
+        (**self).update(bundle, expected_updated_at, role, kind).await
     }
 }
 

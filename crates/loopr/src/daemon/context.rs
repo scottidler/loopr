@@ -793,7 +793,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
             error!(error = %e, "bundle Proposed -> Triaged transition rejected by FSM; skipping");
             return;
         }
-        if let Err(e) = self.store.bundles().update(bundle.clone(), expected).await {
+        if let Err(e) = self
+            .store
+            .bundles()
+            .update(bundle.clone(), expected, Role::Reactor, domain::TargetKind::Normal)
+            .await
+        {
             warn!(error = %e, "triage OCC update failed (another task beat us?); skipping");
             return;
         }
@@ -845,7 +850,12 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                     error!(error = %e, "Bundle -> Superseded rejected by FSM; skipping");
                     return;
                 }
-                if let Err(e) = self.store.bundles().update(bundle.clone(), expected).await {
+                if let Err(e) = self
+                    .store
+                    .bundles()
+                    .update(bundle.clone(), expected, Role::Reactor, domain::TargetKind::Normal)
+                    .await
+                {
                     warn!(error = %e, "Bundle supersede OCC update failed (another task beat us?); skipping");
                 }
                 return;
@@ -1303,7 +1313,16 @@ where
     // Integrated -> Done in `spawn_integrator_for_bundle`) carries the
     // correct OCC expected-version even when both writes land in the same
     // millisecond.
-    let persisted = match sink.update(work.clone(), expected_updated_at).await {
+    // Phase 9: hand the store the same FSM intent this helper just used
+    // (`override_status` vs `transition`) so the chokepoint re-validates
+    // against the matching table. Behavior-neutral: the edge the store
+    // re-checks is the one already accepted above.
+    let kind = if override_ {
+        domain::TargetKind::Override
+    } else {
+        domain::TargetKind::Normal
+    };
+    let persisted = match sink.update(work.clone(), expected_updated_at, role, kind).await {
         Ok(ts) => ts,
         Err(store::WorkUpdateError::Stale { expected, actual }) => {
             return Err(TransitionError::Stale { expected, actual });
@@ -1451,8 +1470,14 @@ where
     let plan_id = plan.id.clone();
     let plan_status = plan.status;
 
+    // Phase 9: pass the FSM intent through to the store chokepoint.
+    let kind = if override_ {
+        domain::TargetKind::Override
+    } else {
+        domain::TargetKind::Normal
+    };
     let persisted = sink
-        .update(plan.clone(), children, expected_updated_at)
+        .update(plan.clone(), children, expected_updated_at, role, kind)
         .await
         .map_err(|e| format!("plans().update: {e}"))?;
     plan.updated_at = persisted;

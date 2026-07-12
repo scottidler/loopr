@@ -32,7 +32,7 @@ use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
 use context::ContextBuilder;
-use domain::{Bundle, BundleStatus, CriterionResult, CriterionStatus, ReviewIssue, Role, Verdict, Work};
+use domain::{Bundle, BundleStatus, CriterionResult, CriterionStatus, ReviewIssue, Role, TargetKind, Verdict, Work};
 use llm::{LlmClient, Message};
 use store::{BundleUpdateError, BundleUpdateSink};
 use telemetry::transcript::{TranscriptIteration, append_iteration, reviewer_path};
@@ -225,7 +225,11 @@ where
         .transition(target_status, Role::Reviewer)
         .map_err(|e| ReviewerError::Transition(e.to_string()))?;
 
-    deps.store.update(bundle, expected_updated_at).await?;
+    // Phase 9: the store chokepoint re-validates this Reviewer-role normal
+    // edge (Triaged -> Reviewed / Rejected) that `transition` just accepted.
+    deps.store
+        .update(bundle, expected_updated_at, Role::Reviewer, TargetKind::Normal)
+        .await?;
 
     Ok(verdict)
 }

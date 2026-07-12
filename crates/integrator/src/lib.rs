@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
-use domain::{Bundle, BundleId, BundleStatus, Plan, Role, Tick, TickId, Work, WorkId};
+use domain::{Bundle, BundleId, BundleStatus, Plan, Role, TargetKind, Tick, TickId, Work, WorkId};
 use store::{BundleUpdateSink, StoreError};
 
 pub use config::IntegratorConfig;
@@ -719,12 +719,16 @@ async fn transition_bundle_returning<U: BundleUpdateSink>(
     clone
         .transition(target, Role::Integrator)
         .map_err(|e| IntegrationError::Transition(e.to_string()))?;
+    // Phase 9: pass the Integrator-role normal intent through so the store
+    // chokepoint re-validates the same edge `transition` just accepted.
     // Sync the in-memory clone to the persisted (monotonically-floored)
     // `updated_at` so a chained next transition (prologue Accepted ->
     // Integrating, then Phase-3 Integrating -> Merged) carries the
     // correct OCC expected-version even when both writes land in the
     // same millisecond.
-    let persisted = sink.update(clone.clone(), expected).await?;
+    let persisted = sink
+        .update(clone.clone(), expected, Role::Integrator, TargetKind::Normal)
+        .await?;
     clone.updated_at = persisted;
     debug!(
         bundle_id = %clone.id,

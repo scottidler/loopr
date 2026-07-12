@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use tempfile::TempDir;
 
-use domain::{AcceptanceCriteria, Plan, Work, WorkId, WorkStatus};
+use domain::{AcceptanceCriteria, Plan, Role, TargetKind, Work, WorkId, WorkStatus};
 use store::{Store, StoreError, WorksStore};
 
 fn assert_send_sync<T: Send + Sync>() {}
@@ -162,11 +162,68 @@ async fn update_round_trips_status_change() {
     store.works().create(work.clone()).await.expect("create");
 
     let expected_updated_at = work.updated_at;
+    // Direct-assign the status (a test-only shortcut); the store chokepoint
+    // still validates the resulting `Pending -> Blocked` edge as a legal
+    // Reactor transition.
     work.status = WorkStatus::Blocked;
-    store.works().update(work, expected_updated_at).await.expect("update");
+    store
+        .works()
+        .update(work, expected_updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect("update");
 
     let got = store.works().get(&id).await.expect("get after update");
     assert_eq!(got.status, WorkStatus::Blocked);
+}
+
+/// Phase 9 (verified-swarm) success criterion: the store is the FSM
+/// chokepoint. A Work persisted with a status that jumped an ILLEGAL edge
+/// (`Pending -> Done`, absent from both the normal and override tables) is
+/// rejected with `IllegalTransition` naming the edge — even though the
+/// direct `status =` assignment bypassed `Work::transition`. Break-to-prove
+/// the guard bites: the companion `update_round_trips_status_change` test
+/// above persists a LEGAL `Pending -> Blocked` edge and succeeds, so this
+/// failure is the validation firing, not a broken write path.
+#[tokio::test]
+async fn update_illegal_edge_is_rejected() {
+    let (_dir, store, plan) = fresh_store_with_plan().await;
+    let mut work = sample_work(&plan, "illegal-jump");
+    store.works().create(work.clone()).await.expect("create");
+
+    let expected_updated_at = work.updated_at;
+    // Direct-assign an illegal target (Pending never reaches Done in one
+    // edge). No `transition()` call guards this; the store must.
+    work.status = WorkStatus::Done;
+    let err = store
+        .works()
+        .update(work, expected_updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect_err("illegal edge must reject");
+    match err {
+        StoreError::IllegalTransition {
+            record_kind,
+            from,
+            to,
+            role,
+        } => {
+            assert_eq!(record_kind, "work");
+            assert_eq!(from, "pending");
+            assert_eq!(to, "done");
+            assert_eq!(role, Role::Reactor);
+        }
+        other => panic!("expected IllegalTransition, got {other:?}"),
+    }
+
+    // The illegal write must NOT have landed: on-disk status is untouched.
+    let still = store
+        .works()
+        .list()
+        .await
+        .expect("list")
+        .into_iter()
+        .next()
+        .expect("one work");
+    assert_eq!(still.status, WorkStatus::Pending, "rejected write must not persist");
 }
 
 #[tokio::test]
@@ -188,7 +245,11 @@ async fn update_floors_updated_at_strictly_above_prior() {
     store.works().create(work.clone()).await.expect("create");
 
     work.status = WorkStatus::Blocked;
-    store.works().update(work, future).await.expect("update");
+    store
+        .works()
+        .update(work, future, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect("update");
 
     let got = store.works().get(&id).await.expect("get after update");
     assert_eq!(got.updated_at, future + 1, "floor lands exactly at prior + 1");

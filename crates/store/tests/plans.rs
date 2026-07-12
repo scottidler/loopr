@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use tempfile::TempDir;
 
-use domain::{Plan, PlanId, PlanStatus};
+use domain::{Plan, PlanId, PlanStatus, Role, TargetKind};
 use store::{PlansStore, Store, StoreError, TASKSTORE_SUBPATH};
 
 fn assert_send_sync<T: Send + Sync>() {}
@@ -281,7 +281,11 @@ async fn update_floors_updated_at_strictly_above_prior() {
     store.plans().create(plan.clone()).await.expect("create");
 
     plan.status = PlanStatus::Complete;
-    let new_ts = store.plans().update(plan, future).await.expect("update");
+    let new_ts = store
+        .plans()
+        .update(plan, future, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect("update");
     assert_eq!(new_ts, future + 1, "floor lands exactly at prior + 1");
     let got = store.plans().get(&id).await.expect("get");
     assert_eq!(got.updated_at, future + 1);
@@ -302,7 +306,11 @@ async fn update_stale_expected_is_rejected() {
     // Winner advances the Plan.
     let mut winner = store.plans().get(&id).await.expect("get");
     winner.status = PlanStatus::Complete;
-    store.plans().update(winner, snapshot).await.expect("winner update");
+    store
+        .plans()
+        .update(winner, snapshot, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect("winner update");
 
     // Loser still holds the original snapshot -> Stale.
     let mut loser = Plan::new("p".to_string());
@@ -310,7 +318,7 @@ async fn update_stale_expected_is_rejected() {
     loser.status = PlanStatus::Stalled;
     let err = store
         .plans()
-        .update(loser, snapshot)
+        .update(loser, snapshot, Role::Reactor, TargetKind::Normal)
         .await
         .expect_err("stale must reject");
     match err {
@@ -340,7 +348,7 @@ async fn update_missing_id_returns_record_not_found() {
     ghost.status = PlanStatus::Complete;
     let err = store
         .plans()
-        .update(ghost, expected)
+        .update(ghost, expected, Role::Reactor, TargetKind::Normal)
         .await
         .expect_err("missing id must reject");
     match err {

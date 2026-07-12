@@ -4,7 +4,7 @@ use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-use domain::{PlanId, Work, WorkId};
+use domain::{PlanId, Role, TargetKind, Work, WorkId, WorkStatus};
 
 use crate::error::StoreError;
 
@@ -199,11 +199,17 @@ impl<'a> WorksStore<'a> {
         name = "works.update",
         level = "debug",
         skip_all,
-        fields(record_kind = "work", record_id = %work.id, status = ?work.status, expected_updated_at, op = "update"),
+        fields(record_kind = "work", record_id = %work.id, status = ?work.status, expected_updated_at, role = %role, kind = ?kind, op = "update"),
         ret,
         err,
     )]
-    pub async fn update(&self, mut work: Work, expected_updated_at: i64) -> Result<i64, StoreError> {
+    pub async fn update(
+        &self,
+        mut work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, StoreError> {
         let _guard = self.update_lock.lock().await;
         let id_str = work.id.as_ref().to_string();
         let current = self
@@ -219,6 +225,27 @@ impl<'a> WorksStore<'a> {
                 expected: expected_updated_at,
                 actual: current.updated_at,
             });
+        }
+        // Phase 9 FSM chokepoint: re-validate the persisted status change
+        // against the table the caller declared via `kind`. Same-status
+        // writes (field-only updates) are a no-op transition and always
+        // legal, so they bypass edge validation. Production paths already
+        // validated this exact edge via `Work::transition`/`override_status`
+        // before persisting, so this is behavior-neutral for legal flows; it
+        // fails closed on a direct-assignment path that never transitioned.
+        if current.status != work.status {
+            let validated = match kind {
+                TargetKind::Normal => WorkStatus::validate_transition(current.status, work.status, role),
+                TargetKind::Override => WorkStatus::validate_override(current.status, work.status, role),
+            };
+            if validated.is_err() {
+                return Err(StoreError::IllegalTransition {
+                    record_kind: "work",
+                    from: current.status.to_string(),
+                    to: work.status.to_string(),
+                    role,
+                });
+            }
         }
         // Monotonic `updated_at` floor. `Work::transition` stamps
         // `now_millis()`, but two writes in the same millisecond (this
@@ -259,7 +286,13 @@ impl<'a> WorksStore<'a> {
 /// version (see `WorksStore::update`).
 #[trait_variant::make(Send)]
 pub trait WorkUpdateSink: Send + Sync {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError>;
+    async fn update(
+        &self,
+        work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, WorkUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -278,8 +311,14 @@ pub enum WorkUpdateError {
 /// `StoreError::Stale` is preserved as `WorkUpdateError::Stale` so
 /// downstream matching works.
 impl WorkUpdateSink for crate::Store {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
-        match self.works().update(work, expected_updated_at).await {
+    async fn update(
+        &self,
+        work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, WorkUpdateError> {
+        match self.works().update(work, expected_updated_at, role, kind).await {
             Ok(ts) => Ok(ts),
             Err(StoreError::Stale { expected, actual }) => Err(WorkUpdateError::Stale { expected, actual }),
             Err(other) => Err(WorkUpdateError::Update(other.to_string())),
@@ -290,15 +329,27 @@ impl WorkUpdateSink for crate::Store {
 /// Forwarding impl for any reference to a `WorkUpdateSink`. Mirrors
 /// `BundleUpdateSink`'s borrowed-store helper.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for &W {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
-        (*self).update(work, expected_updated_at).await
+    async fn update(
+        &self,
+        work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, WorkUpdateError> {
+        (*self).update(work, expected_updated_at, role, kind).await
     }
 }
 
 /// Forwarding impl for `Arc<W>`. Lets the daemon construct
 /// `SummaryFanout::new(Arc::clone(&store), ...)` without unwrapping.
 impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for std::sync::Arc<W> {
-    async fn update(&self, work: Work, expected_updated_at: i64) -> Result<i64, WorkUpdateError> {
-        (**self).update(work, expected_updated_at).await
+    async fn update(
+        &self,
+        work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, WorkUpdateError> {
+        (**self).update(work, expected_updated_at, role, kind).await
     }
 }

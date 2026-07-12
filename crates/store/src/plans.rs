@@ -4,7 +4,7 @@ use taskstore_async::AsyncStore;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-use domain::{Plan, PlanId, Work};
+use domain::{Plan, PlanId, PlanStatus, Role, TargetKind, Work};
 
 use crate::error::StoreError;
 
@@ -115,11 +115,17 @@ impl<'a> PlansStore<'a> {
         name = "plans.update",
         level = "debug",
         skip_all,
-        fields(record_kind = "plan", record_id = %plan.id, status = ?plan.status, expected_updated_at, op = "update"),
+        fields(record_kind = "plan", record_id = %plan.id, status = ?plan.status, expected_updated_at, role = %role, kind = ?kind, op = "update"),
         ret,
         err,
     )]
-    pub async fn update(&self, mut plan: Plan, expected_updated_at: i64) -> Result<i64, StoreError> {
+    pub async fn update(
+        &self,
+        mut plan: Plan,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, StoreError> {
         let _guard = self.update_lock.lock().await;
         let id_str = plan.id.as_ref().to_string();
         let current = self
@@ -135,6 +141,24 @@ impl<'a> PlansStore<'a> {
                 expected: expected_updated_at,
                 actual: current.updated_at,
             });
+        }
+        // Phase 9 FSM chokepoint: re-validate the persisted status change
+        // against the table the caller declared via `kind`. Same-status
+        // writes (field-only updates) bypass edge validation. Behavior-
+        // neutral for legal flows; fails closed on a direct-assignment path.
+        if current.status != plan.status {
+            let validated = match kind {
+                TargetKind::Normal => PlanStatus::validate_transition(current.status, plan.status, role),
+                TargetKind::Override => PlanStatus::validate_override(current.status, plan.status, role),
+            };
+            if validated.is_err() {
+                return Err(StoreError::IllegalTransition {
+                    record_kind: "plan",
+                    from: current.status.to_string(),
+                    to: plan.status.to_string(),
+                    role,
+                });
+            }
         }
         let floored = std::cmp::max(domain::now_millis(), current.updated_at + 1);
         plan.updated_at = floored;
@@ -169,7 +193,14 @@ impl<'a> PlansStore<'a> {
 /// floored `updated_at`.
 #[trait_variant::make(Send)]
 pub trait PlanUpdateSink: Send + Sync {
-    async fn update(&self, plan: Plan, children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError>;
+    async fn update(
+        &self,
+        plan: Plan,
+        children: Vec<Work>,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, PlanUpdateError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -189,8 +220,15 @@ pub enum PlanUpdateError {
 /// decorator's render path uses it). `StoreError::Stale` is preserved as
 /// `PlanUpdateError::Stale` so downstream matching works.
 impl PlanUpdateSink for crate::Store {
-    async fn update(&self, plan: Plan, _children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError> {
-        match self.plans().update(plan, expected_updated_at).await {
+    async fn update(
+        &self,
+        plan: Plan,
+        _children: Vec<Work>,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, PlanUpdateError> {
+        match self.plans().update(plan, expected_updated_at, role, kind).await {
             Ok(ts) => Ok(ts),
             Err(StoreError::Stale { expected, actual }) => Err(PlanUpdateError::Stale { expected, actual }),
             Err(other) => Err(PlanUpdateError::Update(other.to_string())),
@@ -200,14 +238,28 @@ impl PlanUpdateSink for crate::Store {
 
 /// Forwarding impl for any reference to a `PlanUpdateSink`.
 impl<P: PlanUpdateSink + ?Sized> PlanUpdateSink for &P {
-    async fn update(&self, plan: Plan, children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError> {
-        (*self).update(plan, children, expected_updated_at).await
+    async fn update(
+        &self,
+        plan: Plan,
+        children: Vec<Work>,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, PlanUpdateError> {
+        (*self).update(plan, children, expected_updated_at, role, kind).await
     }
 }
 
 /// Forwarding impl for `Arc<P>`.
 impl<P: PlanUpdateSink + ?Sized> PlanUpdateSink for std::sync::Arc<P> {
-    async fn update(&self, plan: Plan, children: Vec<Work>, expected_updated_at: i64) -> Result<i64, PlanUpdateError> {
-        (**self).update(plan, children, expected_updated_at).await
+    async fn update(
+        &self,
+        plan: Plan,
+        children: Vec<Work>,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, PlanUpdateError> {
+        (**self).update(plan, children, expected_updated_at, role, kind).await
     }
 }

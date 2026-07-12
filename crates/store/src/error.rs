@@ -1,4 +1,4 @@
-use domain::{BundleId, PlanId, TickId};
+use domain::{BundleId, PlanId, Role, TickId};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -61,6 +61,26 @@ pub enum StoreError {
         tick_id: TickId,
         plan_id: PlanId,
         bundles: Vec<BundleId>,
+    },
+
+    /// FSM chokepoint rejection (verified-swarm Phase 9). Raised by
+    /// `WorksStore::update` / `BundlesStore::update` / `PlansStore::update`
+    /// after the OCC read when the persisted status change `from -> to` is
+    /// not a legal edge in the record's FSM table (normal or override, per
+    /// the caller's declared `TargetKind` intent) for `role`. The store is
+    /// the last write barrier: this catches direct-assignment paths (a
+    /// fresh record persisted with an arbitrary status) that never went
+    /// through `Record::transition`. Same-status writes (field-only
+    /// updates) bypass this check — a no-op transition is always legal.
+    /// The edge is named in the message so the caller's error log needs no
+    /// reconstruction. Fail-closed: an unrecognized edge errors here rather
+    /// than persisting silently.
+    #[error("illegal FSM transition on {record_kind}: {from} -> {to} (role: {role})")]
+    IllegalTransition {
+        record_kind: &'static str,
+        from: String,
+        to: String,
+        role: Role,
     },
 }
 

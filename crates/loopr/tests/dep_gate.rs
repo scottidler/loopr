@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use domain::{Plan, PlanId, Work, WorkGraph, WorkId, WorkStatus};
+use domain::{Plan, PlanId, Role, TargetKind, Work, WorkGraph, WorkId, WorkStatus};
 use tempfile::TempDir;
 
 async fn fresh_store() -> (TempDir, store::Store) {
@@ -162,7 +162,11 @@ async fn blocked_reason_persists_through_store_round_trip() {
     work.status = WorkStatus::Blocked;
     // Manually bump updated_at to simulate FSM transition
     work.updated_at += 1;
-    store.works().update(work.clone(), expected_updated_at).await.unwrap();
+    store
+        .works()
+        .update(work.clone(), expected_updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap();
 
     let fetched = store.works().get(&work.id).await.unwrap();
     assert_eq!(fetched.blocked_reason.as_deref(), Some("dep x reached Abandoned"));
@@ -187,12 +191,20 @@ async fn works_store_occ_rejects_stale_write() {
     let mut first = work.clone();
     first.updated_at = original_updated_at + 1;
     first.status = WorkStatus::Ready;
-    store.works().update(first, original_updated_at).await.unwrap();
+    store
+        .works()
+        .update(first, original_updated_at, Role::Reactor, TargetKind::Normal)
+        .await
+        .unwrap();
 
-    // Second write with stale expected_updated_at must be rejected.
+    // Second write with stale expected_updated_at must be rejected (the OCC
+    // stale check precedes FSM validation, so this returns Stale).
     work.updated_at = original_updated_at + 2;
     work.status = WorkStatus::InProgress;
-    let result = store.works().update(work, original_updated_at).await;
+    let result = store
+        .works()
+        .update(work, original_updated_at, Role::Reactor, TargetKind::Normal)
+        .await;
     assert!(
         matches!(result, Err(store::StoreError::Stale { .. })),
         "concurrent write with stale expected_updated_at must return Stale"

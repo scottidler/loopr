@@ -7,7 +7,9 @@ use std::sync::Mutex;
 use tempfile::TempDir;
 
 use context::InlineContextBuilder;
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, Verdict, Work, WorkId};
+use domain::{
+    AcceptanceCriteria, Bundle, BundleStatus, PlanId, ReviewIssue, Role, Severity, TargetKind, Verdict, Work, WorkId,
+};
 use llm::{LlmClient, LlmError, Message, ToolCall, ToolSchema as LlmToolSchema, Usage};
 
 use store::{BundleUpdateError, BundleUpdateSink};
@@ -80,7 +82,13 @@ struct CollectingSink {
 }
 
 impl BundleUpdateSink for CollectingSink {
-    async fn update(&self, bundle: Bundle, expected_updated_at: i64) -> Result<i64, BundleUpdateError> {
+    async fn update(
+        &self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+        _role: Role,
+        _kind: TargetKind,
+    ) -> Result<i64, BundleUpdateError> {
         let mut stale = self.stale_once.lock().unwrap();
         if *stale {
             *stale = false;

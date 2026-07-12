@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agents::{WorkSpawner, reconcile_director};
-use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, Role, Work, WorkId, WorkStatus};
+use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, Role, TargetKind, Work, WorkId, WorkStatus};
 use llm::ScriptedLlm;
 use loopr::config::Config;
 use loopr::daemon::build_context;
@@ -128,7 +128,12 @@ async fn seed_bundle_at_status(ctx: &Arc<DaemonContext<ScriptedLlm>>, target_sta
         // the in-memory bundle so the next chained transition's OCC
         // expected-version matches even when both writes land in the same
         // millisecond (the F2 floor makes them strictly increasing).
-        let new_ts = ctx.store.bundles().update(bundle.clone(), expected).await.unwrap();
+        let new_ts = ctx
+            .store
+            .bundles()
+            .update(bundle.clone(), expected, *role, TargetKind::Normal)
+            .await
+            .unwrap();
         bundle.updated_at = new_ts;
     }
     bundle_id
@@ -341,7 +346,11 @@ async fn reconcile_recovers_in_progress_work_with_no_live_implementer() {
     for target in [WorkStatus::Ready, WorkStatus::InProgress] {
         let expected = work.updated_at;
         work.transition(target, Role::Reactor).unwrap();
-        ctx.store.works().update(work.clone(), expected).await.unwrap();
+        ctx.store
+            .works()
+            .update(work.clone(), expected, Role::Reactor, TargetKind::Normal)
+            .await
+            .unwrap();
         work = ctx.store.works().get(&work_id).await.unwrap();
     }
     assert_eq!(work.status, WorkStatus::InProgress);
@@ -401,7 +410,11 @@ async fn reconcile_skips_in_progress_work_with_live_implementer_sidecar() {
     for target in [WorkStatus::Ready, WorkStatus::InProgress] {
         let expected = work.updated_at;
         work.transition(target, Role::Reactor).unwrap();
-        ctx.store.works().update(work.clone(), expected).await.unwrap();
+        ctx.store
+            .works()
+            .update(work.clone(), expected, Role::Reactor, TargetKind::Normal)
+            .await
+            .unwrap();
         work = ctx.store.works().get(&work_id).await.unwrap();
     }
     let attempt_at_inprogress = work.attempt_count;

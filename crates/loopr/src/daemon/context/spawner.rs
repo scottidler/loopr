@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use agents::WorkSpawner;
-use domain::{BundleId, BundleStatus, Role, WorkId, WorkStatus};
+use domain::{BundleId, BundleStatus, Role, TargetKind, WorkId, WorkStatus};
 use llm::LlmClient;
 use tracing::{debug, info, warn};
 
@@ -108,7 +108,12 @@ where
                     warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
                     return;
                 }
-                if let Err(e) = ctx.store.bundles().update(bundle.clone(), expected).await {
+                if let Err(e) = ctx
+                    .store
+                    .bundles()
+                    .update(bundle.clone(), expected, Role::Director, TargetKind::Normal)
+                    .await
+                {
                     // Stale OCC errors are expected when the daemon's reconcile
                     // sweep races the Director; swallow and continue.
                     if let store::StoreError::Stale { .. } = e {
