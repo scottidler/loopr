@@ -172,6 +172,16 @@ async fn passing_validation_produces_tick_and_merged_bundle() {
     let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
     assert_eq!(ticks.len(), 1);
 
+    // Phase 12: the Integrator persists a CheckRun per validation command,
+    // executor Integrator, on the green path too ("every Tick carries
+    // executed proof" must be literally true).
+    let check_runs = store.check_runs().list_by_bundle(&bundle.id).await.unwrap();
+    assert_eq!(check_runs.len(), 1, "one CheckRun per validation command");
+    assert_eq!(check_runs[0].command, "true");
+    assert_eq!(check_runs[0].exit_code, 0);
+    assert!(check_runs[0].passed());
+    assert_eq!(check_runs[0].executor, Role::Integrator);
+
     store.close().await.unwrap();
 }
 
@@ -219,6 +229,15 @@ async fn failing_validation_resets_branch_and_no_tick_written() {
     let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
     assert!(ticks.is_empty(), "no Tick should exist after validation failure");
 
+    // Phase 12: the red command's CheckRun is persisted too — evidence
+    // survives even though the merge itself was rolled back.
+    let check_runs = store.check_runs().list_by_bundle(&bundle.id).await.unwrap();
+    assert_eq!(check_runs.len(), 1, "the failing command's CheckRun is persisted");
+    assert_eq!(check_runs[0].command, "false");
+    assert_eq!(check_runs[0].exit_code, 1);
+    assert!(!check_runs[0].passed());
+    assert_eq!(check_runs[0].executor, Role::Integrator);
+
     store.close().await.unwrap();
 }
 
@@ -256,6 +275,15 @@ async fn second_command_failure_rolls_back() {
 
     let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
     assert!(ticks.is_empty());
+
+    // Phase 12: both commands ran (the first passed, the second failed),
+    // so both get a persisted CheckRun — the passing prefix's evidence is
+    // not discarded just because the sequence ultimately failed.
+    let check_runs = store.check_runs().list_by_bundle(&bundle.id).await.unwrap();
+    assert_eq!(check_runs.len(), 2, "both executed commands persist a CheckRun");
+    let mut by_command: Vec<(&str, i32)> = check_runs.iter().map(|c| (c.command.as_str(), c.exit_code)).collect();
+    by_command.sort();
+    assert_eq!(by_command, vec![("false", 1), ("true", 0)]);
 
     store.close().await.unwrap();
 }

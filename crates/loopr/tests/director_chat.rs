@@ -67,7 +67,12 @@ fn init_target(target: &std::path::Path) {
     fs::create_dir_all(&loopr_dir).unwrap();
     fs::write(
         loopr_dir.join("config.yml"),
-        "transport:\n  client-request-secs: 60\n  daemon-startup-secs: 60\n",
+        // Phase 12 (validation-by-default): `integrator.require-validation`
+        // now defaults to `true`, so an empty `validation-commands` list
+        // refuses daemon startup. This file tests `director chat`, not
+        // Integrator validation; opt out explicitly.
+        "transport:\n  client-request-secs: 60\n  daemon-startup-secs: 60\n\
+         integrator:\n  require-validation: false\n",
     )
     .unwrap();
 }

@@ -272,6 +272,10 @@ async fn build_test_context_with_llm(target: &Path, llm: ScriptedLlm) -> Arc<Dae
     // brief lifetime of this test. Production overrides via .loopr/config.yml.
     config.agents.director.poll_interval_secs = 0;
     config.agents.director.idle_interval_secs = 0;
+    // Phase 12 (validation-by-default): this file tests Director
+    // reconcile, not Integrator validation; opt out of the
+    // require-validation-by-default startup gate.
+    config.integrator.require_validation = false;
 
     let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-stub-model")));
 

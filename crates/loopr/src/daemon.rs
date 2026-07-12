@@ -696,6 +696,15 @@ pub async fn build_context<L>(
 where
     L: LlmClient + Send + Sync + 'static,
 {
+    // Phase 12 (validation-by-default): fail closed BEFORE any other
+    // side effect (store open, sandbox probe, LLM spend) when this
+    // target's integrator config cannot produce executed proof. This is
+    // the single choke point shared by production (`run_active_daemon`)
+    // and the test-reachable entry point documented above, so both get
+    // the same fail-closed gate. A config problem is not a per-Bundle
+    // terminal failure; it is a startup refusal with a named knob.
+    config.integrator.validate()?;
+
     // Open the per-target store AFTER telemetry init so open errors land
     // in the daemon's run log, and BEFORE `DaemonContext::new` because the
     // context owns the store for the duration of the active phase.

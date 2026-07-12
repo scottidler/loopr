@@ -138,6 +138,11 @@ where
     // Production callers override via config.yml.
     config.agents.director.poll_interval_secs = 0;
     config.agents.director.idle_interval_secs = 0;
+    // Phase 12 (validation-by-default): this shared harness is not
+    // exercising validation semantics, so every daemon it spawns opts
+    // out of the require-validation-by-default startup gate. Tests that
+    // DO want to exercise validation build their own `Config` directly.
+    config.integrator.require_validation = false;
 
     // Tests boot with a clean target, so the corruption gate is a no-op
     // by default (no JSONL exists yet). Pass `false` to keep the

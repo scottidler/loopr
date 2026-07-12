@@ -22,10 +22,31 @@ use common::{DaemonAutoStop, init_git_repo};
 /// user's `~/.local/share/loopr/` and the daemon's config load doesn't
 /// read the real `~/.config/loopr/loopr.yml` (the XDG user config layer).
 fn loopr(target: &Path) -> Command {
+    ensure_validation_opt_out(target);
     let mut cmd = Command::cargo_bin("loopr").unwrap();
     cmd.env("XDG_DATA_HOME", xdg_home_for(target));
     cmd.env("XDG_CONFIG_HOME", xdg_home_for(target));
     cmd
+}
+
+/// Phase 12 (validation-by-default): `integrator.require-validation`
+/// now defaults to `true`, so an empty `validation-commands` list
+/// refuses daemon startup. This file's tests exercise daemon lifecycle
+/// (pid/socket/version sentinels), not validation semantics, so every
+/// daemon spawned here opts out explicitly. Idempotent and
+/// non-clobbering: if a test already wrote its own `.loopr/config.yml`
+/// (none currently do), this leaves it alone.
+fn ensure_validation_opt_out(target: &Path) {
+    let loopr_dir = target.join(".loopr");
+    if loopr_dir.join("config.yml").exists() {
+        return;
+    }
+    fs::create_dir_all(&loopr_dir).unwrap();
+    fs::write(
+        loopr_dir.join("config.yml"),
+        "integrator:\n  require-validation: false\n",
+    )
+    .unwrap();
 }
 
 fn xdg_home_for(target: &Path) -> std::path::PathBuf {

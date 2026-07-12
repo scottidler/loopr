@@ -233,6 +233,9 @@ async fn build_ctx(target: &Path) -> Arc<DaemonContext<ScriptedLlm>> {
     let process_id = ProcessId::parse("pc-swp001").unwrap();
     let mut config = crate::config::Config::default();
     config.tools.sandbox = SandboxMode::Off;
+    // Phase 12: this fixture is not exercising validation semantics; opt
+    // out of the require-validation-by-default startup gate.
+    config.integrator.require_validation = false;
     let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-sweep-model")));
     crate::daemon::build_context(
         target.to_path_buf(),
@@ -269,6 +272,7 @@ async fn build_context_rejects_negative_per_work_cost_cap() {
     let process_id = ProcessId::parse("pc-negcap").unwrap();
     let mut config = crate::config::Config::default();
     config.tools.sandbox = SandboxMode::Off;
+    config.integrator.require_validation = false;
     config.budgets.per_work_cost_usd = Some(-1.0);
     let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-negcap-model")));
 
@@ -317,6 +321,7 @@ async fn build_context_rejects_nan_per_work_cost_cap() {
     let process_id = ProcessId::parse("pc-nancap").unwrap();
     let mut config = crate::config::Config::default();
     config.tools.sandbox = SandboxMode::Off;
+    config.integrator.require_validation = false;
     config.budgets.per_work_cost_usd = Some(f64::NAN);
     let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-nancap-model")));
 

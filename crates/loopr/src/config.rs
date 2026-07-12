@@ -33,7 +33,9 @@ pub struct IntegratorSection {
     /// Shell commands run after a successful git merge, before Tick
     /// persistence. Each string is passed to `sh -c`. First non-zero
     /// exit rolls back the merge and returns ValidationFailed.
-    /// Default: `[]` (skip validation entirely).
+    /// Default: `[]`. Phase 12 of `docs/design/2026-07-11-verified-swarm.md`
+    /// makes an empty list a STARTUP error (not a silent skip) unless
+    /// `require_validation` is explicitly opted out below.
     pub validation_commands: Vec<String>,
 
     /// Wall-clock cap in seconds for each individual validation command.
@@ -46,6 +48,13 @@ pub struct IntegratorSection {
     /// and the Integrator merges directly onto the checked-out branch
     /// (refusing on a dirty tree). loopr never merges to `main` itself.
     pub integration_branch: bool,
+
+    /// Fail-closed gate (Phase 12): when `true` (the default), an empty
+    /// `validation_commands` refuses daemon startup — see
+    /// `IntegratorSection::validate`. The explicit operator escape hatch
+    /// is `false`, which permits Ticks with no executed validation
+    /// evidence and logs a `WARN` on every boot. Default: `true`.
+    pub require_validation: bool,
 }
 
 impl Default for IntegratorSection {
@@ -54,6 +63,7 @@ impl Default for IntegratorSection {
             validation_commands: vec![],
             validation_timeout_secs: 300,
             integration_branch: true,
+            require_validation: true,
         }
     }
 }
@@ -66,6 +76,34 @@ impl IntegratorSection {
             integration_branch: self.integration_branch,
             ..integrator::IntegratorConfig::default()
         }
+    }
+
+    /// Fail-closed startup gate: `require_validation` defaults `true`, so
+    /// an empty `validation_commands` is a config error naming the knob,
+    /// not a silently-skipped phase — the daemon refuses to start rather
+    /// than producing Ticks with no executed proof. The escape hatch is
+    /// the explicit `require_validation: false`, logged loudly on every
+    /// boot so an operator running that way cannot miss it.
+    pub fn validate(&self) -> Result<(), LooprError> {
+        if self.require_validation && self.validation_commands.is_empty() {
+            return Err(LooprError::DaemonStartup(
+                "integrator.require-validation is true but integrator.validation-commands is \
+                 empty; the daemon refuses to start without a way to produce executed validation \
+                 evidence. Configure at least one command under `integrator.validation-commands` \
+                 (e.g. \"cargo test\"), or set `integrator.require-validation: false` to opt out \
+                 (not recommended: Ticks will carry no executed proof)."
+                    .to_string(),
+            ));
+        }
+        if !self.require_validation {
+            tracing::warn!(
+                "integrator.require-validation is false: this target's Ticks are produced \
+                 WITHOUT executed validation evidence. This is the explicit operator escape \
+                 hatch (Phase 12, docs/design/2026-07-11-verified-swarm.md); reconsider before \
+                 pointing loopr at real work."
+            );
+        }
+        Ok(())
     }
 }
 
@@ -320,6 +358,12 @@ fn xdg_config_file() -> Option<PathBuf> {
 /// overlay. Used to layer the target config over the XDG user config so a
 /// key present only in the lower layer survives an upper layer that omits
 /// it (serde_yaml has no native deep-merge).
+///
+/// A `Null` overlay (an empty or all-comment YAML document — e.g. the
+/// `loopr init` config template, which is documentation-only until an
+/// operator uncomments a knob) is a no-op, not a wholesale replace: a
+/// comment-only target file must never erase a real XDG-layer config.
+/// `serde_yaml::from_str("")` and an all-`#` file both parse to `Null`.
 fn deep_merge(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
     match (base, overlay) {
         (serde_yaml::Value::Mapping(b), serde_yaml::Value::Mapping(o)) => {
@@ -332,6 +376,7 @@ fn deep_merge(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
                 }
             }
         }
+        (_, serde_yaml::Value::Null) => {}
         (base, overlay) => *base = overlay,
     }
 }

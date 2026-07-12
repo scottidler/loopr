@@ -47,6 +47,10 @@ async fn build_test_context(target: &Path) -> Arc<DaemonContext<ScriptedLlm>> {
     config.tools.sandbox = SandboxMode::Off;
     config.agents.director.poll_interval_secs = 0;
     config.agents.director.idle_interval_secs = 0;
+    // Phase 12 (validation-by-default): this file tests Director stuck
+    // states, not Integrator validation; opt out of the
+    // require-validation-by-default startup gate.
+    config.integrator.require_validation = false;
 
     let snapshot = Arc::new(std::sync::Mutex::new(ProcessSnapshot::new("test-stub-model")));
 

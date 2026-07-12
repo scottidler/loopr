@@ -62,6 +62,10 @@ async fn run_build(target: &Path, accept_corruption: bool) -> Result<(), LooprEr
     let target_slug = "-test-corruption-gate".to_string();
     let mut config = Config::default();
     config.tools.sandbox = SandboxMode::Off;
+    // Phase 12 (validation-by-default): this file tests the corruption
+    // gate, not Integrator validation; opt out of the
+    // require-validation-by-default startup gate.
+    config.integrator.require_validation = false;
 
     let snapshot = std::sync::Arc::new(std::sync::Mutex::new(telemetry::digest::process::ProcessSnapshot::new(
         "test-stub-model",

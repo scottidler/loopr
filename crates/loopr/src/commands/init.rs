@@ -56,16 +56,18 @@ pub fn run(target: &Path, force: bool) -> Result<(), LooprError> {
     let report = rt.block_on(async {
         let guard = step_verify_source_guard(target)?;
         let loopr_dir = step_create_loopr_dir(target)?;
+        let config = step_seed_config_template(target)?;
         let taskstore = step_open_taskstore(target).await?;
         let hooks = step_install_taskstore_hooks(target).await?;
         let excludes = step_ensure_git_excludes(target)?;
         let prompts = step_seed_prompts(target, force)?;
-        Ok::<_, LooprError>([guard, loopr_dir, taskstore, hooks, excludes, prompts])
+        Ok::<_, LooprError>([guard, loopr_dir, config, taskstore, hooks, excludes, prompts])
     })?;
 
     for (label, outcome) in [
         "source-guard",
         "loopr-dir",
+        "config",
         "taskstore",
         "git-hooks",
         "git-excludes",
@@ -117,6 +119,54 @@ fn step_create_loopr_dir(target: &Path) -> Result<StepOutcome, LooprError> {
             detail: format!(".loopr/ at {}", dir.display()),
         })
     }
+}
+
+/// Documentation-only `config.yml` seed (Phase 12 of
+/// `docs/design/2026-07-11-verified-swarm.md`): "no autodetection magic —
+/// `loopr init` documents the knob with commented examples." Every line
+/// is a comment; `Config::load` treats an all-comment file as a no-op
+/// overlay (see `deep_merge`'s `Null` guard), so a fresh `loopr init`
+/// changes zero effective behavior. The `integrator.require-validation`
+/// default (`true`) still applies and still refuses daemon startup on
+/// an empty `validation-commands` list — this file's job is to make the
+/// fix (uncomment + fill in a command) one line away, not to pick a
+/// command on the operator's behalf.
+const CONFIG_TEMPLATE: &str = "\
+# loopr config -- local overrides for this target.
+# NOT committed to git (.git/info/exclude carries the ignore pattern);
+# edit freely.
+#
+# integrator:
+#   Validation runs after every merge, before a Tick is produced.
+#   `require-validation` defaults to `true`: an empty `validation-commands`
+#   list refuses daemon startup rather than silently skipping validation,
+#   so every Tick carries executed proof. Configure the command(s) this
+#   repo actually uses, e.g.:
+#
+#     validation-commands:
+#       - \"cargo test\"
+#       - \"otto ci\"
+#       - \"npm test\"
+#
+#   Escape hatch (NOT recommended -- Ticks will carry no executed proof):
+#   explicitly opt out. The daemon logs a WARN on every boot when this is
+#   set.
+#
+#     require-validation: false
+";
+
+fn step_seed_config_template(target: &Path) -> Result<StepOutcome, LooprError> {
+    let config_path = target.join(".loopr").join("config.yml");
+    if config_path.exists() {
+        return Ok(StepOutcome::Preserved {
+            detail: format!("config.yml already present at {}", config_path.display()),
+        });
+    }
+    std::fs::write(&config_path, CONFIG_TEMPLATE)
+        .map_err(|e| LooprError::DaemonStartup(format!("write {}: {e}", config_path.display())))?;
+    Ok(StepOutcome::Created {
+        detail: format!("config.yml template at {}", config_path.display()),
+    })
 }
 
 async fn step_open_taskstore(target: &Path) -> Result<StepOutcome, LooprError> {

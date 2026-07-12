@@ -32,73 +32,121 @@ fn cap_head_tail_keeps_head_and_tail_when_oversized() {
 #[tokio::test]
 async fn empty_commands_succeeds() {
     let dir = temp_dir();
-    run_validation(&[], Duration::from_secs(5), dir.path()).await.unwrap();
+    let outcomes = run_validation(&[], Duration::from_secs(5), dir.path()).await.unwrap();
+    assert!(outcomes.is_empty());
 }
 
 #[tokio::test]
 async fn passing_command_succeeds() {
     let dir = temp_dir();
-    run_validation(&["true".to_string()], Duration::from_secs(5), dir.path())
+    let outcomes = run_validation(&["true".to_string()], Duration::from_secs(5), dir.path())
         .await
         .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].command, "true");
+    assert_eq!(outcomes[0].exit_code, 0);
+    // Evidence is captured on the green path too (Phase 12: "success and
+    // failure both").
+    assert!(!outcomes[0].output_digest.is_empty());
 }
 
 #[tokio::test]
 async fn failing_command_returns_error() {
     let dir = temp_dir();
-    let err = run_validation(&["false".to_string()], Duration::from_secs(5), dir.path())
+    let failure = run_validation(&["false".to_string()], Duration::from_secs(5), dir.path())
         .await
         .unwrap_err();
-    assert_eq!(err.command, "false");
-    assert_eq!(err.exit_code, Some(1));
+    assert_eq!(failure.error.command, "false");
+    assert_eq!(failure.error.exit_code, Some(1));
+    // The failing command still produced a CommandOutcome (evidence for
+    // the red run), not just a bare error.
+    assert_eq!(failure.outcomes.len(), 1);
+    assert_eq!(failure.outcomes[0].exit_code, 1);
 }
 
 #[tokio::test]
 async fn failing_command_captures_output() {
     let dir = temp_dir();
-    let err = run_validation(
+    let failure = run_validation(
         &["echo 'hello failure' && exit 1".to_string()],
         Duration::from_secs(5),
         dir.path(),
     )
     .await
     .unwrap_err();
-    assert!(err.log.contains("hello failure"), "log was: {}", err.log);
-    assert_eq!(err.exit_code, Some(1));
+    assert!(
+        failure.error.log.contains("hello failure"),
+        "log was: {}",
+        failure.error.log
+    );
+    assert_eq!(failure.error.exit_code, Some(1));
+    assert!(
+        failure.outcomes[0].output_excerpt.contains("hello failure"),
+        "outcome excerpt was: {}",
+        failure.outcomes[0].output_excerpt
+    );
 }
 
 #[tokio::test]
 async fn timeout_returns_error_with_no_exit_code() {
     let dir = temp_dir();
-    let err = run_validation(&["sleep 60".to_string()], Duration::from_millis(200), dir.path())
+    let failure = run_validation(&["sleep 60".to_string()], Duration::from_millis(200), dir.path())
         .await
         .unwrap_err();
-    assert_eq!(err.command, "sleep 60");
-    assert!(err.exit_code.is_none());
-    assert!(err.log.contains("timed out"), "log was: {}", err.log);
+    assert_eq!(failure.error.command, "sleep 60");
+    assert!(failure.error.exit_code.is_none());
+    assert!(
+        failure.error.log.contains("timed out"),
+        "log was: {}",
+        failure.error.log
+    );
+    // A timeout never reaches an exit code: no CommandOutcome evidence,
+    // matching the Reviewer's spawn-error precedent (environment problem,
+    // not a check outcome).
+    assert!(failure.outcomes.is_empty());
 }
 
 #[tokio::test]
 async fn first_failure_stops_sequence() {
     let dir = temp_dir();
-    let err = run_validation(
+    let failure = run_validation(
         &["false".to_string(), "echo 'should not run'".to_string()],
         Duration::from_secs(5),
         dir.path(),
     )
     .await
     .unwrap_err();
-    assert_eq!(err.command, "false");
+    assert_eq!(failure.error.command, "false");
+    assert_eq!(failure.outcomes.len(), 1, "only the failing command produced evidence");
 }
 
 #[tokio::test]
 async fn multiple_passing_commands_all_run() {
     let dir = temp_dir();
-    run_validation(
+    let outcomes = run_validation(
         &["true".to_string(), "true".to_string(), "true".to_string()],
         Duration::from_secs(5),
         dir.path(),
     )
     .await
     .unwrap();
+    assert_eq!(outcomes.len(), 3, "every command produced a CommandOutcome");
+}
+
+#[tokio::test]
+async fn second_command_failure_preserves_first_commands_outcome() {
+    let dir = temp_dir();
+    let failure = run_validation(
+        &["true".to_string(), "false".to_string()],
+        Duration::from_secs(5),
+        dir.path(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.error.command, "false");
+    assert_eq!(failure.outcomes.len(), 2, "the passing command's evidence is kept");
+    assert_eq!(failure.outcomes[0].command, "true");
+    assert_eq!(failure.outcomes[0].exit_code, 0);
+    assert_eq!(failure.outcomes[1].command, "false");
+    assert_eq!(failure.outcomes[1].exit_code, 1);
 }

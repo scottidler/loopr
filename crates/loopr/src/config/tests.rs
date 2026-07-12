@@ -488,6 +488,34 @@ fn generic_env_override_works_with_no_files() {
 }
 
 #[test]
+fn comment_only_target_file_does_not_clobber_xdg_layer() {
+    // Phase 12: `loopr init` seeds a documentation-only (all-comment)
+    // config.yml. That file parses to `Value::Null`, and a naive
+    // deep-merge would previously replace the whole merged tree with
+    // Null — silently erasing a real XDG-layer config the moment a
+    // fresh target is `init`ed. The Null overlay must be a no-op.
+    let g = load_guard();
+    let xdg_path = g.xdg_config_path();
+    std::fs::create_dir_all(xdg_path.parent().unwrap()).expect("mkdir xdg");
+    std::fs::write(&xdg_path, "transport:\n  client-request-secs: 42\n").expect("write xdg");
+
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    std::fs::write(
+        loopr_dir.join("config.yml"),
+        "# nothing configured yet\n# see the docs\n",
+    )
+    .expect("write target");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(
+        cfg.transport.client_request_secs, 42,
+        "an all-comment target file must not erase the XDG layer"
+    );
+}
+
+#[test]
 fn loopr_env_without_nesting_marker_is_ignored() {
     // A LOOPR_* var without the `__` marker (e.g. LOOPR_TARGET) is not a
     // config-field override and must not corrupt the config or trip

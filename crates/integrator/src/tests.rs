@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use tokio::sync::Mutex as AsyncMutex;
 
-use domain::{AcceptanceCriteria, Bundle, BundleStatus, Plan, Role, TargetKind, Tick, Work, WorkId};
-use store::{BundleUpdateError, BundleUpdateSink, StoreError};
+use domain::{AcceptanceCriteria, Bundle, BundleStatus, CheckRunId, Plan, Role, TargetKind, Tick, Work, WorkId};
+use store::{BundleUpdateError, BundleUpdateSink, CheckRunSink, StoreError};
 
 use crate::classify::{ConflictKind, classify_conflict, is_merge_conflict};
 use crate::{IntegrationError, IntegratorConfig, IntegratorDeps, TickSink, WorkLookup};
@@ -236,6 +236,14 @@ impl BundleUpdateSink for FakeBundleSink {
         let ts = bundle.updated_at;
         self.writes.lock().unwrap().push(bundle);
         Ok(ts)
+    }
+}
+
+impl CheckRunSink for FakeBundleSink {
+    async fn create_check_run(&self, check_run: domain::CheckRun) -> Result<CheckRunId, StoreError> {
+        // These pre-flight-only fixtures never reach Phase 3 (validation);
+        // the impl exists purely to satisfy `IntegratorDeps`'s bound.
+        Ok(check_run.id)
     }
 }
 

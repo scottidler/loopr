@@ -114,6 +114,46 @@ fn run_is_idempotent_on_already_initialized_target() {
 }
 
 #[test]
+fn run_seeds_config_template_documenting_the_validation_knob() {
+    let td = tempfile::tempdir().unwrap();
+    init_git_repo(td.path());
+
+    super::run(td.path(), false).unwrap();
+
+    let config_path = td.path().join(".loopr/config.yml");
+    assert!(config_path.exists());
+    let body = std::fs::read_to_string(&config_path).unwrap();
+    assert!(body.contains("validation-commands"), "documents the knob: {body}");
+    assert!(
+        body.contains("require-validation"),
+        "documents the escape hatch: {body}"
+    );
+    // Phase 12: the template is documentation-only (every line a
+    // comment) so it changes zero effective config.
+    assert!(
+        body.lines()
+            .all(|l| l.trim().is_empty() || l.trim_start().starts_with('#')),
+        "every line must be a comment: {body}"
+    );
+}
+
+#[test]
+fn step_seed_config_template_preserves_an_existing_config_yml() {
+    let td = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(td.path().join(".loopr")).unwrap();
+    std::fs::write(
+        td.path().join(".loopr/config.yml"),
+        "integrator:\n  validation-commands:\n    - \"cargo test\"\n",
+    )
+    .unwrap();
+
+    let outcome = super::step_seed_config_template(td.path()).unwrap();
+    assert!(matches!(outcome, super::StepOutcome::Preserved { .. }));
+    let body = std::fs::read_to_string(td.path().join(".loopr/config.yml")).unwrap();
+    assert!(body.contains("cargo test"), "operator config not clobbered: {body}");
+}
+
+#[test]
 fn step_create_loopr_dir_reports_preserved_when_dir_exists() {
     let td = tempfile::tempdir().unwrap();
     std::fs::create_dir(td.path().join(".loopr")).unwrap();

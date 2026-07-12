@@ -53,6 +53,18 @@ fn init_target(target: &std::path::Path) {
     fs::write(target.join("README.md"), "seed\n").unwrap();
     run(&["add", "-A"]);
     run(&["commit", "-q", "-m", "seed", "--no-gpg-sign"]);
+
+    // Phase 12 (validation-by-default): `integrator.require-validation`
+    // now defaults to `true`, so an empty `validation-commands` list
+    // refuses daemon startup. This file tests the Stage 7 shutdown-drain
+    // path, not Integrator validation; opt out explicitly.
+    let loopr_dir = target.join(".loopr");
+    fs::create_dir_all(&loopr_dir).unwrap();
+    fs::write(
+        loopr_dir.join("config.yml"),
+        "integrator:\n  require-validation: false\n",
+    )
+    .unwrap();
 }
 
 // `stop_daemon` lives in `common::stop_daemon_for` so all daemon-spawning

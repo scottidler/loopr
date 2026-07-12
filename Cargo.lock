@@ -1320,6 +1320,7 @@ version = "0.7.24"
 dependencies = [
  "domain",
  "serde_json",
+ "sha2 0.11.0",
  "store",
  "telemetry",
  "tempfile",

@@ -18,10 +18,31 @@ use common::{DaemonAutoStop, init_git_repo, stop_daemon_for};
 /// instead of polluting `~/.local/share/loopr/`, and so the daemon's
 /// config load does not read the real `~/.config/loopr/loopr.yml`.
 fn loopr(target: &std::path::Path) -> Command {
+    ensure_validation_opt_out(target);
     let mut cmd = Command::cargo_bin("loopr").unwrap();
     cmd.env("XDG_DATA_HOME", xdg_home_for(target));
     cmd.env("XDG_CONFIG_HOME", xdg_home_for(target));
     cmd
+}
+
+/// Phase 12 (validation-by-default): `integrator.require-validation`
+/// now defaults to `true`, so an empty `validation-commands` list
+/// refuses daemon startup. These smoke tests exercise CLI/daemon
+/// plumbing, not validation semantics, so every daemon spawned here
+/// opts out explicitly. Idempotent and non-clobbering: if a test
+/// already wrote its own `.loopr/config.yml` (none currently do), this
+/// leaves it alone.
+fn ensure_validation_opt_out(target: &std::path::Path) {
+    let loopr_dir = target.join(".loopr");
+    if loopr_dir.join("config.yml").exists() {
+        return;
+    }
+    fs::create_dir_all(&loopr_dir).unwrap();
+    fs::write(
+        loopr_dir.join("config.yml"),
+        "integrator:\n  require-validation: false\n",
+    )
+    .unwrap();
 }
 
 fn xdg_home_for(target: &std::path::Path) -> std::path::PathBuf {

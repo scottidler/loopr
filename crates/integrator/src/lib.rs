@@ -20,8 +20,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
-use domain::{Bundle, BundleId, BundleStatus, Plan, Role, TargetKind, Tick, TickId, Work, WorkId};
-use store::{BundleUpdateSink, StoreError};
+use domain::{Bundle, BundleId, BundleStatus, CheckRun, Plan, Role, TargetKind, Tick, TickId, Work, WorkId};
+use store::{BundleUpdateSink, CheckRunSink, StoreError};
 
 pub use config::IntegratorConfig;
 pub use error::IntegrationError;
@@ -109,13 +109,15 @@ impl<T: TickSink + ?Sized> TickSink for &T {
 /// no `LlmClient`, no `ToolExecutor`, no `ContextBuilder`.
 pub struct IntegratorDeps<U, W, T>
 where
-    U: BundleUpdateSink,
+    U: BundleUpdateSink + CheckRunSink,
     W: WorkLookup,
     T: TickSink,
 {
     /// OCC update sink for Bundle transitions (`Accepted -> Integrating`,
     /// `Integrating -> Merged | IntegrationFailed`). Same trait the
     /// Reviewer consumes, relocated from `agents` to `store` in Phase 1.
+    /// Also the `CheckRunSink` the Phase 12 validation step persists
+    /// through, mirroring the Reviewer's Phase 10 evidence write.
     pub bundle_sink: U,
 
     /// Read-only Work lookup for the `work.parent_id == plan.id`
@@ -201,7 +203,7 @@ pub async fn integrate<U, W, T>(
     deps: &IntegratorDeps<U, W, T>,
 ) -> Result<Tick, IntegrationError>
 where
-    U: BundleUpdateSink,
+    U: BundleUpdateSink + CheckRunSink,
     W: WorkLookup,
     T: TickSink,
 {
@@ -468,14 +470,50 @@ where
         validation_commands = deps.config.validation_commands.len(),
         "integrator: phase begin"
     );
-    if !deps.config.validation_commands.is_empty()
-        && let Err(val_err) = validation::run_validation(
+    let validation_outcome = if deps.config.validation_commands.is_empty() {
+        Ok(Vec::new())
+    } else {
+        validation::run_validation(
             &deps.config.validation_commands,
             deps.config.validation_timeout,
             &deps.target,
         )
         .await
-    {
+    };
+    let (command_outcomes, validation_err) = match validation_outcome {
+        Ok(outcomes) => (outcomes, None),
+        Err(validation::ValidationFailure { error, outcomes }) => (outcomes, Some(error)),
+    };
+
+    // Phase 12: persist a CheckRun per executed command, success and
+    // failure alike ("every Tick carries executed proof" must be
+    // literally true). First-gate single-Bundle invariant
+    // (`allow_multi_bundle = false`, enforced in preflight_shape) means
+    // there is exactly one Bundle/Work to anchor this integration-level
+    // evidence to.
+    if let Some(anchor) = bundle_states.first() {
+        for outcome in &command_outcomes {
+            let check_run = CheckRun::new(
+                anchor.id.clone(),
+                anchor.work_id.clone(),
+                outcome.command.clone(),
+                outcome.exit_code,
+                outcome.output_digest.clone(),
+                outcome.output_excerpt.clone(),
+                Role::Integrator,
+                outcome.duration_ms,
+            );
+            // Propagate as a Store error (not a bespoke variant): the
+            // daemon's existing retry contract already retries
+            // `IntegrationError::Store(_)` (see `spawn_integrator_for_bundle`),
+            // and the Bundles are still `Integrating` at this point (no
+            // rollback has happened yet), so a retry re-runs validation
+            // and re-persists cleanly.
+            deps.bundle_sink.create_check_run(check_run).await?;
+        }
+    }
+
+    if let Some(val_err) = validation_err {
         // AdoptedExisting rollback hazard: when EVERY outcome is
         // AdoptedExisting, a prior crashed call already merged this
         // slice, so `pre_merge` was captured AFTER that merge landed.
@@ -755,7 +793,7 @@ async fn fail_all<U, W, T>(
     err: IntegrationError,
 ) -> Result<Tick, IntegrationError>
 where
-    U: BundleUpdateSink,
+    U: BundleUpdateSink + CheckRunSink,
     W: WorkLookup,
     T: TickSink,
 {
@@ -784,7 +822,7 @@ async fn fail_all_without_reset<U, W, T>(
     err: IntegrationError,
 ) -> Result<Tick, IntegrationError>
 where
-    U: BundleUpdateSink,
+    U: BundleUpdateSink + CheckRunSink,
     W: WorkLookup,
     T: TickSink,
 {
