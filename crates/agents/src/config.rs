@@ -67,6 +67,22 @@ pub struct ImplementerConfig {
     /// so the budget config stays in one place.
     #[serde(skip)]
     pub per_work_cost_cap_usd: Option<f64>,
+
+    /// Per-role model routing (Phase 13 of
+    /// `docs/design/2026-07-11-verified-swarm.md`). A tier name
+    /// (`primary` / `lightweight` / `advisor`) or a literal model ID;
+    /// `loopr::config::Config::resolve_model_tiers` resolves this to a
+    /// concrete model ID at config-load time (fail-closed on an unknown
+    /// tier name -- see `llm::ModelTiers::resolve_checked`), so the
+    /// implementer loop always sees a concrete id, never a tier name.
+    /// Default is a literal id (`ModelTiers::default().primary`), NOT the
+    /// bare tier name `"primary"` -- mirrors `DirectorConfig::model`'s
+    /// existing literal-default convention below, and matters here
+    /// because this crate's own test harnesses build `ImplementerConfig`
+    /// via `Default` directly (never through `loopr::Config::load`'s
+    /// resolution pass); a literal default means the field is already a
+    /// valid model id with zero resolution step, in every context.
+    pub model: String,
 }
 
 impl ImplementerConfig {
@@ -96,6 +112,7 @@ impl Default for ImplementerConfig {
             max_force_propose_file_size_bytes: 10 * 1024 * 1024,
             gpg_sign: false,
             per_work_cost_cap_usd: None,
+            model: "claude-sonnet-4-6".to_string(),
         }
     }
 }
@@ -129,6 +146,11 @@ pub struct ReviewerConfig {
     /// Opt-in per target: the universal merge gate is the Integrator's
     /// validation (Phase 12), not these.
     pub check_commands: Vec<String>,
+    /// Per-role model routing (Phase 13 of
+    /// `docs/design/2026-07-11-verified-swarm.md`). Same tier-name-or-
+    /// literal shape, resolution seam, and literal-default rationale as
+    /// `ImplementerConfig::model`.
+    pub model: String,
 }
 
 impl Default for ReviewerConfig {
@@ -138,6 +160,7 @@ impl Default for ReviewerConfig {
             diff_byte_cap: 64 * 1024,
             noop_files_byte_cap: 64 * 1024,
             check_commands: Vec::new(),
+            model: "claude-sonnet-4-6".to_string(),
         }
     }
 }

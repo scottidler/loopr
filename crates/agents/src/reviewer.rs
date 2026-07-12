@@ -571,7 +571,7 @@ where
     let mut requeries: u32 = 0;
     loop {
         let (raw, usage) = with_llm_retry(&RetryPolicy::default(), || {
-            llm.complete_free(system_prompt, &messages, None)
+            llm.complete_free(system_prompt, &messages, Some(config.model.as_str()))
         })
         .await?;
         match parse_verdict(&raw) {

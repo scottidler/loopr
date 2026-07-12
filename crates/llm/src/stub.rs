@@ -226,10 +226,22 @@ impl LlmClient for ScriptedLlm {
             let usage = self.usage();
             return result.map(|s| (s, usage));
         }
+        // Model-FIFO: an exact `Some(model)` queue (via `queue_free_for`)
+        // takes precedence when populated; otherwise fall back to the
+        // `None`-keyed default queue (via `queue_free`). Phase 13 of
+        // `docs/design/2026-07-11-verified-swarm.md` made the Implementer
+        // and Reviewer pass their own resolved `Some(model)` (previously
+        // always `None`), so `None` is now the general-purpose default
+        // route rather than a route only the Director's callers skip --
+        // existing tests that queue via the untargeted `queue_free` keep
+        // working unmodified regardless of which role's resolved model is
+        // passed at the call site.
         let key: ModelKey = model.map(|m| m.to_string());
         let popped = {
             let mut map = self.free_responses.lock().expect("free_responses lock");
-            map.get_mut(&key).and_then(|q| q.pop_front())
+            map.get_mut(&key)
+                .and_then(|q| q.pop_front())
+                .or_else(|| map.get_mut(&None).and_then(|q| q.pop_front()))
         };
         match popped {
             Some(Ok(s)) => Ok((s, self.usage())),
@@ -408,6 +420,41 @@ mod tests {
         let messages = [Message::user("WORK item")];
         assert_eq!(stub.complete_free("", &messages, None).await.unwrap().0, "first");
         assert_eq!(stub.complete_free("", &messages, None).await.unwrap().0, "second");
+        assert!(stub.is_empty());
+    }
+
+    // Phase 13 (`docs/design/2026-07-11-verified-swarm.md`, per-role model
+    // routing) made the Implementer and Reviewer pass their own resolved
+    // `Some(model)` to `complete_free` instead of always `None`. Without a
+    // fallback, an untargeted `queue_free` (routed to the `None` key)
+    // would never be found by a `Some("claude-...")` lookup and every
+    // existing implementer/reviewer test would panic on an empty queue.
+    #[tokio::test]
+    async fn complete_free_falls_back_to_untargeted_queue_when_model_specific_queue_is_empty() {
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Ok("default-route".to_string()));
+        assert_eq!(
+            stub.complete_free("", &[], Some("claude-sonnet-4-6")).await.unwrap().0,
+            "default-route"
+        );
+        assert!(stub.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_free_prefers_model_specific_queue_over_untargeted_fallback() {
+        let stub = ScriptedLlm::new();
+        stub.queue_free(Ok("default-route".to_string()));
+        stub.queue_free_for("claude-haiku-4-5", Ok("lightweight-route".to_string()));
+        assert_eq!(
+            stub.complete_free("", &[], Some("claude-haiku-4-5")).await.unwrap().0,
+            "lightweight-route"
+        );
+        // The untargeted queue is untouched by the model-specific hit.
+        assert_eq!(stub.remaining(), (0, 1));
+        assert_eq!(
+            stub.complete_free("", &[], Some("claude-haiku-4-5")).await.unwrap().0,
+            "default-route"
+        );
         assert!(stub.is_empty());
     }
 

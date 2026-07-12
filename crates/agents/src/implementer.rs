@@ -280,7 +280,8 @@ where
         let mut requeries_used: u32 = 0;
         let actions = loop {
             let (raw, usage) = with_llm_retry(&RetryPolicy::default(), || {
-                deps.llm.complete_free(&assembled.system_prompt, &messages, None)
+                deps.llm
+                    .complete_free(&assembled.system_prompt, &messages, Some(deps.config.model.as_str()))
             })
             .await?;
             if usage.model.is_some() {
@@ -466,7 +467,8 @@ where
                         "action failed: {err_msg}. Return one corrected JSON action (single object, not array)."
                     )));
                     let (corrected_raw, usage) = with_llm_retry(&RetryPolicy::default(), || {
-                        deps.llm.complete_free(&assembled.system_prompt, &messages, None)
+                        deps.llm
+                            .complete_free(&assembled.system_prompt, &messages, Some(deps.config.model.as_str()))
                     })
                     .await?;
                     if usage.model.is_some() {

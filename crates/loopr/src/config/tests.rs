@@ -324,6 +324,85 @@ llm:
     assert_eq!(cfg.llm.model, "claude-opus-4-7", "literal id passes through");
 }
 
+// Phase 13 of `docs/design/2026-07-11-verified-swarm.md`: per-role model
+// routing. Success criterion: an unconfigured run's implementer/reviewer
+// calls carry the SAME model id as before this phase (asserted, not
+// eyeballed) -- the cheap-worker split is opt-in, never a silent default
+// change.
+#[test]
+fn model_tiers_unconfigured_implementer_and_reviewer_match_llm_model() {
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(
+        cfg.agents.implementer.model, cfg.llm.model,
+        "unconfigured implementer.model must resolve to the same concrete id as llm.model"
+    );
+    assert_eq!(
+        cfg.agents.reviewer.model, cfg.llm.model,
+        "unconfigured reviewer.model must resolve to the same concrete id as llm.model"
+    );
+    assert_eq!(cfg.agents.implementer.model, "claude-sonnet-4-6");
+    assert_eq!(cfg.agents.reviewer.model, "claude-sonnet-4-6");
+}
+
+#[test]
+fn model_tiers_opt_in_split_routes_implementer_and_reviewer_independently() {
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = r#"
+agents:
+  implementer:
+    model: lightweight
+  reviewer:
+    model: primary
+"#;
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let cfg = Config::load(dir.path()).expect("load");
+    assert_eq!(
+        cfg.agents.implementer.model, "claude-haiku-4-5",
+        "implementer opted into lightweight"
+    );
+    assert_eq!(
+        cfg.agents.reviewer.model, "claude-sonnet-4-6",
+        "reviewer stays on primary"
+    );
+    assert_ne!(cfg.agents.implementer.model, cfg.agents.reviewer.model);
+}
+
+#[test]
+fn model_tiers_unknown_tier_name_fails_config_load_with_typed_error() {
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = "agents:\n  implementer:\n    model: lightwieght\n";
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let err = Config::load(dir.path()).expect_err("unknown tier name must fail config load");
+    let msg = err.to_string();
+    assert!(msg.contains("agents.implementer.model"), "got: {msg}");
+    assert!(msg.contains("lightwieght"), "got: {msg}");
+}
+
+#[test]
+fn model_tiers_unknown_tier_name_on_reviewer_also_fails_config_load() {
+    let _g = load_guard();
+    let dir = TempDir::new().expect("tempdir");
+    let loopr_dir = dir.path().join(".loopr");
+    std::fs::create_dir_all(&loopr_dir).expect("mkdir .loopr");
+    let yml = "agents:\n  reviewer:\n    model: bogus-tier\n";
+    std::fs::write(loopr_dir.join("config.yml"), yml).expect("write");
+
+    let err = Config::load(dir.path()).expect_err("unknown tier name must fail config load");
+    let msg = err.to_string();
+    assert!(msg.contains("agents.reviewer.model"), "got: {msg}");
+    assert!(msg.contains("bogus-tier"), "got: {msg}");
+}
+
 #[test]
 fn budgets_default_to_unlimited() {
     let _g = load_guard();

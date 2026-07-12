@@ -33,3 +33,30 @@ fn partial_table_keeps_defaults_for_unspecified_tiers() {
     assert_eq!(tiers.resolve("primary"), "only-primary");
     assert_eq!(tiers.resolve("advisor"), "claude-opus-4-7");
 }
+
+#[test]
+fn resolve_checked_accepts_known_tier_names() {
+    let tiers = ModelTiers::default();
+    assert_eq!(tiers.resolve_checked("primary").unwrap(), "claude-sonnet-4-6");
+    assert_eq!(tiers.resolve_checked("lightweight").unwrap(), "claude-haiku-4-5");
+    assert_eq!(tiers.resolve_checked("advisor").unwrap(), "claude-opus-4-7");
+}
+
+#[test]
+fn resolve_checked_accepts_a_claude_prefixed_literal() {
+    let tiers = ModelTiers::default();
+    assert_eq!(tiers.resolve_checked("claude-opus-4-7").unwrap(), "claude-opus-4-7");
+}
+
+// Break-to-prove: on the OLD lenient `resolve`, this same typo'd tier
+// name silently becomes a literal "model" (see
+// `literal_model_id_passes_through_unchanged` above, which asserts
+// exactly that pass-through for a non-"claude-" string). `resolve_checked`
+// is the new fail-closed seam Phase 13 adds for per-role model config.
+#[test]
+fn resolve_checked_rejects_an_unknown_tier_name() {
+    let tiers = ModelTiers::default();
+    let err = tiers.resolve_checked("lightwieght").unwrap_err();
+    assert_eq!(err.reference, "lightwieght");
+    assert!(err.to_string().contains("lightwieght"));
+}

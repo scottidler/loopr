@@ -153,6 +153,24 @@ const CONFIG_TEMPLATE: &str = "\
 #   set.
 #
 #     require-validation: false
+#
+# agents:
+#   Per-role model routing (Phase 13). Each of `implementer.model` and
+#   `reviewer.model` accepts a tier name (`primary` / `lightweight` /
+#   `advisor`, resolved against the `models:` block) or a literal model
+#   id. Both default to `primary` -- the same model `llm.model` resolves
+#   to today -- so a fresh target's behavior is unchanged until an
+#   operator opts in. The cheap-worker split routes routine implementer
+#   turns to a cheaper tier while keeping the reviewer (the code-gate
+#   the LLM never overrides) on the stronger model:
+#
+#     implementer:
+#       model: lightweight
+#     reviewer:
+#       model: primary
+#
+#   An unknown tier name fails daemon startup with a named error instead
+#   of silently routing a role to a nonsense model.
 ";
 
 fn step_seed_config_template(target: &Path) -> Result<StepOutcome, LooprError> {

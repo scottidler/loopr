@@ -54,6 +54,47 @@ impl ModelTiers {
             literal => literal.to_string(),
         }
     }
+
+    /// Fail-closed variant of `resolve` (Phase 13 of
+    /// `docs/design/2026-07-11-verified-swarm.md`, per-role model
+    /// routing). `resolve` treats ANY non-tier string as a literal model
+    /// ID, so a typo'd tier name (e.g. `lightwieght`) silently becomes a
+    /// "model" that the Anthropic API will reject at call time -- by
+    /// then the config-load failure signal is long gone. This method
+    /// accepts the same three tier names, and treats a literal as valid
+    /// only when it looks like an Anthropic model ID (`claude-` prefix,
+    /// matching every model ID in this workspace: `self.primary` /
+    /// `self.lightweight` / `self.advisor`'s defaults and every id in
+    /// `docs/design/2026-07-11-verified-swarm.md`'s Config block).
+    /// Anything else is rejected with a typed error naming the bad
+    /// reference, so a config-load-time typo fails loudly instead of
+    /// routing a role to a nonsense model. Used only for the
+    /// `agents.implementer.model` / `agents.reviewer.model` knobs
+    /// (per-role opt-in split); `llm.model` and `agents.director.model`
+    /// keep the lenient `resolve` (unchanged by this phase).
+    pub fn resolve_checked(&self, reference: &str) -> Result<String, UnknownModelTier> {
+        match reference {
+            "primary" => Ok(self.primary.clone()),
+            "lightweight" => Ok(self.lightweight.clone()),
+            "advisor" => Ok(self.advisor.clone()),
+            literal if literal.starts_with("claude-") => Ok(literal.to_string()),
+            other => Err(UnknownModelTier {
+                reference: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Typed rejection from `ModelTiers::resolve_checked`: `reference` is
+/// neither a known tier name nor recognizable as a literal Anthropic
+/// model ID.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error(
+    "unknown model tier {reference:?}: expected one of \"primary\", \"lightweight\", \"advisor\", \
+     or a literal model id starting with \"claude-\""
+)]
+pub struct UnknownModelTier {
+    pub reference: String,
 }
 
 #[cfg(test)]

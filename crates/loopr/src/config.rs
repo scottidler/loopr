@@ -306,7 +306,7 @@ impl Config {
             config.worktree.cleanup_policy = parsed;
         }
 
-        config.resolve_model_tiers();
+        config.resolve_model_tiers()?;
         Ok(config)
     }
 
@@ -336,9 +336,28 @@ impl Config {
     /// a literal model ID is left unchanged. Run once after load so the
     /// `AnthropicClient`, the `ProcessSnapshot`, and the per-role agent
     /// configs all see concrete model IDs, never tier names.
-    fn resolve_model_tiers(&mut self) {
+    ///
+    /// `llm.model` and `agents.director.model` keep the lenient
+    /// `ModelTiers::resolve` (unchanged by Phase 13 of
+    /// `docs/design/2026-07-11-verified-swarm.md`: the decomposer keeps
+    /// `llm.model`, and the Director's routing is untouched by this
+    /// phase). `agents.implementer.model` and `agents.reviewer.model`
+    /// (Phase 13's per-role routing) go through the fail-closed
+    /// `resolve_checked`: an unknown tier name fails config load with a
+    /// typed error instead of silently becoming a literal "model" the
+    /// Anthropic API would reject at call time.
+    fn resolve_model_tiers(&mut self) -> Result<(), LooprError> {
         self.llm.model = self.models.resolve(&self.llm.model);
         self.agents.director.model = self.models.resolve(&self.agents.director.model);
+        self.agents.implementer.model = self
+            .models
+            .resolve_checked(&self.agents.implementer.model)
+            .map_err(|e| LooprError::DaemonStartup(format!("agents.implementer.model: {e}")))?;
+        self.agents.reviewer.model = self
+            .models
+            .resolve_checked(&self.agents.reviewer.model)
+            .map_err(|e| LooprError::DaemonStartup(format!("agents.reviewer.model: {e}")))?;
+        Ok(())
     }
 }
 
