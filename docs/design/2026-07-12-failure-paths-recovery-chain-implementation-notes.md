@@ -527,3 +527,73 @@ discrimination logic to drift.
 
 ### Open questions
 - None.
+
+## Phase 6: Link 5 - integrator dirty-guard tolerates target build artifacts
+
+### Design decisions
+- **Pre-guard `clean_fd` call, gated `if deps.config.integration_branch`,
+  inserted immediately before the dirty-tree guard** -
+  `crates/integrator/src/lib.rs::integrate` (between the crash-recovery
+  merge-abort block and the `git::working_tree_dirty` check, formerly at
+  `lib.rs:278`). Reuses the existing `git::clean_fd` helper verbatim (no new
+  cleaning logic, per the task's explicit constraint) - the same function
+  the success path already calls post-merge at `lib.rs:563`. The gate
+  mirrors `IntegratorConfig::integration_branch`'s existing semantics
+  exactly: `true` (default, per-Plan-branch mode) is loopr's own
+  integration workspace with no operator work, so untracked artifacts are
+  disposable; `false` (no-branch override) is the operator's own checked-
+  out branch, so the guard must stay strict and the pre-clean must not run.
+- **Confirmed `clean_fd`'s pathspec before wiring** (per the task's
+  instruction) - `crates/integrator/src/git.rs:372`:
+  `["clean", "-fd", "--", ".", ":(exclude).loopr/"]`. Excludes `.loopr/` by
+  pathspec and removes everything else untracked (`Cargo.lock`, `target/`,
+  arbitrary build artifacts) - exactly the shape Link 5 needs, reused
+  as-is.
+- **Code comment at the call site explains the gating and the symmetry
+  with `:563`** - written to name the exact line reference so a future
+  reader does not have to re-derive why the same helper runs twice.
+
+### Deviations
+- **Inverted a pre-existing test whose premise Link 5 explicitly
+  invalidates, rather than leaving it green by accident.**
+  `dirty_working_tree_refused_in_per_plan_mode`
+  (`crates/integrator/tests/integrate_seam.rs`) previously seeded an
+  UNTRACKED file as "operator work in progress" in per-Plan-branch mode and
+  asserted `DirtyWorkingTree`. Per Link 5's own design decision (an
+  untracked file in per-Plan-branch mode is disposable build-artifact
+  territory, not operator work - the target main tree in this mode is
+  loopr's own workspace), that premise is now false: the pre-guard clean
+  legitimately disposes of the seeded file before the guard runs, and the
+  test would silently pass for the wrong reason (`Ok(Tick)` where it
+  expected `Err`) had it not been caught by re-running the full seam suite.
+  Inverted to seed a TRACKED modification instead (`README.md`, committed
+  by the fixture's initial commit) - `clean_fd` never touches tracked
+  changes, so the guard must still refuse the tree on genuine,
+  undisposable dirty state in per-Plan-branch mode. The test's name and its
+  core contract (per-Plan-branch mode still refuses a dirty tree) are
+  unchanged; only the seeded dirt's shape changed, with a comment
+  explaining why and pointing at the new test that covers the untracked-
+  artifact case. Not a deviation from the task's spec (which only named the
+  three new/extended tests) - this is the "invert the old test that pinned
+  the wrong behavior" instruction applied to a test the task did not
+  anticipate would need updating.
+- No other deviations. Implemented at the exact seam the doc named
+  (`lib.rs:278`, before the dirty-tree guard), reusing `clean_fd` verbatim.
+
+### Tradeoffs
+- **Reuse `clean_fd` verbatim vs. writing a narrower "artifacts-only"
+  clean.** A narrower clean (e.g. only removing `Cargo.lock` and `target/`
+  by name) would shrink the disposable surface, but the design doc is
+  explicit that `clean_fd` "already excludes `.loopr/`, already removes
+  `Cargo.lock` + `target/`" and directs reuse, not a new implementation;
+  the success path already accepts the same broad "untracked-non-`.loopr`
+  is disposable" assumption at `:563` in the same mode, so a narrower
+  pre-guard clean would just be a second, drifting definition of
+  "disposable" to keep in sync. One function, one definition.
+- **Gate on `integration_branch` rather than an unconditional pre-clean.**
+  Recorded as a Resolved Decision in the design doc itself
+  (2026-07-13, "Link 5 fix is the mode-gated pre-guard `clean_fd`... NOT an
+  unconditional pre-clean"); implemented exactly as decided.
+
+### Open questions
+- None.

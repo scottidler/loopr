@@ -675,6 +675,19 @@ async fn dirty_working_tree_refused_in_per_plan_mode() {
     // Per-Plan-branch mode (the default) must refuse a dirty tree, not
     // silently carry the dirt across the checkout. Previously only the
     // no-branch override checked.
+    //
+    // Link 5 update: this test previously seeded an UNTRACKED file as
+    // "operator work in progress". Per Link 5's design decision, an
+    // untracked file in per-Plan-branch mode is now, correctly,
+    // disposable build-artifact territory (the pre-guard clean_fd runs
+    // before this guard) - the target main tree in this mode is loopr's
+    // own integration workspace, never the operator's. That premise is
+    // now covered separately by
+    // `dirty_tree_from_target_build_artifact_tolerated_in_per_plan_mode`
+    // (asserts Ok(Tick), not DirtyWorkingTree). This test is inverted to
+    // seed a TRACKED modification instead: clean_fd never touches
+    // tracked changes, so the guard must still refuse the tree on real,
+    // undisposable dirty state in per-Plan-branch mode.
     let plan = Plan::new("ship".to_string());
     let (_dir, store, repo, _base) = setup(&plan).await;
     store.plans().create(plan.clone()).await.unwrap();
@@ -685,8 +698,10 @@ async fn dirty_working_tree_refused_in_per_plan_mode() {
     let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
     let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
 
-    // Dirty the working tree with an untracked, non-ignored file.
-    std::fs::write(repo.join("uncommitted.txt"), "operator work in progress\n").unwrap();
+    // Dirty the working tree with a TRACKED modification (README.md was
+    // committed by `init_repo_with_integration_branch`). clean_fd cannot
+    // remove this, so it must still trip the guard.
+    std::fs::write(repo.join("README.md"), "operator work in progress\n").unwrap();
 
     let deps = deps_for(&store, &repo);
     let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
@@ -702,6 +717,106 @@ async fn dirty_working_tree_refused_in_per_plan_mode() {
     assert_eq!(unchanged.status, BundleStatus::Accepted);
     let ticks = store.ticks().list_by_plan_id(&plan.id).await.unwrap();
     assert!(ticks.is_empty());
+
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn dirty_tree_from_target_build_artifact_tolerated_in_per_plan_mode() {
+    // Link 5 (docs/design/2026-07-12-failure-paths-recovery-chain.md):
+    // the target's own `cargo` build/validation leaves an untracked
+    // Cargo.lock (+ target/) in the main tree. In per-Plan-branch mode
+    // (integration_branch = true, the default) that is disposable build
+    // output, not operator work - the post-merge clean_fd already treats
+    // it that way (lib.rs:563). The pre-guard clean_fd (lib.rs, before
+    // the dirty-tree guard) must dispose of it BEFORE the guard runs, so
+    // integrate reaches Ok(Tick) instead of refusing.
+    //
+    // Break-to-prove: against the pre-fix code (no pre-guard clean_fd
+    // gated on integration_branch), this returns Err(DirtyWorkingTree)
+    // instead of Ok(Tick).
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
+
+    // Seed the main tree (currently checked out on `main`, mirroring the
+    // live e2e's `cd <main-tree> && cargo test`) with untracked build
+    // artifacts left behind by a build that ran against the target.
+    std::fs::write(repo.join("Cargo.lock"), b"# untracked build artifact\n").unwrap();
+    let target_dir = repo.join("target");
+    std::fs::create_dir_all(&target_dir).unwrap();
+    std::fs::write(target_dir.join("debug.bin"), b"build output\n").unwrap();
+
+    let deps = deps_for(&store, &repo); // IntegratorConfig::default() -> integration_branch = true
+    let tick = integrate(std::slice::from_ref(&bundle), &plan, &deps)
+        .await
+        .expect("expected Ok(Tick): a target build artifact must not trip the dirty-tree guard");
+
+    assert_eq!(tick.bundles, vec![bundle.id.clone()]);
+
+    // .loopr/taskstore truth survives the pre-guard clean (it excludes
+    // .loopr/ by pathspec, same as the post-merge clean_fd).
+    let final_bundle = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(final_bundle.status, BundleStatus::Merged);
+
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn dirty_tree_from_operator_work_still_refused_in_no_branch_mode() {
+    // Companion to the test above: in no-branch override mode
+    // (integration_branch = false), the pre-guard clean_fd must NOT run,
+    // so genuine operator untracked work still trips the dirty-tree
+    // guard exactly as before (fail-closed; the fix must not blind
+    // no-branch mode).
+    let plan = Plan::new("ship".to_string());
+    let (_dir, store, repo, _base) = setup(&plan).await;
+    store.plans().create(plan.clone()).await.unwrap();
+    let work = sample_work(&plan);
+    store.works().create(work.clone()).await.unwrap();
+
+    let branch = format!("loopr/wk-{}", work.id);
+    let head = create_bundle_branch(&repo, &plan, &branch, "feat.rs", "fn feat() {}\n");
+    let bundle = persist_accepted_bundle(&store, &work, &branch, &head, vec!["feat.rs".to_string()]).await;
+
+    // No-branch override merges onto the currently-checked-out branch
+    // (main here), so check out main explicitly to match that mode's
+    // real usage, then seed genuine operator untracked work.
+    git(&repo, &["checkout", "-q", "main"]);
+    std::fs::write(repo.join("operator-wip.rs"), "// uncommitted operator work\n").unwrap();
+
+    let deps = IntegratorDeps {
+        bundle_sink: &store,
+        works: &store,
+        ticks: &store,
+        config: IntegratorConfig {
+            integration_branch: false,
+            ..IntegratorConfig::default()
+        },
+        target: repo.clone(),
+        git_lock: Arc::new(AsyncMutex::new(())),
+    };
+
+    let result = integrate(std::slice::from_ref(&bundle), &plan, &deps).await;
+    match result {
+        Err(IntegrationError::DirtyWorkingTree { .. }) => {}
+        other => panic!("expected DirtyWorkingTree (no-branch mode must stay strict), got {other:?}"),
+    }
+
+    // No mutation: the Bundle is untouched and the operator file survives
+    // (the pre-guard clean_fd must not have run and deleted it).
+    let unchanged = store.bundles().get(&bundle.id).await.unwrap();
+    assert_eq!(unchanged.status, BundleStatus::Accepted);
+    assert!(
+        repo.join("operator-wip.rs").exists(),
+        "no-branch mode must not clean operator untracked work away"
+    );
 
     store.close().await.unwrap();
 }

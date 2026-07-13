@@ -259,6 +259,23 @@ where
         git::merge_abort(&deps.target, deps.config.git_timeout).await;
     }
 
+    // Link 5 pre-guard clean (per-Plan-branch mode only): a target repo's
+    // own `cargo` build/validation leaves untracked build artifacts
+    // (`Cargo.lock`, `target/`) that never came from the operator, and
+    // the guard below would otherwise refuse to integrate on account of
+    // them. `clean_fd` already excludes `.loopr/` and already runs on the
+    // SUCCESS path post-merge (`:563`, below) in per-Plan-branch mode -
+    // this is the identical "untracked-non-`.loopr` is disposable"
+    // assumption, just applied one step earlier so the guard evaluates
+    // the cleaned tree instead of tripping on artifacts the same mode
+    // would delete anyway a few phases later. Gated to
+    // `integration_branch == true`: in the no-branch override the target
+    // main tree may legitimately hold operator untracked work, so the
+    // guard must stay strict there (fail-closed).
+    if deps.config.integration_branch {
+        git::clean_fd(&deps.target, deps.config.git_timeout).await;
+    }
+
     // Dirty-tree guard (unconditional, both modes): refuse to integrate
     // onto a dirty working tree. The per-Plan-branch path was previously
     // unguarded on the false premise that `git checkout loopr/plan-<id>`
