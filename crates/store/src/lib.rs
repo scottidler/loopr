@@ -5,6 +5,8 @@
 mod bundles;
 mod checks;
 mod error;
+#[cfg(test)]
+mod logcapture;
 mod notes;
 mod plans;
 mod reviews;

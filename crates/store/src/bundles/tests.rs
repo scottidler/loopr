@@ -283,6 +283,21 @@ fn json_subscriber(writer: VecWriter) -> impl tracing::Subscriber + Send + Sync 
     tracing_subscriber::registry().with(layer)
 }
 
+/// Install `writer`'s JSON subscriber as this thread's capturing default.
+///
+/// Before doing so it installs the process-global interested default (see
+/// [`crate::logcapture`]) exactly once. That global default is load-bearing:
+/// without it, tracing's per-callsite interest cache can be poisoned to
+/// "not interested" by a sibling test that hits a shared `warn!`/`error!`
+/// callsite first on a thread with no subscriber, silently dropping this
+/// test's log line (~16% flake over 150 full-binary runs; 0 over 300 with
+/// the global default). Every log-capturing test here MUST install its
+/// subscriber through this helper.
+fn set_capturing_default(writer: VecWriter) -> tracing::subscriber::DefaultGuard {
+    crate::logcapture::ensure_global_interested_default();
+    tracing::subscriber::set_default(json_subscriber(writer))
+}
+
 /// Count JSON log lines at `level` whose message contains `needle`.
 fn count_lines(json: &str, level: &str, needle: &str) -> usize {
     json.lines()
@@ -329,7 +344,7 @@ async fn update_stale_logs_warn_not_error() {
         .expect("reject");
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     let err = store
         .bundles()
         .update(loser, snapshot, Role::Reviewer, TargetKind::Normal)
@@ -358,7 +373,7 @@ async fn update_non_stale_failure_logs_error() {
     let bundle = fresh_bundle();
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     let err = store
         .bundles()
         .update(bundle, 0, Role::Reactor, TargetKind::Normal)
