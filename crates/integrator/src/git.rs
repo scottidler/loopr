@@ -355,11 +355,21 @@ pub(crate) async fn merge_in_progress(target: &Path, git_timeout: Duration) -> R
     Ok(in_progress)
 }
 
-/// Best-effort `git clean -fd`. Removes untracked files and directories
-/// left by validation commands that `git reset --hard` cannot restore.
-/// Errors are swallowed; the rollback continues regardless.
+/// Best-effort `git clean -fd`, scoped to exclude `.loopr/`. Removes
+/// untracked files and directories left by validation commands that
+/// `git reset --hard` cannot restore. Errors are swallowed; the rollback
+/// continues regardless.
+///
+/// `.loopr/` is excluded via the same pathspec as `working_tree_dirty`:
+/// `.loopr/taskstore/` is untracked in every real target (nothing commits
+/// it yet; it is deliberately NOT in `worktree::ensure_loopr_excludes`
+/// because per vision TaskStore is committed), so a bare `git clean -fd`
+/// deletes the Store's JSONL truth files — the full Bundle/Review/Work
+/// history — on every clean, and the post-clean writes recreate them with
+/// only the surviving rows. The `-- .` positive pathspec is required for
+/// the trailing exclude to apply (an exclude-only pathspec matches nothing).
 pub(crate) async fn clean_fd(target: &Path, git_timeout: Duration) {
-    let _ = run_git(target, &["clean", "-fd"], git_timeout).await;
+    let _ = run_git(target, &["clean", "-fd", "--", ".", ":(exclude).loopr/"], git_timeout).await;
 }
 
 /// Reset the current branch hard to the given SHA. A failure here is

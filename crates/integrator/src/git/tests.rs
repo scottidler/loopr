@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-use super::{current_branch, working_tree_dirty};
+use super::{clean_fd, current_branch, working_tree_dirty};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -124,6 +124,43 @@ async fn working_tree_dirty_ignores_modified_tracked_loopr_taskstore() {
     assert!(
         !working_tree_dirty(td.path(), TIMEOUT).await.unwrap(),
         "a modified tracked .loopr/taskstore file is loopr's own state, not operator work"
+    );
+}
+
+/// `clean_fd` must remove validation's untracked build artifacts while
+/// leaving loopr's own `.loopr/taskstore/` truth files untouched. The
+/// taskstore JSONL is untracked in every real target (nothing commits it
+/// yet) and deliberately NOT in `ensure_loopr_excludes`, so a bare
+/// `git clean -fd` deletes the Store's entire history on every successful
+/// Tick — Rejected-bundle audit rows, Reviews, retry-feedback source.
+/// Break-to-prove: against the pre-fix bare `-fd` the taskstore assertion
+/// below fails (bundles.jsonl removed), which is exactly the lost
+/// attempt-1 Bundle in failure_paths::reject_then_recover_reaches_tick.
+#[tokio::test]
+async fn clean_fd_preserves_loopr_state_and_removes_artifacts() {
+    let td = TempDir::new().unwrap();
+    init_repo(td.path());
+    let taskstore = td.path().join(".loopr").join("taskstore");
+    std::fs::create_dir_all(&taskstore).unwrap();
+    std::fs::write(taskstore.join("bundles.jsonl"), b"{}\n").unwrap();
+    let artifact_dir = td.path().join("target");
+    std::fs::create_dir_all(&artifact_dir).unwrap();
+    std::fs::write(artifact_dir.join("debug.bin"), b"build output\n").unwrap();
+    std::fs::write(td.path().join("artifact.txt"), b"validation leftover\n").unwrap();
+
+    clean_fd(td.path(), TIMEOUT).await;
+
+    assert!(
+        taskstore.join("bundles.jsonl").exists(),
+        "clean_fd must not delete loopr's own .loopr/taskstore/ truth files"
+    );
+    assert!(
+        !td.path().join("artifact.txt").exists(),
+        "clean_fd must still remove untracked files outside .loopr/"
+    );
+    assert!(
+        !artifact_dir.exists(),
+        "clean_fd must still remove untracked directories outside .loopr/"
     );
 }
 

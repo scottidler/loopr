@@ -556,8 +556,9 @@ where
     // artifacts validation produced so the operator-visible tree stays
     // clean on the SUCCESS path too (previously clean_fd ran only on
     // failure, leaving build output behind on every successful Tick).
-    // `git clean -fd` leaves ignored paths (`.loopr/`) untouched, so the
-    // Store's files survive. The entry-time dirty-tree guard guarantees
+    // clean_fd excludes `.loopr/` by pathspec — `.loopr/taskstore/` is
+    // untracked, not ignored, so an unscoped clean would delete the
+    // Store's truth files. The entry-time dirty-tree guard guarantees
     // anything untracked here was produced by this integrate.
     git::clean_fd(&deps.target, deps.config.git_timeout).await;
 
