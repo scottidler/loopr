@@ -597,3 +597,84 @@ discrimination logic to drift.
 
 ### Open questions
 - None.
+
+## Phase 7: Link 6 - block the sandbox worktree-escape
+
+### Design decisions
+- **Mechanism chosen: `--ro-bind / /` (no blanket `--bind /tmp /tmp`) + rw
+  worktree `--bind <cwd> <cwd>` + an ephemeral scratch `tmpfs` mounted at
+  `<cwd>/.loopr-sandbox-tmp` with `$TMPDIR` redirected there** -- `bwrap_command`
+  and `detect_bwrap_functional` in `crates/tools/src/sandbox.rs`. This is the
+  design doc's named fallback ("rw-bind only the worktree + a dedicated scoped
+  scratch dir, leave the rest of /tmp ... ro"), not the primary `--tmpfs /tmp`
+  candidate. Everything outside the worktree -- including the rest of `/tmp`,
+  where sibling worktrees and the target's main tree live -- inherits the
+  read-only `--ro-bind / /`, so `cd <abs-path-outside-worktree> && write` fails
+  closed with EROFS. The scratch `tmpfs` is ordered *after* the rw worktree bind
+  and sits *under* it, so bwrap can create the mount point (a `tmpfs` under a
+  ro-bound path cannot be created -- bwrap can't `mkdir` the mount point on a
+  read-only fs, verified empirically). `$TMPDIR` points at the scratch so
+  temp-writing tools land there instead of the now-read-only `/tmp`.
+- **How the mechanism was verified against real bwrap + cargo (not asserted
+  blindly).** Built a real git worktree under `/tmp` (main repo + `git worktree
+  add`, so the worktree's `.git` file points at `<main>/.git/worktrees/<name>`
+  under `/tmp`, exactly the production layout) with a cargo project inside, then
+  drove real `bwrap 0.11.1` through each candidate:
+  - Current all-`/tmp`-rw bind: `cd <main-tree> && echo > f` LANDED on the host
+    main tree (the Link 6 hole, reproduced).
+  - `--tmpfs /tmp` + overlay worktree (the doc's primary candidate): escape
+    denied (main tree invisible, ENOENT) and `cargo test` incl. doctests worked
+    with `TMPDIR=/tmp` -- BUT sandboxed `git status`/`git diff`/`git log` inside
+    the worktree FAILED ("fatal: not a git repository: <main>/.git/worktrees/
+    <name>") because the tmpfs shadows the parent repo's git dir under `/tmp`.
+    That is a legitimate tool need (agents inspect their diffs via the Bash
+    lane), so per the doc's instruction I documented it and moved to the next
+    fail-closed option.
+  - Fully read-only `/tmp` (remove `--bind /tmp /tmp`, no scratch): escape
+    denied (EROFS), git reads worked -- BUT `cargo test --doc` and `mktemp`
+    FAILED with `ReadOnlyFilesystem` because rustdoc/mktemp write under
+    `$TMPDIR=/tmp`. Another legitimate need broken.
+  - Chosen mechanism (ro `/tmp` + rw worktree + scratch `tmpfs` + `$TMPDIR`):
+    escape denied (EROFS, nothing on host), in-worktree write lands, `git
+    status`/`log` work (parent `.git` ro-visible), `cargo test` incl. doctests
+    and `mktemp` succeed (scratch tmpfs), and the scratch leaves nothing on the
+    host worktree after bwrap exits. All four hard constraints hold.
+- **`run_git` git writes are un-sandboxed** (`crates/agents/src/dispatch.rs:734`,
+  `Command::new("git")` directly), so making the parent repo's git dir
+  read-only in the sandbox does not break the framework's staging/commit path;
+  only sandboxed git *reads* (status/diff/log) touch it, and those work.
+- **Probe kept consistent with the new bind model** (`detect_bwrap_functional`):
+  it now exercises `--tmpfs <cwd>/.loopr-sandbox-tmp` (the one new mount type we
+  depend on) over a rw-bound stand-in cwd, so a kernel that rejects the tmpfs
+  mount is caught at daemon startup, not on first tool call -- preserving the
+  Phase-5 finding-4 "probe mirrors the real flags" property.
+
+### Deviations
+- **Did NOT ship the design doc's primary candidate (`--tmpfs /tmp` + overlay
+  worktree); shipped its named fallback instead.** Reason: `--tmpfs /tmp`
+  shadows the worktree's parent-repo git dir (which lives under `/tmp`),
+  breaking sandboxed `git status`/`diff`/`log`. The doc explicitly authorized
+  this ("if `--tmpfs /tmp` breaks a legitimate tool need ... document why and
+  pick the next fail-closed option (e.g. rw-bind only the worktree + a dedicated
+  scoped scratch dir, leave the rest of /tmp ... ro)"). Same effect (writes
+  scoped to the worktree, fail-closed), correct seam.
+
+### Tradeoffs
+- **EROFS (read-only, visible) vs. ENOENT (invisible) for out-of-worktree
+  paths.** The chosen ro-bind makes the main tree *readable* but not writable;
+  `--tmpfs /tmp` would make it *invisible*. Invisible is marginally stronger
+  isolation, but the Link 6 threat model is write-escape (polluting the tree),
+  which EROFS closes, and read-visibility is what lets legitimate sandboxed git
+  reads keep working. Chose the option that satisfies the write-isolation
+  contract while preserving more legitimate functionality.
+- **Scratch `tmpfs` under the worktree namespace vs. elsewhere.** The mount
+  point must sit under a writable path so bwrap can create it; the worktree is
+  the only writable bind, so the scratch lives at `<cwd>/.loopr-sandbox-tmp`.
+  During a single sandboxed command a `git status` in that same command could
+  list `.loopr-sandbox-tmp/` as untracked, but the mount is per-invocation and
+  gone when bwrap exits, so the host worktree never sees it and the
+  un-sandboxed dispatch stage (explicit-scope `git add -- <paths>`) is
+  unaffected.
+
+### Open questions
+- None.
