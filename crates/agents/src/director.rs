@@ -1150,7 +1150,15 @@ impl DirectorSession {
         let works_after = deps.store.list_works_for_plan(plan_id).await?;
         let bundles_after = deps.store.list_bundles_for_plan(plan_id).await?;
         let state_hash = compute_state_hash(&works_after, &bundles_after);
-        if let Some(observation) = self.pattern_tracker.observe(fingerprint, state_hash) {
+        // Director-actionable: a Reviewed bundle (only `accept_bundle`
+        // clears it; reconcile never touches Reviewed) or a Blocked Work
+        // (the Director must override/supersede/abandon it; dependency-
+        // waiting Works are Pending, not Blocked). Idling while either
+        // sits unaddressed engages the no-progress gate below even when
+        // the current action is non-mutating `done`.
+        let actionable = bundles_after.iter().any(|b| b.status == BundleStatus::Reviewed)
+            || works_after.iter().any(|w| w.status == WorkStatus::Blocked);
+        if let Some(observation) = self.pattern_tracker.observe(fingerprint, state_hash, actionable) {
             let next = next_mode(self.current_mode, &observation);
             if next != self.current_mode {
                 let trigger = pattern_observation_trigger(&observation);

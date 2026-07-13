@@ -111,9 +111,12 @@ impl ActionFingerprint {
     }
 
     /// Mutating actions change FSM state; non-mutating actions (`done`,
-    /// `need_help`) leave the Plan in place. The action-context gate
-    /// in `observe()` consults this so a Director that only emits
-    /// `done` while waiting on a long Implementer does not trip.
+    /// `need_help`) leave the Plan in place. `observe()`'s engaged gate
+    /// (step 4) consults this for the CURRENT iteration's action only:
+    /// a Director that emits `done` while waiting on a long Implementer
+    /// does not trip on that account — but idling on Director-actionable
+    /// state (a Reviewed bundle, a Blocked Work) still trips via the
+    /// gate's other clause.
     pub fn is_mutating(&self) -> bool {
         matches!(self.kind, "accept_bundle" | "override_work" | "assign_work")
     }
@@ -221,10 +224,14 @@ impl DirectorPatternTracker {
     /// 3. **Warm-up gate** — fewer than `no_progress_threshold` samples
     ///    means the window is not yet populated enough to evaluate
     ///    no-progress; return None without touching the streak.
-    /// 4. **NoProgress trip** — gated by a mutating action in the
-    ///    window AND (`distinct <= 2` OR
-    ///    `max_recurrence >= (window/2)+1`). On trip, increment streak;
-    ///    emit `EscalationTripped` once streak >= `escalation_threshold`,
+    /// 4. **NoProgress trip** — gated by "engaged": the CURRENT action is
+    ///    mutating, OR Director-actionable state (a Reviewed bundle, a
+    ///    Blocked Work) is present, AND (`distinct <= 2` OR
+    ///    `max_recurrence >= (window/2)+1`). Idle `done` with no
+    ///    actionable state present never engages, so waiting on
+    ///    in-flight work never trips regardless of what sits earlier in
+    ///    the window. On trip, increment streak; emit
+    ///    `EscalationTripped` once streak >= `escalation_threshold`,
     ///    otherwise emit `NoProgressTripped`.
     /// 5. **Recovered** — non-trip iteration AFTER a streak existed,
     ///    with hash motion + action variety. Resets streak to 0 and
@@ -238,7 +245,12 @@ impl DirectorPatternTracker {
     /// window=8, half_plus_one=5` so neither OR-clause fires. If
     /// real traces show this is a recurring pathology, add a
     /// dedicated `distinct_threshold` config knob.
-    pub fn observe(&mut self, action: ActionFingerprint, state_hash: u64) -> Option<PatternObservation> {
+    pub fn observe(
+        &mut self,
+        action: ActionFingerprint,
+        state_hash: u64,
+        actionable: bool,
+    ) -> Option<PatternObservation> {
         let prev_hash = self.state_hash_history.back().copied();
         push_bounded(&mut self.action_history, action.clone(), self.config.window);
         push_bounded(&mut self.state_hash_history, state_hash, self.config.window);
@@ -273,11 +285,11 @@ impl DirectorPatternTracker {
             return None;
         }
 
-        let mutating = self.action_history.iter().any(ActionFingerprint::is_mutating);
+        let engaged = action.is_mutating() || actionable;
         let distinct = distinct_count(&self.state_hash_history);
         let max_rec = max_recurrence(&self.state_hash_history);
         let half_plus_one = (self.config.window / 2) + 1;
-        let trip = mutating && (distinct <= 2 || max_rec >= half_plus_one);
+        let trip = engaged && (distinct <= 2 || max_rec >= half_plus_one);
 
         // 4. NoProgress trip / EscalationTripped.
         if trip {

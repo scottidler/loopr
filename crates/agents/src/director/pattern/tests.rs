@@ -43,9 +43,9 @@ fn same_action_three_consecutive_trips() {
     let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
     // Three identical override_work(wk-x, Ready) calls, mutating, with
     // moving state hash so Recovered doesn't preempt SameAction.
-    let r1 = tracker.observe(override_ready("wk-x"), 100);
-    let r2 = tracker.observe(override_ready("wk-x"), 100);
-    let r3 = tracker.observe(override_ready("wk-x"), 100);
+    let r1 = tracker.observe(override_ready("wk-x"), 100, false);
+    let r2 = tracker.observe(override_ready("wk-x"), 100, false);
+    let r3 = tracker.observe(override_ready("wk-x"), 100, false);
     assert!(r1.is_none());
     assert!(r2.is_none());
     match r3 {
@@ -60,11 +60,11 @@ fn same_action_three_consecutive_trips() {
 #[test]
 fn same_action_interrupted_by_done_resets_counter() {
     let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
-    tracker.observe(override_ready("wk-x"), 100);
-    tracker.observe(override_ready("wk-x"), 100);
+    tracker.observe(override_ready("wk-x"), 100, false);
+    tracker.observe(override_ready("wk-x"), 100, false);
     // `done` is a different fingerprint kind; the consecutive run breaks.
-    tracker.observe(done(), 100);
-    let r = tracker.observe(override_ready("wk-x"), 100);
+    tracker.observe(done(), 100, false);
+    let r = tracker.observe(override_ready("wk-x"), 100, false);
     // Only 1 consecutive override_ready after the done; below threshold.
     assert!(
         !matches!(r, Some(PatternObservation::SameActionTripped { .. })),
@@ -86,7 +86,7 @@ fn sustained_same_action_escalates_instead_of_pinning_conservative() {
     let mut tracker = DirectorPatternTracker::new(cfg);
     let mut observations = Vec::new();
     for _ in 0..12 {
-        observations.push(tracker.observe(override_ready("wk-x"), 100));
+        observations.push(tracker.observe(override_ready("wk-x"), 100, false));
     }
     // First trip (obs 3) is SameActionTripped (Normal -> Conservative).
     assert!(
@@ -116,7 +116,7 @@ fn idle_done_run_never_trips_same_action() {
     let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
     let mut observations = Vec::new();
     for _ in 0..10 {
-        observations.push(tracker.observe(done(), 100));
+        observations.push(tracker.observe(done(), 100, false));
     }
     assert!(
         observations
@@ -182,9 +182,9 @@ fn recovered_does_not_fire_from_normal_mode() {
     // *demotion* from a tripped state; firing it from Normal would be
     // noisy and meaningless to the Phase 5 mode FSM.
     let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
-    tracker.observe(override_ready("wk-x"), 100);
-    tracker.observe(accept("bd-1"), 100);
-    let r = tracker.observe(assign("wk-y"), 200);
+    tracker.observe(override_ready("wk-x"), 100, false);
+    tracker.observe(accept("bd-1"), 100, false);
+    let r = tracker.observe(assign("wk-y"), 200, false);
     assert!(
         !matches!(r, Some(PatternObservation::Recovered)),
         "Recovered must require a prior streak: {r:?}"
@@ -194,8 +194,8 @@ fn recovered_does_not_fire_from_normal_mode() {
 #[test]
 fn recovered_does_not_fire_when_hash_stays_constant() {
     let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
-    tracker.observe(override_ready("wk-x"), 100);
-    let r = tracker.observe(accept("bd-1"), 100);
+    tracker.observe(override_ready("wk-x"), 100, false);
+    let r = tracker.observe(accept("bd-1"), 100, false);
     assert!(
         !matches!(r, Some(PatternObservation::Recovered)),
         "hash unchanged; no recovery: {r:?}"
@@ -218,7 +218,7 @@ fn recovered_resets_no_progress_streak() {
     let mut tripped = 0usize;
     let actions = [accept("bd-1"), assign("wk-1")];
     for i in 0..4 {
-        let r = tracker.observe(actions[i % 2].clone(), 100);
+        let r = tracker.observe(actions[i % 2].clone(), 100, false);
         if matches!(r, Some(PatternObservation::NoProgressTripped { .. })) {
             tripped += 1;
         }
@@ -230,8 +230,8 @@ fn recovered_resets_no_progress_streak() {
     // window=4 and starting history [100,100,100,100], the second
     // recovery observation pushes distinct to 3 and max_rec to 2,
     // clearing both clauses.
-    tracker.observe(override_ready("wk-z"), 200);
-    let r = tracker.observe(accept("bd-2"), 300);
+    tracker.observe(override_ready("wk-z"), 200, false);
+    let r = tracker.observe(accept("bd-2"), 300, false);
     match r {
         Some(PatternObservation::Recovered) => {}
         other => panic!("expected Recovered once window clears, got {other:?}"),
@@ -239,7 +239,7 @@ fn recovered_resets_no_progress_streak() {
 
     // Streak is reset; following observations don't immediately
     // jump to EscalationTripped even if the window re-trips.
-    let r2 = tracker.observe(accept("bd-1"), 100);
+    let r2 = tracker.observe(accept("bd-1"), 100, false);
     if let Some(PatternObservation::EscalationTripped { .. }) = r2 {
         panic!("streak must reset on Recovered: {r2:?}")
     }
@@ -261,7 +261,7 @@ fn no_progress_static_state_with_mutation_trips() {
     // doesn't preempt NoProgress.
     for i in 0..5 {
         let action = if i % 2 == 0 { accept("bd-1") } else { assign("wk-1") };
-        let r = tracker.observe(action, 100);
+        let r = tracker.observe(action, 100, false);
         if i == 4 {
             match r {
                 Some(PatternObservation::NoProgressTripped {
@@ -293,7 +293,7 @@ fn no_progress_two_cycle_trips_via_distinct_clause() {
     // half_plus_one = 5. `distinct <= 2` is the firing clause.
     for i in 0..8 {
         let hash = if i % 2 == 0 { 1 } else { 2 };
-        last_obs = tracker.observe(actions[i % 2].clone(), hash);
+        last_obs = tracker.observe(actions[i % 2].clone(), hash, false);
     }
     match last_obs {
         Some(PatternObservation::NoProgressTripped {
@@ -323,7 +323,7 @@ fn no_progress_gravity_state_trips_via_recurrence_clause() {
     let mut last_obs: Option<PatternObservation> = None;
     for (i, h) in hashes.iter().enumerate() {
         let action = if i % 2 == 0 { accept("bd-1") } else { assign("wk-1") };
-        last_obs = tracker.observe(action, *h);
+        last_obs = tracker.observe(action, *h, false);
     }
     match last_obs {
         Some(PatternObservation::NoProgressTripped {
@@ -358,7 +358,7 @@ fn no_progress_chaotic_three_cycle_does_not_trip() {
     let actions = [accept("bd-1"), assign("wk-1"), accept("bd-2")];
     let mut last_obs: Option<PatternObservation> = None;
     for (i, h) in hashes.iter().enumerate() {
-        last_obs = tracker.observe(actions[i % actions.len()].clone(), *h);
+        last_obs = tracker.observe(actions[i % actions.len()].clone(), *h, false);
     }
     assert!(
         !matches!(last_obs, Some(PatternObservation::NoProgressTripped { .. })),
@@ -382,7 +382,7 @@ fn action_context_gate_static_hash_all_done_does_not_trip() {
     // trip on distinct=1; with the gate it must NOT.
     let mut last_obs: Option<PatternObservation> = None;
     for _ in 0..8 {
-        last_obs = tracker.observe(done(), 42);
+        last_obs = tracker.observe(done(), 42, false);
     }
     assert!(
         !matches!(last_obs, Some(PatternObservation::NoProgressTripped { .. })),
@@ -401,7 +401,7 @@ fn action_context_gate_two_cycle_all_done_does_not_trip() {
     let mut last_obs: Option<PatternObservation> = None;
     for i in 0..8 {
         let hash = if i % 2 == 0 { 1 } else { 2 };
-        last_obs = tracker.observe(done(), hash);
+        last_obs = tracker.observe(done(), hash, false);
     }
     assert!(
         !matches!(last_obs, Some(PatternObservation::NoProgressTripped { .. })),
@@ -427,7 +427,7 @@ fn escalation_fires_after_sustained_no_progress() {
     let mut observations: Vec<Option<PatternObservation>> = Vec::new();
     for i in 0..10 {
         let action = if i % 2 == 0 { accept("bd-1") } else { assign("wk-1") };
-        observations.push(tracker.observe(action, 100));
+        observations.push(tracker.observe(action, 100, false));
     }
     let escalated = observations.iter().any(|o| {
         matches!(
@@ -487,6 +487,187 @@ fn pattern_config_empty_yaml_all_defaults() {
 }
 
 // ---------------------------------------------------------------------------
+// Engaged gate (Phase 1 of
+// docs/design/2026-07-12-failure-paths-recovery-chain.md): the NoProgress
+// trip counts an iteration only when the CURRENT action is mutating, or
+// Director-actionable state (a Reviewed bundle | a Blocked Work) is
+// present. Idle waiting on in-flight work (no actionable records, current
+// action `done`) never trips, even with a stale mutating fingerprint
+// sitting elsewhere in the window.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn link4_stale_mutating_fingerprint_idle_done_no_actionable_never_trips() {
+    // The exact Link 4 shape: one mutating action (Director's legitimate
+    // override/accept during a prior recovery) sits in the window while
+    // the Director idles on `done` waiting for in-flight agents. No
+    // actionable record exists (no Reviewed bundle, no Blocked Work), so
+    // this must never trip and the streak must stay 0 — the pre-fix
+    // `any()` gate counted the stale fingerprint for the entire window.
+    let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
+    // Stale mutating fingerprint, then idle `done` at a static hash.
+    tracker.observe(override_ready("wk-a"), 1, false);
+    let mut observations = Vec::new();
+    for _ in 0..15 {
+        observations.push(tracker.observe(done(), 100, false));
+    }
+    assert!(
+        observations.iter().all(Option::is_none),
+        "idle done with a stale mutating fingerprint and no actionable state must never trip: {observations:?}"
+    );
+    assert_eq!(
+        tracker.no_progress_streak(),
+        0,
+        "streak must stay 0 across idle waiting on in-flight work"
+    );
+}
+
+#[test]
+fn idle_done_with_actionable_state_trips_and_escalates() {
+    // The Reviewed-rot pathology: the Director only emits `done` (no
+    // mutating action anywhere), but a Reviewed bundle sits unaddressed.
+    // The actionable clause must catch this even though the mutating
+    // clause never fires. Sustained -> EscalationTripped.
+    let cfg = PatternConfig {
+        no_progress_threshold: 5,
+        escalation_threshold: 3,
+        window: 8,
+        ..PatternConfig::default()
+    };
+    let mut tracker = DirectorPatternTracker::new(cfg);
+    let mut observations = Vec::new();
+    for _ in 0..10 {
+        observations.push(tracker.observe(done(), 42, true));
+    }
+    assert!(
+        observations
+            .iter()
+            .any(|o| matches!(o, Some(PatternObservation::NoProgressTripped { .. }))),
+        "idle done with actionable state must trip NoProgress: {observations:?}"
+    );
+    assert!(
+        observations.iter().any(|o| matches!(
+            o,
+            Some(PatternObservation::EscalationTripped {
+                reason: "no_progress_sustained",
+                ..
+            })
+        )),
+        "sustained idle-on-actionable must escalate: {observations:?}"
+    );
+}
+
+#[test]
+fn current_mutating_action_static_hash_trips_and_escalates_without_actionable() {
+    // Regression: a genuine doom loop (current action mutating, static
+    // hash) must still trip and escalate even with NO actionable state
+    // present — the engaged gate's mutating clause is unaffected by the
+    // actionable clause.
+    let cfg = PatternConfig {
+        no_progress_threshold: 5,
+        escalation_threshold: 3,
+        window: 8,
+        ..PatternConfig::default()
+    };
+    let mut tracker = DirectorPatternTracker::new(cfg);
+    let mut observations = Vec::new();
+    for i in 0..10 {
+        let action = if i % 2 == 0 { accept("bd-1") } else { assign("wk-1") };
+        observations.push(tracker.observe(action, 100, false));
+    }
+    assert!(
+        observations
+            .iter()
+            .any(|o| matches!(o, Some(PatternObservation::NoProgressTripped { .. }))),
+        "current mutating action against static state must trip: {observations:?}"
+    );
+    assert!(
+        observations.iter().any(|o| matches!(
+            o,
+            Some(PatternObservation::EscalationTripped {
+                reason: "no_progress_sustained",
+                ..
+            })
+        )),
+        "sustained doom loop must still escalate: {observations:?}"
+    );
+}
+
+#[test]
+fn interleaved_mutating_noop_and_done_with_actionable_target_accumulates_streak() {
+    // A mutating action that has no effect (no-op override against
+    // static state) interleaved with idle `done`, both against an
+    // actionable target (a Blocked Work rotting). The streak must
+    // accumulate across BOTH iteration kinds without resetting between
+    // them: the mutating iterations trip via `action.is_mutating()`, the
+    // `done` iterations trip via `actionable`.
+    let cfg = PatternConfig {
+        no_progress_threshold: 3,
+        escalation_threshold: 4,
+        same_action_threshold: 99, // disable SameAction preemption
+        window: 8,
+    };
+    let mut tracker = DirectorPatternTracker::new(cfg);
+    let mut observations = Vec::new();
+    for i in 0..8 {
+        let action = if i % 2 == 0 { override_ready("wk-1") } else { done() };
+        observations.push(tracker.observe(action, 7, true));
+    }
+    // Every trip after warm-up must be a strict streak increase, never a
+    // reset to 0/1 caused by an interleaved iteration kind.
+    let streaks: Vec<u32> = observations
+        .iter()
+        .filter_map(|o| match o {
+            Some(PatternObservation::NoProgressTripped { streak, .. }) => Some(*streak),
+            Some(PatternObservation::EscalationTripped { streak, .. }) => Some(*streak),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        streaks.len() >= 4,
+        "expected sustained trips across both kinds: {observations:?}"
+    );
+    for pair in streaks.windows(2) {
+        assert_eq!(
+            pair[1],
+            pair[0] + 1,
+            "streak must increase by exactly 1 each iteration regardless of action kind: {streaks:?}"
+        );
+    }
+    assert!(
+        observations.iter().any(|o| matches!(
+            o,
+            Some(PatternObservation::EscalationTripped {
+                reason: "no_progress_sustained",
+                ..
+            })
+        )),
+        "accumulated streak across interleaved kinds must escalate: {observations:?}"
+    );
+}
+
+#[test]
+fn repeated_identical_mutating_action_same_action_path_unchanged() {
+    // The engaged gate lives in step 4 (NoProgress); step 2 (SameAction)
+    // is untouched by this change. A repeated identical mutating action
+    // trips SameActionTripped exactly as before, with no actionable
+    // state present.
+    let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
+    let r1 = tracker.observe(override_ready("wk-x"), 100, false);
+    let r2 = tracker.observe(override_ready("wk-x"), 100, false);
+    let r3 = tracker.observe(override_ready("wk-x"), 100, false);
+    assert!(r1.is_none());
+    assert!(r2.is_none());
+    match r3 {
+        Some(PatternObservation::SameActionTripped { kind, count }) => {
+            assert_eq!(kind, "override_work");
+            assert_eq!(count, 3);
+        }
+        other => panic!("expected SameActionTripped, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OperatorNoteArrived is NOT emitted by `observe()` (Phase 9)
 //
 // `OperatorNoteArrived` is constructed by the Director loop when
@@ -504,7 +685,7 @@ fn observe_never_emits_operator_note_arrived() {
     let mut tracker = DirectorPatternTracker::new(PatternConfig::default());
     for i in 0..32 {
         let action = if i % 2 == 0 { done() } else { accept("b") };
-        let obs = tracker.observe(action, hash.wrapping_add(i as u64));
+        let obs = tracker.observe(action, hash.wrapping_add(i as u64), false);
         if let Some(o) = obs {
             assert!(
                 !matches!(o, PatternObservation::OperatorNoteArrived),
