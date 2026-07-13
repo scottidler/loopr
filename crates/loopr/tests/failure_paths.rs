@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use tokio::time::sleep;
 
-use domain::{Bundle, BundleStatus, PlanId, Tick, Work, WorkStatus};
+use domain::{Bundle, BundleStatus, PlanId, Review, Tick, Work, WorkStatus};
 use ipc::{MethodName, PROTOCOL_VERSION, PlanCreateResult};
 use llm::{LlmClient, LlmError, Message, MessageContent, MessageRole, ScriptedLlm, ToolCall, ToolSchema, Usage};
 use loopr::transport::IpcClient;
@@ -116,6 +116,28 @@ async fn reject_then_recover_reaches_tick() {
     );
 
     assert_eq!(load_ticks(&target, &plan_id).len(), 1, "expected one Tick");
+
+    // Link 3 audit-trail pin: the scoped `git clean -fd` (excluding `.loopr/`)
+    // must leave BOTH review rounds on disk — the reject round and the
+    // accept round — not just whatever the final Bundle status implies.
+    let reviews = load_reviews(&target, works[0].id.as_ref());
+    assert_eq!(
+        reviews.len(),
+        2,
+        "expected two persisted Review rounds (reject + accept)"
+    );
+    assert!(
+        reviews
+            .iter()
+            .any(|r| matches!(r.verdict, domain::Verdict::Reject { .. })),
+        "first Review round should be a Reject"
+    );
+    assert!(
+        reviews
+            .iter()
+            .any(|r| matches!(r.verdict, domain::Verdict::Accept { .. })),
+        "recovery Review round should be an Accept"
+    );
 
     daemon.shutdown().await.expect("shutdown");
 }
@@ -442,6 +464,17 @@ fn load_ticks(target: &Path, plan_id: &PlanId) -> Vec<Tick> {
         .collect()
 }
 
+fn load_reviews(target: &Path, work_id: &str) -> Vec<Review> {
+    let bundle_ids: Vec<String> = load_bundles(target, work_id)
+        .into_iter()
+        .map(|b| b.id.as_ref().to_string())
+        .collect();
+    read_jsonl::<Review>(&target.join(".loopr").join("taskstore").join("reviews.jsonl"))
+        .into_iter()
+        .filter(|r| bundle_ids.contains(&r.bundle_id.as_ref().to_string()))
+        .collect()
+}
+
 fn read_jsonl<T: serde::de::DeserializeOwned + HasId>(path: &Path) -> Vec<T> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
@@ -474,6 +507,11 @@ impl HasId for Bundle {
     }
 }
 impl HasId for Tick {
+    fn record_id(&self) -> String {
+        self.id.as_ref().to_string()
+    }
+}
+impl HasId for Review {
     fn record_id(&self) -> String {
         self.id.as_ref().to_string()
     }
