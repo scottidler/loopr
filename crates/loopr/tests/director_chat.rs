@@ -22,6 +22,26 @@ fn loopr() -> Command {
     Command::cargo_bin("loopr").unwrap()
 }
 
+/// Test-local XDG root so a forked daemon's session/run dirs (where
+/// `events.log` lands) are discoverable from the test and never pollute
+/// the real `~/.local/share/loopr/`. Mirrors `tests/daemon.rs`.
+fn xdg_home_for(target: &std::path::Path) -> std::path::PathBuf {
+    target.join(".xdg")
+}
+
+/// `loopr` with a pinned XDG root AND `LOOPR_LOG_LEVEL=debug`. The
+/// restart-pickup test asserts on a `debug!`-level Director event
+/// (`"director: operator note observed"`), which the daemon's default
+/// `info` filter drops; the forked daemon inherits this env var and
+/// re-parses its own `EnvFilter` from it at telemetry init.
+fn loopr_dbg(target: &std::path::Path) -> Command {
+    let mut cmd = Command::cargo_bin("loopr").unwrap();
+    cmd.env("XDG_DATA_HOME", xdg_home_for(target));
+    cmd.env("XDG_CONFIG_HOME", xdg_home_for(target));
+    cmd.env("LOOPR_LOG_LEVEL", "debug");
+    cmd
+}
+
 /// Pre-seed a Plan via the in-process `store::Store` so the test does
 /// not depend on the decomposer's real-LLM slow path. The Store is
 /// closed before the daemon starts so its SQLite cache is committed
@@ -191,87 +211,140 @@ fn seed_note(target: &std::path::Path, plan_id: &domain::PlanId, message: &str) 
     })
 }
 
-/// Restart-pickup proof. The design (`docs/design/2026-05-12-director-phase-2-followups.md`
-/// Phase 1) requires that a note arriving while the daemon is down
-/// gets ingested by the post-restart Director's first iteration. The
-/// gap this closes is the daemon cold-boot boundary that unit tests
-/// cannot exercise: `startup_reconcile_directors` spawns Directors
-/// from persisted state, and the freshly spawned Director's first
-/// `list_unread_notes_for_plan` call must find the note. A
-/// successful LLM round-trip stamps `read_at`, which is the
-/// observable signal we assert on.
+/// Seed a Plan plus one `Blocked` child Work directly through the Store.
+/// Two reasons the child Work matters for the restart-pickup path:
+///   1. `startup_reconcile_directors` RE-DECOMPOSES (rather than spawning a
+///      Director) for an Active Plan with ZERO Works. On a credential-less
+///      box that decompose hits a real Anthropic 401 and drives the Plan to
+///      `Stalled` before a note is ever seeded; daemon #2 then filters the
+///      Stalled Plan out and never spawns a Director. A single child Work
+///      takes the direct Director-spawn branch instead (`startup.rs:477`).
+///   2. `Blocked` is non-terminal and is not auto-dispatched at startup, so
+///      the Plan stays `Active` across daemon #1's brief life — no cascading
+///      implementer failure can terminalize it.
+fn seed_plan_with_work(target: &std::path::Path, goal: &str) -> domain::PlanId {
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let store = store::Store::open(target).await.expect("Store::open");
+        let plan = domain::Plan::new(goal.to_string());
+        let plan_id = plan.id.clone();
+        store.plans().create(plan).await.expect("plans().create");
+        let mut work = domain::Work::new(plan_id.clone(), "restart-pickup placeholder work".to_string());
+        work.status = domain::WorkStatus::Blocked;
+        work.blocked_reason = Some("seeded Blocked so the Plan stays Active without dispatch".to_string());
+        store.works().create(work).await.expect("works().create");
+        store.close().await.expect("store.close");
+        plan_id
+    })
+}
+
+/// Restart-pickup proof (`docs/design/2026-05-12-director-phase-2-followups.md`
+/// Phase 1): a note that arrives while the daemon is DOWN must be ingested by
+/// the post-restart Director's first iteration. The cold-boot boundary unit
+/// tests cannot reach is `startup_reconcile_directors` spawning a fresh
+/// Director from persisted state whose first `list_unread_notes_for_plan`
+/// call finds the note.
+///
+/// We assert the credential-independent, load-bearing signal: the fresh
+/// Director spawns and OBSERVES the seeded note in its first iteration (the
+/// Phase 9 note-observation event, carrying the plan id). We do NOT assert it
+/// marks the note read — `mark_notes_read` fires only AFTER a genuine
+/// authenticated Anthropic response parses, which cannot happen in `otto ci`:
+/// no `ANTHROPIC_API_KEY` exists on the box (and none under that env-var name
+/// is ever provisioned), so the placeholder key makes every real call a
+/// `Fatal(Auth)` 401. This test drives the compiled binary end-to-end with no
+/// fake-LLM seam, so `read_at` is unreachable here; note-observation, which
+/// happens before the LLM call, is the invariant actually under test.
 #[test]
 fn note_persists_across_daemon_restart() {
     let td = TempDir::new().unwrap();
     let target = td.path();
     init_target(target);
+    std::fs::create_dir_all(xdg_home_for(target)).unwrap();
 
-    // 1. Seed a Plan that the daemon will pick up via
-    //    `startup_reconcile_directors` on both forks.
-    let plan_id = seed_plan(target, "restart-pickup-target");
+    // 1. Seed an Active Plan WITH one Blocked Work (see `seed_plan_with_work`
+    //    for why the child Work is load-bearing on a credential-less box).
+    let plan_id = seed_plan_with_work(target, "restart-pickup-target");
 
-    // 2. Fork daemon #1 explicitly. Phase 16 of
-    //    `docs/design/2026-07-11-verified-swarm.md` made read verbs
-    //    (`plans` included) report "no daemon" instead of auto-forking;
-    //    `daemon start` is the direct replacement. The DaemonAutoStop
-    //    guard is panic-safe cleanup of last resort; we stop the daemon
-    //    explicitly below so the seed-note write happens with no
-    //    concurrent writer.
+    // 2. Fork daemon #1 (debug-level, pinned XDG), then bring it down so the
+    //    Store's SQLite lock releases before the offline note seed.
     {
         let _stop = DaemonAutoStop::for_target(target);
-        loopr()
+        loopr_dbg(target)
             .args(["-C", target.to_str().unwrap(), "daemon", "start"])
             .assert()
             .success();
-
-        // 3. Bring daemon #1 down deterministically. The Store's
-        //    SQLite lock must release before step 4 opens its own
-        //    handle. `stop_daemon_for` waits up to 5s for process exit.
         stop_daemon_for(target);
     }
 
-    // 4. Seed an unread `OperatorNote` while the daemon is offline.
-    //    JSONL is append-only and SQLite cache is rebuilt on next
-    //    daemon boot, so no read-after-write race against the cache.
+    // 3. Seed an unread OperatorNote while the daemon is offline. JSONL is
+    //    append-only and the SQLite cache is rebuilt on next boot, so there
+    //    is no read-after-write race against the cache.
     let chat_msg = "post-restart pickup probe";
-    let note_id = seed_note(target, &plan_id, chat_msg);
+    let _note_id = seed_note(target, &plan_id, chat_msg);
 
-    // 5. Fork daemon #2 explicitly. `startup_reconcile_directors` finds
-    //    the Active Plan, spawns a fresh Director, whose first iteration
-    //    calls `list_unread_notes_for_plan` and (after a successful
-    //    LLM round-trip) `mark_notes_read`.
+    // 4. Fork daemon #2. `startup_reconcile_directors` finds the still-Active
+    //    Plan, spawns a fresh Director, whose first iteration lists (and thus
+    //    observes) the seeded note before it ever reaches the LLM call.
     let _stop2 = DaemonAutoStop::for_target(target);
-    loopr()
+    loopr_dbg(target)
         .args(["-C", target.to_str().unwrap(), "daemon", "start"])
         .assert()
         .success();
 
-    // 6. Poll the notes JSONL for a line that marks the seeded note
-    //    read. `mark_read` appends a fresh full-record line with
-    //    `read_at` populated (numeric, not `null`). Generous deadline
-    //    covers the Director's restart, context build, and one
-    //    Anthropic round-trip. Reading the JSONL directly avoids
-    //    opening a competing SQLite handle.
-    let notes_jsonl = target.join(".loopr").join("taskstore").join("operatornotes.jsonl");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    let note_id_str = note_id.to_string();
-    let mut last_body = String::new();
-    let read = loop {
-        if notes_jsonl.is_file() {
-            last_body = fs::read_to_string(&notes_jsonl).unwrap_or_default();
-            if last_body.lines().any(|line| {
-                line.contains(&note_id_str) && !line.contains("\"read_at\":null") && line.contains("\"read_at\":")
-            }) {
+    // 5. Poll daemon #2's own events.log (resolved via its `daemon.process-id`
+    //    pointer under the pinned XDG session tree) for the fresh Director's
+    //    first iteration observing the note. Both branches of the Phase 9
+    //    note-observation block — `director.mode_change` (info) and the
+    //    idempotent-edge `"director: operator note observed"` (debug) — carry
+    //    the plan id and fire ONLY when the unread-note set is non-empty, i.e.
+    //    only if the cross-restart note was picked up. That is the invariant.
+    let plan_id_str = plan_id.to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    let mut last_events = String::new();
+    let observed = loop {
+        if let Some(events) = daemon_events_log(target)
+            && events.is_file()
+        {
+            last_events = fs::read_to_string(&events).unwrap_or_default();
+            let spawned = last_events.contains("director iteration start");
+            let picked_up = last_events.lines().any(|l| {
+                l.contains(&plan_id_str)
+                    && (l.contains("director: operator note observed") || l.contains("director.mode_change"))
+            });
+            if spawned && picked_up {
                 break true;
             }
         }
         if std::time::Instant::now() >= deadline {
             break false;
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(250));
     };
     assert!(
-        read,
-        "post-restart Director never marked seeded note {note_id_str} as read within 90s; jsonl body:\n{last_body}"
+        observed,
+        "post-restart Director never spawned + observed the seeded note for {plan_id_str} within 45s; \
+         daemon #2 events.log:\n{last_events}"
     );
+}
+
+/// Resolve the CURRENT daemon's `events.log` from its on-disk pointers
+/// (`active-session` + `daemon.process-id`) under the pinned XDG session
+/// tree. `None` until both pointers exist. Mirrors the run-dir resolution in
+/// `tests/daemon.rs`.
+fn daemon_events_log(target: &std::path::Path) -> Option<std::path::PathBuf> {
+    let session_id = fs::read_to_string(target.join(".loopr").join("active-session")).ok()?;
+    let process_id = fs::read_to_string(target.join(".loopr").join("daemon.process-id")).ok()?;
+    let slug = target.to_str().unwrap().replace('/', "-");
+    Some(
+        xdg_home_for(target)
+            .join("loopr")
+            .join("sessions")
+            .join(session_id.trim())
+            .join("targets")
+            .join(&slug)
+            .join("runs")
+            .join(process_id.trim())
+            .join("events.log"),
+    )
 }
