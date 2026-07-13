@@ -57,6 +57,7 @@ usage() {
     echo "  --no-build          Use whatever binary is at ~/.cargo/bin/loopr (default)"
     echo "  --skip-eval         Skip the optional Claude evaluation step"
     echo "  --log-level <lvl>   Override log level (default: debug). Use 'info' for terse output."
+    echo "  --validation-command <cmd>  integrator.validation-commands entry (repeatable; default: per-target)"
     echo "  -h, --help          Show this help"
     echo ""
     echo -e "${BOLD}Examples:${NC}"
@@ -92,6 +93,7 @@ E2E_TIMEOUT=""
 DO_BUILD=false
 SKIP_EVAL=false
 SUBCOMMAND=""
+VALIDATION_COMMANDS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -103,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --no-build)  DO_BUILD=false; shift ;;
         --skip-eval) SKIP_EVAL=true; shift ;;
         --log-level) LOG_LEVEL="$2"; shift 2 ;;
+        --validation-command) VALIDATION_COMMANDS+=("$2"); shift 2 ;;
         -*)          err "Unknown flag: $1"; usage; exit 1 ;;
         *)           E2E_TARGET="$1"; shift ;;
     esac
@@ -128,6 +131,19 @@ if [[ ! -f "${PLAN_MD}" ]]; then
     err ""
     err "Run 'bin/e2e ls' to see available targets."
     exit 1
+fi
+
+# Phase 12 (2026-07-11 verified-swarm) made integrator.require-validation
+# default true, so a target with no validation-commands refuses to start.
+# Give each target family a sensible default check; override it -- or set the
+# red-path check (e.g. --validation-command false) -- with --validation-command.
+if [[ ${#VALIDATION_COMMANDS[@]} -eq 0 ]]; then
+    case "${E2E_TARGET}" in
+        rust-version|rust-cli)                  VALIDATION_COMMANDS=("cargo test") ;;
+        node-api|react-todo)                    VALIDATION_COMMANDS=("npm test") ;;
+        python-api|python-scraper|python-todo)  VALIDATION_COMMANDS=("pytest -q") ;;
+        *)                                       VALIDATION_COMMANDS=("cargo test") ;;
+    esac
 fi
 
 ###############################################################################
@@ -983,10 +999,23 @@ esac
 # Run-dir setup
 ###############################################################################
 
-# v5 Config::default() (incl. LlmConfig::default()) covers Stage 9. No
-# config.yml needed; writing a partial llm: block fails serde parse because
-# LlmConfig has deny_unknown_fields and no per-field defaults at the
-# deserializer layer (only the manual impl Default).
+# Top-level Config is deny_unknown_fields + serde(default), so a partial
+# config.yml carrying only an integrator: block is valid (every other section
+# falls back to its Default -- a partial llm: block would NOT be, since
+# LlmConfig lacks per-field deserializer defaults). Phase 12 made
+# integrator.require-validation default true, so we MUST write
+# validation-commands or the daemon refuses to start. Values are quoted: an
+# unquoted `false` would parse as a YAML bool and fail Vec<String> deser.
+mkdir -p "${RUN_DIR}/.loopr"
+{
+    echo "integrator:"
+    echo "  validation-commands:"
+    for _vc in "${VALIDATION_COMMANDS[@]}"; do
+        printf '    - "%s"\n' "${_vc//\"/\\\"}"
+    done
+} > "${RUN_DIR}/.loopr/config.yml"
+ok "Wrote .loopr/config.yml (validation-commands: ${VALIDATION_COMMANDS[*]})"
+
 mkdir -p "${MONITOR_DIR}"
 ok "Monitor dir: ${MONITOR_DIR}"
 
