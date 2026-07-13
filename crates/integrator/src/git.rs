@@ -73,15 +73,33 @@ pub(crate) async fn current_branch(target: &Path, git_timeout: Duration) -> Resu
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Return `true` if the working tree has any uncommitted state (tracked
-/// modifications, staged changes, or untracked files) via
+/// Return `true` if the working tree has any uncommitted OPERATOR state
+/// (tracked modifications, staged changes, or untracked files) via
 /// `git status --porcelain`. The no-branch override uses this to refuse
 /// integrating on top of a dirty tree: `git checkout <current-branch>` is
 /// a no-op that does NOT fail on a dirty tree (unlike checking out a
 /// different per-Plan branch), so without this guard the Integrator would
 /// `git merge` on top of the operator's uncommitted work.
+///
+/// `.loopr/` is excluded from the check via a git pathspec: it is loopr's
+/// OWN run-local state, not the operator's work. Most of it is already
+/// covered by `worktree::ensure_loopr_excludes`, but `.loopr/taskstore/`
+/// is deliberately NOT excluded there (per vision, TaskStore is committed)
+/// — so a target whose taskstore is untracked (test harnesses) or merely
+/// dirty between the taskstore git-hook commits (production) reports
+/// `?? .loopr/` / ` M .loopr/taskstore/...` and would otherwise trip this
+/// guard on loopr's own bookkeeping rather than genuine operator work. The
+/// pathspec keeps the guard protecting only operator changes.
 pub(crate) async fn working_tree_dirty(target: &Path, git_timeout: Duration) -> Result<bool, IntegrationError> {
-    let out = run_git(target, &["status", "--porcelain"], git_timeout).await?;
+    // `-- .` establishes a positive pathspec (everything) so the trailing
+    // `:(exclude).loopr/` subtracts loopr's own state dir; without a
+    // positive term the exclude-only pathspec matches nothing.
+    let out = run_git(
+        target,
+        &["status", "--porcelain", "--", ".", ":(exclude).loopr/"],
+        git_timeout,
+    )
+    .await?;
     if !out.status.success() {
         return Err(IntegrationError::Git(format!(
             "git status --porcelain failed: {}",

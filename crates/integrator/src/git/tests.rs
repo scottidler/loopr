@@ -81,3 +81,64 @@ async fn working_tree_dirty_is_true_with_tracked_modification() {
         "a modified tracked file must register as dirty"
     );
 }
+
+/// loopr's own run-local state under `.loopr/` (here an UNTRACKED
+/// `.loopr/taskstore/`, the test-harness / pre-first-commit shape) must NOT
+/// count as dirty — it is loopr's bookkeeping, not the operator's work.
+/// Break-to-prove: against the pre-fix plain `git status --porcelain` this
+/// returns `?? .loopr/` and the assertion below fails (dirty == true), which
+/// is exactly what wedged the integrator in the reject->retry->accept path.
+#[tokio::test]
+async fn working_tree_dirty_ignores_untracked_loopr_state() {
+    let td = TempDir::new().unwrap();
+    init_repo(td.path());
+    std::fs::create_dir_all(td.path().join(".loopr").join("taskstore")).unwrap();
+    std::fs::write(td.path().join(".loopr").join("taskstore").join("plans.jsonl"), b"{}\n").unwrap();
+    assert!(
+        !working_tree_dirty(td.path(), TIMEOUT).await.unwrap(),
+        "loopr's own untracked .loopr/ state must not register as dirty"
+    );
+}
+
+/// The production shape: `.loopr/taskstore/` is committed (per vision) but
+/// goes dirty between the taskstore git-hook commits. A modified TRACKED
+/// taskstore file is still loopr's own state and must not trip the guard.
+#[tokio::test]
+async fn working_tree_dirty_ignores_modified_tracked_loopr_taskstore() {
+    let td = TempDir::new().unwrap();
+    init_repo(td.path());
+    let run = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(td.path())
+            .args(args)
+            .output()
+            .unwrap();
+    };
+    std::fs::create_dir_all(td.path().join(".loopr").join("taskstore")).unwrap();
+    let jsonl = td.path().join(".loopr").join("taskstore").join("plans.jsonl");
+    std::fs::write(&jsonl, b"{}\n").unwrap();
+    run(&["add", "-f", ".loopr/taskstore/plans.jsonl"]);
+    run(&["commit", "-q", "-m", "commit taskstore"]);
+    std::fs::write(&jsonl, b"{\"updated\":1}\n").unwrap();
+    assert!(
+        !working_tree_dirty(td.path(), TIMEOUT).await.unwrap(),
+        "a modified tracked .loopr/taskstore file is loopr's own state, not operator work"
+    );
+}
+
+/// The guard must still bite: genuine operator work OUTSIDE `.loopr/` is
+/// reported dirty even when loopr's own `.loopr/` state is also present, so
+/// the exclusion narrows the guard without blinding it.
+#[tokio::test]
+async fn working_tree_dirty_still_reports_operator_work_alongside_loopr() {
+    let td = TempDir::new().unwrap();
+    init_repo(td.path());
+    std::fs::create_dir_all(td.path().join(".loopr").join("taskstore")).unwrap();
+    std::fs::write(td.path().join(".loopr").join("taskstore").join("plans.jsonl"), b"{}\n").unwrap();
+    std::fs::write(td.path().join("operator.txt"), b"uncommitted operator edit\n").unwrap();
+    assert!(
+        working_tree_dirty(td.path(), TIMEOUT).await.unwrap(),
+        "operator work outside .loopr/ must still register as dirty"
+    );
+}
