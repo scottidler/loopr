@@ -21,10 +21,34 @@ fn generate_id_base36_chars() {
     );
 }
 
+/// A healthy random generator varies every body position across a sample. A
+/// stuck RNG or a constant/degenerate generator collapses one or more
+/// positions to a single char; this catches that.
+///
+/// We assert per-position variation, NOT global uniqueness of the sample.
+/// Uniqueness is a birthday-paradox property: the body is 5 base36 chars
+/// (36^5 ≈ 60.4M space), so 1000 draws collide ~0.8% of the time. Asserting
+/// "all N distinct" is therefore a statistically-false claim about a random
+/// generator (it flaked ~1.3%/run before this change), not a real invariant.
+/// A false failure of THIS test needs all `SAMPLES` ids to share a char at
+/// some position (~36^(1-SAMPLES)), i.e. never. Collision *handling* is
+/// covered where it matters — at the store seam (`store::{works,plans,
+/// bundles,ticks}` return `AlreadyExists`; the decomposer's
+/// `persist_works_with_remint` re-mints on collision).
 #[test]
-fn generate_id_uniqueness_1000() {
-    let ids: HashSet<String> = (0..1000).map(|_| generate_id("wk")).collect();
-    assert_eq!(ids.len(), 1000, "expected 1000 distinct ids");
+fn generate_id_body_positions_are_not_stuck() {
+    const SAMPLES: usize = 256;
+    const BODY_LEN: usize = 5;
+    let bodies: Vec<Vec<char>> = (0..SAMPLES)
+        .map(|_| generate_id("wk").chars().skip(3).collect())
+        .collect();
+    for pos in 0..BODY_LEN {
+        let distinct: HashSet<char> = bodies.iter().map(|b| b[pos]).collect();
+        assert!(
+            distinct.len() > 1,
+            "body position {pos} produced only {distinct:?} across {SAMPLES} ids (stuck RNG?)"
+        );
+    }
 }
 
 #[test]
@@ -123,10 +147,23 @@ fn work_id_display_matches_as_ref() {
     assert_eq!(id.to_string(), id.as_ref());
 }
 
+/// `WorkId::new` twin of `generate_id_body_positions_are_not_stuck`: assert
+/// per-position variation, not global uniqueness (see that test for why
+/// uniqueness is a birthday-paradox property, not an invariant).
 #[test]
-fn work_id_uniqueness_1000() {
-    let ids: HashSet<String> = (0..1000).map(|_| WorkId::new().as_ref().to_string()).collect();
-    assert_eq!(ids.len(), 1000, "expected 1000 distinct WorkIds");
+fn work_id_body_positions_are_not_stuck() {
+    const SAMPLES: usize = 256;
+    const BODY_LEN: usize = 5;
+    let bodies: Vec<Vec<char>> = (0..SAMPLES)
+        .map(|_| WorkId::new().as_ref().chars().skip(3).collect())
+        .collect();
+    for pos in 0..BODY_LEN {
+        let distinct: HashSet<char> = bodies.iter().map(|b| b[pos]).collect();
+        assert!(
+            distinct.len() > 1,
+            "WorkId body position {pos} produced only {distinct:?} across {SAMPLES} ids (stuck RNG?)"
+        );
+    }
 }
 
 #[test]

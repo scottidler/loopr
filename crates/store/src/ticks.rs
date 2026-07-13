@@ -46,11 +46,21 @@ impl<'a> TicksStore<'a> {
     /// 3. if any existing Tick's `bundles` (as a set) matches the incoming
     ///    `tick.bundles`, return `DuplicateTick { tick_id: existing.id, .. }`
     ///    without appending,
-    /// 4. otherwise append via `AsyncStore::create`,
-    /// 5. drop the lock.
+    /// 4. if a Tick with the same `id` already exists, return `AlreadyExists`
+    ///    without appending,
+    /// 5. otherwise append via `AsyncStore::create`,
+    /// 6. drop the lock.
     ///
     /// The comparison is set-based (`HashSet`), not Vec-order-sensitive, so a
     /// caller reordering the bundles Vec does not produce a false non-duplicate.
+    ///
+    /// Step 4 mirrors the id pre-check on `WorksStore`/`PlansStore`/
+    /// `BundlesStore`: `TickId`s are 5-char base36 (~60.4M space) and
+    /// `AsyncStore::create` inherits SQLite's `INSERT OR REPLACE`, which would
+    /// silently overwrite a colliding prior Tick. `DuplicateTick` guards the
+    /// *semantic* `(plan_id, bundles-set)` identity; this guards the *id*
+    /// identity. Both run under `tick_lock`, so the read-check-write is
+    /// race-free.
     ///
     /// On success returns a clone of the input Tick (caller-convenience so
     /// the call site need not clone upstream of the `await`).
@@ -80,6 +90,14 @@ impl<'a> TicksStore<'a> {
                 tick_id: dup.id.clone(),
                 plan_id: tick.plan_id.clone(),
                 bundles: tick.bundles.clone(),
+            });
+        }
+
+        let id_str = tick.id.as_ref().to_string();
+        if self.inner.get::<Tick>(&id_str).await?.is_some() {
+            return Err(StoreError::AlreadyExists {
+                collection: "ticks",
+                id: id_str,
             });
         }
 

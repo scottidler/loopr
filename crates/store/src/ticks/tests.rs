@@ -137,6 +137,39 @@ async fn duplicate_detection_is_set_based_not_order_based() {
 }
 
 #[tokio::test]
+async fn colliding_id_different_bundles_rejected_as_already_exists() {
+    // The id pre-check is distinct from `DuplicateTick`: a second Tick that
+    // shares the first's `id` but has a DIFFERENT bundle-set passes the
+    // semantic `(plan_id, bundles-set)` duplicate check, and must be caught
+    // by the id guard as `AlreadyExists` rather than silently overwriting the
+    // first Tick via `INSERT OR REPLACE`. Break the guard (remove the id
+    // pre-check in `TicksStore::create`) and this test fails: the second
+    // create returns `Ok`, clobbering the first.
+    let (_dir, store) = open_store().await;
+    let pid = PlanId::new();
+
+    let first = fresh_tick(pid.clone(), vec![BundleId::new()]);
+    let first_id = first.id.clone();
+    store.ticks().create(first).await.expect("first create");
+
+    // Different bundle set (dodges DuplicateTick), same id (hits the guard).
+    let mut second = fresh_tick(pid.clone(), vec![BundleId::new()]);
+    second.id = first_id.clone();
+    let result = store.ticks().create(second).await;
+    match result {
+        Err(StoreError::AlreadyExists { collection, id }) => {
+            assert_eq!(collection, "ticks");
+            assert_eq!(id, first_id.as_ref());
+        }
+        other => panic!("expected AlreadyExists, got: {other:?}"),
+    }
+
+    // The first Tick is intact (not overwritten).
+    let fetched = store.ticks().get(&first_id).await.expect("first still present");
+    assert_eq!(fetched.id, first_id);
+}
+
+#[tokio::test]
 async fn different_bundle_sets_allowed_on_same_plan() {
     let (_dir, store) = open_store().await;
     let pid = PlanId::new();
