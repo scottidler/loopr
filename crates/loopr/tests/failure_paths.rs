@@ -400,7 +400,25 @@ async fn wait_for_tick(target: &Path, plan_id: &PlanId, deadline: Duration) -> R
         }
         sleep(Duration::from_millis(100)).await;
     }
-    Err("deadline exceeded before all Works reached Done + a Tick was written".to_string())
+    // Deadline diagnostics: dump the on-disk state so a stall names the
+    // wedged record instead of a bare timeout.
+    let works = load_works(target, plan_id);
+    let mut state = String::new();
+    for w in &works {
+        state.push_str(&format!(
+            "\n  work {} status={:?} attempts={}",
+            w.id.as_ref(),
+            w.status,
+            w.attempt_count
+        ));
+        for b in load_bundles(target, w.id.as_ref()) {
+            state.push_str(&format!("\n    bundle {} status={:?}", b.id.as_ref(), b.status));
+        }
+    }
+    state.push_str(&format!("\n  ticks={}", load_ticks(target, plan_id).len()));
+    Err(format!(
+        "deadline exceeded before all Works reached Done + a Tick was written; state:{state}"
+    ))
 }
 
 fn load_works(target: &Path, plan_id: &PlanId) -> Vec<Work> {
