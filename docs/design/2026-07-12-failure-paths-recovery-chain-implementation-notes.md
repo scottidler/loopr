@@ -230,3 +230,96 @@ restore):
   Recommend a separate follow-up (own design doc or a targeted fix) if
   it recurs; not blocking this phase since 5 independent `otto ci` /
   `cargo test --workspace` runs after the one failure were all green.
+
+## Phase 3: OCC regression tests
+
+### Design decisions
+- **Store-seam test** —
+  `review_transition_succeeds_on_synced_copy_across_same_millisecond_floor`
+  in `crates/store/src/bundles/tests.rs` (alongside the existing
+  `update_round_trip_ok` / `update_stale_version_rejected` OCC tests it's
+  modeled on). Forces the on-disk `updated_at` into the future
+  (`domain::now_millis() + 1_000_000`) before creating the Bundle — the
+  same deterministic-floor idiom `update_floors_updated_at_strictly_above_
+  prior` (`crates/store/tests/plans.rs`) already uses — so the triage
+  write's floor (`max(now_millis(), current.updated_at + 1)`) lands at
+  exactly `current.updated_at + 1` regardless of wall-clock scheduling.
+  This reproduces "create and triage land in the same millisecond"
+  without depending on test-runner timing luck. Asserts: (a) the floor
+  value is exactly `future + 1`; (b) the local transition's own
+  `now_millis()`-stamped `updated_at` (`unsynced_local_ts`) is strictly
+  less than the floored value (proving a same-ms gap genuinely exists to
+  reproduce); (c) a subsequent `Triaged -> Reviewed` write, snapshotting
+  its `expected_updated_at` from a copy SYNCED to the returned floored
+  value, succeeds.
+- **Integration test** — new file
+  `crates/loopr/tests/reviewer_occ_regression.rs`, two tests
+  (`spawn_reviewer_for_bundle_lands_reviewed_with_one_review_row`,
+  `..._rejected_with_one_review_row`) mirroring `accept_gate.rs`'s
+  `build_test_context`/`teardown`/seed-then-assert idiom. Each seeds a
+  Plan + Work (`InReview` fixture status, FSM bypassed as a fixture per
+  the `director_reconcile.rs` precedent) + a `Proposed` Bundle whose
+  `updated_at`/`created_at` are ALSO forced into the future (same
+  determinism technique as the store-seam test, needed because a real
+  `DaemonContext`'s startup — git init, `build_context` — burns enough
+  wall-clock time between Bundle construction and the triage write that
+  the natural gap is not reliably sub-millisecond). Calls
+  `Arc::clone(&ctx).spawn_reviewer_for_bundle(bundle).await` directly (not
+  spawned — awaited in-test so the assertions run against settled state,
+  no polling needed) with a `ScriptedLlm` queued with one free-form
+  verdict (`queue_free`, untargeted — matches any model, mirroring
+  `failure_paths.rs`'s `REVIEWER_ACCEPT`/`REVIEWER_REJECT` idiom). Asserts
+  the Bundle status (`Reviewed`/`Rejected`) and exactly one
+  `store.reviews().list_by_bundle(...)` row.
+
+### Deviations
+- None from the design doc's Phase 3 bullet list. One implementation
+  detail not spelled out in either source doc: the integration test
+  drives `spawn_reviewer_for_bundle` directly against a hand-seeded
+  Bundle/Work rather than through the full decompose->implement->review
+  daemon loop (`failure_paths.rs`'s heavier idiom) — same effect at the
+  correct seam, and the doc's own wording ("driving
+  `spawn_reviewer_for_bundle` end-to-end") names the function directly
+  rather than the full pipeline.
+
+### Tradeoffs
+- The integration test forces the same-millisecond floor via a future
+  `updated_at` (deterministic) rather than relying on the real timing gap
+  between Bundle creation and the daemon's own triage write. Confirmed
+  empirically: with the fix reverted (see Break-to-proven below), the
+  *undoctored* real-timing version of this test did NOT reliably fail —
+  `DaemonContext` construction (git init, worktree reconcile) consumes
+  enough wall-clock time that the natural create-to-triage gap exceeds a
+  millisecond, so the floor's +1 bump is rarely exercised without forcing
+  it. The store-seam test's forced-future technique was ported into the
+  integration test for exactly this reason; without it, the integration
+  test would not have been a faithful regression guard for Link 1's
+  specific mechanism (it would still catch OTHER Bundle-review
+  regressions, just not reliably this one).
+- `queue_free` (untargeted) over `queue_free_for("claude-sonnet-4-6", ...)`
+  (the reviewer's default configured model): keeps the test independent
+  of `ReviewerConfig::model`'s literal default, matching `failure_paths.rs`'s
+  existing plain-`queue_free` reviewer verdicts rather than inventing a
+  new keyed idiom for this one file.
+
+### Break-to-proven results
+- **Store-seam test**: temporarily changed
+  `expected_updated_at = synced.updated_at` to
+  `expected_updated_at = unsynced_local_ts` (the pre-fix discard shape —
+  keep the caller's pre-write snapshot instead of the store's returned
+  floored value). RED: `Stale { expected: <local>, actual: <floored> }`.
+  Restored the fix; confirmed green again (`git diff` on the test file
+  after restore showed no residual change).
+- **Integration test**: temporarily changed
+  `crates/loopr/src/daemon/context/transition.rs`'s
+  `transition_and_persist_bundle` to discard the store's returned value
+  (`let _ = persisted;` in place of `bundle.updated_at = persisted;` —
+  the exact Link 1 discard shape). RED, both tests: Bundle left `Triaged`
+  (assertion `left: Triaged, right: Reviewed`/`Rejected`), reproducing the
+  pre-fix doom-loop symptom exactly — the reviewer's own final write lost
+  to a self-inflicted Stale and the Bundle never advanced past Triaged.
+  Restored the fix; `git diff` on `transition.rs` confirmed a clean,
+  artifact-free restore (empty diff) before the commit.
+
+### Open questions
+- None.

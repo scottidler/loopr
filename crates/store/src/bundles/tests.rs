@@ -113,6 +113,67 @@ async fn update_stale_version_rejected() {
     assert_eq!(after.status, BundleStatus::Reviewed);
 }
 
+/// Phase 3 of `docs/design/2026-07-12-failure-paths-recovery-chain.md`
+/// (folds in OCC doc Phase 2): pins the same-millisecond floor window that
+/// doomed the reviewer (`docs/design/2026-07-12-reviewer-occ-stale-race.md`,
+/// Link 1, `5dfd3112`). Forces `current.updated_at` into the future so the
+/// triage write's floor deterministically lands at `current.updated_at + 1`
+/// (same idiom as `update_floors_updated_at_strictly_above_prior`) regardless
+/// of wall-clock timing — this reproduces "create + triage land in the same
+/// millisecond" without depending on scheduler luck. A caller that syncs its
+/// local copy to the RETURNED floored value (the fix) then succeeds on the
+/// immediately-following review-transition. Break-to-proven: temporarily
+/// swap the last argument below from `floored` to `unsynced_local_ts` (the
+/// pre-fix discard shape — keeping the caller's pre-write snapshot instead of
+/// the returned value) and this test goes red with `StoreError::Stale`.
+#[tokio::test]
+async fn review_transition_succeeds_on_synced_copy_across_same_millisecond_floor() {
+    let (_dir, store) = open_store().await;
+    let mut bundle = fresh_bundle();
+    let future = domain::now_millis() + 1_000_000;
+    bundle.updated_at = future;
+    bundle.created_at = future;
+    let id = store.bundles().create(bundle.clone()).await.expect("create");
+
+    // Immediate triage: `Bundle::transition` stamps `now_millis()` locally,
+    // far behind `future` — this is the daemon's pre-write snapshot, the
+    // value the pre-fix discard shape kept instead of the store's return.
+    let mut triaged = bundle.clone();
+    triaged
+        .transition(BundleStatus::Triaged, Role::Reactor)
+        .expect("triage");
+    let unsynced_local_ts = triaged.updated_at;
+
+    let floored = store
+        .bundles()
+        .update(triaged.clone(), future, Role::Reactor, TargetKind::Normal)
+        .await
+        .expect("triage persist");
+    assert_eq!(floored, future + 1, "floor lands exactly at prior + 1");
+    assert!(
+        unsynced_local_ts < floored,
+        "local transition timestamp must lag the floored value to reproduce the same-ms window"
+    );
+
+    // The fix: sync the local copy to the returned floored value before the
+    // next write snapshots its OCC token from it.
+    let mut synced = triaged.clone();
+    synced.updated_at = floored;
+    let expected_updated_at = synced.updated_at; // the fix: synced, not the pre-write snapshot
+    let mut review = synced;
+    review
+        .transition(BundleStatus::Reviewed, Role::Reviewer)
+        .expect("review");
+    store
+        .bundles()
+        .update(review, expected_updated_at, Role::Reviewer, TargetKind::Normal)
+        .await
+        .expect("review transition on synced copy must succeed");
+
+    let after = store.bundles().get(&id).await.expect("get");
+    assert_eq!(after.status, BundleStatus::Reviewed);
+}
+
 #[tokio::test]
 async fn update_unknown_id_yields_not_found() {
     let (_dir, store) = open_store().await;
