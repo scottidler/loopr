@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-07-12
-**Status:** Approved
+**Status:** Approved; Phase 1 implemented (see Addendum: Implementation status)
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -351,3 +351,65 @@ None.
 - Live repro: `~/.local/share/loopr/sessions/20260712-163709-2/targets/-tmp-loopr-e2e-rust-version-20260712-163709/runs/pc-qc23ip/events.log`, bundle `bd-cx1u1`
 - Prior art: `transition_and_persist_work` (`crates/loopr/src/daemon/context.rs:1617-1623`),
   `integrator::transition_bundle_returning` (`crates/integrator/src/lib.rs:750-778`)
+
+## Addendum: Implementation status (2026-07-12)
+
+Point-in-time record of what actually landed vs. what the plan assumed. The
+`failure_paths` goal turned out to be a multi-bug recovery-path chain, not the
+single OCC fix this doc scoped; Scott's call was to consolidate the proven work
+and take `failure_paths` as its own effort.
+
+### Landed and verified
+
+- **Phase 1 (OCC helper + call-site conversions): done, proven.** Live
+  diagnostics confirmed the reviewer's `Triaged -> Reviewed/Rejected` write now
+  succeeds on the first round (`OK floored=...`), not `Stale`. The reviewer runs
+  exactly twice in the reject->accept scenario. The self-stale doom loop is gone.
+- **Deviation (disclosed): the helper does NOT live in `context.rs`.** `context.rs`
+  was already 1825 lines at HEAD, over the 1500 bloat gate before this change, so
+  adding the helper worsened an already-red file. Per the in-house decomposition
+  pattern (`spawner.rs`/`integration.rs`/`reap.rs`), the transition helpers moved
+  to `crates/loopr/src/daemon/context/transition.rs` and the sibling-Work helpers
+  to `context/siblings.rs`, both re-exported from `context` so every call site
+  resolves unchanged. `context.rs` is now 1402 lines. `transport/handler/tests.rs`
+  (1503, also pre-existing over) split its `director.chat` tests into
+  `handler/tests/chat.rs`.
+- **`director_chat::note_persists_across_daemon_restart`: pre-existing broken
+  test, rewritten.** It was committed already-red (c67a8eb9), requiring a live
+  authenticated Anthropic round-trip inside `otto ci` (impossible: placeholder
+  key -> real 401 -> `Fatal(Auth)`). Rewritten to assert the credential-independent
+  invariant the design actually claims -- the post-restart Director spawns and
+  OBSERVES the seeded note in its first iteration (before the LLM call) -- and to
+  seed a child Work so the Plan stays Active instead of going Stalled on boot.
+  Green in ~5s.
+
+### Latent bug found and fixed (separate crate)
+
+- **Integrator working-tree-dirty guard tripped on loopr's own state.**
+  `integrator::git::working_tree_dirty` ran a bare `git status --porcelain` and
+  treated `?? .loopr/` (loopr's own `.loopr/taskstore/`, deliberately not in
+  `ensure_loopr_excludes` because TaskStore is committed) as the operator's
+  uncommitted work, refusing to integrate. Latent because every prior run wedged
+  at the reviewer OCC race before the integrator ran; Phase 1 un-masked it. Fixed
+  by scoping the guard to `git status --porcelain -- . ':(exclude).loopr/'` with
+  break-to-prove tests. This is the fix that lets the recovery pipeline reach a
+  Tick at all.
+
+### Deferred to a separate effort: `failure_paths` green
+
+The doc's Goal "the 3 red `failure_paths` tests go green" is NOT met by the OCC
+fix alone. These tests never passed; they hid a chain of latent recovery-path
+bugs, each masked by the one before:
+
+1. Reviewer OCC self-stale -- **fixed** (Phase 1).
+2. Integrator dirty-guard on `.loopr/` -- **fixed** (above).
+3. **Open:** the reject->retry recovery persists **1 Bundle (Merged), not the
+   expected 2 (Rejected + Merged)** -- `attempt_count=2` but the rejected
+   attempt's Bundle record is absent. Undetermined whether this is a real
+   lost-Bundle bug or a never-validated test expectation; likely more behind it.
+
+Phases 2 (regression tests), 3 (loud-fail Stale discrimination), and 4 (live
+e2e) remain unstarted. `stage_8`/`stage_9` flake is plausibly the same
+integrator-dirty timing issue now fixed, but is unverified pending the separate
+effort. That effort owns: root-causing item 3, completing Phases 2-4, and
+correcting this doc's premise that the OCC fix was sufficient.
