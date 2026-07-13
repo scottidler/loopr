@@ -323,3 +323,130 @@ restore):
 
 ### Open questions
 - None.
+
+## Phase 4: loud-fail Stale discrimination
+
+### Design decisions
+- **Extracted a shared helper `discriminate_stale_bundle_write`** into
+  `crates/loopr/src/daemon/context/transition.rs` (re-exported from
+  `context`), consumed byte-identically by BOTH arms. The two arms now
+  differ ONLY in the single `expected: BundleStatus` argument they pass
+  (`Triaged` for the reviewer-result / F6 arm, `Reviewed` for
+  `accept_bundle`); everything else — the re-read, the three-way branch,
+  every log line and its fields — is one code path. This is the
+  "siblings behave identically" instinct expressed structurally: two
+  hand-copied blocks can drift, one shared helper called with a different
+  status cannot. `transition.rs` is where the sibling `BundleTransitionError`
+  / `BundleUpdateError::Stale` types already live and where
+  `transition_and_persist_bundle` (the write that produces the Stale)
+  lives, so it is the truthful home for the post-Stale discriminator.
+- **Three-way branch, matching the OCC doc's Phase 3 enumeration exactly:**
+  re-read fails -> `error!` carrying both Stale timestamps AND the re-read
+  error (cannot distinguish lost-race from violation without the current
+  status); current status != expected -> a legitimate lost race, `debug!`
+  names the winning status; current status == expected -> OCC invariant
+  violation with no winner, `error!` carrying bundle id, expected/actual
+  Stale timestamps, and the latest Review round.
+- **Round fetched ONLY on the loud invariant-violation path.** A private
+  `latest_review_round` helper lists the bundle's Review rows and returns
+  the max `round` (or 0 if none / list error); it is called only inside the
+  `current == expected` arm, so the benign `debug!` winner branch never pays
+  for the extra store read (the OCC doc's "extra read confined to the loud
+  path" requirement).
+- **Logging rule (scope-identifying keys on the loud line):** the
+  invariant-violation `error!` carries `bundle_id`, `expected_status`,
+  `stale_expected`, `stale_actual`, and `round` so an operator diagnoses the
+  break from the single log line without a rerun. The benign `debug!` names
+  the `winner_status`.
+- **F6 arm** (`crates/loopr/src/daemon/context.rs`, inside
+  `spawn_reviewer_for_bundle`): the `ReviewerError::Update(BundleUpdateError
+  ::Stale { .. })` arm now binds `{ expected, actual }` and calls
+  `discriminate_stale_bundle_write(&self.store, &bundle.id,
+  BundleStatus::Triaged, expected, actual)` instead of the bare
+  `debug!("...another reviewer won...")` swallow.
+- **accept_bundle arm** (`crates/loopr/src/daemon/context/spawner.rs`): the
+  `BundleTransitionError::Stale { .. }` arm now binds `{ expected, actual }`
+  and calls the same helper with `BundleStatus::Reviewed`, replacing the
+  bare `debug!("...another writer beat us...")` swallow.
+- Six unit tests in `crates/loopr/src/daemon/context/transition/tests.rs`
+  (new 2018-style submodule beside the helper), a per-branch test for BOTH
+  arms: `f6_still_triaged_is_loud_invariant_violation`,
+  `f6_advanced_to_reviewed_is_silent_winner`, `f6_reread_failure_is_loud`,
+  `accept_still_reviewed_is_loud_invariant_violation`,
+  `accept_advanced_to_accepted_is_silent_winner`,
+  `accept_reread_failure_is_loud`. Log assertions capture the JSON
+  `tracing` output via a `VecWriter` MakeWriter (the exact pattern from
+  `crates/llm/src/metered.rs`), so the loud branches are verified by the
+  precise ERROR line + fields they emit, and the silent branches by the
+  absence of any ERROR plus the single winner `debug!`.
+
+### Deviations
+- **The OCC doc labels this the "F6 arm + accept_bundle arm" and describes
+  two arms hardened separately; implemented as ONE shared helper both arms
+  call.** Same effect at the correct seam — the design doc's own Phase 4
+  bullet explicitly invited this ("If there's a shared helper opportunity
+  that keeps them genuinely identical... prefer extracting it"). This makes
+  the "siblings behave identically" requirement structural rather than a
+  reviewer-verified copy match.
+- The OCC doc's Phase 3 prose says the reviewer error "carries only the
+  timestamps... round is obtained by listing the bundle's Review rows at
+  error time." Implemented exactly: the helper takes the timestamps from the
+  matched `Stale { expected, actual }` and reads the round itself on the
+  loud path only. No signature change to `ReviewerError` / `BundleUpdateError`
+  was needed.
+
+### Tradeoffs
+- **Helper does the logging itself vs. returning an outcome enum for the
+  caller to log.** Chose helper-owns-the-logging so the two arms are
+  guaranteed byte-identical in what they emit; an outcome enum would have
+  reintroduced two hand-written `match`/log blocks — exactly the drift the
+  extraction removes. The cost is that the log message strings live in the
+  helper rather than the call site, which is acceptable because the message
+  is about the Stale discrimination, not about the specific caller (the
+  `expected_status` field already disambiguates which arm fired).
+- **Testing the shared helper directly with each `expected` value, vs.
+  driving each arm end-to-end through a full daemon loop.** The two arms are
+  literally one call each into the helper differing only by the status
+  argument, so exercising the helper with `Triaged` and with `Reviewed` IS
+  the per-arm coverage — a faithful test at the correct seam, far cheaper
+  and more deterministic than standing up a `DaemonContext` and racing a
+  real Stale. The seam is the helper; that is where the branch logic lives
+  and where it is tested.
+- **`round` = max of persisted Review rounds, 0 on empty/error.** `Review`
+  rows are append-only with 1-based `round`; the max is the current round.
+  0 is an honest "no rounds / couldn't read" sentinel on the loud path (the
+  round is diagnostic context, not a control signal), and a list-read error
+  there emits its own `warn!` rather than masking silently.
+
+### Break-to-proven results
+Temporarily replaced the helper body with the exact pre-fix silent-swallow
+shape (`debug!(bundle_id, "OCC Stale; another writer beat us"); return;` —
+no re-read, no discrimination), ran the full transition-tests suite, then
+restored the fix (`grep` confirmed zero `BREAK-TO-PROVEN` markers remained;
+`otto ci` green after restore):
+- `f6_still_triaged_is_loud_invariant_violation` — RED under the pre-fix
+  shape: `count_lines(ERROR, "OCC invariant violation, no winner")` was 0,
+  not 1 (the loud line never fired; the Stale was swallowed silently). This
+  is the reviewer-result loud branch proven to bite.
+- `accept_still_reviewed_is_loud_invariant_violation` — RED under the
+  pre-fix shape, identically: 0 ERROR lines, not 1. The accept-arm loud
+  branch proven to bite.
+- The other four tests (both silent-winner, both re-read-failure) also went
+  RED under the pre-fix shape (winner tests expected the new `debug!`
+  message + `winner_status` field, absent in the swallow; re-read tests
+  expected the loud ERROR the swallow never emits), confirming every branch
+  assertion is load-bearing, not just the two invariant-violation ones.
+
+### Sibling symmetry
+Both arms are byte-equivalent in behavior: each is a single
+`discriminate_stale_bundle_write(&<store>, &<bundle id>, <expected status>,
+expected, actual).await` call, and `<expected status>` is the ONLY
+difference (`Triaged` vs `Reviewed`). Identical re-read, identical three-way
+branch, identical log messages and fields. There is no second copy of the
+discrimination logic to drift.
+
+### Open questions
+- None. (Phase 5 owns the store-seam Stale WARN-vs-ERROR log-level change in
+  `store::works` / `store::bundles`; this phase deliberately does not touch
+  the store crate — the caller-owns-severity split is exactly why the loud
+  `error!` lives here in the caller, not at the store seam.)

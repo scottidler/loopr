@@ -17,7 +17,7 @@ use std::sync::Mutex as StdMutex;
 
 use tracing::{debug, error, info, warn};
 
-use domain::{Bundle, BundleStatus, Plan, PlanId, PlanStatus, Role, Work, WorkStatus};
+use domain::{Bundle, BundleId, BundleStatus, Plan, PlanId, PlanStatus, Role, Work, WorkStatus};
 use store::Store;
 use telemetry::digest::process::ProcessSnapshot;
 
@@ -297,6 +297,96 @@ where
     );
     Ok(())
 }
+
+/// Discriminate an OCC `Stale` Bundle write into its three real cases,
+/// shared by the two daemon arms that lose a Bundle write to a race: the
+/// reviewer-result arm (`context.rs::spawn_reviewer_for_bundle`, whose
+/// failed write expected the Bundle still at `Triaged`) and `accept_bundle`
+/// (`spawner.rs`, whose failed write expected `Reviewed`). Both re-read the
+/// Bundle and branch identically on the same three outcomes; the shared
+/// helper keeps the siblings byte-equivalent instead of two hand-copied
+/// blocks that can drift (docs/design/2026-07-12-failure-paths-recovery-
+/// chain.md Phase 4; folds in the OCC doc's Phase 3 enumeration).
+///
+/// - **re-read fails** -> `error!`, carrying BOTH the Stale timestamps and
+///   the re-read error: without the current on-disk status there is no way
+///   to tell a benign lost race from an invariant violation, so this fails
+///   loud.
+/// - **advanced past `expected`** (`current != expected`) -> a legitimate
+///   lost race; another writer won. `debug!` names the winning status and
+///   leaves that winner's routing to stand.
+/// - **still at `expected`** (`current == expected`) -> no writer advanced
+///   the Bundle, so the Stale is an OCC invariant violation with no winner.
+///   `error!` carrying the bundle id, the Stale expected/actual timestamps,
+///   and the latest persisted Review round so an operator can diagnose from
+///   the single log line without a rerun. The Review-row list is read ONLY
+///   on this loud path; the benign `debug!` branch never pays for it.
+pub async fn discriminate_stale_bundle_write(
+    store: &Store,
+    bundle_id: &BundleId,
+    expected: BundleStatus,
+    stale_expected: i64,
+    stale_actual: i64,
+) {
+    debug!(
+        bundle_id = %bundle_id,
+        expected_status = ?expected,
+        stale_expected,
+        stale_actual,
+        "discriminate_stale_bundle_write: entry"
+    );
+    match store.bundles().get(bundle_id).await {
+        Err(e) => {
+            error!(
+                bundle_id = %bundle_id,
+                expected_status = ?expected,
+                stale_expected,
+                stale_actual,
+                reread_error = %e,
+                "bundle OCC Stale: re-read failed; cannot distinguish lost-race from invariant violation"
+            );
+        }
+        Ok(bundle) if bundle.status != expected => {
+            debug!(
+                bundle_id = %bundle_id,
+                winner_status = ?bundle.status,
+                "bundle OCC Stale: another writer won; leaving the winner's routing untouched"
+            );
+        }
+        Ok(_) => {
+            let round = latest_review_round(store, bundle_id).await;
+            error!(
+                bundle_id = %bundle_id,
+                expected_status = ?expected,
+                stale_expected,
+                stale_actual,
+                round,
+                "bundle OCC Stale: bundle never advanced past expected status; OCC invariant violation, no winner"
+            );
+        }
+    }
+}
+
+/// Highest persisted Review round for a Bundle, or 0 if none exist / the
+/// list read errors. Confined to the loud Stale path in
+/// `discriminate_stale_bundle_write` so the benign lost-race branch never
+/// pays for the extra store read.
+async fn latest_review_round(store: &Store, bundle_id: &BundleId) -> u32 {
+    match store.reviews().list_by_bundle(bundle_id).await {
+        Ok(reviews) => reviews.iter().map(|r| r.round).max().unwrap_or(0),
+        Err(e) => {
+            warn!(
+                bundle_id = %bundle_id,
+                error = %e,
+                "bundle OCC Stale: failed to list reviews for round on the loud path"
+            );
+            0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Mirror of `transition_and_persist_work` for `Plan` records. Consumed by
 /// the Integrator spawn's `Active -> Complete` check once every sibling

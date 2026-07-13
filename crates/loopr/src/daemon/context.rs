@@ -1130,14 +1130,18 @@ impl<L: LlmClient + Send + Sync + 'static> DaemonContext<L> {
                 self.wake_director(&work.parent_id).await;
                 return;
             }
-            // F6: a benign OCC lost-race (the winning Reviewer already
-            // persisted this Bundle's verdict) must NOT force the Work to
-            // Blocked — that manufactures divergence (Bundle Reviewed while
-            // Work Blocked). Drop the losing verdict silently and let the
-            // winner's routing stand. Mirrors spawner.rs's accept_bundle
-            // Stale handling.
-            Ok(Err(ReviewerError::Update(store::BundleUpdateError::Stale { .. }))) => {
-                debug!("reviewer OCC Stale; another reviewer won, leaving Work untouched");
+            // F6: an OCC Stale on the reviewer's `Triaged -> Reviewed/Rejected`
+            // write. Re-read the Bundle and discriminate the three real cases
+            // rather than blanket-swallowing every Stale as "another reviewer
+            // won" — a benign lost race leaves the winner's routing to stand
+            // (never forcing the Work to Blocked, which would manufacture a
+            // Bundle-Reviewed / Work-Blocked divergence), while a Bundle that
+            // never advanced past `Triaged` is an OCC invariant violation with
+            // no winner and fails loud. Byte-identical discrimination to
+            // spawner.rs's accept_bundle Stale arm via the shared helper
+            // (docs/design/2026-07-12-failure-paths-recovery-chain.md Phase 4).
+            Ok(Err(ReviewerError::Update(store::BundleUpdateError::Stale { expected, actual }))) => {
+                discriminate_stale_bundle_write(&self.store, &bundle.id, BundleStatus::Triaged, expected, actual).await;
                 return;
             }
             Ok(Err(other)) => {
@@ -1370,7 +1374,8 @@ mod transition;
 pub(crate) use transition::compute_plan_summary_extras;
 pub use transition::{
     BundleTransitionError, MAX_WORK_ATTEMPTS_HARD_CAP, PlanSummaryExtras, TransitionError,
-    transition_and_persist_bundle, transition_and_persist_plan, transition_and_persist_work,
+    discriminate_stale_bundle_write, transition_and_persist_bundle, transition_and_persist_plan,
+    transition_and_persist_work,
 };
 
 mod siblings;

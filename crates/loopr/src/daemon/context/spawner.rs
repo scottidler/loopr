@@ -20,8 +20,8 @@ use llm::LlmClient;
 use tracing::{debug, info, warn};
 
 use super::{
-    BundleTransitionError, DaemonContext, TransitionError, block_dependent_siblings, transition_and_persist_bundle,
-    transition_and_persist_work,
+    BundleTransitionError, DaemonContext, TransitionError, block_dependent_siblings, discriminate_stale_bundle_write,
+    transition_and_persist_bundle, transition_and_persist_work,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,11 +159,24 @@ where
                         BundleTransitionError::Fsm(_) => {
                             warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
                         }
-                        // Stale OCC errors are expected when the daemon's reconcile
-                        // sweep races the Director; swallow and continue. Phase 3
-                        // hardens this into a re-read + loud-fail discrimination.
-                        BundleTransitionError::Stale { .. } => {
-                            debug!(bundle_id = %bundle_id, "accept_bundle: OCC Stale; another writer beat us");
+                        // An OCC Stale on the `Reviewed -> Accepted` write.
+                        // Re-read and discriminate rather than blanket-swallow:
+                        // a benign lost race (another writer advanced the Bundle
+                        // past `Reviewed`) stays a silent `debug!`, but a Bundle
+                        // that never advanced is an OCC invariant violation with
+                        // no winner and fails loud. Byte-identical discrimination
+                        // to context.rs's reviewer-result Stale arm via the shared
+                        // helper (docs/design/2026-07-12-failure-paths-recovery-
+                        // chain.md Phase 4).
+                        BundleTransitionError::Stale { expected, actual } => {
+                            discriminate_stale_bundle_write(
+                                &ctx.store,
+                                &bundle_id,
+                                BundleStatus::Reviewed,
+                                expected,
+                                actual,
+                            )
+                            .await;
                         }
                         BundleTransitionError::Persist(_) => {
                             warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
