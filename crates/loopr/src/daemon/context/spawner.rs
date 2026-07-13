@@ -15,11 +15,14 @@
 use std::sync::Arc;
 
 use agents::WorkSpawner;
-use domain::{BundleId, BundleStatus, Role, TargetKind, WorkId, WorkStatus, decide_accept};
+use domain::{BundleId, BundleStatus, Role, WorkId, WorkStatus, decide_accept};
 use llm::LlmClient;
 use tracing::{debug, info, warn};
 
-use super::{DaemonContext, TransitionError, block_dependent_siblings, transition_and_persist_work};
+use super::{
+    BundleTransitionError, DaemonContext, TransitionError, block_dependent_siblings, transition_and_persist_bundle,
+    transition_and_persist_work,
+};
 
 // ---------------------------------------------------------------------------
 // WorkSpawner: Director's fire-and-forget surface into the daemon.
@@ -138,24 +141,34 @@ where
                     evidence = %decision.evidence_label(),
                     "accept_bundle: accept gate passed; proceeding to Accepted"
                 );
-                let expected = bundle.updated_at;
-                if let Err(e) = bundle.transition(BundleStatus::Accepted, Role::Director) {
-                    warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
-                    return;
-                }
-                if let Err(e) = ctx
-                    .store
-                    .bundles()
-                    .update(bundle.clone(), expected, Role::Director, TargetKind::Normal)
-                    .await
+                // Routed through `transition_and_persist_bundle` so the floored
+                // `updated_at` this write returns is re-synced onto `bundle`
+                // before it is handed to `spawn_integrator_for_bundle` below —
+                // the integrator prologue's `Accepted -> Integrating` OCC token
+                // is `bundle.updated_at`, and the pre-fix discard handed it a
+                // stale copy (docs/design/2026-07-12-reviewer-occ-stale-race.md).
+                if let Err(e) = transition_and_persist_bundle(
+                    &*ctx.summary_fanout,
+                    &mut bundle,
+                    BundleStatus::Accepted,
+                    Role::Director,
+                )
+                .await
                 {
-                    // Stale OCC errors are expected when the daemon's reconcile
-                    // sweep races the Director; swallow and continue.
-                    if let store::StoreError::Stale { .. } = e {
-                        debug!(bundle_id = %bundle_id, "accept_bundle: OCC Stale; another writer beat us");
-                        return;
+                    match e {
+                        BundleTransitionError::Fsm(_) => {
+                            warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: FSM transition rejected");
+                        }
+                        // Stale OCC errors are expected when the daemon's reconcile
+                        // sweep races the Director; swallow and continue. Phase 3
+                        // hardens this into a re-read + loud-fail discrimination.
+                        BundleTransitionError::Stale { .. } => {
+                            debug!(bundle_id = %bundle_id, "accept_bundle: OCC Stale; another writer beat us");
+                        }
+                        BundleTransitionError::Persist(_) => {
+                            warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
+                        }
                     }
-                    warn!(error = %e, bundle_id = %bundle_id, "accept_bundle: OCC update failed");
                     return;
                 }
                 // Phase 4: `Reviewed -> Accepted` just persisted successfully.

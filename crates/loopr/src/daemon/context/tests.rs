@@ -412,3 +412,129 @@ mod budget {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1 (`docs/design/2026-07-12-reviewer-occ-stale-race.md`):
+// `transition_and_persist_bundle` — the `updated_at` re-sync and the
+// Unchanged-skip that together de-fang the reviewer OCC self-stale doom loop.
+// ---------------------------------------------------------------------------
+
+mod bundle_helper {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use domain::{Bundle, BundleStatus, Role, TargetKind, WorkId};
+    use store::{BundleUpdateError, BundleUpdateSink, Store};
+    use tempfile::TempDir;
+
+    use crate::daemon::context::{BundleTransitionError, transition_and_persist_bundle};
+
+    fn fresh_bundle() -> Bundle {
+        Bundle::new(
+            WorkId::new(),
+            "loopr/test-branch".to_string(),
+            vec!["test claim".to_string()],
+        )
+    }
+
+    /// A `BundleUpdateSink` that records how many times `update` was invoked
+    /// and never touches disk — lets the "zero writes on Unchanged" criterion
+    /// be asserted at the exact seam the reviewer writes through.
+    struct CountingSink {
+        calls: AtomicUsize,
+    }
+
+    impl CountingSink {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+        fn count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl BundleUpdateSink for CountingSink {
+        async fn update(
+            &self,
+            bundle: Bundle,
+            _expected_updated_at: i64,
+            _role: Role,
+            _kind: TargetKind,
+        ) -> Result<i64, BundleUpdateError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            // A plausible floored value so a Changed caller could re-sync;
+            // the Unchanged path under test never reaches this.
+            Ok(bundle.updated_at + 1)
+        }
+    }
+
+    /// Success criterion 1: after a `Changed` transition the in-memory
+    /// bundle's `updated_at` equals the floored value persisted on disk — the
+    /// re-sync the pre-fix hand-rolled site dropped. Driven against a real
+    /// `Store` (its own `BundleUpdateSink` impl) so "on disk" is literal.
+    #[tokio::test]
+    async fn changed_transition_resyncs_updated_at_to_disk() {
+        let dir = TempDir::new().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+
+        let created = fresh_bundle();
+        let id = store.bundles().create(created).await.unwrap();
+        let mut in_mem = store.bundles().get(&id).await.unwrap();
+        let before = in_mem.updated_at;
+
+        transition_and_persist_bundle(&store, &mut in_mem, BundleStatus::Triaged, Role::Reactor)
+            .await
+            .expect("Proposed -> Triaged persists");
+
+        let on_disk = store.bundles().get(&id).await.unwrap();
+        assert_eq!(on_disk.status, BundleStatus::Triaged);
+        assert_eq!(
+            in_mem.updated_at, on_disk.updated_at,
+            "helper must re-sync the in-memory updated_at to the floored disk value"
+        );
+        assert!(in_mem.updated_at > before, "a Changed transition advances updated_at");
+    }
+
+    /// Success criterion 2: an already-Triaged bundle re-triaged to Triaged
+    /// produces ZERO store writes (the Unchanged-skip that removes the
+    /// reconcile age-clock reset), asserted against the counting sink. A
+    /// no-op transition is `Ok`, not an error.
+    #[tokio::test]
+    async fn unchanged_transition_skips_the_store_write() {
+        let sink = CountingSink::new();
+        let mut bundle = fresh_bundle();
+        // Advance to Triaged in memory (a legal Proposed -> Triaged hop); this
+        // is setup, NOT the transition under test.
+        bundle.transition(BundleStatus::Triaged, Role::Reactor).expect("triage");
+        let token_before = bundle.updated_at;
+
+        transition_and_persist_bundle(&sink, &mut bundle, BundleStatus::Triaged, Role::Reactor)
+            .await
+            .expect("Triaged -> Triaged is Unchanged, not an error");
+
+        assert_eq!(
+            sink.count(),
+            0,
+            "Unchanged transition must skip the store write entirely"
+        );
+        assert_eq!(
+            bundle.updated_at, token_before,
+            "no write means no updated_at bump — the reconcile age clock stays honest"
+        );
+    }
+
+    /// The `BundleTransitionError` variants are bundle-worded (not a reuse of
+    /// the Work-worded `TransitionError`): a names-tell-the-truth guard so a
+    /// log line about a Bundle never says "work".
+    #[test]
+    fn error_messages_are_bundle_worded() {
+        let stale = BundleTransitionError::Stale {
+            expected: 10,
+            actual: 11,
+        };
+        let msg = stale.to_string();
+        assert!(msg.contains("stale bundle"), "Stale must be bundle-worded: {msg}");
+        assert!(!msg.contains("work"), "must not leak Work wording: {msg}");
+    }
+}
