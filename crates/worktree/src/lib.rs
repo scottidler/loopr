@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use tracing::instrument;
+use tracing::{error, instrument};
 
 use domain::WorkId;
 
@@ -88,18 +88,23 @@ fn under_worktrees_root(path: &Path) -> bool {
 /// terminal status (Phase 19), and by reconcile for any terminal Work
 /// (`Done`, `Superseded`, `Abandoned`) as belt-and-suspenders. Idempotent
 /// on missing.
-#[instrument(
-    name = "worktree.delete_branch",
-    level = "info",
-    skip_all,
-    fields(repo_path = %repo_path.display(), branch),
-    err,
-)]
+///
+/// No `err` clause: whether a git-command failure here is worth ERROR is
+/// caller-decided. The integrator and reap treat it as best-effort and log
+/// their own WARN; startup's crash-recovery join treats it as fatal and
+/// propagates loud. A blanket auto-ERROR here fired twice per tolerated
+/// failure (this layer + `ops::delete_branch`) before the caller's own WARN
+/// - the exact ERROR-hygiene defect Phase 5 fixed one layer up in `store`
+/// (see `docs/design/2026-07-12-failure-paths-recovery-chain.md`).
+#[instrument(name = "worktree.delete_branch", level = "info", skip_all, fields(repo_path = %repo_path.display(), branch))]
 pub fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError> {
     // Finding 12: only ever delete loopr-managed branches. A buggy caller
     // passing `main` (or any non-`loopr/` ref) is refused here rather than
-    // force-deleting a real branch via `git branch -D`.
+    // force-deleting a real branch via `git branch -D`. Unlike the tolerated
+    // git failures below, this is a caller BUG (an invariant violation), not
+    // a recoverable race - it stays loud regardless of who calls it.
     if !branch.starts_with("loopr/") {
+        error!(branch, "worktree::delete_branch: refused non-loopr-managed branch");
         return Err(WorktreeError::InvalidBranchName(branch.to_string()));
     }
     ops::delete_branch(repo_path, branch)

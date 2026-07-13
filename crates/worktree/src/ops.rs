@@ -130,13 +130,10 @@ pub(crate) fn remove_worktree(repo_path: &Path, path: &Path) -> Result<(), Workt
 
 /// Delete a local branch. `git branch -D <branch>` is force-delete so a
 /// branch that has unmerged commits still goes away. Idempotent on missing.
-#[instrument(
-    name = "worktree.ops.delete_branch",
-    level = "debug",
-    skip_all,
-    fields(repo_path = %repo_path.display(), branch),
-    err,
-)]
+///
+/// No `err` clause: severity is owned by `delete_branch`'s callers (see its
+/// doc comment in `lib.rs`), not auto-logged here.
+#[instrument(name = "worktree.ops.delete_branch", level = "debug", skip_all, fields(repo_path = %repo_path.display(), branch))]
 pub(crate) fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let output = git_cmd(repo_path).args(["branch", "-D", branch]).output()?;
 
@@ -151,6 +148,7 @@ pub(crate) fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), Worktr
         return Ok(());
     }
 
+    debug!(branch, stderr = %stderr.trim(), "worktree.ops: delete_branch failed (severity owned by caller)");
     Err(WorktreeError::GitCommand(format_stderr(&output)))
 }
 

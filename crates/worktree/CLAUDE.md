@@ -44,9 +44,22 @@ Design doc: [`docs/design/2026-04-21-worktree-lifecycle.md`](../../docs/design/2
 
 `Worktree::create` opens `worktree.create` at `info` with `err`. `work_id`, `repo_path`, `worktree_root`, `base_sha` set at span open; `seq` and `branch` filled via `Span::current().record()` once the seq-allocation loop succeeds. Reading the closing span answers "what worktree, on which branch, at which base SHA, on which seq."
 
-`Worktree::cleanup` opens `worktree.cleanup` at `info` with `err` carrying `work_id`, `branch`, `worktree_path`, `seq`. The free functions `worktree::list`, `worktree::cleanup_at`, `worktree::delete_branch`, `worktree::resolve_sha`, `worktree::ensure_loopr_excludes` each open spans at `info`/`debug` with their own scope keys; `list` also records `count` post-parse.
+`Worktree::cleanup` opens `worktree.cleanup` at `info` with `err` carrying `work_id`, `branch`, `worktree_path`, `seq`. The free functions `worktree::list`, `worktree::cleanup_at`, `worktree::resolve_sha`, `worktree::ensure_loopr_excludes` each open spans at `info`/`debug` with their own scope keys; `list` also records `count` post-parse.
 
-Internal git wrappers (`ops::try_create_at_seq`, `ops::remove_worktree`, `ops::delete_branch`, `ops::prune`, `ops::resolve_sha`, `ops::list_porcelain`) open `worktree.ops.<op>` at `debug` with `err`. The pre-existing `Worktree::Drop` `tracing::warn!` stays as the safety-net signal.
+Internal git wrappers (`ops::try_create_at_seq`, `ops::remove_worktree`, `ops::prune`, `ops::resolve_sha`, `ops::list_porcelain`) open `worktree.ops.<op>` at `debug` with `err`. The pre-existing `Worktree::Drop` `tracing::warn!` stays as the safety-net signal.
+
+**`delete_branch` is the one exception (caller owns severity).** Both layers -
+public `worktree::delete_branch` (`info`) and internal `ops::delete_branch`
+(`debug`) - carry NO `err` clause: whether a git-command failure is worth
+ERROR is caller-decided (the integrator and `loopr`'s reap treat it as
+best-effort and log their own WARN; startup's crash-recovery join treats it
+as fatal and propagates loud). A blanket `err` on both layers used to fire
+ERROR twice per tolerated failure before the caller's own WARN - the same
+ERROR-hygiene defect Phase 5 fixed one layer up in `store` (see
+`docs/design/2026-07-12-failure-paths-recovery-chain.md`). The Finding-12
+guard in `delete_branch` (refusing a non-`loopr/` branch) stays loud: it's a
+caller bug, not a tolerated race, so it hand-logs `error!` before returning
+`InvalidBranchName`.
 
 Acceptance test: `tests/instrumentation.rs::worktree_smoke_spans_create_then_cleanup` creates and cleans up a real worktree, asserts both span names and the post-creation `seq` + `branch` fields.
 
