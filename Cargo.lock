@@ -2506,6 +2506,7 @@ name = "store"
 version = "0.7.24"
 dependencies = [
  "domain",
+ "serde_json",
  "taskstore-async",
  "tempfile",
  "thiserror 2.0.18",

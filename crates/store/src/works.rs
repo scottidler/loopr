@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 use tokio::sync::Mutex;
-use tracing::instrument;
+use tracing::{error, instrument, warn};
 
 use domain::{PlanId, Role, TargetKind, Work, WorkId, WorkStatus};
 
@@ -201,9 +201,44 @@ impl<'a> WorksStore<'a> {
         skip_all,
         fields(record_kind = "work", record_id = %work.id, status = ?work.status, expected_updated_at, role = %role, kind = ?kind, op = "update"),
         ret,
-        err,
     )]
     pub async fn update(
+        &self,
+        work: Work,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, StoreError> {
+        let result = self.update_and_persist(work, expected_updated_at, role, kind).await;
+        // Phase 5 (docs/design/2026-07-12-failure-paths-recovery-chain.md):
+        // an OCC Stale refusal is an expected, recoverable race at this
+        // seam, not a store failure - the caller already owns the severity
+        // verdict (the reviewer-result / accept_bundle arms' `discriminate_
+        // stale_bundle_write`, Phase 4, fails loud only when a Stale is a
+        // genuine invariant violation). The prior blanket
+        // `#[instrument(err)]` logged ERROR on every benign lost race,
+        // which trains operators to ignore ERROR entirely. Everything else
+        // (I/O, corruption, illegal FSM transition) is a real failure and
+        // stays loud.
+        match &result {
+            Ok(_) => {}
+            Err(StoreError::Stale { expected, actual }) => {
+                warn!(
+                    expected_updated_at = expected,
+                    actual_updated_at = actual,
+                    "works.update: OCC Stale refusal (benign race, caller decides severity)"
+                );
+            }
+            Err(other) => {
+                error!(error = %other, "works.update: update failed");
+            }
+        }
+        result
+    }
+
+    /// Body of `update`, split out so the outer fn can discriminate the
+    /// Stale-vs-other log level at one boundary (see `update` above).
+    async fn update_and_persist(
         &self,
         mut work: Work,
         expected_updated_at: i64,
@@ -353,3 +388,6 @@ impl<W: WorkUpdateSink + ?Sized> WorkUpdateSink for std::sync::Arc<W> {
         (**self).update(work, expected_updated_at, role, kind).await
     }
 }
+
+#[cfg(test)]
+mod tests;

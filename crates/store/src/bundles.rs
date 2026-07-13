@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use taskstore_async::{AsyncStore, Filter, FilterOp, IndexValue};
 use tokio::sync::Mutex;
-use tracing::instrument;
+use tracing::{error, instrument, warn};
 
 use domain::{Bundle, BundleId, BundleStatus, Role, TargetKind, WorkId};
 
@@ -170,9 +170,43 @@ impl<'a> BundlesStore<'a> {
             op = "update",
         ),
         ret,
-        err,
     )]
     pub async fn update(
+        &self,
+        bundle: Bundle,
+        expected_updated_at: i64,
+        role: Role,
+        kind: TargetKind,
+    ) -> Result<i64, StoreError> {
+        let result = self.update_and_persist(bundle, expected_updated_at, role, kind).await;
+        // Phase 5 (docs/design/2026-07-12-failure-paths-recovery-chain.md):
+        // an OCC Stale refusal is an expected, recoverable race at this
+        // seam, not a store failure - the caller already owns the severity
+        // verdict (`discriminate_stale_bundle_write`, Phase 4, fails loud
+        // only when a Stale is a genuine invariant violation). The prior
+        // blanket `#[instrument(err)]` logged ERROR on every benign lost
+        // race, which trains operators to ignore ERROR entirely. Everything
+        // else (I/O, corruption, illegal FSM transition) is a real failure
+        // and stays loud. Sibling of `WorksStore::update`'s identical split.
+        match &result {
+            Ok(_) => {}
+            Err(StoreError::Stale { expected, actual }) => {
+                warn!(
+                    expected_updated_at = expected,
+                    actual_updated_at = actual,
+                    "bundles.update: OCC Stale refusal (benign race, caller decides severity)"
+                );
+            }
+            Err(other) => {
+                error!(error = %other, "bundles.update: update failed");
+            }
+        }
+        result
+    }
+
+    /// Body of `update`, split out so the outer fn can discriminate the
+    /// Stale-vs-other log level at one boundary (see `update` above).
+    async fn update_and_persist(
         &self,
         mut bundle: Bundle,
         expected_updated_at: i64,

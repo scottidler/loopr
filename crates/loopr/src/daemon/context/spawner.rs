@@ -256,6 +256,27 @@ where
                 .await
                 {
                     Ok(()) => true,
+                    // Phase 5 works-race audit (docs/design/2026-07-12-
+                    // failure-paths-recovery-chain.md): this is the losing
+                    // call site for the `store::works` Stale ERROR observed
+                    // in the Link 4 trace. `director::reconcile_director`
+                    // (`crates/agents/src/director/reconcile.rs:61`) fires
+                    // `override_work(work_id, WorkStatus::Done, "reconcile:
+                    // Integrated->Done")` for every Work it sees at
+                    // `Integrated`, on its own periodic iteration cadence.
+                    // That is the SAME `Integrated -> Done` edge the
+                    // integrator writes inline, immediately after its own
+                    // `Integrated` persist (`daemon/context/integration.rs`,
+                    // the two chained `transition_and_persist_work` calls
+                    // around the "Work: InReview -> Integrated -> Done"
+                    // comment). When the integrator's own write lands first,
+                    // this redundant reconcile-driven override arrives here
+                    // Stale: the OCC lock refuses it fail-closed, we log at
+                    // debug and don't spawn (a Done Work needs no
+                    // Implementer), and the system self-heals with no wedge
+                    // -- the integrator's own write already ran the
+                    // worktree-reap / sibling-promotion / Plan-completion
+                    // follow-ups this call would have skipped anyway.
                     Err(TransitionError::Stale { .. }) => {
                         debug!(work_id = %work_id, "override_work: OCC Stale; another writer won, not spawning");
                         false

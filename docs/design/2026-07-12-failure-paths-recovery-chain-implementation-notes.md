@@ -450,3 +450,80 @@ discrimination logic to drift.
   `store::works` / `store::bundles`; this phase deliberately does not touch
   the store crate — the caller-owns-severity split is exactly why the loud
   `error!` lives here in the caller, not at the store seam.)
+
+## Phase 5: store-seam Stale log-level fix + works-race caller audit
+
+### Design decisions
+- **Split `update` into a thin discriminating wrapper + a renamed
+  `update_and_persist` body** - `crates/store/src/works.rs::update` /
+  `update_and_persist`, `crates/store/src/bundles.rs::update` /
+  `update_and_persist`. The `#[instrument(... ret, err)]` attribute's `err`
+  clause is what drove the blanket ERROR on every `Err`, including a benign
+  OCC `Stale`; removing `err` (keeping `ret` for the success-path return
+  value) and hand-logging at the outer wrapper boundary is the smallest
+  change that lets `Stale` route to `warn!` while every other `StoreError`
+  variant (I/O, `RecordNotFound`, `IllegalTransition`, corruption) still
+  routes to `error!`. Discrimination matches the typed `StoreError::Stale`
+  variant, not a string, per `rules/rust.md`'s "detect a condition by
+  matching a typed error variant."
+- **Siblings behave identically** - both stores get the exact same
+  wrapper/body split, the same two log lines
+  (`"<collection>.update: OCC Stale refusal (benign race, caller decides
+  severity)"` at `warn!`, `"<collection>.update: update failed"` at
+  `error!`), and the same `expected_updated_at` / `actual_updated_at` /
+  `error` fields. No drift between `works` and `bundles`.
+- **Losing call site: `crates/loopr/src/daemon/context/spawner.rs:259-280`
+  (the `override_work` `TransitionError::Stale` arm).** Confirmed by reading
+  both writers of the `Integrated -> Done` edge: `director::reconcile_
+  director` (`crates/agents/src/director/reconcile.rs:61`) fires
+  `spawner.override_work(w.id, WorkStatus::Done, "reconcile:
+  Integrated->Done")` for every Work it observes at `Integrated`, on its own
+  periodic iteration cadence; `daemon/context/integration.rs`'s
+  `spawn_integrator_for_bundle` (the two chained `transition_and_persist_
+  work` calls around the "Work: InReview -> Integrated -> Done" comment,
+  `integration.rs:132-157`) writes the SAME `Integrated -> Done` edge inline,
+  immediately after its own `Integrated` persist. When the integrator's
+  inline write lands first, the reconcile-driven `override_work` call is the
+  one that arrives Stale (its own fresh `ctx.store.works().get(&work_id)`
+  read races the integrator's second write); `override_work`'s existing
+  `Err(TransitionError::Stale { .. })` arm already handled this at `debug!`
+  before Phase 5 (it just didn't spawn an Implementer for a Done Work,
+  which is correct - Done needs no further spawn). The comment added at
+  that call site documents the race and why the fail-closed refusal is a
+  genuine no-op, not a wedge: the integrator's own successful write already
+  ran the worktree-reap / sibling-promotion / Plan-completion follow-ups
+  this redundant call would have skipped anyway.
+
+### Deviations
+- None. The task's `path:line` citation names the two writers precisely so a
+  future reader does not have to re-derive the race; no code behavior at the
+  `spawner.rs` call site changed (it already discriminated `Stale`
+  correctly before this phase - only the comment is new).
+
+### Tradeoffs
+- **Wrapper/body split vs. hand-logging at every `?`-propagated return
+  point.** `update`'s pre-Phase-5 body has five fallible points
+  (`self.inner.get`, `.ok_or(RecordNotFound)`, the explicit `Stale` return,
+  the explicit `IllegalTransition` return, and the final
+  `self.inner.update(work).await?`). Converting each to an inline
+  `match`+log+return would roughly double the function's line count and
+  scatter the WARN/ERROR decision across five sites instead of one. The
+  wrapper/body split makes the discrimination a single boundary that every
+  error path - present and future - flows through, at the cost of one extra
+  private method per store (`update_and_persist`) and one level of
+  indirection a reader has to follow from `update` to find the actual FSM
+  logic.
+- **`ret` kept, `err` dropped, rather than dropping both and hand-logging
+  the success path too.** `ret` without `err` still emits a DEBUG-level
+  "return value" event for both `Ok` and `Err` (tracing-attributes'
+  documented behavior when `err` is absent), which slightly duplicates the
+  hand-rolled `warn!`/`error!` on the `Err` path, but at DEBUG (not
+  ERROR/WARN) it does not interfere with any log-level assertion and
+  preserves the documented "writes carry `ret` so the span close logs the
+  returned id" contract in `crates/store/CLAUDE.md` for the success path.
+  Verified empirically: `cargo test -p store` and root `otto ci` both green
+  with the new WARN/ERROR-count assertions passing, so no double-count
+  leaked into the `count_lines(..., "WARN"/"ERROR", ...)` checks.
+
+### Open questions
+- None.
