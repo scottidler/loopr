@@ -2,7 +2,13 @@
 
 **Author:** Scott Idler
 **Date:** 2026-07-12
-**Status:** Approved; Phase 1 implemented (see Addendum: Implementation status)
+**Status:** Superseded (2026-07-13) — Phase 1 shipped from this doc (`5dfd3112`);
+Phases 2-4 folded into and shipped via
+`docs/design/2026-07-12-failure-paths-recovery-chain.md` (its Phases 3, 4, and 8
+respectively), verified live 2026-07-13 (Tick `tk-m5dxy`). Open item 3 below
+(reject->retry persists 1 Bundle not 2) was root-caused as Link 3 there
+(`2ba07f0f`, scoped `git clean`) and pinned by that doc's Phase 2 audit test.
+See Addendum: Implementation status.
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -227,6 +233,11 @@ timestamp.
 
 ## Acceptance Criteria
 
+**Superseded 2026-07-13: these were realized via
+`docs/design/2026-07-12-failure-paths-recovery-chain.md` (Phases 3, 4, 8 and its
+own Acceptance Criteria, all checked). The boxes below reflect this doc's
+original plan and are satisfied there, not tracked here.**
+
 - [ ] `bin/e2e rust-version` passes the reviewer step: bundle reaches
       Reviewed/Accepted, integrator runs, ticks > 0.
 - [ ] The 3 `failure_paths` tests (`crates/loopr/tests/failure_paths.rs:67,169,223`)
@@ -403,13 +414,19 @@ bugs, each masked by the one before:
 
 1. Reviewer OCC self-stale -- **fixed** (Phase 1).
 2. Integrator dirty-guard on `.loopr/` -- **fixed** (above).
-3. **Open:** the reject->retry recovery persists **1 Bundle (Merged), not the
-   expected 2 (Rejected + Merged)** -- `attempt_count=2` but the rejected
-   attempt's Bundle record is absent. Undetermined whether this is a real
-   lost-Bundle bug or a never-validated test expectation; likely more behind it.
+3. **Resolved (Link 3, `2ba07f0f`):** the reject->retry recovery persisting
+   **1 Bundle instead of 2** was the unscoped `git clean -fd` on the integrate
+   success path erasing the untracked `.loopr/taskstore/*.jsonl` truth files
+   (Rejected-bundle rows included). Fixed with a `':(exclude).loopr/'` pathspec
+   and pinned by the recovery-chain doc's Phase 2 audit test
+   (`crates/loopr/tests/failure_paths.rs`, asserts both review rounds survive
+   the Tick). Not a lost-Bundle bug in the OCC layer.
 
-Phases 2 (regression tests), 3 (loud-fail Stale discrimination), and 4 (live
-e2e) remain unstarted. `stage_8`/`stage_9` flake is plausibly the same
-integrator-dirty timing issue now fixed, but is unverified pending the separate
-effort. That effort owns: root-causing item 3, completing Phases 2-4, and
-correcting this doc's premise that the OCC fix was sufficient.
+**Shipped (2026-07-13), superseding the "remain unstarted" note:** Phases 2
+(regression tests), 3 (loud-fail Stale discrimination), and 4 (live e2e) were
+folded into and shipped via
+`docs/design/2026-07-12-failure-paths-recovery-chain.md` as its Phases 3
+(`28ff824b`), 4 (`1e0115e8`), and 8 (live e2e, Tick `tk-m5dxy`). The
+`stage_8`/`stage_9` flake was confirmed stable (that doc's Phase 2 stability
+gate, 15/15 isolated runs). The premise-correction that effort owned is the
+recovery-chain doc's full Link 1-6 catalog.
