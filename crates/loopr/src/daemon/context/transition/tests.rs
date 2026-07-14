@@ -166,6 +166,16 @@ fn json_subscriber(writer: VecWriter) -> impl tracing::Subscriber + Send + Sync 
     tracing_subscriber::registry().with(layer)
 }
 
+/// Install the process-global always-interested default (once) before the
+/// thread-local capturing subscriber, so a subscriber-less sibling test in
+/// this 295-test binary can't first-hit a shared `warn!`/`error!` callsite,
+/// cache `Interest::never()` process-wide, and empty this test's buffer. See
+/// `telemetry::testing`. Mirror of `store`'s `set_capturing_default`.
+fn set_capturing_default(writer: VecWriter) -> tracing::subscriber::DefaultGuard {
+    telemetry::ensure_global_interested_default();
+    tracing::subscriber::set_default(json_subscriber(writer))
+}
+
 // ---------------------------------------------------------------------------
 // F6 arm (reviewer-result): expected status == Triaged.
 // ---------------------------------------------------------------------------
@@ -185,7 +195,7 @@ async fn f6_still_triaged_is_loud_invariant_violation() {
     seed_reviews(&store, &id, 2).await;
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     discriminate_stale_bundle_write(&store, &id, BundleStatus::Triaged, 111, 222).await;
     drop(guard);
 
@@ -226,7 +236,7 @@ async fn f6_advanced_to_reviewed_is_silent_winner() {
     let (id, _bundle) = create_at(&store, BundleStatus::Reviewed).await;
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     discriminate_stale_bundle_write(&store, &id, BundleStatus::Triaged, 111, 222).await;
     drop(guard);
 
@@ -263,7 +273,7 @@ async fn f6_reread_failure_is_loud() {
     let missing = BundleId::new();
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     discriminate_stale_bundle_write(&store, &missing, BundleStatus::Triaged, 111, 222).await;
     drop(guard);
 
@@ -304,7 +314,7 @@ async fn accept_still_reviewed_is_loud_invariant_violation() {
     seed_reviews(&store, &id, 1).await;
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     discriminate_stale_bundle_write(&store, &id, BundleStatus::Reviewed, 333, 444).await;
     drop(guard);
 
@@ -344,7 +354,7 @@ async fn accept_advanced_to_accepted_is_silent_winner() {
     let (id, _bundle) = create_at(&store, BundleStatus::Accepted).await;
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     discriminate_stale_bundle_write(&store, &id, BundleStatus::Reviewed, 333, 444).await;
     drop(guard);
 
@@ -374,7 +384,7 @@ async fn accept_reread_failure_is_loud() {
     let missing = BundleId::new();
 
     let writer = VecWriter::default();
-    let guard = tracing::subscriber::set_default(json_subscriber(writer.clone()));
+    let guard = set_capturing_default(writer.clone());
     discriminate_stale_bundle_write(&store, &missing, BundleStatus::Reviewed, 333, 444).await;
     drop(guard);
 

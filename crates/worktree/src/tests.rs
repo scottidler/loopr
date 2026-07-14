@@ -56,6 +56,13 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for VecWriter {
 }
 
 fn json_subscriber(writer: VecWriter) -> impl tracing::Subscriber + Send + Sync {
+    // Install the process-global always-interested default (once) before this
+    // subscriber is handed to `with_default`, so a subscriber-less sibling
+    // test (e.g. the non-capturing `delete_branch_rejects_*` tests hitting the
+    // same `error!` callsite) can't cache `Interest::never()` process-wide and
+    // empty the ERROR-count buffer. See `telemetry::testing`. `LOG_LOCK` is a
+    // different job: it serializes the two capturing tests' buffer assertions.
+    telemetry::ensure_global_interested_default();
     let layer = tracing_subscriber::fmt::layer().json().with_writer(writer);
     tracing_subscriber::registry().with(layer)
 }
