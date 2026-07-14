@@ -208,6 +208,12 @@ pub fn init(
 /// parallel async-aware harness or `tracing::instrument`-on-future
 /// adaptation. This helper deliberately does not try to bridge that gap.
 pub fn init_for_test(run_dir: &Path, directive: &str) -> Result<TestSubscriberGuard, TelemetryInitError> {
+    // Install the process-global always-interested default first, so the
+    // per-callsite interest cache can never resolve to `never` on a
+    // subscriber-less sibling thread and empty a later capture buffer. See
+    // `crate::testing` for the full mechanism. Idempotent and cheap.
+    crate::testing::ensure_global_interested_default();
+
     EnvFilter::try_new(directive).map_err(|e| TelemetryInitError::InvalidFilter {
         directive: directive.to_string(),
         reason: e.to_string(),

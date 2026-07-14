@@ -18,6 +18,7 @@ mod session;
 mod session_fanout;
 mod slug;
 mod subscriber;
+mod testing;
 pub mod transcript;
 mod xdg;
 
@@ -40,6 +41,7 @@ pub use slug::{TargetSlugError, target_slug};
 pub use subscriber::{
     Guard, SharedWriter, SharedWriterGuard, TelemetryInitError, TestSubscriberGuard, init, init_for_test,
 };
+pub use testing::ensure_global_interested_default;
 pub use xdg::{XdgError, session_dir, session_run_dir, session_target_dir, xdg_config_dir, xdg_data_dir, xdg_root};
 
 /// True if `s` is safe to use as a single on-disk path segment: non-empty,

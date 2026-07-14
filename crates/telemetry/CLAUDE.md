@@ -37,6 +37,29 @@ per-crate scenarios in other crates' `tests/` use `init_for_test`
 directly. Operator grep patterns for the resulting JSONL:
 [`docs/telemetry-grep-cookbook.md`](../../docs/telemetry-grep-cookbook.md).
 
+### Interest-cache contract (`ensure_global_interested_default`)
+
+`ensure_global_interested_default()` (in `src/testing.rs`, re-exported at the
+crate root) installs a process-global always-interested discarding subscriber
+exactly once per test binary. It is the workspace-canonical fix for the
+`tracing` interest-cache log-capture flake: a subscriber-less sibling test that
+first-hits a shared `warn!`/`error!` callsite otherwise caches
+`Interest::never()` process-wide, emptying a later capturing test's buffer. See
+the module doc for the full mechanism and the b1b076ed evidence (0/300 in `llm`
+and `store`).
+
+- **Every log-capture test in the workspace routes through this helper** (via a
+  local `set_capturing_default` helper) or `init_for_test`, which calls it
+  internally. There is exactly one canonical definition; per-crate copies are
+  forbidden.
+- **One exemption class:** a test binary that installs its *own* process-global
+  default (`set_global_default`, `try_init`, or `SubscriberInitExt::init`)
+  conflicts with the helper and must be exempted with a one-line
+  `// interest-cache exempt: <reason> (see telemetry::testing)` comment, never
+  routed. The lone current exemption is `crates/llm/tests/span.rs`.
+- Plain `pub fn`, not behind a cargo feature — symmetric with `init_for_test`
+  and `TestSubscriberGuard`, which also ship un-gated.
+
 ## Dependencies
 
 `tracing`, `tracing-subscriber` (with `json` and `env-filter` features), `tracing-appender` (non-blocking file writer), `chrono` (for session-id formatting), `serde` + `serde_json` (for structured event emission), `dirs` (XDG lookup), `dashmap` (Work fanout cache), `lru` (Session fanout cache). Added via `cargo add` at the time the first code needs them, not speculatively.
