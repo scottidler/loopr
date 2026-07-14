@@ -112,6 +112,7 @@ async fn decomposer_smoke_spans_decompose() {
     let cap = Arc::new(SpanCapture::default());
     let layer = CaptureLayer { capture: cap.clone() };
     let sub = Registry::default().with(EnvFilter::new("trace")).with(layer);
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
 
     let (_dir, repo) = init_repo();

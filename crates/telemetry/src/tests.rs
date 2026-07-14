@@ -371,6 +371,7 @@ fn compose_emits_json_event_with_expected_fields() {
         .with_filter(EnvFilter::new("info"));
     let subscriber = tracing_subscriber::registry().with(json_layer).with(pretty_layer);
 
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(subscriber, || {
         let span = info_span!("loopr.invocation", session_id = "20260419-143012", subcommand = "plan");
         let _enter = span.enter();
@@ -426,6 +427,7 @@ fn fanout_writes_per_work_file() {
     let run_dir = td.path().join("run1");
     fs::create_dir_all(&run_dir).unwrap();
     let (sub, cache) = compose_fanout(&run_dir);
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let span = info_span!("stage.x", work_id = "w-test-01");
         let _enter = span.enter();
@@ -447,6 +449,7 @@ fn fanout_no_work_id_creates_no_file() {
     let run_dir = td.path().join("run1");
     fs::create_dir_all(&run_dir).unwrap();
     let (sub, _cache) = compose_fanout(&run_dir);
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         tracing::info!("no work id here");
     });
@@ -462,6 +465,7 @@ fn fanout_two_work_ids_get_two_files() {
     let run_dir = td.path().join("run1");
     fs::create_dir_all(&run_dir).unwrap();
     let (sub, cache) = compose_fanout(&run_dir);
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let s1 = info_span!("stage.x", work_id = "w-A");
         s1.in_scope(|| tracing::info!("for A"));
@@ -481,6 +485,7 @@ fn fanout_same_work_id_reuses_file() {
     let run_dir = td.path().join("run1");
     fs::create_dir_all(&run_dir).unwrap();
     let (sub, cache) = compose_fanout(&run_dir);
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let span = info_span!("stage.x", work_id = "w-once");
         span.in_scope(|| {
@@ -558,6 +563,7 @@ fn session_fanout_path(xdg_root: &Path, target_slug: &str, session_id: &str) -> 
 fn session_fanout_writes_per_session_file_on_session_id() {
     let td = TempDir::new().unwrap();
     let (sub, cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let span = info_span!("loopr.invocation", session_id = "20260424-150000");
         let _enter = span.enter();
@@ -577,6 +583,7 @@ fn session_fanout_writes_per_session_file_on_client_session_id_recorded_post_cre
     // the layer's `on_record` hook.
     let td = TempDir::new().unwrap();
     let (sub, cache) = compose_session_fanout(td.path(), "-home-daemon-repo");
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let span = info_span!(
             "ipc.connection",
@@ -604,6 +611,7 @@ fn session_fanout_writes_per_session_file_on_client_session_id_recorded_post_cre
 fn session_fanout_no_session_id_creates_no_file() {
     let td = TempDir::new().unwrap();
     let (sub, _cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         tracing::info!("no session id");
     });
@@ -618,6 +626,7 @@ fn session_fanout_no_session_id_creates_no_file() {
 fn session_fanout_two_session_ids_get_two_files() {
     let td = TempDir::new().unwrap();
     let (sub, cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let s1 = info_span!("loopr.invocation", session_id = "20260424-150000");
         s1.in_scope(|| tracing::info!("for A"));
@@ -637,6 +646,7 @@ fn session_fanout_two_session_ids_get_two_files() {
 fn session_fanout_same_session_id_reuses_writer() {
     let td = TempDir::new().unwrap();
     let (sub, cache) = compose_session_fanout(td.path(), "-home-test-repo");
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let span = info_span!("loopr.invocation", session_id = "20260424-150000");
         span.in_scope(|| {
@@ -658,6 +668,7 @@ fn session_fanout_lru_evicts_oldest_when_cap_exceeded() {
     let td = TempDir::new().unwrap();
     // Cap of 2 so the third session evicts the first.
     let (sub, cache) = compose_session_fanout_with_cap(td.path(), "-home-test-repo", 2);
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         for i in 1..=3 {
             let sid = format!("20260424-15000{i}");
@@ -680,6 +691,7 @@ fn session_fanout_lru_evicts_oldest_when_cap_exceeded() {
 fn session_fanout_evicted_session_reopens_on_next_event() {
     let td = TempDir::new().unwrap();
     let (sub, cache) = compose_session_fanout_with_cap(td.path(), "-home-test-repo", 1);
+    crate::testing::ensure_global_interested_default();
     tracing::subscriber::with_default(sub, || {
         let s1 = info_span!("loopr.invocation", session_id = "20260424-150001");
         s1.in_scope(|| tracing::info!("first for 1"));

@@ -113,6 +113,7 @@ fn capture_subscriber() -> (Arc<SpanCapture>, impl tracing::Subscriber) {
 #[tokio::test(flavor = "current_thread")]
 async fn read_emits_tool_span() {
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
     let td = TempDir::new().unwrap();
     let p = td.path().join("hello.txt");
@@ -131,6 +132,7 @@ async fn read_emits_tool_span() {
 #[tokio::test(flavor = "current_thread")]
 async fn write_emits_tool_span() {
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
     let td = TempDir::new().unwrap();
 
@@ -151,6 +153,7 @@ async fn write_emits_tool_span() {
 #[tokio::test(flavor = "current_thread")]
 async fn edit_emits_tool_span() {
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
     let td = TempDir::new().unwrap();
     let p = td.path().join("e.txt");
@@ -172,6 +175,7 @@ async fn edit_emits_tool_span() {
 #[tokio::test(flavor = "current_thread")]
 async fn glob_emits_tool_span() {
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
     let td = TempDir::new().unwrap();
     std::fs::write(td.path().join("a.txt"), "x").unwrap();
@@ -189,6 +193,7 @@ async fn glob_emits_tool_span() {
 #[tokio::test(flavor = "current_thread")]
 async fn grep_emits_tool_span() {
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
     let td = TempDir::new().unwrap();
     std::fs::write(td.path().join("a.txt"), "needle\n").unwrap();
@@ -210,6 +215,7 @@ async fn grep_emits_tool_span() {
 #[tokio::test(flavor = "current_thread")]
 async fn bash_emits_tool_span_with_lane_recorded() {
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
     let td = TempDir::new().unwrap();
 

@@ -189,6 +189,7 @@ async fn agents_smoke_spans_lifeguard_escalation() {
     // `set_default` makes the subscriber thread-local; current_thread
     // tokio runtime keeps every poll on this thread, so async spans are
     // captured.
+    telemetry::ensure_global_interested_default();
     let _guard = tracing::subscriber::set_default(subscriber);
     let result = run_implementer(&work, &wt, &deps).await;
     drop(_guard);

@@ -68,6 +68,8 @@ async fn work_terminal_summary_emits_on_done_transition() {
     store.works().create(work.clone()).await.unwrap();
 
     {
+        // interest-cache: init_for_test calls ensure_global_interested_default
+        // internally, so this capture path is covered (see telemetry::testing).
         let _guard = telemetry::init_for_test(log_dir.path(), "debug").expect("init_for_test");
         // Walk the FSM with the role each edge requires per domain::Work
         // FSM: Reactor for Pending/Ready/Integrated/Done transitions,
@@ -144,6 +146,8 @@ async fn plan_terminal_summary_emits_on_complete_transition() {
     let children = vec![work_a.clone(), work_b.clone()];
 
     {
+        // interest-cache: init_for_test calls ensure_global_interested_default
+        // internally, so this capture path is covered (see telemetry::testing).
         let _guard = telemetry::init_for_test(log_dir.path(), "debug").expect("init_for_test");
         // Plan::new starts at Active per docs/design (Stage 5 has no clarity
         // loop); transition Active -> Complete to land on the terminal

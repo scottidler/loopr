@@ -100,6 +100,7 @@ fn capture_subscriber() -> (Arc<SpanCapture>, impl tracing::Subscriber) {
 async fn store_smoke_spans_each_collection() {
     let td = TempDir::new().unwrap();
     let (cap, sub) = capture_subscriber();
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
 
     let store = Store::open(td.path()).await.unwrap();

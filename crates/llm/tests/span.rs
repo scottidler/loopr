@@ -101,6 +101,10 @@ fn shared_captured() -> Arc<Mutex<Vec<Captured>>> {
         .get_or_init(|| {
             let buf: Arc<Mutex<Vec<Captured>>> = Arc::new(Mutex::new(Vec::new()));
             let layer = CaptureLayer { spans: buf.clone() };
+            // interest-cache exempt: this binary installs its OWN process-global
+            // default via SubscriberInitExt::init, which conflicts with the
+            // shared helper; it must not route through
+            // telemetry::ensure_global_interested_default (see telemetry::testing).
             tracing_subscriber::registry().with(layer).init();
             buf
         })

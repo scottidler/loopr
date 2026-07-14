@@ -32,6 +32,8 @@ use tracing::info_span;
 /// alongside the first phase that needs it.
 fn run_and_capture_events_sync<F: FnOnce()>(run_dir: &Path, scenario: F) -> Vec<Value> {
     {
+        // interest-cache: init_for_test calls ensure_global_interested_default
+        // internally, so this capture path is covered (see telemetry::testing).
         let _guard = telemetry::init_for_test(run_dir, "debug").expect("init_for_test");
         scenario();
     }

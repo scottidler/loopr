@@ -90,6 +90,7 @@ fn context_smoke_spans_implementer_and_reviewer() {
     let cap = Arc::new(SpanCapture::default());
     let layer = CaptureLayer { capture: cap.clone() };
     let sub = Registry::default().with(EnvFilter::new("trace")).with(layer);
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
 
     let plan = Plan::new("instrumentation".to_string());
@@ -141,6 +142,7 @@ fn context_smoke_spans_director_and_researcher() {
     let cap = Arc::new(SpanCapture::default());
     let layer = CaptureLayer { capture: cap.clone() };
     let sub = Registry::default().with(EnvFilter::new("trace")).with(layer);
+    telemetry::ensure_global_interested_default();
     let _g = tracing::subscriber::set_default(sub);
 
     let builder = InlineContextBuilder::new();
