@@ -22,7 +22,7 @@ Agent orchestrator with Plan decomposition as a central feature. Clean-break rew
 |---|---|---|
 | [derive](crates/derive/CLAUDE.md) | Proc macros (Fsm, Record); derives only, no fn-like or attribute macros | - |
 | [telemetry](crates/telemetry/CLAUDE.md) | Tracing subscriber init, run-id, span conventions, log-query helpers | - |
-| [store](crates/store/CLAUDE.md) | Typed wrapper around `scottidler/taskstore`; JSONL+SQLite+git-hooks anti-corruption layer | derive, taskstore |
+| [store](crates/store/CLAUDE.md) | Typed wrapper around `scottidler/taskstore`; JSONL+SQLite+git-hooks anti-corruption layer | derive, taskstore (+ telemetry, dev-only) |
 | [domain](crates/domain/CLAUDE.md) | Records + FSM tables only (no I/O) | derive, taskstore |
 | [llm](crates/llm/CLAUDE.md) | LlmClient trait + Anthropic backend (no prompt assembly — that's `agents`) | domain, telemetry |
 | [tools](crates/tools/CLAUDE.md) | Tool trait + builtins + lane classification + bwrap sandbox | domain, telemetry |
