@@ -12,8 +12,6 @@ mod call;
 mod client;
 mod config;
 mod error;
-#[cfg(test)]
-mod logcapture;
 mod message;
 mod metered;
 mod tier;

@@ -36,6 +36,8 @@ The crate exposes three `*UpdateSink` traits — `BundleUpdateSink`, `WorkUpdate
 
 `taskstore` (git dep, inherited via `workspace = true` from the root `[workspace.dependencies]` block), `derive`, and workspace-shared crates (`eyre`, `tracing`, `serde`). Added via `cargo add` at the time the first code needs them, not speculatively.
 
+**Dev-dependency:** `telemetry` (path dep, test-only). Log-capture tests route through `telemetry::ensure_global_interested_default()` (the workspace-canonical interest-cache flake fix); `store` carries no `telemetry` dep in normal builds. No cycle — `telemetry` depends on no workspace crate.
+
 ### Note on the `taskstore-traits` split
 
 `scottidler/taskstore` is a two-crate workspace: `taskstore-traits` (trait-only, pure `serde` + `std`) and `taskstore` (Store engine + `rusqlite`/`fs2`/`chrono`). `domain` depends on traits-only; `store` depends on the full crate because it needs `Store`. Both deps MUST resolve to the same commit — they're declared centrally in the root `Cargo.toml` for exactly that reason. See `../../docs/taskstore-integration.md` for the split-brain failure mode that motivates the centralized declaration.

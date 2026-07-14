@@ -16,6 +16,7 @@ trait-variant.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+telemetry = { path = "../telemetry" }
 tempfile = "3.27.0"
 tokio = { version = "1.52.1", features = ["rt", "macros"] }
 tracing-subscriber = { workspace = true }

@@ -520,8 +520,8 @@ mod pricing_tests {
         // interested" by a sibling test that hits this WARN callsite first
         // on a thread with no subscriber, silently dropping this test's WARN
         // (~8% flake over 200 full-binary runs; 0 over 300 with it). See
-        // `crate::logcapture`.
-        crate::logcapture::ensure_global_interested_default();
+        // `telemetry::testing`.
+        telemetry::ensure_global_interested_default();
         let writer = VecWriter::default();
         let json_layer = tracing_subscriber::fmt::layer().json().with_writer(writer.clone());
         let subscriber = tracing_subscriber::registry().with(json_layer);

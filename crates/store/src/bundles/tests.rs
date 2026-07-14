@@ -294,7 +294,7 @@ fn json_subscriber(writer: VecWriter) -> impl tracing::Subscriber + Send + Sync 
 /// the global default). Every log-capturing test here MUST install its
 /// subscriber through this helper.
 fn set_capturing_default(writer: VecWriter) -> tracing::subscriber::DefaultGuard {
-    crate::logcapture::ensure_global_interested_default();
+    telemetry::ensure_global_interested_default();
     tracing::subscriber::set_default(json_subscriber(writer))
 }
 
